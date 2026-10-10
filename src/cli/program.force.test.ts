@@ -1,11 +1,20 @@
 // Program force tests cover root force flag behavior and command propagation.
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type ExecFileSyncMock = (
+  command: string,
+  args: string[],
+  options: ExecFileSyncOptionsWithStringEncoding,
+) => string;
+
+const execFileSyncMock = vi.hoisted(() => vi.fn<ExecFileSyncMock>());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    execFileSync: vi.fn(),
+    execFileSync: execFileSyncMock,
   };
 });
 
@@ -15,23 +24,20 @@ vi.mock("../infra/ports-probe.js", () => ({
   probePortUsage: (...args: unknown[]) => probePortUsageMock(...args),
 }));
 
-import { execFileSync } from "node:child_process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
-import {
-  forceFreePort,
-  forceFreePortAndWait,
-  listPortListeners,
-  type PortProcess,
-  parseLsofOutput,
-} from "./ports.js";
+import { forceFreePortAndWait } from "./ports.js";
+
+type PortProcess = Awaited<ReturnType<typeof forceFreePortAndWait>>["killed"][number];
 
 describe("gateway --force helpers", () => {
   let originalKill: typeof process.kill;
   let originalPlatform: NodeJS.Platform;
+  const defaultKillMock = vi.fn<typeof process.kill>();
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
+    process.kill = defaultKillMock.mockReturnValue(true);
     originalPlatform = process.platform;
     probePortUsageMock.mockReset();
     probePortUsageMock.mockResolvedValue("busy");
@@ -40,59 +46,18 @@ describe("gateway --force helpers", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     process.kill = originalKill;
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
-  it("parses lsof output into pid/command pairs", () => {
-    const sample = ["p123", "cnode", "p456", "cpython", ""].join("\n");
-    const parsed = parseLsofOutput(sample);
-    expect(parsed).toEqual<PortProcess[]>([
-      { pid: 123, command: "node" },
-      { pid: 456, command: "python" },
-    ]);
-  });
-
-  it("skips malformed lsof 'p' lines (no digits after p)", () => {
-    const sample = ["p", "cnode", "p456", "cpython", ""].join("\n");
-    const parsed = parseLsofOutput(sample);
-    expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
-  });
-
-  it("skips malformed lsof 'p' lines (non-numeric suffix)", () => {
-    const sample = ["pabc", "cnode", "p456", "cpython", ""].join("\n");
-    const parsed = parseLsofOutput(sample);
-    expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
-  });
-
-  it("returns empty array when all lsof 'p' lines are malformed", () => {
-    const sample = ["p", "cnode", "pabc", "", ""].join("\n");
-    const parsed = parseLsofOutput(sample);
-    expect(parsed).toEqual<PortProcess[]>([]);
-  });
-
-  it("handles empty lsof output", () => {
-    expect(parseLsofOutput("")).toEqual<PortProcess[]>([]);
-  });
-
-  it("handles 'p' lines with negative-like tokens (zero)", () => {
-    const sample = ["p0", "cnode", "p456", "cpython", ""].join("\n");
-    const parsed = parseLsofOutput(sample);
-    // PID 0 is filtered out (> 0 check), only valid PIDs remain
-    expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
-  });
-
-  it("returns empty list when lsof finds nothing", () => {
-    (execFileSync as unknown as Mock).mockImplementation(() => {
+  it("returns without cleanup when lsof and the bind probe find no listener", async () => {
+    probePortUsageMock.mockResolvedValue("free");
+    execFileSyncMock.mockImplementation(() => {
       const err = new Error("no matches") as NodeJS.ErrnoException & { status?: number };
-      err.status = 1; // lsof uses exit 1 for no matches
+      err.status = 1;
       throw err;
     });
-    expect(listPortListeners(18789)).toStrictEqual([]);
-  });
-
-  it("skips lsof when the port is already bindable", async () => {
-    probePortUsageMock.mockResolvedValue("free");
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -101,28 +66,92 @@ describe("gateway --force helpers", () => {
       waitedMs: 0,
       escalatedToSigkill: false,
     });
-    expect(execFileSync).not.toHaveBeenCalled();
+    expect(execFileSyncMock).toHaveBeenCalledOnce();
+    expect(probePortUsageMock).toHaveBeenCalledWith(18789);
   });
 
-  it("throws when lsof missing", () => {
-    (execFileSync as unknown as Mock).mockImplementation(() => {
+  it("kills an interface-specific listener even when the bind probe would report free", async () => {
+    probePortUsageMock.mockResolvedValue("free");
+    execFileSyncMock.mockReturnValueOnce(["p42", "cnode", ""].join("\n")).mockReturnValue("");
+    const killMock = vi.fn();
+    process.kill = killMock;
+
+    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+
+    expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
+    expect(result).toEqual({
+      killed: [{ pid: 42, command: "node" }],
+      waitedMs: 0,
+      escalatedToSigkill: false,
+    });
+    expect(probePortUsageMock).not.toHaveBeenCalled();
+  });
+
+  it("returns without fuser when lsof is unavailable and the bind probe reports free", async () => {
+    probePortUsageMock.mockResolvedValue("free");
+    execFileSyncMock.mockImplementation(() => {
       const err = new Error("not found") as NodeJS.ErrnoException;
       err.code = "ENOENT";
       throw err;
     });
-    expect(() => listPortListeners(18789)).toThrow(/lsof not found/);
+
+    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+
+    expect(result).toEqual({
+      killed: [],
+      waitedMs: 0,
+      escalatedToSigkill: false,
+    });
+    expect(execFileSyncMock).toHaveBeenCalledOnce();
+    expect(probePortUsageMock).toHaveBeenCalledWith(18789);
   });
 
-  it("kills each listener and returns metadata", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(
-      ["p42", "cnode", "p99", "cssh", ""].join("\n"),
+  it.each([
+    { name: "digit-prefixed garbage", output: "p111abc\ncnode\np456\ncpython\n" },
+    { name: "later malformed PID", output: "p456\ncpython\npabc\ncnode\n" },
+    { name: "non-positive PID", output: "p0\ncnode\np456\ncpython\n" },
+  ])("fails closed for $name when fuser cannot identify a listener", async ({ output }) => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd.includes("lsof")) {
+        return output;
+      }
+      const err = new Error("no matches") as NodeJS.ErrnoException & {
+        status?: number;
+        stdout?: string;
+        stderr?: string;
+      };
+      err.status = 1;
+      err.stdout = "";
+      err.stderr = "";
+      throw err;
+    });
+
+    await expect(forceFreePortAndWait(18789, { timeoutMs: 0 })).rejects.toThrow(
+      /still busy.*no listener PID/i,
     );
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "fuser",
+      ["-k", "-TERM", "18789/tcp"],
+      expect.anything(),
+    );
+    expect(defaultKillMock).not.toHaveBeenCalled();
+  });
+
+  it("kills each listener and returns metadata", async () => {
+    execFileSyncMock
+      .mockReturnValueOnce(["p42", "cnode", "p99", "cssh", ""].join("\n"))
+      .mockReturnValue("");
     const killMock = vi.fn();
     process.kill = killMock;
 
-    const killed = forceFreePort(18789);
+    const { killed } = await forceFreePortAndWait(18789);
 
-    expect(execFileSync).toHaveBeenCalledTimes(1);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      expect.stringContaining("lsof"),
+      ["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-FpFc"],
+      { env: expect.any(Object), encoding: "utf-8", killSignal: "SIGKILL", timeout: 10_000 },
+    );
     expect(killMock).toHaveBeenCalledTimes(2);
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
     expect(killMock).toHaveBeenCalledWith(99, "SIGTERM");
@@ -132,10 +161,75 @@ describe("gateway --force helpers", () => {
     ]);
   });
 
+  it("continues when a discovered listener exits before it can be signaled", async () => {
+    execFileSyncMock
+      .mockReturnValueOnce(["p42", "cnode", "p99", "cssh", ""].join("\n"))
+      .mockReturnValue("");
+    const gone = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    const killMock = vi.fn().mockImplementationOnce(() => {
+      throw gone;
+    });
+    process.kill = killMock;
+
+    expect((await forceFreePortAndWait(18789)).killed).toEqual<PortProcess[]>([
+      { pid: 42, command: "node" },
+      { pid: 99, command: "ssh" },
+    ]);
+    expect(killMock).toHaveBeenNthCalledWith(1, 42, "SIGTERM");
+    expect(killMock).toHaveBeenNthCalledWith(2, 99, "SIGTERM");
+  });
+
+  it("does not suppress listener ownership-guard errors", async () => {
+    execFileSyncMock.mockReturnValue(["p42", "cnode", ""].join("\n"));
+    const guardError = Object.assign(new Error("ownership verification failed"), {
+      code: "ESRCH",
+    });
+    const killMock = vi.fn();
+    process.kill = killMock;
+
+    await expect(
+      forceFreePortAndWait(18789, {
+        beforeSignal: () => {
+          throw guardError;
+        },
+      }),
+    ).rejects.toThrow(guardError);
+    expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["beforeSignal", "process.kill"] as const)(
+    "propagates EPERM from %s without fuser fallback",
+    async (source) => {
+      execFileSyncMock.mockReturnValue(["p42", "cnode", ""].join("\n"));
+      probePortUsageMock.mockResolvedValue("free");
+      const denied = Object.assign(new Error("permission denied"), { code: "EPERM" });
+      const rejectSignal = vi.fn(() => {
+        throw denied;
+      });
+      if (source === "process.kill") {
+        process.kill = rejectSignal;
+      }
+
+      await expect(
+        forceFreePortAndWait(
+          18789,
+          source === "beforeSignal" ? { beforeSignal: rejectSignal } : {},
+        ),
+      ).rejects.toThrow(source === "beforeSignal" ? denied : /failed to kill pid 42/);
+
+      expect(rejectSignal).toHaveBeenCalledOnce();
+      expect(probePortUsageMock).not.toHaveBeenCalled();
+      expect(execFileSyncMock).toHaveBeenCalledOnce();
+      if (source === "beforeSignal") {
+        expect(defaultKillMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("retries until the port is free", async () => {
     vi.useFakeTimers();
     let call = 0;
-    (execFileSync as unknown as Mock).mockImplementation(() => {
+    execFileSyncMock.mockImplementation(() => {
       call += 1;
       // 1st call: initial listeners to kill.
       // 2nd/3rd calls: still listed.
@@ -165,14 +259,12 @@ describe("gateway --force helpers", () => {
     expect(res.killed).toEqual<PortProcess[]>([{ pid: 42, command: "node" }]);
     expect(res.escalatedToSigkill).toBe(false);
     expect(res.waitedMs).toBe(100);
-
-    vi.useRealTimers();
   });
 
   it("escalates to SIGKILL if SIGTERM doesn't free the port", async () => {
     vi.useFakeTimers();
     let call = 0;
-    (execFileSync as unknown as Mock).mockImplementation(() => {
+    execFileSyncMock.mockImplementation(() => {
       call += 1;
       // 1st call: initial kill list; then keep showing until after SIGKILL.
       if (call <= 7) {
@@ -182,12 +274,14 @@ describe("gateway --force helpers", () => {
     });
 
     const killMock = vi.fn();
+    const beforeSignal = vi.fn();
     process.kill = killMock;
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 800,
       intervalMs: 100,
       sigtermTimeoutMs: 300,
+      beforeSignal,
     });
 
     await vi.runAllTimersAsync();
@@ -195,17 +289,18 @@ describe("gateway --force helpers", () => {
 
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
     expect(killMock).toHaveBeenCalledWith(42, "SIGKILL");
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 42, signal: "SIGTERM" });
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 42, signal: "SIGKILL" });
     expect(res.escalatedToSigkill).toBe(true);
-
-    vi.useRealTimers();
   });
 
   it("bounds oversized force-free intervals by the remaining timeout", async () => {
-    (execFileSync as unknown as Mock).mockReturnValue(["p42", "cnode", ""].join("\n"));
+    vi.useFakeTimers();
+    execFileSyncMock.mockReturnValue(["p42", "cnode", ""].join("\n"));
     const killMock = vi.fn();
     process.kill = killMock;
 
-    await expect(
+    const rejected = expect(
       forceFreePortAndWait(18789, {
         timeoutMs: 2,
         intervalMs: Number.MAX_SAFE_INTEGER,
@@ -213,18 +308,21 @@ describe("gateway --force helpers", () => {
       }),
     ).rejects.toThrow(/still has listeners/);
 
+    await vi.runAllTimersAsync();
+    await rejected;
+
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
     expect(killMock).toHaveBeenCalledWith(42, "SIGKILL");
   });
 
   it("falls back to fuser when lsof is permission denied", async () => {
-    (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
       if (cmd.includes("lsof")) {
         const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
         err.code = "EACCES";
         throw err;
       }
-      return "18789/tcp: 4242\n";
+      return "4242\n";
     });
     probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
 
@@ -232,26 +330,103 @@ describe("gateway --force helpers", () => {
 
     expect(result.escalatedToSigkill).toBe(false);
     expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
-    const termCall = (execFileSync as unknown as Mock).mock.calls.find(
+    const termCall = execFileSyncMock.mock.calls.find(
       ([cmd, args]) => cmd === "fuser" && Array.isArray(args) && args.includes("-TERM"),
     );
     expect(termCall?.[1]).toEqual(["-k", "-TERM", "18789/tcp"]);
-    expect((termCall?.[2] as { encoding?: string } | undefined)?.encoding).toBe("utf-8");
+    expect(termCall?.[2]).toEqual({
+      env: expect.any(Object),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      killSignal: "SIGKILL",
+      timeout: 10_000,
+    });
+  });
+
+  it("freezes guarded fuser PIDs before signaling when the port owner changes", async () => {
+    let fuserPids = [4242];
+    execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd.includes("lsof")) {
+        const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      if (args.includes("-k")) {
+        throw new Error("guarded fuser cleanup must not use resource-targeted kill");
+      }
+      return `${fuserPids.join(" ")}\n`;
+    });
+    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
+    const killMock = vi.fn();
+    process.kill = killMock;
+    const beforeSignal = vi.fn(() => {
+      fuserPids = [5252];
+    });
+
+    const result = await forceFreePortAndWait(18789, {
+      timeoutMs: 500,
+      intervalMs: 100,
+      beforeSignal,
+    });
+
+    expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 4242, signal: "SIGTERM" });
+    expect(killMock).toHaveBeenCalledOnce();
+    expect(killMock).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(killMock).not.toHaveBeenCalledWith(5252, expect.anything());
+    expect(execFileSyncMock).toHaveBeenCalledWith("fuser", ["18789/tcp"], expect.anything());
+  });
+
+  it("never derives guarded fuser victims from stderr diagnostics", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd.includes("lsof")) {
+        const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      const err = new Error("fuser diagnostics") as NodeJS.ErrnoException & {
+        status?: number;
+        stdout?: string;
+        stderr?: string;
+      };
+      err.status = 1;
+      err.stdout = "4242 5151oops\n";
+      err.stderr = "18789/tcp: 5252\nfuser warning for device 6161\n";
+      throw err;
+    });
+    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
+    const killMock = vi.fn();
+    process.kill = killMock;
+    const beforeSignal = vi.fn();
+
+    const result = await forceFreePortAndWait(18789, {
+      timeoutMs: 500,
+      intervalMs: 100,
+      beforeSignal,
+    });
+
+    expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
+    expect(beforeSignal).toHaveBeenCalledOnce();
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 4242, signal: "SIGTERM" });
+    expect(killMock).toHaveBeenCalledOnce();
+    expect(killMock).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(killMock).not.toHaveBeenCalledWith(5252, expect.anything());
+    expect(killMock).not.toHaveBeenCalledWith(6161, expect.anything());
   });
 
   it("uses fuser SIGKILL escalation when port stays busy", async () => {
     vi.useFakeTimers();
-    (execFileSync as unknown as Mock).mockImplementation((cmd: string, args: string[]) => {
+    execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd.includes("lsof")) {
         const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
         err.code = "EACCES";
         throw err;
       }
       if (args.includes("-TERM")) {
-        return "18789/tcp: 1337\n";
+        return "1337\n";
       }
       if (args.includes("-KILL")) {
-        return "18789/tcp: 1337\n";
+        return "1337\n";
       }
       return "";
     });
@@ -273,18 +448,17 @@ describe("gateway --force helpers", () => {
 
     expect(result.escalatedToSigkill).toBe(true);
     expect(result.waitedMs).toBe(100);
-    const killCall = (execFileSync as unknown as Mock).mock.calls.find(
+    const killCall = execFileSyncMock.mock.calls.find(
       ([cmd, args]) => cmd === "fuser" && Array.isArray(args) && args.includes("-KILL"),
     );
     expect(killCall?.[1]).toEqual(["-k", "-KILL", "18789/tcp"]);
     expect((killCall?.[2] as { encoding?: string } | undefined)?.encoding).toBe("utf-8");
-    vi.useRealTimers();
   });
 
   it("throws when lsof is unavailable and fuser is missing", async () => {
     // An inconclusive four-host probe must continue into the cleanup tools.
     probePortUsageMock.mockResolvedValue("unknown");
-    (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
       const err = new Error(`spawnSync ${cmd} ENOENT`) as NodeJS.ErrnoException;
       err.code = "ENOENT";
       throw err;
@@ -299,10 +473,12 @@ describe("gateway --force helpers", () => {
 describe("gateway --force helpers (Windows netstat path)", () => {
   let originalKill: typeof process.kill;
   let originalPlatform: NodeJS.Platform;
+  const defaultKillMock = vi.fn<typeof process.kill>();
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
+    process.kill = defaultKillMock.mockReturnValue(true);
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
   });
@@ -320,45 +496,31 @@ describe("gateway --force helpers (Windows netstat path)", () => {
       ),
     ].join("\r\n");
 
-  it("returns empty list when netstat finds no listeners on the port", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(9999, 42));
-    expect(listPortListeners(18789)).toStrictEqual([]);
+  it("deduplicates PIDs that appear multiple times", async () => {
+    execFileSyncMock.mockReturnValueOnce(makeNetstatOutput(18789, 42, 42)).mockReturnValue("");
+    expect((await forceFreePortAndWait(18789)).killed).toEqual<PortProcess[]>([{ pid: 42 }]);
+    expect(defaultKillMock).toHaveBeenCalledExactlyOnceWith(42, "SIGTERM");
   });
 
-  it("parses PIDs from netstat output correctly", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
-    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
-    expect(execFileSync).toHaveBeenCalledWith(
-      getWindowsSystem32ExePath("netstat.exe"),
-      ["-ano", "-p", "TCP"],
-      { encoding: "utf-8" },
-    );
-  });
-
-  it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(8080, 42));
-    expect(listPortListeners(80)).toStrictEqual([]);
-  });
-
-  it("deduplicates PIDs that appear multiple times", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 42));
-    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }]);
-  });
-
-  it("throws a descriptive error when netstat fails", () => {
-    (execFileSync as unknown as Mock).mockImplementation(() => {
+  it("throws a descriptive error when netstat fails", async () => {
+    execFileSyncMock.mockImplementation(() => {
       throw new Error("access denied");
     });
-    expect(() => listPortListeners(18789)).toThrow(/netstat failed/);
+    await expect(forceFreePortAndWait(18789)).rejects.toThrow(/netstat failed/);
   });
 
-  it("kills Windows listeners and returns metadata", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
+  it("kills Windows listeners and returns metadata", async () => {
+    execFileSyncMock.mockReturnValueOnce(makeNetstatOutput(18789, 42, 99)).mockReturnValue("");
     const killMock = vi.fn();
     process.kill = killMock;
 
-    const killed = forceFreePort(18789);
+    const { killed } = await forceFreePortAndWait(18789);
 
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      getWindowsSystem32ExePath("netstat.exe"),
+      ["-ano"],
+      { env: expect.any(Object), encoding: "utf-8", killSignal: "SIGKILL", timeout: 10_000 },
+    );
     expect(killMock).toHaveBeenCalledTimes(2);
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
     expect(killMock).toHaveBeenCalledWith(99, "SIGTERM");

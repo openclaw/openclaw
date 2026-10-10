@@ -1,22 +1,11 @@
-import Foundation
+import Observation
 
-struct AsyncWaitTimeoutError: Error, CustomStringConvertible {
-    let label: String
-    var description: String { "Timeout waiting for: \(self.label)" }
-}
-
-func waitUntil(
-    _ label: String,
-    timeoutSeconds: Double = 3.0,
-    pollMs: UInt64 = 10,
-    _ condition: @escaping @Sendable () async -> Bool) async throws
-{
-    let deadline = Date().addingTimeInterval(timeoutSeconds)
-    while Date() < deadline {
-        if await condition() {
-            return
+/// Wakes on observed view-model mutations instead of a wall-clock deadline, for work no handle can reach.
+@MainActor
+func waitForObservedState(_ condition: @escaping @MainActor () -> Bool) async {
+    while !condition() {
+        await withCheckedContinuation { continuation in
+            withObservationTracking { _ = condition() } onChange: { continuation.resume() }
         }
-        try await Task.sleep(nanoseconds: pollMs * 1_000_000)
     }
-    throw AsyncWaitTimeoutError(label: label)
 }

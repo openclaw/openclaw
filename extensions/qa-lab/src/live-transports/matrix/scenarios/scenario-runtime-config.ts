@@ -1,0 +1,195 @@
+import { readFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  buildMatrixQaToken,
+  buildMentionPrompt,
+  resolveMatrixQaActorSyncParams,
+  resolveMatrixQaNoReplyWindowMs,
+  runConfigurableTopLevelScenario,
+  runNoReplyExpectedScenario,
+  type MatrixQaScenarioContext,
+} from "./scenario-runtime-shared.js";
+import type { MatrixQaScenarioExecution } from "./scenario-types.js";
+
+async function readMatrixQaGatewayConfigFile(configPath: string) {
+  const config: unknown = JSON.parse(await readFile(configPath, "utf8"));
+  if (!isRecord(config)) {
+    throw new Error("Matrix QA gateway config file must contain an object");
+  }
+  return config;
+}
+
+async function writeMatrixQaGatewayConfigFile(configPath: string, config: unknown) {
+  await replaceFileAtomic({
+    filePath: configPath,
+    content: `${JSON.stringify(config, null, 2)}\n`,
+    mode: 0o600,
+    tempPrefix: ".matrix-qa-config",
+  });
+}
+
+export async function readMatrixQaGatewayMatrixAccount(params: {
+  accountId: string;
+  configPath: string;
+}) {
+  const config = await readMatrixQaGatewayConfigFile(params.configPath);
+  const channels = isRecord(config.channels) ? config.channels : {};
+  const matrix = isRecord(channels.matrix) ? channels.matrix : {};
+  const accounts = isRecord(matrix.accounts) ? matrix.accounts : {};
+  const account = accounts[params.accountId];
+  if (!isRecord(account)) {
+    throw new Error(`Matrix QA gateway account "${params.accountId}" missing from config`);
+  }
+  return account;
+}
+
+export async function replaceMatrixQaGatewayMatrixAccount(params: {
+  accountConfig: Record<string, unknown>;
+  accountId: string;
+  configPath: string;
+}) {
+  const config = await readMatrixQaGatewayConfigFile(params.configPath);
+  const channels = isRecord(config.channels) ? config.channels : {};
+  const matrix = isRecord(channels.matrix) ? channels.matrix : {};
+  channels.matrix = {
+    ...matrix,
+    defaultAccount: params.accountId,
+    accounts: {
+      [params.accountId]: params.accountConfig,
+    },
+  };
+  config.channels = channels;
+  await writeMatrixQaGatewayConfigFile(params.configPath, config);
+}
+
+export async function patchMatrixQaGatewayMatrixAccount(params: {
+  accountId: string;
+  accountPatch: Record<string, unknown>;
+  configPath: string;
+}) {
+  const config = await readMatrixQaGatewayConfigFile(params.configPath);
+  const channels = isRecord(config.channels) ? config.channels : {};
+  const matrix = isRecord(channels.matrix) ? channels.matrix : {};
+  const accounts = isRecord(matrix.accounts) ? matrix.accounts : {};
+  const existing = accounts[params.accountId];
+  if (!isRecord(existing)) {
+    throw new Error(`Matrix QA gateway account "${params.accountId}" missing from config`);
+  }
+  channels.matrix = {
+    ...matrix,
+    defaultAccount: params.accountId,
+    accounts: {
+      [params.accountId]: {
+        ...existing,
+        ...params.accountPatch,
+      },
+    },
+  };
+  config.channels = channels;
+  await writeMatrixQaGatewayConfigFile(params.configPath, config);
+}
+
+function requireMatrixQaAccountReload(context: MatrixQaScenarioContext) {
+  if (!context.readGatewayAccountStartAt || !context.waitGatewayAccountReady) {
+    throw new Error("Matrix QA allowlist reload requires gateway generation readiness support");
+  }
+  const readStartAt = context.readGatewayAccountStartAt;
+  return {
+    readStartAt: async (accountId: string) => {
+      const startAt = await readStartAt(accountId);
+      if (startAt === undefined) {
+        throw new Error(`Matrix QA account "${accountId}" has no active start generation`);
+      }
+      return startAt;
+    },
+    waitReady: context.waitGatewayAccountReady,
+  };
+}
+
+export async function runMatrixQaAllowlistHotReloadScenario(
+  context: MatrixQaScenarioContext,
+): Promise<MatrixQaScenarioExecution> {
+  const configPath = context.gatewayRuntimeEnv?.OPENCLAW_CONFIG_PATH;
+  const accountId = context.sutAccountId;
+  if (!configPath || !accountId) {
+    throw new Error("Matrix QA allowlist reload requires the gateway config path and account id");
+  }
+  const originalAccount = await readMatrixQaGatewayMatrixAccount({ accountId, configPath });
+  const accountReload = requireMatrixQaAccountReload(context);
+  const { observerAccessToken: accessToken } = context;
+
+  try {
+    const acceptedStartAt = await accountReload.readStartAt(accountId);
+    await patchMatrixQaGatewayMatrixAccount({
+      accountId,
+      accountPatch: { groupAllowFrom: [context.driverUserId, context.observerUserId] },
+      configPath,
+    });
+    await accountReload.waitReady(accountId, {
+      afterStartAt: acceptedStartAt,
+      timeoutMs: context.timeoutMs,
+    });
+    const acceptedMarkerPrefix = "MATRIX_QA_GROUP_RELOAD_ACCEPTED";
+    const accepted = await runConfigurableTopLevelScenario({
+      ...resolveMatrixQaActorSyncParams(context, "observer"),
+      accessToken,
+      roomId: context.roomId,
+      sutUserId: context.sutUserId,
+      timeoutMs: context.timeoutMs,
+      tokenPrefix: acceptedMarkerPrefix,
+    });
+
+    const blockedStartAt = await accountReload.readStartAt(accountId);
+    await patchMatrixQaGatewayMatrixAccount({
+      accountId,
+      accountPatch: { groupAllowFrom: [context.driverUserId] },
+      configPath,
+    });
+    await accountReload.waitReady(accountId, {
+      afterStartAt: blockedStartAt,
+      timeoutMs: context.timeoutMs,
+    });
+    const token = buildMatrixQaToken("MATRIX_QA_GROUP_RELOAD_REMOVED");
+    const blocked = await runNoReplyExpectedScenario({
+      ...resolveMatrixQaActorSyncParams(context, "observer"),
+      accessToken,
+      actorUserId: context.observerUserId,
+      body: buildMentionPrompt(context.sutUserId, token),
+      mentionUserIds: [context.sutUserId],
+      roomId: context.roomId,
+      sutUserId: context.sutUserId,
+      timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
+      token,
+    });
+
+    return {
+      artifacts: {
+        accepted: {
+          actorUserId: context.observerUserId,
+          driverEventId: accepted.driverEventId,
+          reply: accepted.reply,
+          token: accepted.token,
+          triggerBody: accepted.body,
+        },
+        blocked: blocked.artifacts,
+      },
+      details: `${accepted.token} accepted; ${token} blocked after hot reload`,
+    };
+  } finally {
+    const currentAccount = await readMatrixQaGatewayMatrixAccount({ accountId, configPath });
+    if (!isDeepStrictEqual(currentAccount, originalAccount)) {
+      const restoreStartAt = await accountReload.readStartAt(accountId);
+      await replaceMatrixQaGatewayMatrixAccount({
+        accountConfig: originalAccount,
+        accountId,
+        configPath,
+      });
+      await accountReload.waitReady(accountId, {
+        afterStartAt: restoreStartAt,
+        timeoutMs: context.timeoutMs,
+      });
+    }
+  }
+}

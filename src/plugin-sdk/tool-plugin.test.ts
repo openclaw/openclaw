@@ -1,13 +1,28 @@
 /**
  * Tests tool plugin schema helpers and SDK tool registration contracts.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
+import { applyCodeModeCatalog } from "../agents/code-mode.js";
+import {
+  createCodeModeHarness,
+  resetCodeModeTestState,
+  resultDetails,
+} from "../agents/code-mode.test-support.js";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
 import { defineToolPlugin, getToolPluginMetadata } from "./tool-plugin.js";
 
 describe("defineToolPlugin", () => {
   it("registers declared tools and wraps plain object results", async () => {
+    const outputSchema = Type.Object(
+      {
+        symbol: Type.String(),
+        configured: Type.Boolean(),
+      },
+      { additionalProperties: false },
+    );
     const entry = defineToolPlugin({
       id: "stock-quotes",
       name: "Stock Quotes",
@@ -23,6 +38,7 @@ describe("defineToolPlugin", () => {
           parameters: Type.Object({
             symbol: Type.String(),
           }),
+          outputSchema,
           async execute(params, config) {
             expectTypeOf(params.symbol).toEqualTypeOf<string>();
             expectTypeOf(config.apiKey).toEqualTypeOf<string>();
@@ -44,12 +60,64 @@ describe("defineToolPlugin", () => {
       name: "quote",
       label: "Quote",
       description: "Fetch a quote.",
+      outputSchema,
     });
-    const result = await captured.tools[0].execute("call-1", { symbol: "OPEN" });
+    expect(getToolPluginMetadata(entry)?.tools[0]?.outputSchema).toBe(outputSchema);
+    const result = await expectDefined(
+      captured.tools[0],
+      "captured.tools[0] test invariant",
+    ).execute("call-1", { symbol: "OPEN" });
     expect(result.details).toEqual({ symbol: "OPEN", configured: true });
     expect(result.content).toEqual([
       { type: "text", text: JSON.stringify({ symbol: "OPEN", configured: true }, null, 2) },
     ]);
+  });
+
+  it("preserves input-dependent outputs through static metadata and registered execution", async () => {
+    onTestFinished(resetCodeModeTestState);
+    const variants = Object.entries({
+      list: Type.Object({ rows: Type.Array(Type.String()) }, { additionalProperties: false }),
+      status: Type.Object({ ready: Type.Boolean() }, { additionalProperties: false }),
+    });
+    const outputSchema = Type.Union(
+      variants.map(([, schema]) => schema),
+      {
+        "x-openclaw-input-discriminator": {
+          version: 1,
+          inputProperty: "kind",
+          mapping: Object.fromEntries(variants.map(([value], index) => [value, index])),
+        },
+      },
+    );
+    const entry = defineToolPlugin({
+      id: "action-fixture",
+      name: "Action fixture",
+      description: "Synthetic action outputs",
+      tools: (tool) => [
+        tool({
+          name: "sdk_records",
+          description: "List records or inspect status",
+          parameters: Type.Object({ kind: Type.String() }),
+          outputSchema,
+          execute: ({ kind }) => (kind === "list" ? { rows: ["one"] } : { ready: true }),
+        }),
+      ],
+    });
+    const metadata = expectDefined(getToolPluginMetadata(entry), "tool metadata");
+    expect(JSON.stringify(metadata.tools[0]?.outputSchema)).toBe(JSON.stringify(outputSchema));
+    const captured = createCapturedPluginRegistration({ id: "action-fixture" });
+    entry.register(captured.api);
+    const h = createCodeModeHarness();
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...captured.tools] });
+    const result = resultDetails(
+      await h.tools[0]!.execute("sdk-actions", {
+        code: 'return { rows: (await sdk_records({kind:"list"})).rows, ready: (await sdk_records({kind:"status"})).ready };',
+      }),
+    );
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "completed",
+      value: { rows: ["one"], ready: true },
+    });
   });
 
   it("wraps plain string results", async () => {
@@ -70,7 +138,10 @@ describe("defineToolPlugin", () => {
 
     entry.register(captured.api);
 
-    const result = await captured.tools[0].execute("call-1", { input: "hello" });
+    const result = await expectDefined(
+      captured.tools[0],
+      "captured.tools[0] test invariant",
+    ).execute("call-1", { input: "hello" });
     expect(result).toEqual({
       content: [{ type: "text", text: "hello" }],
       details: "hello",

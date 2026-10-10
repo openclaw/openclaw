@@ -1,10 +1,9 @@
-// Telegram plugin module implements setup surface behavior.
 import {
   createAllowFromSection,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
+  defineTokenCredential,
   hasConfiguredSecretInput,
-  patchChannelConfigForAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
@@ -14,6 +13,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import {
+  applyTelegramAllowFrom,
   getTelegramTokenHelpLines,
   getTelegramUserIdHelpLines,
   parseTelegramAllowFromId,
@@ -40,18 +40,20 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 10,
     resolveConfigured: ({ cfg, accountId }) =>
-      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some((resolvedAccountId) => {
-        const account = inspectTelegramAccount({ cfg, accountId: resolvedAccountId });
-        return account.configured;
-      }),
+      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some(
+        (resolvedAccountId) =>
+          inspectTelegramAccount({ cfg, accountId: resolvedAccountId }).configured,
+      ),
   }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
     credentialValues,
   }),
   credentials: [
-    {
+    defineTokenCredential({
       inputKey: "token",
+      configKey: "botToken",
+      configuredFields: ["botToken", "tokenFile"],
       providerHint: channel,
       credentialLabel: t("wizard.telegram.botToken"),
       preferredEnvVar: "TELEGRAM_BOT_TOKEN",
@@ -61,22 +63,16 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       keepPrompt: t("wizard.telegram.tokenKeepPrompt"),
       inputPrompt: t("wizard.telegram.tokenInputPrompt"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      inspect: ({ cfg, accountId }) => {
-        const resolved = resolveTelegramAccount({ cfg, accountId });
-        const hasConfiguredBotToken = hasConfiguredSecretInput(resolved.config.botToken);
-        const hasConfiguredValue =
-          hasConfiguredBotToken || Boolean(resolved.config.tokenFile?.trim());
-        return {
-          accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
-          hasConfiguredValue,
-          resolvedValue: normalizeOptionalString(resolved.token),
-          envValue:
-            accountId === DEFAULT_ACCOUNT_ID
-              ? normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN)
-              : undefined,
-        };
-      },
-    },
+      resolveAccount: ({ cfg, accountId }) => resolveTelegramAccount({ cfg, accountId }),
+      hasConfiguredValue: (account) =>
+        hasConfiguredSecretInput(account.config.botToken) ||
+        Boolean(account.config.tokenFile?.trim()),
+      resolvedValue: (account) => normalizeOptionalString(account.token),
+      envValue: ({ accountId }) =>
+        accountId === DEFAULT_ACCOUNT_ID
+          ? normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN)
+          : undefined,
+    }),
   ],
   allowFrom: createAllowFromSection({
     helpTitle: t("wizard.telegram.userIdTitle"),
@@ -86,18 +82,8 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     invalidWithoutCredentialNote: t("wizard.telegram.allowFromInvalid"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseTelegramAllowFromId(entry);
-        return { input: entry, resolved: Boolean(id), id };
-      }),
     apply: async ({ cfg, accountId, allowFrom }) =>
-      patchChannelConfigForAccount({
-        cfg,
-        channel,
-        accountId,
-        patch: { dmPolicy: "allowlist", allowFrom },
-      }),
+      applyTelegramAllowFrom(cfg, accountId, allowFrom),
   }),
   finalize: async ({ cfg, accountId, prompter }) => {
     if (!shouldShowTelegramDmAccessWarning(cfg, accountId)) {

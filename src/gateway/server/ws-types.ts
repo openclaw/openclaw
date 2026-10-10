@@ -1,28 +1,98 @@
-// Gateway WebSocket client types describe authenticated client state retained by the server.
 import type { WebSocket } from "ws";
-import type { ConnectParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-identity.js";
+import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { GatewayAuthPolicy } from "../auth-policy.types.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
+import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
+import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
+import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
+import type { GatewayWsBrowserOrigin } from "./client-identity-types.js";
+import type { GatewayConnectionTransport } from "./connection-transport.js";
 
-/**
- * Runtime WebSocket client state tracked by the gateway server.
- */
+export type { GatewayWsBrowserOrigin } from "./client-identity-types.js";
+
+export const GATEWAY_WS_CONNECTION_KIND_PROPERTY = "__openclawConnectionKind";
+export const GATEWAY_WS_PREAUTH_BUDGET_PROPERTY = "__openclawPreauthBudget";
+type GatewayWsConnectionKind = "gateway" | "worker";
+export type GatewayIngressWebSocket = WebSocket & {
+  [GATEWAY_WS_CONNECTION_KIND_PROPERTY]?: GatewayWsConnectionKind;
+  [GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]?: {
+    release(clientIp: string | undefined): void;
+  };
+  __openclawPreauthBudgetClaimed?: boolean;
+  __openclawPreauthBudgetKey?: string;
+};
+
 export type GatewayWsClient = PluginNodeCapabilityClient & {
-  socket: WebSocket;
+  socket: GatewayConnectionTransport;
+  /** Physical WS liveness capability; absent on transports without ping/pong. */
+  webSocket?: Pick<WebSocket, "ping" | "once" | "off">;
   connect: ConnectParams;
   connId: string;
+  /** Host-owned transport retirement notification; never accepted from wire params. */
+  connectionSignal?: AbortSignal;
+  connectionKind?: GatewayWsConnectionKind;
+  worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
+  /** Client id verified against the server-approved device pairing record. */
+  pairedClientId?: string;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
+  authPolicy?: GatewayAuthPolicy;
   presenceKey?: string;
+  /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
+  personPresence?: { onlineSince: number; lastActivityAt?: number };
+  /** Accepted interaction on this exact connection, never copied from another client. */
+  connectionLastActivityAt?: number;
+  authenticatedUserId?: string;
+  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
+  authenticatedUserIsTailscaleProvider?: boolean;
+  authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  /** Lifecycle-prepared canonical recipient; never a scope or authorization grant. */
+  preparedRecipientProfileId?: string;
+  preparedSessionProfile?: UserProfileIdentity;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    avatarRevision: string;
+    hasAvatar: boolean;
+    updatedAt: number;
+  };
   clientIp?: string;
+  /** Server-attested inputs for rechecking browser-origin policy after config publication. */
+  browserOrigin?: GatewayWsBrowserOrigin;
   internal?: {
+    /** Authenticated operator transport ingress; never accepted from wire params. */
+    authenticatedOperator?: true;
+    /** Exact accepted/issued operator token; null attests a tokenless ingress. */
+    operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
+    /** Authenticated Control UI operator ingress; never accepted from wire params. */
+    authenticatedControlUi?: true;
+    /** Authenticated Control UI admin admission; never accepted from wire params. */
+    controlUiAdmin?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
+    /** Server-attested role-policy actor; never accepted from WebSocket wire params. */
+    operatorRoleActor?: GatewayOperatorRoleActor;
+    /** Additional access captured at authenticated admission; independent of socket lifetime. */
+    operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   };
-  canvasHostUrl?: string;
-  canvasCapability?: string;
-  canvasCapabilityExpiresAtMs?: number;
-  invalidated?: boolean;
   invalidatedReason?: string;
 };
+
+export const WS_HANDSHAKE_PHASES = [
+  "tcp_accepted",
+  "ws_upgrade_started",
+  "auth_credentials_received",
+  "auth_validated",
+  "session_attached",
+  "hello_payload_prepared",
+  "ready",
+] as const;
+
+export type WsHandshakePhase = (typeof WS_HANDSHAKE_PHASES)[number];

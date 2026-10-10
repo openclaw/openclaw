@@ -2,8 +2,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
-  approveDevicePairing,
   getPairedDevice,
   listDevicePairing,
   requestDevicePairing,
@@ -53,6 +54,7 @@ describe("device pairing requestId churn", () => {
   });
 
   afterAll(async () => {
+    await closeStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 
@@ -92,6 +94,9 @@ describe("device pairing requestId churn", () => {
 
     expect(approveReconnect.created).toBe(true);
     expect(approveReconnect.request.requestId).not.toBe(readRepair.request.requestId);
+    expect(approveReconnect.superseded).toEqual([
+      { requestId: readRepair.request.requestId, deviceId: DEVICE_ID },
+    ]);
 
     const staleApprove = await approveDevicePairing(
       readRepair.request.requestId,

@@ -1,12 +1,13 @@
-// Defines host hook scheduled turn payload types.
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 /** Placement for context injected into the next agent turn. */
-export type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
+type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
 
 /** Plugin request to inject text into the next turn for a session. */
 export type PluginNextTurnInjection = {
   sessionKey: string;
+  /** Selected owner when the session key is unscoped, such as global. */
+  agentId?: string;
   text: string;
   idempotencyKey?: string;
   placement?: PluginNextTurnInjectionPlacement;
@@ -15,7 +16,10 @@ export type PluginNextTurnInjection = {
 };
 
 /** Stored next-turn injection after session/plugin metadata is attached. */
-export type PluginNextTurnInjectionRecord = Omit<PluginNextTurnInjection, "sessionKey"> & {
+export type PluginNextTurnInjectionRecord = Omit<
+  PluginNextTurnInjection,
+  "sessionKey" | "agentId"
+> & {
   id: string;
   pluginId: string;
   pluginName?: string;

@@ -2,17 +2,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 
-const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME"]);
+const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
 const tempHomes: string[] = [];
+const reloadedStateDatabaseClosers = new Set<() => void>();
 
 function useTempHome(): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-runtime-"));
   tempHomes.push(home);
   setTestEnvValue("HOME", home);
   setTestEnvValue("OPENCLAW_HOME", home);
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+  closeOpenClawStateDatabaseForTest();
+  execApprovalsStoreTesting.reset();
   return home;
 }
 
@@ -20,33 +30,34 @@ function execApprovalsPath(home: string): string {
   return path.join(home, ".openclaw", "exec-approvals.json");
 }
 
-function writeExecApprovalsToken(home: string, token: string): void {
-  fs.mkdirSync(path.join(home, ".openclaw"), { recursive: true });
-  fs.writeFileSync(
-    execApprovalsPath(home),
-    `${JSON.stringify(
-      {
-        version: 1,
-        socket: {
-          path: "~/.openclaw/exec-approvals.sock",
-          token,
-        },
-        agents: {},
-      },
-      null,
-      2,
-    )}\n`,
-  );
+function writeExecApprovalsToken(_home: string, token: string): void {
+  saveExecApprovals({
+    version: 1,
+    socket: {
+      path: "~/.openclaw/exec-approvals.sock",
+      token,
+    },
+    agents: {},
+  } satisfies ExecApprovalsFile);
 }
 
 async function importRuntimeTokenModule(): Promise<
   typeof import("./operator-approval-runtime-token.js")
 > {
   vi.resetModules();
-  return await import("./operator-approval-runtime-token.js");
+  const runtimeToken = await import("./operator-approval-runtime-token.js");
+  const stateDb = await import("../state/openclaw-state-db.js");
+  reloadedStateDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
+  return runtimeToken;
 }
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  for (const closeDatabase of reloadedStateDatabaseClosers) {
+    closeDatabase();
+  }
+  reloadedStateDatabaseClosers.clear();
+  execApprovalsStoreTesting.reset();
   vi.resetModules();
   envSnapshot.restore();
   for (const home of tempHomes.splice(0)) {
@@ -65,6 +76,7 @@ describe("operator approval runtime token", () => {
     expect(sharedToken).toEqual(expect.any(String));
     expect(sharedToken).not.toBe("shared-runtime-token");
     expect(runtimeToken.isOperatorApprovalRuntimeToken(` ${sharedToken} `)).toBe(true);
+    expect(runtimeToken.isOperatorApprovalRuntimeToken(sharedToken.slice(0, -1))).toBe(false);
     expect(runtimeToken.isOperatorApprovalRuntimeToken("shared-runtime-token")).toBe(false);
     expect(runtimeToken.isOperatorApprovalRuntimeToken("different-token")).toBe(false);
   });

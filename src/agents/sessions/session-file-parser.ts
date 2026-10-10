@@ -1,12 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FileEntry } from "./session-manager.js";
 
-export type SessionFileParseWarning = {
+type SessionFileParseWarning = {
   code: "invalid-session-json" | "invalid-session-row";
   row: number;
 };
 
-function isSessionFileEntry(value: unknown): value is FileEntry {
+export function isSessionFileEntry(value: unknown): value is FileEntry {
   if (!isRecord(value) || typeof value.type !== "string") {
     return false;
   }

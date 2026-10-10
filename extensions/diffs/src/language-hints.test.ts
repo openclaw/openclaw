@@ -5,18 +5,36 @@ import {
   normalizeDiffViewerPayloadLanguages,
   normalizeSupportedLanguageHint,
 } from "./language-hints.js";
+import type { DiffViewerOptions } from "./types.js";
 
-async function normalizeHints(values: readonly string[], options = {}) {
-  return await Promise.all(values.map((value) => normalizeSupportedLanguageHint(value, options)));
+const viewerOptions: DiffViewerOptions = {
+  theme: {
+    light: "pierre-light",
+    dark: "pierre-dark",
+  },
+  diffStyle: "unified",
+  diffIndicators: "bars",
+  disableLineNumbers: false,
+  expandUnchanged: false,
+  themeType: "dark",
+  backgroundEnabled: true,
+  overflow: "wrap",
+  unsafeCSS: "",
+};
+
+async function normalizeHints(values: readonly string[]) {
+  return await Promise.all(values.map((value) => normalizeSupportedLanguageHint(value)));
 }
 
 describe("normalizeSupportedLanguageHint", () => {
-  it("keeps supported languages", async () => {
-    await expect(normalizeHints(["typescript", "cpp", "text"])).resolves.toEqual([
+  it("normalizes language hint casing", async () => {
+    await expect(normalizeHints(["Python", "TypeScript"])).resolves.toEqual([
+      "python",
       "typescript",
-      "cpp",
-      "text",
     ]);
+    await expect(
+      normalizeSupportedLanguageHint("AbAp", { languagePackAvailable: true }),
+    ).resolves.toBe("abap");
   });
 
   it("normalizes common aliases to base viewer languages", async () => {
@@ -36,17 +54,7 @@ describe("normalizeSupportedLanguageHint", () => {
 
   it("keeps mainstream languages in the base viewer without the language pack", async () => {
     await expect(
-      normalizeHints([
-        "ruby",
-        "swift",
-        "kotlin",
-        "r",
-        "dart",
-        "lua",
-        "powershell",
-        "xml",
-        "toml",
-      ]),
+      normalizeHints(["ruby", "swift", "kotlin", "r", "dart", "lua", "powershell", "xml", "toml"]),
     ).resolves.toEqual([
       "ruby",
       "swift",
@@ -59,47 +67,13 @@ describe("normalizeSupportedLanguageHint", () => {
       "toml",
     ]);
   });
-
-  it("drops uncommon languages without the language pack", async () => {
-    await expect(normalizeSupportedLanguageHint("abap")).resolves.toBeUndefined();
-  });
-
-  it("keeps uncommon languages when the language pack is available", async () => {
-    await expect(
-      normalizeSupportedLanguageHint("abap", { languagePackAvailable: true }),
-    ).resolves.toBe("abap");
-  });
-
-  it("drops invalid languages", async () => {
-    await expect(normalizeSupportedLanguageHint("not-a-real-language")).resolves.toBeUndefined();
-  });
-
-  it("keeps valid languages when invalid hints are mixed in", async () => {
-    await expect(normalizeHints(["typescript", "not-a-real-language"])).resolves.toEqual([
-      "typescript",
-      undefined,
-    ]);
-  });
 });
 
 describe("normalizeDiffViewerPayloadLanguages", () => {
   it("rewrites stale patch payload language overrides to plain text", async () => {
     const result = await normalizeDiffViewerPayloadLanguages({
       prerenderedHTML: "<div>diff</div>",
-      options: {
-        theme: {
-          light: "pierre-light",
-          dark: "pierre-dark",
-        },
-        diffStyle: "unified",
-        diffIndicators: "bars",
-        disableLineNumbers: false,
-        expandUnchanged: false,
-        themeType: "dark",
-        backgroundEnabled: true,
-        overflow: "wrap",
-        unsafeCSS: "",
-      },
+      options: viewerOptions,
       langs: ["not-a-real-language" as never],
       fileDiff: {
         name: "foo.txt",
@@ -115,10 +89,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
     const result = await normalizeDiffViewerPayloadLanguages({
       prerenderedHTML: "<div>diff</div>",
       options: {
-        theme: {
-          light: "pierre-light",
-          dark: "pierre-dark",
-        },
+        ...viewerOptions,
         diffStyle: "split",
         diffIndicators: "classic",
         disableLineNumbers: true,
@@ -126,7 +97,6 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
         themeType: "light",
         backgroundEnabled: false,
         overflow: "scroll",
-        unsafeCSS: "",
       },
       langs: ["typescript", "not-a-real-language" as never],
       oldFile: {
@@ -150,20 +120,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
     const result = await normalizeDiffViewerPayloadLanguages(
       {
         prerenderedHTML: "<div>diff</div>",
-        options: {
-          theme: {
-            light: "pierre-light",
-            dark: "pierre-dark",
-          },
-          diffStyle: "unified",
-          diffIndicators: "bars",
-          disableLineNumbers: false,
-          expandUnchanged: false,
-          themeType: "dark",
-          backgroundEnabled: true,
-          overflow: "wrap",
-          unsafeCSS: "",
-        },
+        options: viewerOptions,
         langs: ["abap" as never],
         fileDiff: {
           name: "demo.abap",
@@ -180,20 +137,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
   it("rewrites blank explicit language overrides to plain text", async () => {
     const result = await normalizeDiffViewerPayloadLanguages({
       prerenderedHTML: "<div>diff</div>",
-      options: {
-        theme: {
-          light: "pierre-light",
-          dark: "pierre-dark",
-        },
-        diffStyle: "unified",
-        diffIndicators: "bars",
-        disableLineNumbers: false,
-        expandUnchanged: false,
-        themeType: "dark",
-        backgroundEnabled: true,
-        overflow: "wrap",
-        unsafeCSS: "",
-      },
+      options: viewerOptions,
       langs: ["   " as never],
       oldFile: {
         name: "before.unknown",
@@ -213,20 +157,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
   it("does not inject text when a valid file language is the only supported hint", async () => {
     const result = await normalizeDiffViewerPayloadLanguages({
       prerenderedHTML: "<div>diff</div>",
-      options: {
-        theme: {
-          light: "pierre-light",
-          dark: "pierre-dark",
-        },
-        diffStyle: "unified",
-        diffIndicators: "bars",
-        disableLineNumbers: false,
-        expandUnchanged: false,
-        themeType: "dark",
-        backgroundEnabled: true,
-        overflow: "wrap",
-        unsafeCSS: "",
-      },
+      options: viewerOptions,
       langs: [],
       oldFile: {
         name: "before.ts",

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/host-timeout.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
@@ -43,12 +48,6 @@ require_cmd() {
     echo "Missing dependency: $1" >&2
     exit 1
   fi
-}
-
-run_docker_build() {
-  # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
-  # BuildKit so hosts defaulting to the legacy builder do not fail.
-  docker_build_exec "$@"
 }
 
 run_docker_pull() {
@@ -142,6 +141,7 @@ read_env_gateway_token() {
 sync_gateway_config() {
   local allowed_origin_json=""
   local current_allowed_origins=""
+  local current_public_origin=""
   local batch_json=""
 
   if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
@@ -150,6 +150,13 @@ sync_gateway_config() {
       run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
     )"
     current_allowed_origins="${current_allowed_origins//$'\r'/}"
+    if [[ -z "$current_allowed_origins" ]]; then
+      current_public_origin="$(run_prestart_cli config get gateway.publicOrigin 2>/dev/null || true)"
+      if [[ -n "${current_public_origin//[[:space:]]/}" ]]; then
+        allowed_origin_json=""
+        echo "Control UI origins inherit gateway.publicOrigin; leaving allowedOrigins unset."
+      fi
+    fi
   fi
 
   batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"
@@ -271,9 +278,9 @@ const defaultSandbox = agents?.defaults?.sandbox ?? {};
 const defaultDockerImage = defaultSandbox?.docker?.image ?? process.argv[1];
 const defaultBrowserImage = defaultSandbox?.browser?.image ?? process.argv[2];
 const images = new Set();
-const configuredEntries = Array.isArray(agents?.list)
-  ? agents.list.filter((entry) => entry !== null && typeof entry === "object")
-  : [];
+const configuredEntries = Object.values(agents?.entries ?? {}).filter(
+  (entry) => entry !== null && typeof entry === "object",
+);
 const entries = configuredEntries.length > 0 ? configuredEntries : [{ sandbox: {} }];
 
 const matchesBrowser = (rawPattern) => {
@@ -408,9 +415,16 @@ contains_disallowed_chars() {
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
 }
 
-is_valid_timezone() {
+is_valid_timezone_in_image() {
   local value="$1"
-  [[ -e "/usr/share/zoneinfo/$value" && ! -d "/usr/share/zoneinfo/$value" ]]
+  docker run --rm --network none --entrypoint node "$IMAGE_NAME" -e '
+const timezone = process.argv[1];
+try {
+  new Intl.DateTimeFormat("en", { timeZone: timezone }).format(0);
+} catch {
+  process.exit(1);
+}
+' "$value"
 }
 
 validate_mount_path_value() {
@@ -496,9 +510,6 @@ if [[ -n "$TIMEZONE" ]]; then
   if [[ ! "$TIMEZONE" =~ ^[A-Za-z0-9/_+\-]+$ ]]; then
     fail "OPENCLAW_TZ must be a valid IANA timezone string (e.g. Asia/Shanghai)."
   fi
-  if ! is_valid_timezone "$TIMEZONE"; then
-    fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
-  fi
 fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
@@ -537,12 +548,14 @@ export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:
 export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}"
 export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}"
 export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="${OTEL_EXPORTER_OTLP_TRACES_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_METRICS_PROTOCOL="${OTEL_EXPORTER_OTLP_METRICS_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL="${OTEL_EXPORTER_OTLP_LOGS_PROTOCOL:-}"
 export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-}"
 export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
 export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
 export OPENCLAW_SKIP_ONBOARDING="$SKIP_ONBOARDING"
 
-# Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
 if [[ -n "$SANDBOX_ENABLED" && -S "$DOCKER_SOCKET_PATH" ]]; then
   DOCKER_GID="$(stat -c '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || stat -f '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || echo "")"
@@ -578,53 +591,35 @@ COMPOSE_ARGS=()
 write_extra_compose() {
   local home_volume="$1"
   shift
-  local mount
-  local gateway_home_mount
-  local gateway_config_mount
-  local gateway_workspace_mount
-  local gateway_auth_profile_secret_mount
-
-  cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
-services:
-  openclaw-gateway:
-    volumes:
-YAML
+  local mount service
+  local home_mounts=()
 
   if [[ -n "$home_volume" ]]; then
-    gateway_home_mount="${home_volume}:/home/node"
-    gateway_config_mount="${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
-    gateway_workspace_mount="${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
-    gateway_auth_profile_secret_mount="${OPENCLAW_AUTH_PROFILE_SECRET_DIR}:/home/node/.config/openclaw"
-    validate_mount_spec "$gateway_home_mount"
-    validate_mount_spec "$gateway_config_mount"
-    validate_mount_spec "$gateway_workspace_mount"
-    validate_mount_spec "$gateway_auth_profile_secret_mount"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
+    home_mounts=(
+      "${home_volume}:/home/node"
+      "${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
+      "${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
+      "${OPENCLAW_AUTH_PROFILE_SECRET_DIR}:/home/node/.config/openclaw"
+    )
   fi
 
-  for mount in "$@"; do
-    validate_mount_spec "$mount"
-    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
-  done
-
-  cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
-  openclaw-cli:
-    volumes:
-YAML
-
-  if [[ -n "$home_volume" ]]; then
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
-  fi
-
-  for mount in "$@"; do
-    validate_mount_spec "$mount"
-    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
+  printf 'services:\n' >"$EXTRA_COMPOSE_FILE"
+  for service in openclaw-gateway openclaw-cli; do
+    printf '  %s:\n    volumes:\n' "$service" >>"$EXTRA_COMPOSE_FILE"
+    if [[ -n "$home_volume" ]]; then
+      if [[ "$service" == "openclaw-gateway" ]]; then
+        for mount in "${home_mounts[@]}"; do
+          validate_mount_spec "$mount"
+        done
+      fi
+      for mount in "${home_mounts[@]}"; do
+        printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
+      done
+    fi
+    for mount in "$@"; do
+      validate_mount_spec "$mount"
+      printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
+    done
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
@@ -744,6 +739,9 @@ upsert_env "$ENV_FILE" \
   OTEL_EXPORTER_OTLP_METRICS_ENDPOINT \
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT \
   OTEL_EXPORTER_OTLP_PROTOCOL \
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL \
+  OTEL_EXPORTER_OTLP_METRICS_PROTOCOL \
+  OTEL_EXPORTER_OTLP_LOGS_PROTOCOL \
   OTEL_SERVICE_NAME \
   OTEL_SEMCONV_STABILITY_OPT_IN \
   OPENCLAW_OTEL_PRELOADED \
@@ -754,7 +752,14 @@ if [[ -n "$OFFLINE_MODE" ]]; then
   echo "==> Using preloaded Docker image: $IMAGE_NAME"
 elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
-  run_docker_build \
+  BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+  BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
+  PROVENANCE_BUILD_ARGS=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
+  if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    PROVENANCE_BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
+  fi
+  docker_build_exec \
+    "${PROVENANCE_BUILD_ARGS[@]}" \
     --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
     --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
@@ -774,6 +779,10 @@ else
   fi
 fi
 
+if [[ -n "$TIMEZONE" ]] && ! is_valid_timezone_in_image "$TIMEZONE"; then
+  fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."
+fi
+
 # Ensure bind-mounted data directories are writable by the container's `node`
 # user (uid 1000). Host-created dirs inherit the host user's uid which may
 # differ, causing EACCES when the container tries to mkdir/write.
@@ -781,16 +790,22 @@ fi
 # it works regardless of the host uid and doesn't require host-side root.
 echo ""
 echo "==> Fixing data-directory permissions"
-# Use -xdev to restrict chown to the config-dir mount only — without it,
-# the recursive chown would cross into the workspace bind mount and rewrite
-# ownership of all user project files on Linux hosts.
+# Prune workspace descendants explicitly: -xdev still crosses bind mounts on
+# the same filesystem. Repair the mount point itself so node can write there,
+# but leave user project file ownership unchanged.
+# Run a no-dereference chown from each entry's directory. This keeps ownership
+# repair for sockets/FIFOs while preventing a swapped symlink leaf from
+# redirecting the root operation outside the mounted tree.
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
-   chown node:node /home/node/.config; \
-   find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH; \
+   /usr/bin/find -P /home/node/.openclaw -xdev \( ! -path /home/node/.openclaw/workspace -o -prune \) -execdir /usr/bin/chown -h node:node {} +; \
+   /usr/bin/chown -h node:node /home/node/.config; \
+   /usr/bin/find -P /home/node/.config/openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
+     /usr/bin/find -P /home/node/.openclaw/workspace/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   fi || true'
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then
@@ -844,7 +859,6 @@ echo ""
 echo "==> Starting gateway"
 run_gateway_up current
 
-# --- Sandbox setup (opt-in via OPENCLAW_SANDBOX=1) ---
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo ""
   echo "==> Sandbox setup"
@@ -858,7 +872,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
 
   if [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" && -f "$sandbox_dockerfile" ]]; then
     echo "Building sandbox image: $DEFAULT_SANDBOX_IMAGE"
-    run_docker_build \
+    docker_build_exec \
       -t "$DEFAULT_SANDBOX_IMAGE" \
       -f "$sandbox_dockerfile" \
       "$ROOT_DIR"
@@ -903,23 +917,15 @@ YAML
 fi
 
 if [[ -n "$SANDBOX_ENABLED" ]]; then
-  # Enable sandbox in OpenClaw config.
   sandbox_config_ok=true
-  if ! run_runtime_cli current no-deps \
-    config set agents.defaults.sandbox.mode "non-main" >/dev/null; then
-    echo "WARNING: Failed to set agents.defaults.sandbox.mode" >&2
-    sandbox_config_ok=false
-  fi
-  if ! run_runtime_cli current no-deps \
-    config set agents.defaults.sandbox.scope "agent" >/dev/null; then
-    echo "WARNING: Failed to set agents.defaults.sandbox.scope" >&2
-    sandbox_config_ok=false
-  fi
-  if ! run_runtime_cli current no-deps \
-    config set agents.defaults.sandbox.workspaceAccess "none" >/dev/null; then
-    echo "WARNING: Failed to set agents.defaults.sandbox.workspaceAccess" >&2
-    sandbox_config_ok=false
-  fi
+  for sandbox_setting in mode:non-main scope:agent workspaceAccess:none; do
+    sandbox_path="agents.defaults.sandbox.${sandbox_setting%%:*}"
+    if ! run_runtime_cli current no-deps \
+      config set "$sandbox_path" "${sandbox_setting#*:}" >/dev/null; then
+      echo "WARNING: Failed to set $sandbox_path" >&2
+      sandbox_config_ok=false
+    fi
+  done
 
   if [[ "$sandbox_config_ok" == true ]]; then
     echo "Sandbox enabled: mode=non-main, scope=agent, workspaceAccess=none"
@@ -963,4 +969,4 @@ echo "Token: stored in Docker environment/config (not printed)."
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
-echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"
+echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"

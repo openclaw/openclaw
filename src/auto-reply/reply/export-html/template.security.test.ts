@@ -1,149 +1,15 @@
 // Tests exported HTML transcript escaping and template safety.
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import vm from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-
-type SessionEntry = {
-  id: string;
-  parentId: string | null;
-  timestamp: string;
-  type: string;
-  message?: unknown;
-  summary?: string;
-  content?: unknown;
-  targetId?: string | null;
-  appendParentId?: string | null;
-  display?: boolean;
-  customType?: string;
-  provider?: string;
-  modelId?: string;
-  thinkingLevel?: string;
-};
-
-type SessionData = {
-  header: { id: string; timestamp: string };
-  entries: SessionEntry[];
-  leafId: string | null;
-  hasLeafControl?: boolean;
-  systemPrompt: string;
-  tools: unknown[];
-};
-
-type ParsedHtml = {
-  document: Document;
-  window: {
-    HTMLElement?: unknown;
-  };
-};
-
-type LinkedomModule = {
-  parseHTML(html: string): ParsedHtml;
-};
-
-const LINKEDOM_MODULE = "linkedom";
-
-const exportHtmlDir = path.dirname(fileURLToPath(import.meta.url));
-const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
-const templateCss = fs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
-const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
-const markedJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "marked.min.js"), "utf8");
-const highlightJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "highlight.min.js"), "utf8");
-
-let parseHtmlPromise: Promise<LinkedomModule["parseHTML"]> | null = null;
-
-async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
-  parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
-    (module) => module["parseHTML"],
-  );
-  return parseHtmlPromise;
-}
-
-function installScrollIntoViewStub(document: Document) {
-  const patchElement = <T extends Element | null>(element: T): T => {
-    if (element && !("scrollIntoView" in element)) {
-      Object.defineProperty(element, "scrollIntoView", {
-        configurable: true,
-        value: () => {},
-      });
-    }
-    return element;
-  };
-
-  for (const element of document.querySelectorAll("*")) {
-    patchElement(element);
-  }
-
-  const getElementById = document.getElementById.bind(document);
-  document.getElementById = ((id: string) =>
-    patchElement(getElementById(id))) as typeof document.getElementById;
-
-  const querySelector = document.querySelector.bind(document);
-  document.querySelector = ((selectors: string) =>
-    patchElement(querySelector(selectors))) as typeof document.querySelector;
-
-  const createElement = document.createElement.bind(document);
-  document.createElement = ((tagName: string, options?: ElementCreationOptions) =>
-    patchElement(createElement(tagName, options))) as typeof document.createElement;
-}
-
-async function renderTemplate(sessionData: SessionData) {
-  const html = [
-    ["CSS", ""],
-    ["SESSION_DATA", Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64")],
-    ["MARKED_JS", ""],
-    ["HIGHLIGHT_JS", ""],
-    ["JS", ""],
-  ].reduce(
-    (currentHtml, [name, value]) =>
-      currentHtml.replace(
-        new RegExp(
-          `(<(?:script|style)\\b(?=[^>]*\\bdata-openclaw-export-placeholder="${name}")[^>]*>)(</(?:script|style)>)`,
-        ),
-        (_match: string, openTag: string, closeTag: string) =>
-          `${openTag.replace(/\sdata-openclaw-export-placeholder="[^"]*"/, "")}${value}${closeTag}`,
-      ),
-    templateHtml,
-  );
-
-  const parseHTML = await loadParseHTML();
-  const { document, window } = parseHTML(html);
-  if (window.HTMLElement) {
-    installScrollIntoViewStub(document);
-  }
-
-  const immediateTimeout = (fn: (...args: unknown[]) => void) => {
-    fn();
-    return 0;
-  };
-  const runtime: Record<string, unknown> = {
-    document,
-    console,
-    clearTimeout: () => {},
-    setTimeout: immediateTimeout,
-    URLSearchParams,
-    TextDecoder,
-    atob: (s: string) => Buffer.from(s, "base64").toString("binary"),
-    btoa: (s: string) => Buffer.from(s, "binary").toString("base64"),
-    navigator: { clipboard: { writeText: async () => {} } },
-    history: { replaceState: () => {} },
-    location: { href: "http://localhost/export.html", search: "" },
-  };
-  runtime.window = runtime;
-  runtime.self = runtime;
-  runtime.globalThis = runtime;
-
-  vm.createContext(runtime);
-  vm.runInContext(markedJs, runtime);
-  vm.runInContext(highlightJs, runtime);
-  vm.runInContext(templateJs, runtime);
-  return { document };
-}
-
-function now() {
-  return new Date("2026-02-24T00:00:00.000Z").toISOString();
-}
+import {
+  now,
+  renderTemplate,
+  requireElement,
+  type SessionData,
+  type SessionEntry,
+  templateCss,
+  templateHtml,
+} from "../../../../test/helpers/export-html-template.js";
 
 function selectorSpecificity(selector: string): [number, number, number] {
   const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
@@ -161,7 +27,7 @@ function selectorSpecificity(selector: string): [number, number, number] {
 function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) {
-      return left[index] - right[index];
+      return expectDefined(left[index], "left[index] test invariant") - expectDefined(right[index], "right[index] test invariant");
     }
   }
   return 0;
@@ -172,13 +38,6 @@ function firstSelectorForDisplay(css: string, display: string, startAt: number):
   displayRule.lastIndex = startAt;
   const match = displayRule.exec(css);
   return match?.[1]?.split(",").at(-1)?.trim() ?? null;
-}
-
-function requireElement<T extends Element>(element: T | null, message: string): T {
-  if (!element) {
-    throw new Error(message);
-  }
-  return element;
 }
 
 describe("export html sidebar trigger affordance", () => {
@@ -212,6 +71,131 @@ describe("export html sidebar trigger affordance", () => {
 });
 
 describe("export html security hardening", () => {
+  it.each(["consult", "answer"])("honors hidden input with %s selected while preserving raw export", async (leafId) => {
+    function message(id: string, parentId: string | null, content: string, role = "assistant") {
+      return {
+        id,
+        parentId,
+        timestamp: now(),
+        type: "message",
+        message: { role, content },
+      };
+    }
+
+    const session: SessionData = {
+      header: { id: "session-hidden-input", timestamp: now() },
+      entries: [
+        {
+          id: "hidden-root",
+          parentId: "hidden-root",
+          timestamp: now(),
+          type: "custom_message",
+          customType: "context",
+          content: "Hidden root context",
+          display: false,
+        },
+        message("speech", "hidden-root", "Explain the change. Context: Spoken style:", "user"),
+        {
+          id: "consult",
+          parentId: "speech",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "user",
+            content: "Synthetic consultation instructions",
+            display: false,
+            provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
+          },
+        },
+        message("answer", "consult", "The change is ready."),
+        message("alternative", "speech", "An alternative reply."),
+        message("other-root", null, "Another conversation."),
+      ],
+      leafId,
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document, downloadJson } = await renderTemplate(session);
+    expect(document.querySelectorAll(".user-message")).toHaveLength(1);
+    expect(document.getElementById("entry-speech")?.textContent).toContain(
+      "Explain the change. Context: Spoken style:",
+    );
+    expect(document.getElementById("entry-consult")).toBeNull();
+    expect(document.getElementById("entry-hidden-root")).toBeNull();
+    const treeIds = () => Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
+    const treePrefixes = () =>
+      Array.from(document.querySelectorAll(".tree-prefix"), (node) => node.textContent);
+    expect(treeIds()).toEqual(["speech", "answer", "alternative", "other-root"]);
+    expect(treePrefixes()).toEqual(["", "├─ ", "└─ ", ""]);
+    const selectFilter = (filter: string) => requireElement(
+      document.querySelector<HTMLButtonElement>(`[data-filter="${filter}"]`), "filter missing",
+    ).click();
+    selectFilter("all");
+    expect(treeIds()).toEqual([
+      "hidden-root",
+      "speech",
+      "consult",
+      "answer",
+      "alternative",
+      "other-root",
+    ]);
+    expect(treePrefixes()).toEqual(["", "   ", "   ├─ ", "   │     ", "   └─ ", ""]);
+    expect(document.querySelector('[data-id="consult"]')?.textContent).toContain("[hidden] user:");
+    requireElement(document.querySelector<HTMLElement>('[data-id="consult"]'), "hidden tree entry missing").click();
+    expect(document.getElementById("entry-answer")?.textContent).toContain("The change is ready.");
+    expect(document.getElementById("entry-consult")).toBeNull();
+    selectFilter("user-only");
+    expect(treeIds()).not.toContain("consult");
+    selectFilter("default");
+    expect(treeIds()).toEqual(["speech", "answer", "alternative", "other-root"]);
+    expect(treePrefixes()).toEqual(["", "├─ ", "└─ ", ""]);
+    expect(document.getElementById("header-container")?.textContent).toContain("2 user, 3 assistant, 1 custom");
+    const encoded = requireElement(document.getElementById("session-data"), "session data missing");
+    expect(JSON.parse(Buffer.from(encoded.textContent ?? "", "base64").toString("utf8"))).toEqual(
+      session,
+    );
+    expect((await downloadJson()).split("\n").map((line) => JSON.parse(line))).toEqual([
+      { type: "header", ...session.header }, ...session.entries,
+    ]);
+  });
+
+  it("renders export warnings in the header without interpreting HTML", async () => {
+    const warning = 'Backend <img src=x onerror="alert(1)"> transcript is incomplete';
+    const session: SessionData = {
+      header: { id: "session-warning", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "hello" },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+      warning,
+    };
+
+    const { document } = await renderTemplate(session);
+    const header = requireElement(
+      document.getElementById("header-container"),
+      "header root missing",
+    );
+    const warningNode = requireElement(
+      header.querySelector(".export-warning"),
+      "export warning missing",
+    );
+
+    expect(warningNode.textContent).toBe(warning);
+    expect(warningNode.querySelector("img[onerror]")).toBeNull();
+    expect(warningNode.innerHTML).toContain(
+      'Backend &lt;img src=x onerror="alert(1)"&gt; transcript is incomplete',
+    );
+  });
+
   it("renders an explicitly selected empty branch without inactive messages", async () => {
     const session: SessionData = {
       header: { id: "session-empty", timestamp: now() },
@@ -281,6 +265,94 @@ describe("export html security hardening", () => {
     expect(messages.querySelector("img[onerror]")).toBeNull();
     expect(messages.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
   });
+
+  it("renders Markdown and TypeScript highlighting without external assets", async () => {
+    const session: SessionData = {
+      header: { id: "session-render", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "**rendered**\n\n```typescript\nconst answer = true;\n```",
+          },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.querySelector("strong")?.textContent).toBe("rendered");
+    const code = requireElement(messages.querySelector("pre code.hljs"), "highlighted code missing");
+    expect(code.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    expect(code.textContent).toContain("answer = true");
+  });
+
+  it.each(["user", "assistant"] as const)(
+    "renders tight-list inline formatting in %s transcript exports",
+    async (role) => {
+      const inline =
+        "**Important**: read [the guide](https://example.test/guide) and use `config.json`.";
+      const literal = "**literal** [not a link](https://example.test/literal)";
+      const session: SessionData = {
+        header: { id: "session-tight-list", timestamp: now() },
+        entries: [
+          {
+            id: "tight-list",
+            parentId: null,
+            timestamp: now(),
+            type: "message",
+            message: {
+              role,
+              content: [
+                `Paragraph control: ${inline}`,
+                "",
+                `- ${inline}`,
+                "- Plain item.",
+                "",
+                "`" + literal + "`",
+              ].join("\n"),
+            },
+          },
+        ],
+        leafId: "tight-list",
+        systemPrompt: "",
+        tools: [],
+      };
+
+      const { document } = await renderTemplate(session);
+      const entry = requireElement(document.getElementById("entry-tight-list"), "entry missing");
+      const paragraph = requireElement(entry.querySelector("p"), "paragraph control missing");
+      expect(paragraph.querySelector("strong")?.textContent).toBe("Important");
+      expect(paragraph.querySelector("a")?.getAttribute("href")).toBe("https://example.test/guide");
+      expect(paragraph.querySelector("code")?.textContent).toBe("config.json");
+
+      const list = requireElement(entry.querySelector("ul"), "tight list missing");
+      expect(list.querySelectorAll("li")).toHaveLength(2);
+      const item = requireElement(list.querySelector("li"), "list item missing");
+      expect(item.querySelector("strong")?.textContent).toBe("Important");
+      const link = requireElement(item.querySelector("a"), "list link missing");
+      expect(link.getAttribute("href")).toBe("https://example.test/guide");
+      expect(link.textContent).toBe("the guide");
+      expect(item.querySelector("code")?.textContent).toBe("config.json");
+      expect(item.textContent?.trim()).toBe("Important: read the guide and use config.json.");
+
+      const literalParagraph = requireElement(
+        Array.from(entry.querySelectorAll("p")).find(
+          (candidate) => candidate.querySelector("code")?.textContent === literal,
+        ) ?? null,
+        "literal code control missing",
+      );
+      expect(literalParagraph.textContent).toBe(literal);
+      expect(literalParagraph.querySelector("a, strong")).toBeNull();
+    },
+  );
 
   it("escapes tree and header metadata fields", async () => {
     const attack = "<img src=x onerror=alert(9)>";
@@ -586,6 +658,38 @@ describe("export html security hardening", () => {
     expect(elementId.startsWith("entry-")).toBe(true);
   });
 
+  it("truncates tree node text without splitting surrogate pairs", async () => {
+    const emoji = "😀";
+    const prefix = "x".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-surrogate-truncation", timestamp: now() },
+      entries: [
+        {
+          id: "surrogate-user",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: `${prefix}${emoji}tail` },
+        },
+      ],
+      leafId: "surrogate-user",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const treeText =
+      Array.from(document.querySelectorAll(".tree-content")).find((node) =>
+        node.textContent?.includes("user:"),
+      )?.textContent ?? "";
+
+    expect(treeText).toContain(`user: ${prefix}...`);
+    expect(treeText).not.toContain(emoji);
+    expect(treeText).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it("copy-link round-trip: dataset.entryId matches raw entry.id after browser decoding", async () => {
     // IDs with characters that need HTML escaping but should round-trip correctly
     const specialId = `msg-with"quotes&amp's`;
@@ -758,5 +862,97 @@ describe("export html security hardening", () => {
       };
       await expect(renderTemplate(session)).resolves.toBeDefined();
     }
+  });
+});
+
+describe("export html tool call previews", () => {
+  it("truncates tool previews without splitting emoji", async () => {
+    const bashPrefix = "a".repeat(49);
+    const genericPrefix = "b".repeat(29);
+    const bashExecutionPrefix = "c".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-tool-preview-emoji", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "run tools" },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-bash",
+                name: "bash",
+                arguments: { command: `${bashPrefix}😀tail` },
+              },
+              {
+                type: "toolCall",
+                id: "call-custom",
+                name: "custom",
+                arguments: { value: `${genericPrefix}😀tail` },
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-bash",
+            content: "bash output",
+          },
+        },
+        {
+          id: "4",
+          parentId: "3",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-custom",
+            content: "custom output",
+          },
+        },
+        {
+          id: "5",
+          parentId: "4",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "bashExecution",
+            command: `${bashExecutionPrefix}😀tail`,
+          },
+        },
+      ],
+      leafId: "5",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const previews = ["3", "4", "5"].map((id) =>
+      requireElement(
+        document.querySelector(`.tree-node[data-id="${id}"] .tree-content`),
+        `tool preview ${id} missing`,
+      ).textContent,
+    );
+
+    expect(previews).toEqual([
+      `[bash: ${bashPrefix}...]`,
+      `[custom: {"value":"${genericPrefix}...]`,
+      `[bash]: ${bashExecutionPrefix}...`,
+    ]);
   });
 });

@@ -1,29 +1,20 @@
-// Tool payload helpers normalize provider tool-call schemas and compatibility payloads.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
-  stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
+  type PlainTextToolCallBlock,
+  type PlainTextToolCallParseOptions,
+  type PlainTextToolCallProtectedRange,
 } from "../../packages/tool-call-repair/src/index.js";
 
-/** Plugin-facing plain-text tool call block with source offsets for repair. */
-export type PlainTextToolCallBlock = {
-  /** Parsed JSON arguments object. */
-  arguments: Record<string, unknown>;
-  /** Exclusive end offset of the parsed block. */
-  end: number;
-  /** Tool name parsed from the standalone block. */
-  name: string;
-  /** Original text slice that produced this block. */
-  raw: string;
-  /** Inclusive start offset of the parsed block. */
-  start: number;
-};
+export type {
+  PlainTextToolCallBlock,
+  PlainTextToolCallParseOptions,
+  PlainTextToolCallProtectedRange,
+} from "../../packages/tool-call-repair/src/index.js";
 
-/** Plugin-facing parser options for standalone plain-text tool calls. */
-export type PlainTextToolCallParseOptions = {
-  /** Optional allowlist of tool names that may be accepted. */
-  allowedToolNames?: Iterable<string>;
-  /** Maximum JSON payload size accepted for one parsed call. */
-  maxPayloadBytes?: number;
+export type PlainTextToolCallStripOptions = {
+  /** Resolves literal source ranges that must not be interpreted as tool calls. */
+  resolveProtectedRanges?: (text: string) => readonly PlainTextToolCallProtectedRange[];
 };
 
 /** Parses a message made only of standalone plain-text tool call blocks. */
@@ -35,9 +26,7 @@ export function parseStandalonePlainTextToolCallBlocks(
 }
 
 /** Removes full-line standalone plain-text tool call blocks from visible text. */
-export function stripPlainTextToolCallBlocks(text: string): string {
-  return stripRepairToolCallBlocks(text);
-}
+export { stripPlainTextToolCallBlocks } from "../../packages/tool-call-repair/src/index.js";
 
 type ToolPayloadTextBlock = {
   type: "text";
@@ -53,12 +42,8 @@ export type ToolPayloadCarrier = {
 };
 
 function isToolPayloadTextBlock(block: unknown): block is ToolPayloadTextBlock {
-  return (
-    Boolean(block) &&
-    typeof block === "object" &&
-    (block as { type?: unknown }).type === "text" &&
-    typeof (block as { text?: unknown }).text === "string"
-  );
+  const record = asOptionalObjectRecord(block);
+  return record?.type === "text" && typeof record.text === "string";
 }
 
 /**

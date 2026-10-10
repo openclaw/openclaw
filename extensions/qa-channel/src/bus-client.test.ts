@@ -1,7 +1,29 @@
-// Qa Channel tests cover bus client plugin behavior.
-import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
-import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
+import http, { createServer, type Server } from "node:http";
+import type { Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getQaBusState, pollQaBus, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
+
+const guardedFetchCalls = vi.hoisted(
+  () =>
+    [] as Array<
+      Parameters<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>[0]
+    >,
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      guardedFetchCalls.push(params);
+      return actual.fetchWithSsrFGuard(params);
+    },
+  };
+});
+
+const OVERSIZED_RESPONSE_BYTES = 18 * 1024 * 1024;
 
 async function startJsonServer(
   handler: (req: { url?: string | undefined }) => { statusCode?: number; body: string },
@@ -14,24 +36,103 @@ async function startJsonServer(
     res.end(response.body);
   });
 
+  const { port, stop } = await listenLoopbackServer(server);
+
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    stop,
+  };
+}
+
+async function listenLoopbackServer(server: Server) {
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
   });
-
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test server failed to bind");
   }
-
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    async stop() {
-      await new Promise<void>((resolve, reject) => {
+    port: address.port,
+    stop: () =>
+      new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      }),
   };
+}
+
+function createOversizedJsonServer(pathname: string): { server: Server; closed: Promise<number> } {
+  let resolveClosed: (sentBytes: number) => void = () => {};
+  const closed = new Promise<number>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const server = createServer((req, res) => {
+    if (req.url !== pathname) {
+      res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: `unexpected path: ${req.url}` }));
+      return;
+    }
+    let sentBytes = 0;
+    let stopped = false;
+    let prefixSent = false;
+    const prefixChunk = Buffer.from('{"payload":"');
+    const bodyChunk = Buffer.alloc(64 * 1024, 0x61);
+    const suffixChunk = Buffer.from('"}');
+    const writeBuffer = (buffer: Buffer) => {
+      sentBytes += buffer.length;
+      if (!res.write(buffer)) {
+        res.once("drain", writeChunks);
+        return false;
+      }
+      return true;
+    };
+    const writeChunks = () => {
+      if (!prefixSent) {
+        prefixSent = true;
+        if (!writeBuffer(prefixChunk)) {
+          return;
+        }
+      }
+      while (true) {
+        if (stopped) {
+          return;
+        }
+        if (sentBytes + bodyChunk.length + suffixChunk.length >= OVERSIZED_RESPONSE_BYTES) {
+          break;
+        }
+        if (!writeBuffer(bodyChunk)) {
+          return;
+        }
+      }
+      if (!stopped) {
+        sentBytes += suffixChunk.length;
+        res.end(suffixChunk);
+      }
+    };
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", connection: "close" });
+    res.on("close", () => {
+      stopped = true;
+      resolveClosed(sentBytes);
+    });
+    req.on("aborted", () => {
+      stopped = true;
+      res.destroy();
+    });
+    writeChunks();
+  });
+  return { server, closed };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -54,20 +155,89 @@ describe("qa-bus client", () => {
   const stops: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
-    await Promise.all(stops.splice(0).map((stop) => stop()));
+    try {
+      await Promise.all(stops.splice(0).map((stop) => stop()));
+    } finally {
+      guardedFetchCalls.length = 0;
+      vi.restoreAllMocks();
+    }
   });
 
-  it("roundtrips explicit group targets", () => {
-    expect(parseQaTarget("group:ops-room")).toEqual({
-      chatType: "group",
-      conversationId: "ops-room",
+  it.each([false, true])(
+    "prepares the outbound POST before handoff (refused=%s)",
+    async (refused) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const arrived = createDeferred<void>();
+      const response = createDeferred<void>();
+      const refusal = new Error("QA message authority ended");
+      const authority = fetchRuntime.captureEffectAuthority();
+      vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (refused) {
+            throw refusal;
+          }
+          return authority.initiate(effect);
+        },
+      });
+      const server = createServer((_req, res) => {
+        arrived.resolve();
+        void response.promise.then(() => {
+          res.end(JSON.stringify({ message: { id: "prepared-message" } }));
+        });
+      });
+      const { port, stop } = await listenLoopbackServer(server);
+      stops.push(stop);
+      const request = vi.spyOn(http, "request");
+      const sending = sendQaBusMessage({
+        baseUrl: `http://127.0.0.1:${port}`,
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "prepared",
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          arrived.promise.then(() => {
+            throw new Error("QA POST bypassed preparation");
+          }),
+        ]);
+        expect(request).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!refused) {
+          await arrived.promise;
+          response.resolve();
+        }
+        expect(await sending).toEqual(
+          refused ? { error: refusal } : { value: { message: { id: "prepared-message" } } },
+        );
+        expect(request).toHaveBeenCalledTimes(refused ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve();
+        await sending;
+      }
+    },
+  );
+
+  it("rejects conflicting embedded and explicit thread ids", () => {
+    expect(resolveQaTargetThread({ target: "thread:Room/Topic", threadId: "Topic" })).toEqual({
+      target: {
+        chatType: "channel",
+        conversationId: "Room",
+        threadId: "Topic",
+      },
+      threadId: "Topic",
     });
-    expect(
-      buildQaTarget({
-        chatType: "group",
-        conversationId: "ops-room",
-      }),
-    ).toBe("group:ops-room");
+    expect(() => resolveQaTargetThread({ target: "thread:Room/Topic", threadId: "Other" })).toThrow(
+      "qa-channel target conflicts with the explicit threadId",
+    );
   });
 
   it("rejects malformed JSON responses instead of throwing from the stream callback", async () => {
@@ -81,9 +251,28 @@ describe("qa-bus client", () => {
         baseUrl: server.baseUrl,
         accountId: "acct-a",
         cursor: 0,
+        acknowledgedCursor: 0,
         timeoutMs: 0,
       }),
-    ).rejects.toThrow(SyntaxError);
+    ).rejects.toThrow("qa-bus /v1/poll: malformed JSON response");
+  });
+
+  it("bounds oversized poll responses and closes the stream early", async () => {
+    const oversized = createOversizedJsonServer("/v1/poll");
+    const { port, stop } = await listenLoopbackServer(oversized.server);
+    stops.push(stop);
+
+    await expect(
+      pollQaBus({
+        baseUrl: `http://127.0.0.1:${port}`,
+        accountId: "acct-a",
+        cursor: 0,
+        acknowledgedCursor: 0,
+        timeoutMs: 0,
+      }),
+    ).rejects.toThrow("qa-bus /v1/poll: JSON response exceeds 16777216 bytes");
+    const sentBytes = await oversized.closed;
+    expect(sentBytes).toBeLessThan(OVERSIZED_RESPONSE_BYTES);
   });
 
   it("rejects immediately when a poll request is aborted", async () => {
@@ -91,28 +280,15 @@ describe("qa-bus client", () => {
       // Keep the request open so the client abort path owns the outcome.
     });
 
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test server failed to bind");
-    }
-
-    stops.push(async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
 
     const abort = new AbortController();
     const request = pollQaBus({
-      baseUrl: `http://127.0.0.1:${address.port}`,
+      baseUrl: `http://127.0.0.1:${port}`,
       accountId: "acct-a",
       cursor: 0,
+      acknowledgedCursor: 0,
       timeoutMs: 30_000,
       signal: abort.signal,
     });
@@ -125,6 +301,83 @@ describe("qa-bus client", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).name).toBe("AbortError");
     }
+  });
+
+  it("bounds stalled message requests with a total deadline", async () => {
+    const server = createServer((_req, _res) => {
+      // Accept the request without returning headers so the client deadline owns the outcome.
+    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
+
+    const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementationOnce(() => realAbortSignalTimeout(25));
+
+    await expect(
+      sendQaBusMessage({
+        baseUrl: `http://127.0.0.1:${port}`,
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "hello",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+  });
+
+  it("bounds message responses that stall after headers", async () => {
+    let markBodyStarted: () => void = () => {};
+    const bodyStarted = new Promise<void>((resolve) => {
+      markBodyStarted = resolve;
+    });
+    const server = createServer((_req, res) => {
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "128",
+      });
+      res.write('{"message":', markBodyStarted);
+    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
+
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(timeout.signal);
+    const request = sendQaBusMessage({
+      baseUrl: `http://127.0.0.1:${port}`,
+      accountId: "acct-a",
+      to: "dm:alice",
+      text: "hello",
+    });
+    const rejection = expect(
+      withTimeout(request, 1_000, "stalled response body did not settle"),
+    ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
+
+    await withTimeout(bodyStarted, 500, "server did not start the response body");
+    timeout.abort(new DOMException("qa-bus request timed out", "TimeoutError"));
+    await rejection;
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+  });
+
+  it("keeps long polls within the server wait window plus response grace", async () => {
+    const server = await startJsonServer(() => ({
+      body: JSON.stringify({ cursor: 1, events: [] }),
+    }));
+    stops.push(server["stop"]);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+
+    await expect(
+      pollQaBus({
+        baseUrl: server.baseUrl,
+        accountId: "acct-a",
+        cursor: 0,
+        acknowledgedCursor: 0,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toEqual({ cursor: 1, events: [] });
+    expect(timeoutSpy).toHaveBeenCalledWith(40_000);
   });
 
   it("preserves baseUrl path prefixes when composing bus URLs", async () => {
@@ -150,5 +403,19 @@ describe("qa-bus client", () => {
       messages: [],
       events: [],
     });
+    expect(guardedFetchCalls.at(-1)).toMatchObject({
+      auditContext: "qa-channel.bus-state",
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("bounds oversized qa-bus state responses", async () => {
+    const oversized = createOversizedJsonServer("/v1/state");
+    const { port, stop } = await listenLoopbackServer(oversized.server);
+    stops.push(stop);
+
+    await expect(getQaBusState(`http://127.0.0.1:${port}`)).rejects.toThrow(
+      "qa-channel.bus-state: JSON response exceeds 16777216 bytes",
+    );
   });
 });

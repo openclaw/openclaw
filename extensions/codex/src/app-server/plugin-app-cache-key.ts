@@ -4,27 +4,35 @@
  */
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildCodexAppInventoryCacheKey,
   type CodexAppInventoryCacheKeyInput,
 } from "./app-inventory-cache.js";
-import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
+import {
+  resolveCodexAppServerHomeDir,
+  resolveCodexAppServerLocalHomeDir,
+  resolveCodexAppServerUserHomeDir,
+} from "./auth-start-options.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
-import type { CodexAppServerRuntimeOptions, CodexAppServerStartOptions } from "./config.js";
+import type {
+  CodexAppServerRuntimeOptions,
+  CodexAppServerStartOptions,
+} from "./config-contracts.js";
 
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
-export type CodexPluginAppCacheKeyParams = Omit<
+type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
   "codexHome" | "endpoint"
 > & {
   appServer: Pick<CodexAppServerRuntimeOptions, "start">;
   agentDir?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
+  desktopGenerationFingerprint?: string;
 };
 
 /** Builds the full app inventory cache key for Codex plugin/app discovery. */
@@ -39,19 +47,26 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
       accountId: params.accountId,
       envApiKeyFingerprint: params.envApiKeyFingerprint,
       appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion,
-      runtimeIdentity: params.runtimeIdentity,
+      runtimeIdentity: params.desktopGenerationFingerprint
+        ? {
+            ...params.runtimeIdentity,
+            desktopGeneration: params.desktopGenerationFingerprint,
+          }
+        : params.runtimeIdentity,
     },
     OPENCLAW_VERSION,
     CODEX_PLUGIN_VERSION,
   );
 }
 
+type CodexConnectionFingerprintOptions = Pick<
+  CodexAppServerRuntimeOptions,
+  "start" | "connectionClass" | "remoteWorkspaceRoot"
+>;
+
 /** Builds a durable thread-binding fingerprint for one initialized app-server runtime. */
 export function buildCodexAppServerRuntimeFingerprint(params: {
-  appServer: Pick<
-    CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspaceRoot"
-  >;
+  appServer: CodexConnectionFingerprintOptions;
   appServerVersion?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
 }): string {
@@ -64,8 +79,43 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
   });
 }
 
+/** Fingerprints the configured connection that owns a supervised source thread. */
+export function buildCodexAppServerConnectionFingerprint(
+  appServer: CodexConnectionFingerprintOptions,
+  agentDir?: string,
+): string {
+  return JSON.stringify({
+    endpoint: resolveCodexPluginAppCacheEndpoint(appServer),
+    connectionClass: appServer.connectionClass,
+    remoteWorkspaceRoot: appServer.remoteWorkspaceRoot ?? null,
+    homeScope: appServer.start.homeScope ?? null,
+    codexHome: resolveCodexAppServerConnectionHome(appServer.start, agentDir),
+    cwd: appServer.start.cwd ?? null,
+  });
+}
+
+function resolveCodexAppServerConnectionHome(
+  start: CodexAppServerStartOptions,
+  agentDir?: string,
+): string | null {
+  const configured = start.codexHome ?? start.env?.CODEX_HOME?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (start.transport === "unix" && (!start.url || start.url === "unix://")) {
+    return resolveCodexAppServerUserHomeDir(start.env ?? process.env);
+  }
+  if (start.transport !== "stdio") {
+    return null;
+  }
+  if (start.homeScope === "user") {
+    return resolveCodexAppServerUserHomeDir(process.env);
+  }
+  return agentDir ? resolveCodexAppServerLocalHomeDir(start, agentDir) : null;
+}
+
 /** Serializes app-server endpoint identity, including credential fingerprints. */
-export function resolveCodexPluginAppCacheEndpoint(
+function resolveCodexPluginAppCacheEndpoint(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
 ): string {
   return JSON.stringify({
@@ -78,11 +128,11 @@ export function resolveCodexPluginAppCacheEndpoint(
 }
 
 /** Resolves the CODEX_HOME value that scopes local app-server inventory. */
-export function resolveCodexPluginAppCacheCodexHome(
+function resolveCodexPluginAppCacheCodexHome(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
   agentDir?: string,
 ): string | undefined {
-  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
+  const configuredCodexHome = appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     return configuredCodexHome;
   }

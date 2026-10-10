@@ -1,0 +1,365 @@
+import { stripInboundMetadata } from "openclaw/plugin-sdk/qa-runtime";
+import {
+  type MockAssistantMessageSpec,
+  type StreamEvent,
+  parseJsonObjectBody,
+  QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE,
+  QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
+  QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
+} from "./mock-openai-contracts.js";
+import { MockResponseStream } from "./mock-openai-stream.js";
+import { buildMockFunctionCall } from "./mock-openai-tooling.js";
+
+export function buildRemoteCompactionV2Events(): StreamEvent[] {
+  const stream = new MockResponseStream("resp_mock_compaction_1");
+  stream.item({
+    type: "compaction",
+    encrypted_content: "QA_MOCK_REMOTE_COMPACTION_SUMMARY",
+  });
+  return stream.complete(16);
+}
+
+export function buildFailedResponseEvents(): StreamEvent[] {
+  return new MockResponseStream(`resp_qa_failed_${Date.now()}`).fail();
+}
+
+export function buildPartialFailureEvents(partialText: string): StreamEvent[] {
+  const stream = new MockResponseStream("resp_qa_partial_failed_1");
+  stream.message(
+    {
+      id: "msg_qa_partial_failed_1",
+      phase: "final_answer",
+      streamDeltas: [partialText],
+      text: partialText,
+    },
+    false,
+  );
+  return stream.fail();
+}
+
+export function buildReleaseAuditJson() {
+  return `${JSON.stringify(
+    {
+      verified: false,
+      findings: [
+        {
+          id: "REL-GATEWAY-417",
+          source: "src/gateway/reconnect.ts",
+          status: "retry jitter verified, resume token fallback still needs manual spot check",
+          verified: true,
+        },
+        {
+          id: "REL-CHANNEL-238",
+          source: "src/channels/delivery.ts",
+          status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+          verified: true,
+        },
+        {
+          id: "REL-CRON-904",
+          source: "src/scheduling/cron.ts",
+          status: "single-run lock verified for restart wakeups",
+          verified: true,
+        },
+        {
+          id: "REL-MEMORY-552",
+          source: "src/memory/recall.ts",
+          status:
+            "fallback summary survives empty memory search; ranking sample needs second reviewer",
+          verified: true,
+        },
+        {
+          id: "REL-PLUGIN-319",
+          source: "src/plugins/runtime.ts",
+          status: "bundled runtime manifest loads cleanly after restart",
+          verified: true,
+        },
+        {
+          id: "REL-INSTALL-846",
+          source: "install/update.ts",
+          status: "update smoke passed from previous stable tag",
+          verified: true,
+        },
+        {
+          id: "REL-DOCS-611",
+          source: "docs/operator-notes.md",
+          status:
+            "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+          verified: true,
+        },
+        {
+          id: "REL-UI-BLOCKED",
+          source: "ui/control-panel.ts",
+          status: "blocked: source file was referenced by checklist but missing from the fixture",
+          verified: false,
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+export function buildReleaseHandoffMarkdown() {
+  return [
+    "# Release Handoff",
+    "",
+    "Ready:",
+    "- REL-GATEWAY-417: gateway reconnect handling checked in `src/gateway/reconnect.ts`.",
+    "- REL-CRON-904: cron duplicate prevention checked in `src/scheduling/cron.ts`.",
+    "- REL-PLUGIN-319: plugin runtime loading checked in `src/plugins/runtime.ts`.",
+    "- REL-INSTALL-846: installer update path checked in `install/update.ts`.",
+    "",
+    "Follow-up:",
+    "- REL-CHANNEL-238: channel delivery ordering needs maintainer handoff.",
+    "- REL-MEMORY-552: memory recall fallback ranking sample needs a second reviewer.",
+    "- REL-DOCS-611: docs update status needs channel ordering and UI notes.",
+    "- `ui/control-panel.ts` is blocked/not found in the fixture.",
+    "",
+  ].join("\n");
+}
+
+export function extractPlannedTool(events: StreamEvent[]) {
+  const items = events.flatMap((event) =>
+    event.type === "response.output_item.done" &&
+    (event.item.type === "function_call" || event.item.type === "custom_tool_call")
+      ? [event.item]
+      : [],
+  );
+  const named = items.find((item) => typeof item.name === "string");
+  const identified = items.find((item) => typeof item.call_id === "string");
+  const argumentsItem = items.find(
+    (item) => item.type === "custom_tool_call" || typeof item.arguments === "string",
+  );
+  let args: Record<string, unknown> | undefined;
+  if (argumentsItem?.type === "custom_tool_call") {
+    args = typeof argumentsItem.input === "string" ? { input: argumentsItem.input } : undefined;
+  } else if (typeof argumentsItem?.arguments === "string") {
+    try {
+      const parsed: unknown = JSON.parse(argumentsItem.arguments);
+      args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+      // Malformed arguments remain unavailable in the debug projection.
+    }
+  }
+  return {
+    name: typeof named?.name === "string" ? named.name : undefined,
+    callId: typeof identified?.call_id === "string" ? identified.call_id : undefined,
+    itemId: typeof identified?.id === "string" ? identified.id : undefined,
+    args,
+  };
+}
+
+export function splitMockStreamingText(text: string) {
+  if (text.length <= 1) {
+    return [text];
+  }
+  const chunkSize = Math.ceil(text.length / 3);
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += chunkSize) {
+    chunks.push(text.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function buildQaLongFinalText({
+  endMarker = "TELEGRAM-LONG-FINAL-END",
+  segmentPrefix = "telegram-long-final-segment",
+  segmentCount = 42,
+  startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
+}: {
+  endMarker?: string;
+  segmentPrefix?: string;
+  segmentCount?: number;
+  startMarker?: string;
+} = {}) {
+  const body = Array.from(
+    { length: segmentCount },
+    (_, index) => `${segmentPrefix}-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
+  ).join("\n");
+  return `${startMarker}\n${body}\n${endMarker}`;
+}
+
+const QA_TELEGRAM_PREPARED_DELIVERY_RE = /Telegram prepared delivery QA: (\{[^\n]+\})/u;
+const QA_TELEGRAM_POLICY_HOT_RELOAD_RE =
+  /^Write (40|12) numbered plain-text lines\. Every line must contain (TG-RELOAD-(?:root|account)-[0-9a-f]{8}(?:-NEXT)?) and the words ((?:hot reload|new policy) keeps this conversation connected)\. Finish with a separate final line containing \2-END\. Do not use tools, Markdown, or explicit reply tags\.$/u;
+
+function readTelegramPolicyHotReloadPrompt(prompt: string) {
+  const match = QA_TELEGRAM_POLICY_HOT_RELOAD_RE.exec(stripInboundMetadata(prompt));
+  const lineCount = Number(match?.[1]);
+  const marker = match?.[2];
+  const phrase = match?.[3];
+  if (!Number.isSafeInteger(lineCount) || !marker || !phrase) {
+    return undefined;
+  }
+  const isHeldTurn =
+    lineCount === 40 && !marker.endsWith("-NEXT") && phrase.startsWith("hot reload");
+  const isNextTurn =
+    lineCount === 12 && marker.endsWith("-NEXT") && phrase.startsWith("new policy");
+  return isHeldTurn || isNextTurn ? { lineCount, marker, phrase } : undefined;
+}
+
+function buildTelegramPolicyHotReloadEvents(prompt: string): StreamEvent[] | undefined {
+  const fixture = readTelegramPolicyHotReloadPrompt(prompt);
+  if (!fixture) {
+    return undefined;
+  }
+  const { lineCount, marker, phrase } = fixture;
+  const lines = Array.from(
+    { length: lineCount },
+    (_, index) => `${index + 1}. ${marker} ${phrase}`,
+  );
+  const text = [...lines, `${marker}-END`].join("\n");
+  return buildStreamingFinalAnswerEvents(
+    "msg_mock_telegram_policy_hot_reload",
+    text,
+    lineCount === 40 ? lines[0] : text,
+  );
+}
+
+export function resolveTelegramChannelStreamingPause(
+  prompt: string,
+): { previewPauseMs: number } | undefined {
+  return QA_TELEGRAM_PREPARED_DELIVERY_RE.test(prompt) ||
+    readTelegramPolicyHotReloadPrompt(prompt)?.lineCount === 40
+    ? { previewPauseMs: 3_000 }
+    : undefined;
+}
+
+export function buildChannelStreamingFixtureEvents(params: {
+  currentPrompt: string;
+  allInputText: string;
+  hasCompletedToolOutput: boolean;
+}): StreamEvent[] | undefined {
+  const policyHotReloadEvents = buildTelegramPolicyHotReloadEvents(params.currentPrompt);
+  if (policyHotReloadEvents) {
+    return policyHotReloadEvents;
+  }
+  if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      segmentCount: 96,
+      startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+    });
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final_three_chunk", text);
+  }
+  if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText();
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final", text);
+  }
+  const preparedDeliveryMatch = QA_TELEGRAM_PREPARED_DELIVERY_RE.exec(params.currentPrompt);
+  if (preparedDeliveryMatch?.[1]) {
+    const fixture = parseJsonObjectBody(preparedDeliveryMatch[1]);
+    if (typeof fixture?.text !== "string" || typeof fixture.previewText !== "string") {
+      throw new Error("Telegram prepared delivery fixture requires text and previewText.");
+    }
+    if (typeof fixture.mediaPath === "string" && !params.hasCompletedToolOutput) {
+      if (typeof fixture.blockCaption !== "string") {
+        throw new Error("Telegram prepared media fixture requires a block caption.");
+      }
+      const blockText = `${fixture.blockCaption}\n\nMEDIA:${fixture.mediaPath}`;
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_telegram_prepared_media",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(blockText),
+          text: blockText,
+        },
+        "read",
+        { path: "QA_KICKOFF_TASK.md" },
+      );
+    }
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_telegram_prepared_delivery",
+      fixture.text,
+      fixture.previewText,
+    );
+  }
+  if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "WHATSAPP-LONG-FINAL-END",
+      segmentPrefix: "whatsapp-long-final-segment",
+      segmentCount: 64,
+      startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
+    });
+    return buildStreamingFinalAnswerEvents("msg_mock_whatsapp_long_final", text);
+  }
+  return undefined;
+}
+
+export function buildAssistantThenToolCallEvents(
+  spec: MockAssistantMessageSpec,
+  name: string,
+  args: Record<string, unknown>,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, args);
+  const stream = new MockResponseStream(call.responseId);
+  stream.message(spec);
+  stream.tool(call.item);
+  return stream.complete(32);
+}
+
+export function buildAssistantEvents(
+  specsOrText: MockAssistantMessageSpec[] | string,
+): StreamEvent[] {
+  const specs =
+    typeof specsOrText === "string"
+      ? [
+          {
+            id: "msg_mock_1",
+            text: specsOrText,
+          },
+        ]
+      : specsOrText;
+  const stream = new MockResponseStream("resp_mock_msg_1");
+  for (const spec of specs) {
+    stream.message(spec);
+  }
+  return stream.complete(24);
+}
+
+export function buildStreamingFinalAnswerEvents(
+  id: string,
+  text: string,
+  previewText = text,
+): StreamEvent[] {
+  return buildAssistantEvents([
+    {
+      id,
+      phase: "final_answer",
+      streamDeltas: splitMockStreamingText(previewText),
+      text,
+    },
+  ]);
+}
+
+export function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
+  const reasoningItem = {
+    type: "reasoning",
+    id,
+    summary: [{ text: summaryText }],
+  } as const;
+  const stream = new MockResponseStream(`resp_${id}`);
+  stream.item(reasoningItem, { ...reasoningItem, summary: [] });
+  return stream.complete(8);
+}
+
+export function buildReasoningAndAssistantEvents(params: {
+  reasoningId: string;
+  answerText: string;
+  answerId?: string;
+}): StreamEvent[] {
+  const reasoningItem = {
+    type: "reasoning",
+    id: params.reasoningId,
+    summary: [],
+  } as const;
+  const stream = new MockResponseStream(`resp_${params.reasoningId}`);
+  stream.item(reasoningItem);
+  stream.message({
+    id: params.answerId ?? "msg_mock_reasoned_answer",
+    phase: "final_answer",
+    streamDeltas: [params.answerText],
+    text: params.answerText,
+  });
+  return stream.complete(16);
+}

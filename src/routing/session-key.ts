@@ -1,8 +1,18 @@
+import {
+  isValidAgentId,
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+} from "@openclaw/normalization-core/agent-id";
 // Routing session key helpers build stable session keys from route targets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildAgentMainSessionKey,
+  DEFAULT_MAIN_KEY,
+  normalizeMainKey,
+} from "@openclaw/session-url-contract";
 import type { ChatType } from "../channels/chat-type.js";
 import {
   isCronRunSessionKey,
@@ -10,10 +20,11 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "../sessions/session-key-utils.js";
+import "../shared/incognito-session-key.js";
 import { normalizeAccountId } from "./account-id.js";
+export { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 export {
-  getSubagentDepth,
   isCronSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -21,27 +32,20 @@ export {
   parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
-  type ParsedSessionDeliveryRoute,
 } from "../sessions/session-key-utils.js";
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "./account-id.js";
+export { isValidAgentId, normalizeAgentId, normalizeAgentIdStrict };
 
-export const DEFAULT_AGENT_ID = "main";
-export const DEFAULT_MAIN_KEY = "main";
-export type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
-
-// Pre-compiled regex
-const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
-const LEADING_DASH_RE = /^-+/;
-const TRAILING_DASH_RE = /-+$/;
-
-function normalizeToken(value: string | undefined | null): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
+/** Legacy on-disk identity used only by doctor/migration and their fixtures. */
+export const LEGACY_IMPLICIT_AGENT_ID = "main";
+/** @deprecated legacy implicit agent id; use roster default resolution. Removal: next major SDK cut. */
+export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
+export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY, normalizeMainKey };
+type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
@@ -86,10 +90,6 @@ export function resolveEventSessionKey(
   return buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey });
 }
 
-export function normalizeMainKey(value: string | undefined | null): string {
-  return normalizeLowercaseStringOrEmpty(value) || DEFAULT_MAIN_KEY;
-}
-
 export function toAgentRequestSessionKey(storeKey: string | undefined | null): string | undefined {
   const raw = (storeKey ?? "").trim();
   if (!raw) {
@@ -107,8 +107,11 @@ export function agentSessionKeysMatchByRequestKey(
   if (!leftRaw || !rightRaw) {
     return false;
   }
+  const leftKey = parseAgentSessionKey(leftRaw);
+  const rightKey = parseAgentSessionKey(rightRaw);
   return (
-    leftRaw === rightRaw || toAgentRequestSessionKey(leftRaw) === toAgentRequestSessionKey(rightRaw)
+    (!leftKey || !rightKey || leftKey.agentId === rightKey.agentId) &&
+    (leftKey?.rest ?? leftRaw) === (rightKey?.rest ?? rightRaw)
   );
 }
 
@@ -133,9 +136,24 @@ export function toAgentStoreSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
 }
 
-export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
+export function resolveAgentIdFromSessionKey(
+  sessionKey: string | undefined | null,
+  configuredDefaultAgentId?: string,
+): string {
   const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
+    throw new Error("Malformed agent session key; refusing default-agent resolution.");
+  }
+  const configuredDefault = configuredDefaultAgentId?.trim();
+  if (configuredDefault) {
+    return normalizeAgentId(configuredDefault);
+  }
+  throw new Error(
+    "Session key does not contain an agent id; resolve it with the configured default agent.",
+  );
 }
 
 export function classifySessionKeyShape(sessionKey: string | undefined | null): SessionKeyShape {
@@ -176,47 +194,13 @@ export function scopeLegacySessionKeyToAgent(params: {
   });
 }
 
-export function normalizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  // Keep it path-safe + shell-friendly.
-  if (VALID_ID_RE.test(trimmed)) {
-    return normalized;
-  }
-  // Best-effort fallback: collapse invalid characters to "-"
-  return (
-    normalized
-      .replace(INVALID_CHARS_RE, "-")
-      .replace(LEADING_DASH_RE, "")
-      .replace(TRAILING_DASH_RE, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
-}
-
 export function normalizeOptionalAgentId(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed ? normalizeAgentId(trimmed) : undefined;
 }
 
-export function isValidAgentId(value: string | undefined | null): boolean {
-  const trimmed = (value ?? "").trim();
-  return Boolean(trimmed) && VALID_ID_RE.test(trimmed);
-}
-
 export function sanitizeAgentId(value: string | undefined | null): string {
   return normalizeAgentId(value);
-}
-
-export function buildAgentMainSessionKey(params: {
-  agentId: string;
-  mainKey?: string | undefined;
-}): string {
-  const agentId = normalizeAgentId(params.agentId);
-  const mainKey = normalizeMainKey(params.mainKey);
-  return `agent:${agentId}:${mainKey}`;
 }
 
 export function buildAgentPeerSessionKey(params: {
@@ -229,6 +213,7 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  groupScope?: "main" | "per-group";
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
@@ -237,7 +222,7 @@ export function buildAgentPeerSessionKey(params: {
     const linkedPeerId =
       dmScope === "main"
         ? null
-        : resolveLinkedPeerId({
+        : resolveLinkedDirectPeerId({
             identityLinks: params.identityLinks,
             channel: params.channel,
             peerId,
@@ -263,6 +248,9 @@ export function buildAgentPeerSessionKey(params: {
       mainKey: params.mainKey,
     });
   }
+  if (params.groupScope === "main") {
+    return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
+  }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const peerId =
     normalizeSessionPeerId({
@@ -273,7 +261,8 @@ export function buildAgentPeerSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
-function resolveLinkedPeerId(params: {
+/** @internal Resolves a declared cross-channel identity for one direct peer. */
+export function resolveLinkedDirectPeerId(params: {
   identityLinks?: Record<string, string[]>;
   channel: string;
   peerId: string;
@@ -286,20 +275,10 @@ function resolveLinkedPeerId(params: {
   if (!peerId) {
     return null;
   }
-  const candidates = new Set<string>();
-  const rawCandidate = normalizeToken(peerId);
-  if (rawCandidate) {
-    candidates.add(rawCandidate);
-  }
-  const channel = normalizeToken(params.channel);
+  const candidates = new Set([normalizeLowercaseStringOrEmpty(peerId)]);
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   if (channel) {
-    const scopedCandidate = normalizeToken(`${channel}:${peerId}`);
-    if (scopedCandidate) {
-      candidates.add(scopedCandidate);
-    }
-  }
-  if (candidates.size === 0) {
-    return null;
+    candidates.add(normalizeLowercaseStringOrEmpty(`${channel}:${peerId}`));
   }
   for (const [canonical, ids] of Object.entries(identityLinks)) {
     const canonicalName = canonical.trim();
@@ -310,7 +289,7 @@ function resolveLinkedPeerId(params: {
       continue;
     }
     for (const id of ids) {
-      const normalized = normalizeToken(id);
+      const normalized = normalizeLowercaseStringOrEmpty(id);
       if (normalized && candidates.has(normalized)) {
         return canonicalName;
       }
@@ -325,7 +304,7 @@ export function buildGroupHistoryKey(params: {
   peerKind: "group" | "channel";
   peerId: string;
 }): string {
-  const channel = normalizeToken(params.channel) || "unknown";
+  const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
   const peerId =
     normalizeSessionPeerId({

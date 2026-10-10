@@ -1,16 +1,11 @@
 import CoreGraphics
 import Foundation
-import OpenClawKit
 
 enum SystemPresenceInfo {
-    static func lastInputSeconds() -> Int? {
+    static func lastHardwareInputSeconds() -> Int? {
         let anyEvent = CGEventType(rawValue: UInt32.max) ?? .null
-        let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEvent)
-        if seconds.isNaN || seconds.isInfinite || seconds < 0 { return nil }
+        let seconds = CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: anyEvent)
+        guard seconds.isFinite, seconds >= 0 else { return nil }
         return Int(seconds.rounded())
-    }
-
-    static func primaryIPv4Address() -> String? {
-        NetworkInterfaces.primaryIPv4Address()
     }
 }

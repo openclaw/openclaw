@@ -1,0 +1,745 @@
+// Subagent announce output tests cover transcript reads, completion extraction,
+// compact stats, and wait-outcome text used in announce messages.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
+import {
+  testing,
+  buildCompactAnnounceStatsLine,
+  buildChildCompletionFindings,
+  dedupeLatestChildCompletionRows,
+  readSubagentOutput,
+} from "./subagent-announce-output.test-support.js";
+import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
+
+type CallGateway = typeof import("../../../gateway/call.js").callGateway;
+type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
+type ReadSessionEntry = (
+  ...args: Parameters<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>
+) => Awaited<ReturnType<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>>;
+type ReadSessionMessagesAsync =
+  typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
+type ResolveAgentIdFromSessionKey =
+  typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey;
+type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveSessionStorePathCore;
+
+function installOutputDeps(params: {
+  messages: Array<unknown>;
+  transcriptMessages?: Array<unknown>;
+}) {
+  const callGateway = vi.fn(async () => ({ messages: params.messages }));
+  const readSessionMessagesAsync = vi.fn(async () => params.transcriptMessages ?? []);
+  testing.setDepsForTest({
+    callGateway: callGateway as unknown as CallGateway,
+    readSessionMessagesAsync: readSessionMessagesAsync as unknown as ReadSessionMessagesAsync,
+  });
+  return { callGateway, readSessionMessagesAsync };
+}
+
+function sessionsYieldTurn(message = "Waiting for subagent completion.") {
+  // sessions_yield is requester control flow, not child output; fixtures keep
+  // that wait turn adjacent to later assistant completions.
+  return [
+    {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: message },
+        {
+          type: "toolCall",
+          id: "call-yield",
+          name: "sessions_yield",
+          arguments: { message },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-yield",
+      toolName: "sessions_yield",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ status: "yielded", message }, null, 2),
+        },
+      ],
+      details: { status: "yielded", message },
+    },
+  ];
+}
+
+describe("dedupeLatestChildCompletionRows", () => {
+  it("prefers the newer generation when child runs share a creation timestamp", () => {
+    const childSessionKey = "agent:main:subagent:reused";
+    const older = {
+      runId: "run-older",
+      generation: 1,
+      childSessionKey,
+      task: "older",
+      createdAt: 1_000,
+      execution: {},
+    };
+    const newer = { ...older, runId: "run-newer", generation: 2, task: "newer" };
+
+    expect(dedupeLatestChildCompletionRows([older, newer])).toStrictEqual([newer]);
+  });
+});
+
+describe("buildCompactAnnounceStatsLine", () => {
+  afterEach(() => {
+    testing.setDepsForTest();
+  });
+
+  it.each([
+    {
+      name: "rolls thousand-token stats over to the million unit",
+      usage: { inputTokens: 999_999, outputTokens: 0, totalTokens: 999_999 },
+      expected: "Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)",
+    },
+    {
+      name: "reports missing usage as unknown",
+      usage: {},
+      expected: "Stats: runtime n/a • tokens unknown",
+    },
+    {
+      name: "keeps genuine zero usage distinct from missing usage",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      expected: "Stats: runtime n/a • tokens 0 (in 0 / out 0)",
+    },
+    {
+      name: "reports a fresh total without inventing directional counts",
+      usage: { totalTokens: 500, totalTokensFresh: true, totalTokensVersion: 1 },
+      expected: "Stats: runtime n/a • tokens 500 prompt/cache",
+    },
+  ])("$name", async ({ usage, expected }) => {
+    testing.setDepsForTest({
+      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
+      readSubagentSessionEntry: (() => ({
+        sessionId: "child-session",
+        updatedAt: 0,
+        ...usage,
+      })) as ReadSessionEntry,
+      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
+      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+    });
+
+    await expect(
+      buildCompactAnnounceStatsLine({ sessionKey: "agent:main:subagent:child" }),
+    ).resolves.toBe(expected);
+  });
+});
+
+describe("readSubagentOutput", () => {
+  afterEach(() => {
+    testing.setDepsForTest();
+  });
+
+  it("does not treat a sessions_yield wait turn as subagent completion output", async () => {
+    const deps = installOutputDeps({
+      messages: sessionsYieldTurn(),
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    expect(deps.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { phase: "commentary", expected: undefined },
+    { phase: "final_answer", expected: "Visible subagent answer" },
+  ])("respects the phase of scalar $phase output", async ({ phase, expected }) => {
+    installOutputDeps({
+      messages: [{ role: "assistant", phase, content: "Visible subagent answer" }],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(expected);
+  });
+
+  it.each([
+    {
+      shape: "OpenAI top-level snake_case function call",
+      assistant: {
+        role: "assistant",
+        content: "Waiting for child completion.",
+        tool_calls: [{ type: "function", function: { name: "sessions_yield" } }],
+      },
+    },
+    {
+      shape: "top-level camelCase tool call",
+      assistant: {
+        role: "assistant",
+        content: "Waiting for child completion.",
+        toolCalls: [{ name: "sessions_yield" }],
+      },
+    },
+    {
+      shape: "nested content function call",
+      assistant: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Waiting for child completion." },
+          { type: "function_call", function: { name: "sessions_yield" } },
+        ],
+      },
+    },
+    {
+      shape: "nested function alias",
+      assistant: {
+        role: "assistant",
+        content: [{ type: "function_call", function: { tool_name: "sessions_yield" } }],
+      },
+    },
+    {
+      shape: "string function name",
+      assistant: {
+        role: "assistant",
+        content: [{ type: "function_call", function: "sessions_yield" }],
+      },
+    },
+  ])("does not expose a $shape yield turn as completion output", async ({ assistant }) => {
+    expect(assistantCallsSessionsYield(assistant)).toBe(true);
+    installOutputDeps({
+      messages: [assistant, { role: "tool", content: '{"status":"yielded"}' }],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it.each(["toolUse", "functionCall", "tool_call", "function_call"])(
+    "does not synthesize output from provider-specific %s transcript blocks",
+    async (type) => {
+      installOutputDeps({
+        messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
+      });
+
+      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(["toolUse", "functionCall", "function_call"])(
+    "summarizes provider-specific %s transcript blocks after a timeout",
+    async (type) => {
+      installOutputDeps({
+        messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
+      });
+
+      await expect(
+        readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+      ).resolves.toBe("1 tool call(s) made without visible output.");
+    },
+  );
+
+  it.each(["toolCalls", "tool_calls"])("summarizes top-level %s after a timeout", async (field) => {
+    installOutputDeps({
+      messages: [{ role: "assistant", [field]: [{ name: "read" }, { name: "exec" }] }],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("2 tool call(s) made without visible output.");
+  });
+
+  it("keeps an intentional silent reply ahead of timeout tool progress", async () => {
+    installOutputDeps({
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", name: "read" }] },
+        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("NO_REPLY");
+  });
+
+  it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {
+    installOutputDeps({
+      messages: [
+        ...sessionsYieldTurn(),
+        {
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          __openclaw: { kind: "compaction" },
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Created /tmp/final-deck.pptx" }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "Created /tmp/final-deck.pptx",
+    );
+  });
+
+  it("does not reuse assistant progress that issued a trailing tool call", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "Mapped the code path." },
+            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          content: "tool result should not become the child result",
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("does not keep earlier visible progress across a trailing tool-only turn", async () => {
+    installOutputDeps({
+      messages: [
+        textAssistant("Mapped the code path."),
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          content: "tool result should not become the child result",
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("returns a final assistant reply emitted after trailing tool activity", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Mapped the code path." },
+            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+          ],
+        },
+        { role: "toolResult", content: "tool result" },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "The fix is complete." }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "The fix is complete.",
+    );
+  });
+
+  it("does not replay an older assistant reply after a newer user turn", async () => {
+    installOutputDeps({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "Completed the old task." }] },
+        { role: "user", content: [{ type: "text", text: "Start the next task." }] },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("does not treat a projected inter-session input as an assistant completion", async () => {
+    installOutputDeps({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "Completed the old task." }] },
+        {
+          role: "assistant",
+          provenance: { kind: "inter_session", sourceSessionKey: "agent:main:main" },
+          content: [{ type: "text", text: "Start the next task." }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("does not synthesize output from tool calls in the latest user turn", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "old-call", name: "read", arguments: {} }],
+        },
+        { role: "user", content: [{ type: "text", text: "Start the next task." }] },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "current-call", name: "exec", arguments: {} }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("resets timeout tool progress at the latest user turn", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "old-read", name: "read", arguments: {} },
+            { type: "toolCall", id: "old-exec", name: "exec", arguments: {} },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "Start the next task." }] },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "current-call", name: "write", arguments: {} }],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("1 tool call(s) made without visible output.");
+  });
+
+  it("does not fall back to tool output when the last assistant turn is empty", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "toolResult",
+          content: "tool output only",
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("reads recovered output from the private SQLite transcript before gateway history", async () => {
+    const deps = installOutputDeps({
+      messages: [textAssistant("stale visible output")],
+      transcriptMessages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "fresh recovered output" }],
+        },
+      ],
+    });
+
+    // Private transcript data is fresher for recovered runs and avoids exposing
+    // stale gateway-visible history after an internal completion is persisted.
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", undefined, {
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "child-session",
+          sessionKey: "agent:main:subagent:child",
+          storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+        },
+      }),
+    ).resolves.toBe("fresh recovered output");
+    expect(deps.readSessionMessagesAsync).toHaveBeenCalledWith(
+      {
+        agentId: "main",
+        sessionId: "child-session",
+        sessionKey: "agent:main:subagent:child",
+        storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+      },
+      { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
+    );
+    expect(deps.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not read visible gateway history when a private transcript is empty", async () => {
+    const deps = installOutputDeps({
+      messages: [textAssistant("stale visible output")],
+      transcriptMessages: [],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", undefined, {
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "child-session",
+          sessionKey: "agent:main:subagent:child",
+          storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(deps.callGateway).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildChildCompletionFindings", () => {
+  it.each([
+    {
+      name: "timeout with its preserved failure cause",
+      endedReason: undefined,
+      outcome: { status: "timeout", error: "  provider rejected the request  " },
+      expected: "timeout: provider rejected the request",
+    },
+    {
+      name: "timeout without a failure cause",
+      endedReason: undefined,
+      outcome: { status: "timeout" },
+      expected: "timeout",
+    },
+    {
+      name: "ordinary failure with its cause",
+      endedReason: undefined,
+      outcome: { status: "error", error: "  provider rejected the request  " },
+      expected: "error: provider rejected the request",
+    },
+    {
+      name: "cancelled child with an authoritative kill reason",
+      endedReason: "subagent-killed",
+      outcome: { status: "error", error: "killed" },
+      expected: "cancelled: killed",
+    },
+    {
+      name: "ordinary failure whose error text mentions a kill",
+      endedReason: undefined,
+      outcome: { status: "error", error: "killed" },
+      expected: "error: killed",
+    },
+  ] as const)(
+    "describes a $name in parent-visible findings",
+    ({ outcome, endedReason, expected }) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: { resultText: "captured findings" },
+          endedReason,
+          execution: { outcome },
+        },
+      ]);
+
+      expect(findings).toContain(`status: ${expected}`);
+    },
+  );
+
+  it("retains complete results and failures in chronological parent-visible findings", () => {
+    const result = `${"<🚀>".repeat(300)}-required-tail`;
+    const children = Array.from({ length: 4 }, (_, index) => ({
+      childSessionKey: `agent:main:subagent:${index}`,
+      task: `child task ${index}`,
+      createdAt: index,
+      completion: { resultText: `${result}-${index}` },
+      execution: {
+        outcome:
+          index === 3
+            ? { status: "error" as const, error: "Permission required." }
+            : { status: "ok" as const },
+      },
+    }));
+    const findings = buildChildCompletionFindings(children.toReversed());
+    const results = Array.from(
+      findings?.matchAll(/Child result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/g) ?? [],
+      (match) => match[1],
+    );
+
+    expect(results).toEqual(
+      children.map((_, index) => `${"&lt;🚀&gt;".repeat(300)}-required-tail-${index}`),
+    );
+    expect(findings).toContain("status: error: Permission required.");
+    expect(findings).not.toContain("[child result truncated]");
+    expect(findings).not.toContain("additional child completion result");
+  });
+
+  it("sanitizes control characters without losing the visible child result", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:control-prefix",
+        task: "control-prefixed result",
+        createdAt: 1,
+        completion: { resultText: `${"\u0000".repeat(700)}useful child result` },
+        execution: { outcome: { status: "ok" } },
+      },
+    ]);
+
+    expect(findings).toContain("useful child result");
+    expect(findings).not.toContain("\u0000");
+  });
+
+  it("bounds failure metadata while preserving the complete escaped child result", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        label: "L".repeat(20_000),
+        task: "child task",
+        createdAt: 1,
+        completion: { resultText: `${"<".repeat(2_000)}-required-tail` },
+        execution: { outcome: { status: "error", error: "E".repeat(20_000) } },
+      },
+    ]);
+    const title = findings?.match(/Child task[^\n]*\n<prompt-data>\n([^\n]*)\n/)?.[1];
+    const status = findings?.match(/^status: (.*)$/m)?.[1];
+
+    expect(title).toBe(`${"L".repeat(255)}…`);
+    expect(status).toBe(`error: ${"E".repeat(248)}…`);
+    expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
+  });
+
+  it("does not recover result text from delivery metadata after completion text is cleared", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        completion: { resultText: null },
+        execution: { outcome: { status: "ok" } },
+      },
+    ]);
+
+    expect(findings).toContain("(no output)");
+  });
+
+  it.each([
+    { name: "successful NO_REPLY", status: "ok", resultText: "NO_REPLY" },
+    { name: "blank failed", status: "error", resultText: "" },
+    { name: "whitespace timed-out", status: "timeout", resultText: " \n\t " },
+  ] as const)("uses captured fallback output for a $name completion", ({ status, resultText }) => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        completion: {
+          resultText,
+          fallbackResultText: "findings captured before the wake",
+        },
+        execution: { outcome: { status } },
+      },
+    ]);
+
+    expect(findings).toContain("findings captured before the wake");
+    expect(findings).not.toContain("(no output)");
+    expect(findings).not.toContain("NO_REPLY");
+  });
+
+  it.each([
+    {
+      name: "required visible",
+      required: true,
+      terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
+      resultText: "older captured output",
+      expected: "authoritative final output",
+    },
+    {
+      name: "required silent",
+      required: true,
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+      expected: "(no output)",
+    },
+    {
+      name: "required empty",
+      required: true,
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: "(no output)",
+    },
+    {
+      name: "optional empty",
+      required: false,
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: "(no output)",
+    },
+  ])(
+    "preserves $name terminal evidence as a child finding",
+    ({ required, terminalReply, resultText, expected }) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: {
+            required,
+            resultText,
+            fallbackResultText: "older captured fallback",
+            terminalReply,
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      expect(findings).toContain(expected);
+      expect(findings).not.toContain("older captured output");
+      expect(findings).not.toContain("older captured fallback");
+    },
+  );
+
+  it.each(["HEARTBEAT_OK"])(
+    "does not override an intentional %s completion with fallback output",
+    (resultText) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:silent",
+          task: "silent task",
+          createdAt: 1,
+          completion: {
+            resultText,
+            fallbackResultText: "stale findings",
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      expect(findings).toBeUndefined();
+    },
+  );
+
+  it("numbers findings contiguously after skipped silent completions", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:silent",
+        task: "silent task",
+        createdAt: 1,
+        completion: { terminalReply: { disposition: "silent" } },
+        execution: { outcome: { status: "ok" } },
+      },
+      {
+        childSessionKey: "agent:main:subagent:visible",
+        task: "visible task",
+        createdAt: 2,
+        completion: { resultText: "actual output" },
+        execution: { outcome: { status: "ok" } },
+      },
+    ]);
+
+    expect(findings).toMatch(/1\. Child task[^\n]*\n<prompt-data>\nvisible task\n/);
+    expect(findings).not.toContain("2. Child task");
+  });
+
+  it("orders same-timestamp child completions by stable session identity", () => {
+    const laterKey = {
+      childSessionKey: "agent:main:subagent:z",
+      task: "Z task",
+      createdAt: 1_000,
+      completion: { resultText: "Z result" },
+      execution: { endedAt: 2_000, outcome: { status: "ok" as const } },
+    };
+    const earlierKey = {
+      ...laterKey,
+      childSessionKey: "agent:main:subagent:a",
+      task: "A task",
+      completion: { resultText: "A result" },
+    };
+
+    const forward = buildChildCompletionFindings([laterKey, earlierKey]);
+    const reverse = buildChildCompletionFindings([earlierKey, laterKey]);
+
+    expect(forward).toBe(reverse);
+    expect(forward).toMatch(/1\. Child task[\s\S]*A task[\s\S]*2\. Child task[\s\S]*Z task/);
+  });
+});

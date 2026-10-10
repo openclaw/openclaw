@@ -1,0 +1,285 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
+import { extractToolResultText } from "./embedded-agent-tool-results.js";
+import { mapAgentHarnessMessagingMediaValues } from "./harness/messaging-media.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import { readToolResultDetails } from "./tool-result-error.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
+
+function pushUniqueMessagingMediaUrl(urls: Set<string>, value: unknown): void {
+  const normalized = normalizeOptionalString(value);
+  if (normalized) {
+    urls.add(normalized);
+  }
+}
+
+export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
+  const urls = new Set<string>();
+  mapAgentHarnessMessagingMediaValues(
+    record,
+    (value) => {
+      pushUniqueMessagingMediaUrl(urls, value);
+      return value;
+    },
+    false,
+  );
+  return [...urls];
+}
+
+export function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
+  const records = [result, asOptionalObjectRecord(result)?.details];
+  const outputText = extractToolResultText(result);
+  if (outputText) {
+    records.push(safeParseJson(outputText));
+  }
+  return [
+    ...new Set(
+      records.flatMap((value) => {
+        const record = asOptionalObjectRecord(value);
+        return record ? collectMessagingMediaUrlsFromRecord(record) : [];
+      }),
+    ),
+  ];
+}
+
+const TRUSTED_TOOL_RESULT_MEDIA = new Set([
+  "agents_list",
+  "apply_patch",
+  "browser",
+  "canvas",
+  AUTOMATIONS_TOOL_NAME,
+  "edit",
+  "exec",
+  "gateway",
+  "view_image",
+  "image_generate",
+  "memory_get",
+  "memory_search",
+  "message",
+  "music_generate",
+  "nodes",
+  "process",
+  "read",
+  "session_status",
+  "sessions_history",
+  "sessions_list",
+  "sessions_search",
+  "sessions_send",
+  "sessions_spawn",
+  "subagents",
+  "tts",
+  "video_generate",
+  "web_fetch",
+  "web_search",
+  "x_search",
+  "write",
+]);
+const HTTP_URL_RE = /^https?:\/\//i;
+
+export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+  return Boolean(toolName && TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolPolicyName(toolName)));
+}
+
+function isExternalToolResult(result: unknown): boolean {
+  const details = readToolResultDetails(result);
+  return typeof details?.mcpServer === "string" || typeof details?.mcpTool === "string";
+}
+
+function isToolResultMediaTrusted(
+  toolName?: string,
+  result?: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
+): boolean {
+  if (!toolName || isExternalToolResult(result)) {
+    return false;
+  }
+  const registeredName = toolName.trim();
+  if (registeredName && trustedLocalMediaToolNames?.has(registeredName) === true) {
+    return true;
+  }
+  return isCoreToolResultMediaTrustedName(toolName);
+}
+
+function getTrustedOwnedTtsLocalMediaUrls(
+  toolName: string | undefined,
+  result: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
+): readonly string[] | undefined {
+  if (
+    !toolName ||
+    !isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames) ||
+    normalizeToolPolicyName(toolName) !== "tts"
+  ) {
+    return undefined;
+  }
+  const media = readToolResultDetails(result)?.media;
+  if (!media || typeof media !== "object" || Array.isArray(media)) {
+    return undefined;
+  }
+  return (media as Record<string, unknown>).trustedLocalMedia === true
+    ? getCoreTtsToolResultMediaUrls(result)
+    : undefined;
+}
+
+export function filterToolResultMediaUrls(
+  toolName: string | undefined,
+  mediaUrls: string[],
+  result?: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
+): string[] {
+  if (mediaUrls.length === 0) {
+    return mediaUrls;
+  }
+  const trustedOwnedTtsMediaUrls = getTrustedOwnedTtsLocalMediaUrls(
+    toolName,
+    result,
+    trustedLocalMediaToolNames,
+  );
+  if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
+    // An omitted raw name needs private core-TTS provenance for each local path.
+    // A result field alone cannot grant that exception to a plugin with a core name.
+    if (trustedLocalMediaToolNames !== undefined) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
+        return mediaUrls.filter(
+          (url) => HTTP_URL_RE.test(url.trim()) || trustedOwnedTtsMediaUrls?.includes(url.trim()),
+        );
+      }
+    }
+    return mediaUrls;
+  }
+  return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+}
+
+type ToolResultMediaArtifact = {
+  mediaUrls: string[];
+  attachments?: ReplyMediaAttachment[];
+  audioAsVoice?: boolean;
+  trustedLocalMedia?: boolean;
+};
+
+function readToolResultDetailsMedia(
+  result: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const details = readToolResultDetails(result);
+  return details?.media && typeof details.media === "object" && !Array.isArray(details.media)
+    ? (details.media as Record<string, unknown>)
+    : undefined;
+}
+
+const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
+  "type",
+  "path",
+  "url",
+  "mediaUrl",
+  "filePath",
+  "mimeType",
+  "name",
+  "sizeBytes",
+  "durationMs",
+  "width",
+  "height",
+]);
+const MEDIA_URL_KEYS = ["media", "path", "url", "mediaUrl", "filePath", "fileUrl"];
+
+function collectStructuredMedia(media: Record<string, unknown>): ToolResultMediaArtifact {
+  const mediaUrls = new Set<string>();
+  const attachmentsByUrl = new Map<string, ReplyMediaAttachment>();
+  const pushString = (value: unknown, attachment?: ReplyMediaAttachment) => {
+    pushUniqueMessagingMediaUrl(mediaUrls, value);
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (normalized && attachment && !attachmentsByUrl.has(normalized)) {
+      attachmentsByUrl.set(normalized, attachment);
+    }
+  };
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    // Provider metadata can break Gateway delivery; media trust remains policy-owned.
+    const attachment: ReplyMediaAttachment = Object.fromEntries(
+      Object.entries(record).filter(([key, entry]) => {
+        if (!REPLY_ATTACHMENT_METADATA_KEYS.has(key)) {
+          return false;
+        }
+        if (key === "type") {
+          return entry === "image" || entry === "audio" || entry === "video" || entry === "file";
+        }
+        if (key === "width" || key === "height") {
+          return asPositiveFiniteNumber(entry) !== undefined;
+        }
+        if (key === "sizeBytes" || key === "durationMs") {
+          return asNonNegativeFiniteNumber(entry) !== undefined;
+        }
+        return typeof entry === "string";
+      }),
+    );
+    for (const key of MEDIA_URL_KEYS) {
+      pushString(record[key], attachment);
+    }
+  };
+  for (const key of MEDIA_URL_KEYS) {
+    pushString(media[key]);
+  }
+  if (Array.isArray(media.mediaUrls)) {
+    for (const value of media.mediaUrls) {
+      pushString(value);
+    }
+  }
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      pushAttachment(attachment);
+    }
+  }
+  return {
+    mediaUrls: [...mediaUrls],
+    ...(attachmentsByUrl.size > 0
+      ? { attachments: [...mediaUrls].map((url) => attachmentsByUrl.get(url) ?? {}) }
+      : {}),
+  };
+}
+
+export function extractToolResultMediaArtifact(
+  result: unknown,
+): ToolResultMediaArtifact | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const detailsMedia = readToolResultDetailsMedia(record);
+  if (detailsMedia) {
+    if (detailsMedia.outbound === false) {
+      return undefined;
+    }
+    const structuredMedia = collectStructuredMedia(detailsMedia);
+    if (structuredMedia.mediaUrls.length > 0) {
+      return {
+        ...structuredMedia,
+        ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
+      };
+    }
+  }
+
+  const content = Array.isArray(record.content) ? record.content : null;
+
+  // Fall back to legacy details.path when image content exists but no
+  // structured media details.
+  if (content?.some((item) => item && typeof item === "object" && item.type === "image")) {
+    const details = record.details as Record<string, unknown> | undefined;
+    const p = normalizeOptionalString(details?.path) ?? "";
+    if (p) {
+      return { mediaUrls: [p] };
+    }
+  }
+
+  return undefined;
+}

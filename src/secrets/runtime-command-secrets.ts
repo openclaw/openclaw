@@ -1,19 +1,21 @@
 /** Resolves command-scoped secrets, including web provider override credentials. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
-import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../plugins/web-provider-public-artifacts.explicit.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
-  collectCommandSecretAssignmentsFromSnapshot,
   type CommandSecretAssignment,
 } from "./command-config.js";
-import { getPath, setPathExistingStrict } from "./path-utils.js";
+import { setPathExistingStrict } from "./path-utils.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
-import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
+import {
+  getActiveSecretsRuntimeEnvState,
+  getActiveSecretsRuntimeSnapshotState,
+} from "./runtime-state.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
@@ -21,17 +23,21 @@ import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 export type { CommandSecretAssignment } from "./command-config.js";
 
 /** Provider selections applied only while resolving command-scoped web secrets. */
-export type CommandSecretProviderOverrides = {
+type CommandSecretProviderOverrides = {
   /** Temporary web-search provider id for this command request. */
   webSearch?: string;
   /** Temporary web-fetch provider id for this command request. */
   webFetch?: string;
 };
 
+const WEB_PROVIDER_OVERRIDES = [
+  ["webSearch", "search", "webSearchProviders"],
+  ["webFetch", "fetch", "webFetchProviders"],
+] as const;
+
 function hasProviderOverrides(overrides: CommandSecretProviderOverrides | undefined): boolean {
-  return (
-    normalizeOptionalString(overrides?.webSearch) !== undefined ||
-    normalizeOptionalString(overrides?.webFetch) !== undefined
+  return WEB_PROVIDER_OVERRIDES.some(
+    ([key]) => normalizeOptionalString(overrides?.[key]) !== undefined,
   );
 }
 
@@ -42,18 +48,15 @@ function applyProviderOverridesToConfig(
   if (!hasProviderOverrides(overrides)) {
     return config;
   }
-  const next = structuredClone(config);
+  const next = cloneConfigWithResolutionFacts(config);
   const tools = (next.tools ??= {}) as Record<string, unknown>;
   const web = (tools.web ??= {}) as Record<string, unknown>;
-  const webSearch = normalizeOptionalString(overrides?.webSearch);
-  if (webSearch) {
-    const search = (web.search ??= {}) as Record<string, unknown>;
-    search.provider = webSearch;
-  }
-  const webFetch = normalizeOptionalString(overrides?.webFetch);
-  if (webFetch) {
-    const fetch = (web.fetch ??= {}) as Record<string, unknown>;
-    fetch.provider = webFetch;
+  for (const [key, kind] of WEB_PROVIDER_OVERRIDES) {
+    const provider = normalizeOptionalString(overrides?.[key]);
+    if (provider) {
+      const tool = (web[kind] ??= {}) as Record<string, unknown>;
+      tool.provider = provider;
+    }
   }
   return next;
 }
@@ -62,95 +65,25 @@ function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   return /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path)?.[1];
 }
 
-function searchProviderFromDirectWebPath(path: string): string | undefined {
-  return /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(path)?.[1];
-}
-
-function fetchProviderFromDirectWebPath(path: string): string | undefined {
-  return /^tools\.web\.fetch\.([^.]+)\.apiKey$/.exec(path)?.[1];
-}
-
-function isWebCommandSecretPath(path: string): boolean {
-  return (
-    path === "tools.web.search.apiKey" ||
-    /^tools\.web\.(search|fetch)\.[^.]+\.apiKey$/.test(path) ||
-    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path)
-  );
-}
-
-function webSearchProviderUsesSharedSearchCredential(params: {
-  config: OpenClawConfig;
-  provider: string;
-}): boolean {
-  const sentinel = "__openclaw_shared_web_search_probe__";
-  const pluginId = resolveManifestContractOwnerPluginId({
-    contract: "webSearchProviders",
-    value: params.provider,
-    origin: "bundled",
-    config: params.config,
-  });
-  if (!pluginId) {
-    return false;
-  }
-  const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
-    onlyPluginIds: [pluginId],
-  });
-  const provider = providers?.find((entry) => entry.id === params.provider);
-  return (
-    provider?.credentialPath === "tools.web.search.apiKey" ||
-    provider?.getCredentialValue({ apiKey: sentinel }) === sentinel ||
-    provider?.getConfiguredCredentialFallback?.(params.config)?.path === "tools.web.search.apiKey"
-  );
-}
-
 function isProviderOverridePath(params: {
   config: OpenClawConfig;
   path: string;
   providerOverrides: CommandSecretProviderOverrides | undefined;
 }): boolean {
-  const webSearch = normalizeOptionalString(params.providerOverrides?.webSearch);
-  if (webSearch) {
-    if (params.config.tools?.web?.search?.enabled === false) {
+  for (const [overrideKey, kind, contract] of WEB_PROVIDER_OVERRIDES) {
+    const provider = normalizeOptionalString(params.providerOverrides?.[overrideKey]);
+    if (!provider) {
+      continue;
+    }
+    if (params.config.tools?.web?.[kind]?.enabled === false) {
       return false;
     }
-    if (params.path === "tools.web.search.apiKey") {
-      return webSearchProviderUsesSharedSearchCredential({
-        config: params.config,
-        provider: webSearch,
-      });
-    }
-    const directProvider = searchProviderFromDirectWebPath(params.path);
-    if (directProvider) {
-      return directProvider === webSearch;
-    }
     const pluginId = pluginIdFromRuntimeWebPath(params.path);
-    if (pluginId && params.path.endsWith(".config.webSearch.apiKey")) {
+    if (pluginId && params.path.endsWith(`.config.${overrideKey}.apiKey`)) {
       return (
         resolveManifestContractOwnerPluginId({
-          contract: "webSearchProviders",
-          value: webSearch,
-          origin: "bundled",
-          config: params.config,
-        }) === pluginId
-      );
-    }
-  }
-
-  const webFetch = normalizeOptionalString(params.providerOverrides?.webFetch);
-  if (webFetch) {
-    if (params.config.tools?.web?.fetch?.enabled === false) {
-      return false;
-    }
-    const directProvider = fetchProviderFromDirectWebPath(params.path);
-    if (directProvider) {
-      return directProvider === webFetch;
-    }
-    const pluginId = pluginIdFromRuntimeWebPath(params.path);
-    if (pluginId && params.path.endsWith(".config.webFetch.apiKey")) {
-      return (
-        resolveManifestContractOwnerPluginId({
-          contract: "webFetchProviders",
-          value: webFetch,
+          contract,
+          value: provider,
           origin: "bundled",
           config: params.config,
         }) === pluginId
@@ -166,182 +99,27 @@ function restoreInactiveWebCommandSecretTargets(params: {
   resolvedConfig: OpenClawConfig;
   targetIds: ReadonlySet<string>;
   inactiveRefPaths: string[];
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
+  isInactivePath: (path: string) => boolean;
 }): string[] {
-  if (!hasProviderOverrides(params.providerOverrides)) {
-    return params.inactiveRefPaths;
-  }
   const inactive = new Set(params.inactiveRefPaths);
   const defaults = params.sourceConfig.secrets?.defaults;
   for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
-    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
-      continue;
-    }
-    if (!isWebCommandSecretPath(target.path)) {
+    if (!pluginIdFromRuntimeWebPath(target.path)) {
       continue;
     }
     // Provider overrides can make a web SecretRef active for this command only. Other web refs
     // must be restored from source config so assignment analysis keeps them inactive.
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }
-    if (
-      params.forcedActivePaths?.has(target.path) ||
-      params.optionalActivePaths?.has(target.path)
-    ) {
-      continue;
-    }
-    if (
-      isProviderOverridePath({
-        config: params.sourceConfig,
-        path: target.path,
-        providerOverrides: params.providerOverrides,
-      })
-    ) {
+    if (!params.isInactivePath(target.path)) {
       continue;
     }
     inactive.add(target.path);
     setPathExistingStrict(params.resolvedConfig, target.pathSegments, target.value);
   }
   return [...inactive];
-}
-
-function filterInactiveRefPaths(params: {
-  config: OpenClawConfig;
-  inactiveRefPaths: readonly string[];
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-}): string[] {
-  return params.inactiveRefPaths.filter((path) => {
-    if (params.allowedPaths && !params.allowedPaths.has(path)) {
-      return false;
-    }
-    if (params.forcedActivePaths?.has(path) || params.optionalActivePaths?.has(path)) {
-      return false;
-    }
-    if (!hasProviderOverrides(params.providerOverrides)) {
-      return true;
-    }
-    return !isProviderOverridePath({
-      config: params.config,
-      path,
-      providerOverrides: params.providerOverrides,
-    });
-  });
-}
-
-function mirrorResolvedProviderCredentialToDirectPath(params: {
-  config: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  contract: "webSearchProviders" | "webFetchProviders";
-  provider: string | undefined;
-  directPathPrefix: string;
-  pluginConfigKey: "webSearch" | "webFetch";
-}): void {
-  const provider = normalizeOptionalString(params.provider);
-  if (!provider) {
-    return;
-  }
-  const pluginId = resolveManifestContractOwnerPluginId({
-    contract: params.contract,
-    value: provider,
-    origin: "bundled",
-    config: params.config,
-  });
-  if (!pluginId) {
-    return;
-  }
-  const directSegments = [...params.directPathPrefix.split("."), provider, "apiKey"];
-  const directValue = getPath(params.config, directSegments);
-  if (directValue === undefined) {
-    return;
-  }
-  // Legacy direct provider targets still exist for command assignment discovery; mirror the
-  // plugin-owned resolved value only when the source config declares that direct path.
-  const resolvedValue = getPath(params.resolvedConfig, [
-    "plugins",
-    "entries",
-    pluginId,
-    "config",
-    params.pluginConfigKey,
-    "apiKey",
-  ]);
-  if (typeof resolvedValue !== "string" || resolvedValue.length === 0) {
-    return;
-  }
-  setPathExistingStrict(params.resolvedConfig, directSegments, resolvedValue);
-}
-
-function mirrorResolvedProviderCredentialToDirectPaths(params: {
-  config: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-}): void {
-  const configuredSearchProvider =
-    normalizeOptionalString(params.providerOverrides?.webSearch) ??
-    normalizeOptionalString(params.config.tools?.web?.search?.provider);
-  const configuredFetchProvider =
-    normalizeOptionalString(params.providerOverrides?.webFetch) ??
-    normalizeOptionalString(params.config.tools?.web?.fetch?.provider);
-  mirrorResolvedProviderCredentialToDirectPath({
-    config: params.config,
-    resolvedConfig: params.resolvedConfig,
-    contract: "webSearchProviders",
-    provider: configuredSearchProvider,
-    directPathPrefix: "tools.web.search",
-    pluginConfigKey: "webSearch",
-  });
-  mirrorResolvedProviderCredentialToDirectPath({
-    config: params.config,
-    resolvedConfig: params.resolvedConfig,
-    contract: "webFetchProviders",
-    provider: configuredFetchProvider,
-    directPathPrefix: "tools.web.fetch",
-    pluginConfigKey: "webFetch",
-  });
-  const webSearch = configuredSearchProvider;
-  if (
-    webSearch &&
-    webSearchProviderUsesSharedSearchCredential({
-      config: params.config,
-      provider: webSearch,
-    }) &&
-    getPath(params.config, ["tools", "web", "search", "apiKey"]) !== undefined
-  ) {
-    const pluginId = resolveManifestContractOwnerPluginId({
-      contract: "webSearchProviders",
-      value: webSearch,
-      origin: "bundled",
-      config: params.config,
-    });
-    const resolvedValue = pluginId
-      ? getPath(params.resolvedConfig, [
-          "plugins",
-          "entries",
-          pluginId,
-          "config",
-          "webSearch",
-          "apiKey",
-        ])
-      : undefined;
-    if (typeof resolvedValue === "string" && resolvedValue.length > 0) {
-      setPathExistingStrict(
-        params.resolvedConfig,
-        ["tools", "web", "search", "apiKey"],
-        resolvedValue,
-      );
-    }
-  }
 }
 
 async function resolveForcedActiveCommandSecretTargets(params: {
@@ -361,7 +139,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
   }
   const context = createResolverContext({
     sourceConfig: params.sourceConfig,
-    env: getActiveSecretsRuntimeEnv(),
+    env: getActiveSecretsRuntimeEnvState(),
   });
   const defaults = params.sourceConfig.secrets?.defaults;
   for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
@@ -371,11 +149,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
     if (!activePaths.has(target.path)) {
       continue;
     }
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }
@@ -404,7 +178,6 @@ async function resolveForcedActiveCommandSecretTargets(params: {
  * Resolves command-scoped SecretRef assignments from the active runtime snapshot.
  * Provider overrides are evaluated against cloned snapshot config.
  */
-/** Resolves command secret assignments from the active prepared runtime snapshot. */
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   /** Command name used in diagnostics returned to gateway/tool callers. */
   commandName: string;
@@ -422,50 +195,33 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   diagnostics: string[];
   inactiveRefPaths: string[];
 }> {
-  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   if (!activeSnapshot) {
     throw new Error("Secrets runtime snapshot is not active.");
   }
   if (params.targetIds.size === 0) {
     return Promise.resolve({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
   }
-  return resolveCommandSecretsFromSnapshot({
-    activeSnapshot,
-    commandName: params.commandName,
-    targetIds: params.targetIds,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-    providerOverrides: params.providerOverrides,
-  });
+  return resolveCommandSecretsFromSnapshot(activeSnapshot, { ...params });
 }
 
-async function resolveCommandSecretsFromSnapshot(params: {
-  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshot>>;
-  commandName: string;
-  targetIds: ReadonlySet<string>;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-  providerOverrides?: CommandSecretProviderOverrides;
-}): Promise<{
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-  inactiveRefPaths: string[];
-}> {
+async function resolveCommandSecretsFromSnapshot(
+  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>,
+  params: Parameters<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>[0],
+): ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot> {
   const hasOverrides = hasProviderOverrides(params.providerOverrides);
   const sourceConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.sourceConfig,
+    activeSnapshot.sourceConfig,
     params.providerOverrides,
   );
   const resolvedConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.config,
+    activeSnapshot.config,
     params.providerOverrides,
   );
   const context = hasOverrides
     ? createResolverContext({
         sourceConfig,
-        env: getActiveSecretsRuntimeEnv(),
+        env: getActiveSecretsRuntimeEnvState(),
       })
     : undefined;
   if (context) {
@@ -475,11 +231,6 @@ async function resolveCommandSecretsFromSnapshot(params: {
       context,
     });
   }
-  mirrorResolvedProviderCredentialToDirectPaths({
-    config: sourceConfig,
-    resolvedConfig,
-    providerOverrides: params.providerOverrides,
-  });
   await resolveForcedActiveCommandSecretTargets({
     sourceConfig,
     resolvedConfig,
@@ -489,42 +240,53 @@ async function resolveCommandSecretsFromSnapshot(params: {
     optionalActivePaths: params.optionalActivePaths,
   });
 
-  const warningSource = context?.warnings ?? params.activeSnapshot.warnings;
-  let inactiveRefPaths = filterInactiveRefPaths({
-    config: sourceConfig,
-    providerOverrides: params.providerOverrides,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-    inactiveRefPaths: [
-      ...new Set(
-        warningSource
-          .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
-          .map((warning) => warning.path),
-      ),
-    ],
-  });
-  inactiveRefPaths = restoreInactiveWebCommandSecretTargets({
-    sourceConfig,
-    resolvedConfig,
-    targetIds: params.targetIds,
-    inactiveRefPaths,
-    providerOverrides: params.providerOverrides,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-  });
+  const warningSource = context?.warnings ?? activeSnapshot.warnings;
+  const isInactivePath = (path: string) => {
+    if (
+      (params.allowedPaths && !params.allowedPaths.has(path)) ||
+      params.forcedActivePaths?.has(path) ||
+      params.optionalActivePaths?.has(path)
+    ) {
+      return false;
+    }
+    return (
+      !hasOverrides ||
+      !isProviderOverridePath({
+        config: sourceConfig,
+        path,
+        providerOverrides: params.providerOverrides,
+      })
+    );
+  };
+  let inactiveRefPaths = [
+    ...new Set(
+      warningSource
+        .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
+        .map((warning) => warning.path),
+    ),
+  ].filter(isInactivePath);
+  if (hasOverrides) {
+    inactiveRefPaths = restoreInactiveWebCommandSecretTargets({
+      sourceConfig,
+      resolvedConfig,
+      targetIds: params.targetIds,
+      inactiveRefPaths,
+      isInactivePath,
+    });
+  }
 
-  let analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-    sourceConfig,
-    resolvedConfig,
-    targetIds: params.targetIds,
-    inactiveRefPaths: new Set(inactiveRefPaths),
-    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-  });
+  const analyzeAssignments = () =>
+    analyzeCommandSecretAssignmentsFromSnapshot({
+      sourceConfig,
+      resolvedConfig,
+      targetIds: params.targetIds,
+      inactiveRefPaths: new Set(inactiveRefPaths),
+      ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    });
+  let analyzed = analyzeAssignments();
   if (hasOverrides) {
     const impliedInactivePaths = analyzed.unresolved
-      .filter((entry) => isWebCommandSecretPath(entry.path))
+      .filter((entry) => pluginIdFromRuntimeWebPath(entry.path))
       .filter(
         (entry) =>
           !isProviderOverridePath({
@@ -536,13 +298,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
       .map((entry) => entry.path);
     if (impliedInactivePaths.length > 0) {
       inactiveRefPaths = uniqueStrings([...inactiveRefPaths, ...impliedInactivePaths]);
-      analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-        sourceConfig,
-        resolvedConfig,
-        targetIds: params.targetIds,
-        inactiveRefPaths: new Set(inactiveRefPaths),
-        ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-      });
+      analyzed = analyzeAssignments();
     }
   }
   const optionalActiveUnresolvedPaths = analyzed.unresolved
@@ -550,42 +306,13 @@ async function resolveCommandSecretsFromSnapshot(params: {
     .map((entry) => entry.path);
   if (optionalActiveUnresolvedPaths.length > 0) {
     inactiveRefPaths = uniqueStrings([...inactiveRefPaths, ...optionalActiveUnresolvedPaths]);
-    analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: params.targetIds,
-      inactiveRefPaths: new Set(inactiveRefPaths),
-      ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-    });
+    analyzed = analyzeAssignments();
   }
-  const selectedProviderUnresolved = analyzed.unresolved.filter((entry) =>
-    isProviderOverridePath({
-      config: sourceConfig,
-      path: entry.path,
-      providerOverrides: params.providerOverrides,
-    }),
-  );
-  const forcedActiveUnresolved = analyzed.unresolved.filter((entry) =>
-    params.forcedActivePaths?.has(entry.path),
-  );
-  if (selectedProviderUnresolved.length > 0 || forcedActiveUnresolved.length > 0) {
-    return {
-      assignments: analyzed.assignments,
-      diagnostics: analyzed.diagnostics,
-      inactiveRefPaths,
-    };
-  }
-  const resolved = collectCommandSecretAssignmentsFromSnapshot({
-    sourceConfig,
-    resolvedConfig,
-    commandName: params.commandName,
-    targetIds: params.targetIds,
-    inactiveRefPaths: new Set(inactiveRefPaths),
-    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-  });
   return {
-    assignments: resolved.assignments,
-    diagnostics: resolved.diagnostics,
+    // A runtime snapshot can be authoritative for only part of a command's target set.
+    // Preserve those values so the caller falls back locally only for unresolved paths.
+    assignments: analyzed.assignments,
+    diagnostics: analyzed.diagnostics,
     inactiveRefPaths,
   };
 }

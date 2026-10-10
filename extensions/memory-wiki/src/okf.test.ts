@@ -9,6 +9,13 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
+const OKF_LITERAL_LINK_EXAMPLES = [
+  "    [customers](/tables/customers.md)",
+  "> ```markdown\n> [customers](/tables/customers.md)\n> ```",
+  "``\n[customers](/tables/customers.md)\n``",
+  "- ```markdown\n  [customers](/tables/customers.md)\n  ```",
+];
+
 function getOnlyPagePath(paths: string[]): string {
   expect(paths).toHaveLength(1);
   const [pagePath] = paths;
@@ -74,6 +81,8 @@ Inline code keeps \`[customers](/tables/customers.md)\` unchanged.
 \`\`\`markdown
 [customers](/tables/customers.md)
 \`\`\`
+
+${OKF_LITERAL_LINK_EXAMPLES.join("\n\n")}
 
 External citation stays as [BigQuery](https://cloud.google.com/bigquery).
 `,
@@ -153,6 +162,9 @@ describe("importMemoryWikiOkfBundle", () => {
     expect(orders.body).toContain('"metric docs"');
     expect(orders.body).toContain("`[customers](/tables/customers.md)`");
     expect(orders.body).toContain("```markdown\n[customers](/tables/customers.md)\n```");
+    for (const example of OKF_LITERAL_LINK_EXAMPLES) {
+      expect(orders.body).toContain(example);
+    }
     expect(orders.body).toContain("https://cloud.google.com/bigquery");
 
     const okf = orders.frontmatter.okf as Record<string, unknown>;
@@ -191,6 +203,32 @@ describe("importMemoryWikiOkfBundle", () => {
       searchCorpus: "wiki",
     });
     expect(searchResults.map((searchResult) => searchResult.path)).toContain(ordersPath);
+  });
+
+  it("prunes repository metadata and dependency subtrees", async () => {
+    const rootDir = await createTempDir("memory-wiki-okf-prune-");
+    const bundlePath = path.join(rootDir, "pruned-okf");
+    await Promise.all([
+      fs.mkdir(path.join(bundlePath, "tables"), { recursive: true }),
+      fs.mkdir(path.join(bundlePath, ".git"), { recursive: true }),
+      fs.mkdir(path.join(bundlePath, "node_modules"), { recursive: true }),
+    ]);
+    const concept = `---\ntype: BigQuery Table\ntitle: Included\n---\n\nIncluded body.\n`;
+    await Promise.all([
+      fs.writeFile(path.join(bundlePath, "tables", "included.md"), concept),
+      fs.writeFile(path.join(bundlePath, ".git", "ignored.md"), concept),
+      fs.writeFile(path.join(bundlePath, "node_modules", "ignored.md"), concept),
+    ]);
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    const result = await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
+    });
+
+    expect(result.importedCount).toBe(1);
+    expect(result.pagePaths).toHaveLength(1);
   });
 
   it("caps generated concept filenames for long OKF concept paths", async () => {

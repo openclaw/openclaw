@@ -1,0 +1,68 @@
+import type { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import type { SessionSuspensionParams } from "../../session-suspension.js";
+import type { resolveRunWorkspaceDir } from "../../workspace-run.js";
+import type { EmbeddedRunReplayState } from "../replay-state.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
+import type { createEmbeddedRunLaneController } from "./lane-controller.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
+import type { createEmbeddedRunProgressController } from "./progress-controller.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
+import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
+import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
+
+export type PreparedEmbeddedRunInput = {
+  /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
+  onInitialWriterPrepared: (resource: AsyncDisposable) => void;
+  preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
+  runParams: RunEmbeddedAgentParamsWithSessionFile;
+  sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>;
+  contextEngineAgentId?: string;
+  provider: string;
+  modelId: string;
+  agentDir: string;
+  workspaceResolution: ReturnType<typeof resolveRunWorkspaceDir>;
+  workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
+  isCanonicalWorkspace: boolean;
+  globalLane: string;
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  hookContext: Parameters<typeof prepareEmbeddedRunRuntime>[0]["hookContext"];
+  fallbackConfigured: boolean;
+  isProbeSession: boolean;
+  resolvedSessionKey: string;
+  resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
+  startedAtMs: number;
+  startupStages: ReturnType<typeof createStageTimingTracker>;
+  emitStartupStageSummary: (phase: string) => void;
+  progressController: ReturnType<typeof createEmbeddedRunProgressController>;
+  laneController: ReturnType<typeof createEmbeddedRunLaneController>;
+  lifecycleGeneration: NonNullable<RunEmbeddedAgentParams["lifecycleGeneration"]>;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+};
+
+export type PreparedEmbeddedAttemptDispatchInput = {
+  runInput: PreparedEmbeddedRunInput;
+  preparedRuntime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
+  contextEngine?: ContextEngine;
+  sessionPromptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
+  terminalRetryState: ReturnType<typeof createEmbeddedRunTerminalRetryState>;
+  replayState: EmbeddedRunReplayState;
+  startupStagesEmitted: boolean;
+  bootstrapPromptWarningSignaturesSeen: string[];
+  resolveRuntimeFallbackReason: () => string | null;
+  observeToolOutcome: ToolOutcomeObserver;
+  isTurnTainted: () => boolean;
+  allocateToolOutcomeOrdinal: NonNullable<EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"]>;
+  getPostCompactionAbortError: () => Error | undefined;
+  setPostCompactionAbortController: (controller: AbortController | undefined) => void;
+  clearPostCompactionAbortController: (controller: AbortController) => void;
+  permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
+};

@@ -1,135 +1,253 @@
-// Skill chat command discovery loads chat commands contributed by active skills.
 import fs from "node:fs";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import {
+  type ExecPolicyOverrides,
+  type ExecSessionDefaults,
+  resolveNodeExecEligibility,
+} from "../../agents/exec-defaults.js";
+import {
+  getAgentWorkspaceAccess,
+  isWorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
-import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
+import {
+  buildWorkspaceSkillCommandSpecs,
+  prepareWorkspaceSkillCommandSpecs,
+} from "./command-specs.js";
 export {
-  listReservedChatSlashCommandNames,
+  expandExplicitSkillReferences,
+  hasSkillReferenceCandidate,
   resolveSkillCommandInvocation,
 } from "./chat-command-invocation.js";
 
-export function listSkillCommandsForWorkspace(params: {
+type WorkspaceSkillCommandParams = {
   workspaceDir: string;
   cfg: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
-}): SkillCommandSpec[] {
-  return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
+  sessionEntry?: ExecSessionDefaults &
+    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+  sessionKey?: string;
+  execOverrides?: ExecPolicyOverrides;
+  includeAllowlistHidden?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+};
+
+function resolveWorkspaceSkillCommandOptions(params: WorkspaceSkillCommandParams) {
+  const nodeSkills = resolveNodeExecEligibility(params);
+  const eligibility = {
+    nodeSkills,
+    remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
+  };
+  return {
     config: params.cfg,
     agentId: params.agentId,
     skillFilter: params.skillFilter,
-    eligibility: {
-      remote: getRemoteSkillEligibility({
-        advertiseExecNode: canExecRequestNode({
-          cfg: params.cfg,
-          agentId: params.agentId,
-        }),
-      }),
-    },
+    includeAllowlistHidden: params.includeAllowlistHidden,
+    eligibility,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    librarySelections: params.sessionEntry?.skillLibrarySelections,
+  };
+}
+
+// Native menus use Gateway-owned Skills only when a workspace is remote. A stopped
+// binding still denotes a remote workspace; it must not expose a stale local copy.
+function hasRemoteWorkspace(workspaceDir: string): boolean {
+  try {
+    return Boolean(getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills);
+  } catch (error) {
+    if (isWorkspaceAccessUnavailableError(error)) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+/** Synchronous public SDK contract; remote workspace menus are deferred. */
+export function listSkillCommandsForWorkspace(
+  params: WorkspaceSkillCommandParams,
+): SkillCommandSpec[] {
+  return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
+    ...resolveWorkspaceSkillCommandOptions(params),
     reservedNames: listReservedChatSlashCommandNames(),
+    gatewayOnly: hasRemoteWorkspace(params.workspaceDir),
   });
 }
 
-function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
-  const seen = new Set<string>();
-  const out: SkillCommandSpec[] = [];
-  for (const cmd of commands) {
-    const key = normalizeOptionalLowercaseString(cmd.skillName);
-    if (key && seen.has(key)) {
-      continue;
-    }
-    if (key) {
-      seen.add(key);
-    }
-    out.push(cmd);
-  }
-  return out;
+export async function prepareSkillCommandsForWorkspace(
+  params: WorkspaceSkillCommandParams,
+  assertCurrent?: () => void,
+): Promise<SkillCommandSpec[]> {
+  assertCurrent?.();
+  await prepareRemoteSkillConnections();
+  assertCurrent?.();
+  const commands = await prepareWorkspaceSkillCommandSpecs(
+    params.workspaceDir,
+    {
+      ...resolveWorkspaceSkillCommandOptions(params),
+      reservedNames: listReservedChatSlashCommandNames(),
+    },
+    assertCurrent,
+  );
+  assertCurrent?.();
+  return commands;
 }
 
-export function listSkillCommandsForAgents(params: {
+/** Resolve Gateway-bundled commands with the active Harness eligibility checks. */
+export async function prepareBundledSkillCommandForWorkspace(
+  params: WorkspaceSkillCommandParams & { skillName: string },
+): Promise<SkillCommandSpec | undefined> {
+  await prepareRemoteSkillConnections();
+  const commands = await prepareWorkspaceSkillCommandSpecs(params.workspaceDir, {
+    ...resolveWorkspaceSkillCommandOptions(params),
+    reservedNames: listReservedChatSlashCommandNames(),
+    bundledSkillName: params.skillName,
+  });
+  return commands.find(
+    (command) =>
+      command.skillSource === "bundled" &&
+      command.skillName.trim().toLowerCase() === params.skillName.trim().toLowerCase(),
+  );
+}
+
+function finalizeSkillCommands(commands: SkillCommandSpec[]): SkillCommandSpec[] {
+  const seen = new Set<string>();
+  return commands
+    .filter((cmd) => {
+      const key = normalizeOptionalLowercaseString(cmd.skillName);
+      if (key && seen.has(key)) {
+        return false;
+      }
+      if (key) {
+        seen.add(key);
+      }
+      return true;
+    })
+    .toSorted((left, right) => left.skillName.localeCompare(right.skillName, "en"));
+}
+
+type AgentSkillCommandParams = {
   cfg: OpenClawConfig;
   agentIds?: string[];
-}): SkillCommandSpec[] {
-  const mergeSkillFilters = (existing?: string[], incoming?: string[]): string[] | undefined => {
-    // undefined = no allowlist (unrestricted); [] = explicit empty allowlist (no skills).
-    // If any agent is unrestricted for this workspace, keep command discovery unrestricted.
-    if (existing === undefined || incoming === undefined) {
-      return undefined;
-    }
-    // An empty allowlist contributes no skills but does not widen the merge to unrestricted.
-    if (existing.length === 0) {
-      return uniqueStrings(incoming);
-    }
-    if (incoming.length === 0) {
-      return uniqueStrings(existing);
-    }
-    return uniqueStrings([...existing, ...incoming]);
-  };
+  sessionEntry?: ExecSessionDefaults &
+    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+  sessionKey?: string;
+  execOverrides?: ExecPolicyOverrides;
+};
 
+function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, allowRemote = false) {
   const agentIds = params.agentIds ?? listAgentIds(params.cfg);
-  const used = listReservedChatSlashCommandNames();
-  const entries: SkillCommandSpec[] = [];
-  // Group by canonical workspace to avoid duplicate registration when multiple
-  // agents share the same directory (#5717), while still honoring per-agent filters.
-  const workspaceFilters = new Map<string, { workspaceDir: string; skillFilter?: string[] }>();
+  const hasSingleAgentContext = agentIds.length === 1;
+  const workspaceAgents: Array<{
+    agentId: string;
+    workspaceDir: string;
+    skillFilter?: string[];
+    gatewayOnly: boolean;
+  }> = [];
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-    if (!fs.existsSync(workspaceDir)) {
-      logVerbose(`Skipping agent "${agentId}": workspace does not exist: ${workspaceDir}`);
-      continue;
+    const remote = allowRemote
+      ? Boolean(getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills)
+      : hasRemoteWorkspace(workspaceDir);
+    if (!remote) {
+      if (!fs.existsSync(workspaceDir)) {
+        logVerbose(`Skipping agent "${agentId}": workspace does not exist: ${workspaceDir}`);
+        continue;
+      }
+      try {
+        fs.realpathSync(workspaceDir);
+      } catch {
+        logVerbose(`Skipping agent "${agentId}": cannot resolve workspace: ${workspaceDir}`);
+        continue;
+      }
     }
-    let canonicalDir: string;
-    try {
-      canonicalDir = fs.realpathSync(workspaceDir);
-    } catch {
-      logVerbose(`Skipping agent "${agentId}": cannot resolve workspace: ${workspaceDir}`);
-      continue;
-    }
-    const skillFilter = resolveEffectiveAgentSkillFilter(params.cfg, agentId);
-    const existing = workspaceFilters.get(canonicalDir);
-    if (existing) {
-      existing.skillFilter = mergeSkillFilters(existing.skillFilter, skillFilter);
-      continue;
-    }
-    workspaceFilters.set(canonicalDir, {
+    workspaceAgents.push({
+      agentId,
       workspaceDir,
-      skillFilter,
+      gatewayOnly: remote && !allowRemote,
+      skillFilter: resolveEffectiveAgentSkillFilter(params.cfg, agentId),
     });
   }
 
-  for (const { workspaceDir, skillFilter } of workspaceFilters.values()) {
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      config: params.cfg,
-      skillFilter,
-      eligibility: {
-        remote: getRemoteSkillEligibility({
-          advertiseExecNode: canExecRequestNode({
-            cfg: params.cfg,
-          }),
+  for (const { agentId, workspaceDir, skillFilter, gatewayOnly } of workspaceAgents) {
+    yield {
+      workspaceDir,
+      options: {
+        ...resolveWorkspaceSkillCommandOptions({
+          cfg: params.cfg,
+          agentId,
+          workspaceDir,
+          skillFilter,
+          ...(hasSingleAgentContext
+            ? {
+                sessionEntry: params.sessionEntry,
+                sessionKey: params.sessionKey,
+                execOverrides: params.execOverrides,
+              }
+            : {}),
         }),
+        gatewayOnly,
       },
-      reservedNames: used,
-    });
-    for (const command of commands) {
-      used.add(normalizeLowercaseStringOrEmpty(command.name));
-      entries.push(command);
-    }
+    };
   }
-  return dedupeBySkillName(entries);
 }
 
-export const testing = {
-  dedupeBySkillName,
-};
-export { testing as __testing };
+function appendSkillCommands(
+  entries: SkillCommandSpec[],
+  used: Set<string>,
+  commands: SkillCommandSpec[],
+) {
+  for (const command of commands) {
+    used.add(command.name);
+    entries.push(command);
+  }
+}
+
+/** Synchronous public SDK contract for native command consumers. */
+export function listSkillCommandsForAgents(params: AgentSkillCommandParams): SkillCommandSpec[] {
+  const used = listReservedChatSlashCommandNames();
+  const entries: SkillCommandSpec[] = [];
+  for (const { workspaceDir, options } of resolveAgentSkillCommandWorkspaces(params)) {
+    appendSkillCommands(
+      entries,
+      used,
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...options,
+        reservedNames: used,
+      }),
+    );
+  }
+  return finalizeSkillCommands(entries);
+}
+
+export async function prepareSkillCommandsForAgents(
+  params: AgentSkillCommandParams & { signal?: AbortSignal },
+): Promise<SkillCommandSpec[]> {
+  params.signal?.throwIfAborted();
+  await prepareRemoteSkillConnections();
+  params.signal?.throwIfAborted();
+  const used = listReservedChatSlashCommandNames();
+  const entries: SkillCommandSpec[] = [];
+  for (const { workspaceDir, options } of resolveAgentSkillCommandWorkspaces(params, true)) {
+    const commands = await racePromiseWithAbortSignal(
+      prepareWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...options,
+        reservedNames: used,
+      }),
+      params.signal,
+    );
+    params.signal?.throwIfAborted();
+    appendSkillCommands(entries, used, commands);
+  }
+  return finalizeSkillCommands(entries);
+}

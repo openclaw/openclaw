@@ -1,103 +1,67 @@
 // Resolves plugin auto-enable preference ordering across candidate plugins.
-import fs from "node:fs";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
+import {
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  readPluginCacheJsonFile,
+} from "../plugins/plugin-cache-files.js";
+import {
+  parseExternalPluginCatalogEntries,
+  resolveExternalPluginCatalogPaths,
+} from "../plugins/plugin-catalog-source.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-type ExternalCatalogChannelEntry = {
-  id: string;
-  preferOver: string[];
-};
-
-const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
-
-function splitEnvPaths(value: string): string[] {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return [];
-  }
-  return normalizeStringEntries(
-    trimmed.split(/[;,]/g).flatMap((chunk) => chunk.split(path.delimiter)),
-  );
-}
-
-function resolveExternalCatalogPaths(env: NodeJS.ProcessEnv): string[] {
-  for (const key of ENV_CATALOG_PATHS) {
-    const raw = normalizeOptionalString(env[key]);
-    if (raw) {
-      return splitEnvPaths(raw);
-    }
-  }
-  const configDir = resolveConfigDir(env);
-  return [
-    path.join(configDir, "mpm", "plugins.json"),
-    path.join(configDir, "mpm", "catalog.json"),
-    path.join(configDir, "plugins", "catalog.json"),
-  ];
-}
-
-function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChannelEntry[] {
-  const list = (() => {
-    if (Array.isArray(raw)) {
-      return raw;
-    }
-    if (!isRecord(raw)) {
-      return [];
-    }
-    const entries = raw.entries ?? raw.packages ?? raw.plugins;
-    return Array.isArray(entries) ? entries : [];
-  })();
-
-  const channels: ExternalCatalogChannelEntry[] = [];
-  for (const entry of list) {
-    if (!isRecord(entry) || !isRecord(entry.openclaw) || !isRecord(entry.openclaw.channel)) {
-      continue;
-    }
-    const channel = entry.openclaw.channel;
-    const id = normalizeOptionalString(channel.id) ?? "";
-    if (!id) {
-      continue;
-    }
-    const preferOver = Array.isArray(channel.preferOver)
-      ? channel.preferOver.filter((value): value is string => typeof value === "string")
-      : [];
-    channels.push({ id, preferOver });
-  }
-  return channels;
-}
+/** Maximum bytes to read from an external catalog file before rejecting it. */
+const MAX_EXTERNAL_CATALOG_BYTES = 16 * 1024 * 1024;
+const log = createSubsystemLogger("config/plugin-catalog");
 
 function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.ProcessEnv): string[] {
-  for (const rawPath of resolveExternalCatalogPaths(env)) {
+  for (const rawPath of resolveExternalPluginCatalogPaths({ env })) {
     const resolved = resolveUserPath(rawPath, env);
-    if (!fs.existsSync(resolved)) {
+    if (!pluginCacheExistsSync(resolved)) {
       continue;
     }
     try {
-      const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
-      const channel = parseExternalCatalogChannelEntries(payload).find(
-        (entry) => entry.id === channelId,
-      );
-      if (channel) {
-        return channel.preferOver;
+      // Resolve symlinks so a catalog file that points to a regular file
+      // keeps working while the bounded regular-file read still rejects
+      // directories, FIFOs, and oversized targets.
+      const resolvedRealPath = pluginCacheRealpathSync(resolved);
+      if (!resolvedRealPath) {
+        continue;
       }
-    } catch {
-      // Ignore invalid catalog files.
+      const payload = readPluginCacheJsonFile(resolvedRealPath, {
+        maxBytes: MAX_EXTERNAL_CATALOG_BYTES,
+      });
+      if (!payload.ok) {
+        throw payload.error;
+      }
+      for (const entry of parseExternalPluginCatalogEntries(payload.value)) {
+        const channel = isRecord(entry.openclaw) ? entry.openclaw.channel : undefined;
+        if (!isRecord(channel) || normalizeOptionalString(channel.id) !== channelId) {
+          continue;
+        }
+        return Array.isArray(channel.preferOver)
+          ? channel.preferOver.filter((value): value is string => typeof value === "string")
+          : [];
+      }
+    } catch (err) {
+      // Surface oversized catalogs so operators know a configured file was
+      // skipped — unlike parse or permission errors which mean the file is
+      // genuinely unusable.
+      if (err instanceof Error && err.message.startsWith("File exceeds")) {
+        log.warn(
+          `skipping oversized external catalog file (max ${MAX_EXTERNAL_CATALOG_BYTES} bytes): ${resolved}`,
+        );
+      }
     }
   }
   return [];
-}
-
-function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
-  const builtInChannelId = normalizeChatChannelId(channelId);
-  if (!builtInChannelId) {
-    return [];
-  }
-  return getChatChannelMeta(builtInChannelId)?.preferOver ?? [];
 }
 
 function resolvePreferredOverIds(
@@ -116,15 +80,14 @@ function resolvePreferredOverIds(
   if (installedChannelMeta?.preferOver?.length) {
     return [...installedChannelMeta.preferOver];
   }
-  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
-  if (builtInChannelPreferOver.length) {
+  const builtInChannelId = normalizeChatChannelId(channelId);
+  const builtInChannelPreferOver = builtInChannelId
+    ? findChatChannelMeta(builtInChannelId)?.preferOver
+    : undefined;
+  if (builtInChannelPreferOver?.length) {
     return [...builtInChannelPreferOver];
   }
   return resolveExternalCatalogPreferOver(channelId, env);
-}
-
-function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
-  return `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
 }
 
 export function shouldSkipPreferredPluginAutoEnable(params: {
@@ -138,7 +101,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   preferOverCache: Map<string, string[]>;
 }): boolean {
   const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
-    const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
+    const cacheKey = `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
     const cached = params.preferOverCache.get(cacheKey);
     if (cached) {
       return cached;
@@ -148,19 +111,11 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     return resolved;
   };
 
-  for (const other of params.configured) {
-    if (other.pluginId === params.entry.pluginId) {
-      continue;
-    }
-    if (
-      params.isPluginDenied(params.config, other.pluginId) ||
-      params.isPluginExplicitlyDisabled(params.config, other.pluginId)
-    ) {
-      continue;
-    }
-    if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
-      return true;
-    }
-  }
-  return false;
+  return params.configured.some(
+    (other) =>
+      other.pluginId !== params.entry.pluginId &&
+      !params.isPluginDenied(params.config, other.pluginId) &&
+      !params.isPluginExplicitlyDisabled(params.config, other.pluginId) &&
+      getPreferredOverIds(other).includes(params.entry.pluginId),
+  );
 }

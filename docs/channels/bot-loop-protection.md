@@ -7,35 +7,28 @@ title: "Bot loop protection"
 sidebarTitle: "Bot loop protection"
 ---
 
-# Bot loop protection
+OpenClaw can accept messages written by other bots on channels that support `allowBots`. Discord and Slack default to accepting them under the normal mention and access rules; an explicit `allowBots: false` still disables bot-triggered turns. Bot messages can remain visible as conversation context independently of turn admission.
 
-OpenClaw can accept messages written by other bots on channels that support `allowBots`.
-When that path is enabled, pair loop protection prevents two bot identities from
-replying to each other indefinitely.
+Pair loop protection bounds rapid exchanges between two bot identities. It is a sliding-window rate guard, so slower exchanges below the budget can continue.
 
-The guard is enforced by the core inbound reply runner. Each supporting channel
-maps its own inbound event into generic facts: account or scope, conversation id,
-sender bot id, and receiver bot id. Core then tracks the participant pair in both
-directions, applies a sliding-window budget, and suppresses the pair during a
-cooldown after the budget is exceeded.
+The guard is enforced by the core inbound reply runner. Each supporting channel maps its inbound event into generic facts: account or scope, conversation id, sender bot id, and receiver bot id. Core tracks the participant pair in both directions (A to B and B to A count as the same pair), applies a sliding-window budget, and suppresses the pair during a cooldown after the budget is exceeded.
 
 ## Defaults
 
-Pair loop protection is active when a channel lets bot-authored messages reach
-dispatch. Built-in defaults are:
+Pair loop protection is active whenever a channel lets bot-authored messages reach dispatch. Built-in defaults:
 
-- `maxEventsPerWindow: 20` - a bot pair can exchange 20 events within the window
-- `windowSeconds: 60` - sliding window length
-- `cooldownSeconds: 60` - suppression time after the pair exceeds the budget
+| Key                  | Default | Meaning                                             |
+| -------------------- | ------- | --------------------------------------------------- |
+| `enabled`            | `true`  | Guard active for channels that support it.          |
+| `maxEventsPerWindow` | `20`    | Events a bot pair can exchange within the window.   |
+| `windowSeconds`      | `60`    | Sliding window length.                              |
+| `cooldownSeconds`    | `60`    | Suppression time after the pair exceeds the budget. |
 
-The guard does not affect normal human-authored messages, single-bot deployments,
-self-message filtering, or one-shot bot replies that stay under the budget.
+The guard does not affect human-authored messages, single-bot deployments, self-message filtering, or bot replies that stay under the budget.
 
 ## Configure shared defaults
 
-Set `channels.defaults.botLoopProtection` once to give every supporting channel
-the same baseline. Channel and account overrides can still tune individual
-surfaces.
+Set `channels.defaults.botLoopProtection` once to give every supporting channel the same baseline. Channels may also expose narrower overrides; Feishu intentionally uses only this shared baseline.
 
 ```json5
 {
@@ -51,18 +44,17 @@ surfaces.
 }
 ```
 
-Set `enabled: false` only when your channel policy intentionally allows
-bot-to-bot conversations without automatic suppression.
+Set `enabled: false` only when your channel policy intentionally allows bot-to-bot conversations without automatic suppression.
 
-## Override per channel or account
+## Override per channel, account, or room
 
-Supporting channels layer their own config over the shared default. Precedence is:
+Supporting channels layer their own config over the shared default, key by key. Precedence, narrowest first:
 
-- `channels.<channel>.<room-or-space>.botLoopProtection`, when the channel supports per-conversation overrides
-- `channels.<channel>.accounts.<account>.botLoopProtection`, when the channel supports accounts
-- `channels.<channel>.botLoopProtection`, when the channel supports top-level defaults
-- `channels.defaults.botLoopProtection`
-- built-in defaults
+1. `channels.<channel>.<room-or-space>.botLoopProtection`, when the channel supports per-conversation overrides
+2. `channels.<channel>.accounts.<account>.botLoopProtection`, when the channel supports accounts
+3. `channels.<channel>.botLoopProtection`, when the channel supports top-level defaults
+4. `channels.defaults.botLoopProtection`
+5. built-in defaults
 
 ```json5
 {
@@ -77,27 +69,11 @@ Supporting channels layer their own config over the shared default. Precedence i
         maxEventsPerWindow: 8,
       },
       accounts: {
-        molty: {
-          allowBots: "mentions",
+        secondary: {
+          allowBots: true,
           botLoopProtection: {
             maxEventsPerWindow: 5,
             cooldownSeconds: 90,
-          },
-        },
-      },
-    },
-    slack: {
-      allowBots: "mentions",
-      botLoopProtection: {
-        maxEventsPerWindow: 8,
-      },
-    },
-    matrix: {
-      allowBots: "mentions",
-      groups: {
-        "!roomid:example.org": {
-          botLoopProtection: {
-            maxEventsPerWindow: 5,
           },
         },
       },
@@ -112,6 +88,22 @@ Supporting channels layer their own config over the shared default. Precedence i
         },
       },
     },
+    matrix: {
+      allowBots: "mentions",
+      groups: {
+        "!roomid:example.org": {
+          botLoopProtection: {
+            maxEventsPerWindow: 5,
+          },
+        },
+      },
+    },
+    slack: {
+      allowBots: "mentions",
+      botLoopProtection: {
+        maxEventsPerWindow: 8,
+      },
+    },
   },
 }
 ```
@@ -119,13 +111,30 @@ Supporting channels layer their own config over the shared default. Precedence i
 ## Channel support
 
 - Discord: native `author.bot` facts, keyed by Discord account, channel, and bot pair.
-- Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, channel, and bot pair.
-- Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
+- Feishu: native `sender_type=bot` facts for admitted bot-authored group messages, keyed by Feishu account, chat, and bot pair. Feishu uses only `channels.defaults.botLoopProtection`.
 - Google Chat: native `sender.type=BOT` facts for accepted bot-authored messages, keyed by account, space, and bot pair.
+- Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
+- Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, channel, and bot pair.
 
-Channels that do not expose a reliable inbound bot identity keep using their
-normal self-message and access-policy filters. They should not opt into this
-guard until they can identify both participants in the bot pair.
+Channels that do not expose a reliable inbound bot identity keep using their normal self-message and access-policy filters. They should not opt into this guard until they can identify both participants in the bot pair.
 
-See [SDK runtime](/plugins/sdk-runtime#reusable-runtime-utilities) for plugin
-implementation details.
+See [SDK runtime](/plugins/sdk-runtime#reusable-runtime-utilities) for plugin implementation details.
+
+## Internal agent group rounds
+
+[Agent group threads](/channels/broadcast-groups) use a separate coordinator
+budget for participants sharing one inbound message. Qualified `broadcast`
+entries allow at most 4 rounds and 32 participant turns. `maxRounds` includes
+the initial round; `maxTurns` counts agent runs started, with slots reserved
+before parallel launch. Every participant passing, either limit, or
+cancellation stops further turns.
+
+A participant turn may produce several physical messages through chunking,
+previews, or message-tool sends. The coordinator does not count those messages.
+Its in-memory budget is scoped to the channel, account, conversation, thread,
+and root message, and cannot resume after a Gateway restart.
+
+Internal continuations have distinct identities so ordinary inbound dedupe does
+not suppress them. They do not change the transport pair guard’s thresholds or
+replace channel bot-admission and self-message policies. Keep those protections
+enabled for bot-authored messages arriving from the platform.

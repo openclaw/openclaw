@@ -1,142 +1,199 @@
 import OpenClawKit
 import SwiftUI
-import UIKit
 import UserNotifications
 
 extension SettingsProTab {
     func detailStatusCard(
         icon: String,
-        title: String,
-        detail: String,
-        value: String,
-        color: Color) -> some View
+        title: OpenClawTextValue,
+        detail: OpenClawTextValue,
+        value: OpenClawTextValue,
+        color: Color,
+        actionTitle: LocalizedStringKey? = nil,
+        actionSystemImage: String = "arrow.right",
+        action: (() -> Void)? = nil) -> some View
     {
-        ProCard(radius: SettingsLayout.cardRadius) {
+        Section {
             HStack(spacing: 12) {
-                ProIconBadge(systemName: icon, color: color)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.headline)
-                    Text(detail)
-                        .font(.caption)
+                SettingsIcon(systemName: icon, color: color)
+                VStack(alignment: .leading, spacing: 2) {
+                    title.text
+                        .font(OpenClawType.headline)
+                    detail.text
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                ProValuePill(value: value, color: color)
+                value.text
+                    .font(OpenClawType.subheadMedium)
+                    .foregroundStyle(color)
+            }
+            if let action, let actionTitle {
+                Button(action: action) {
+                    Label(actionTitle, systemImage: actionSystemImage)
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
+                }
+                .openClawProminentButton()
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var diagnosticChecksCard: some View {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0) {
-                self.diagnosticCheckRow(
-                    icon: "stethoscope",
-                    title: "Last Run",
-                    detail: self.diagnosticsLastRunText,
-                    value: self.diagnosticsRunValue,
-                    color: self.diagnosticsRunColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "antenna.radiowaves.left.and.right",
-                    title: "Gateway Link",
-                    detail: self.gatewayStatusDetail,
-                    value: self.gatewayStatusValue,
-                    color: self.gatewayStatusColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "dot.radiowaves.left.and.right",
-                    title: "Discovery",
-                    detail: self.gatewayController.discoveryStatusText,
-                    value: "\(self.gatewayController.gateways.count)",
-                    color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "waveform",
-                    title: "Talk Config",
-                    detail: self.gatewayTalkConfigDetail,
-                    value: self.gatewayTalkConfigValue,
-                    color: self.gatewayTalkConfigColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "bell",
-                    title: "Notifications",
-                    detail: "Approval and event alert channel",
-                    value: self.notificationStatusText,
-                    color: self.notificationStatus.color)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "rectangle.on.rectangle",
-                    title: "Screen Capture",
-                    detail: "Live foreground capture state",
-                    value: self.appModel.screenRecordActive ? "live" : "idle",
-                    color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "mic",
-                    title: "Voice Wake",
-                    detail: self.appModel.voiceWake.statusText,
-                    value: self.voiceWakeEnabled ? "on" : "off",
-                    color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
-            }
+        Section("Checks") {
+            let run = self.diagnosticsRunPresentation
+            self.diagnosticCheckRow(
+                icon: "stethoscope",
+                title: "Last Run",
+                detail: .verbatim(self.diagnosticsLastRunText),
+                value: .verbatim(run.value),
+                color: run.color)
+            let gateway = self.gatewayStatusPresentation
+            self.diagnosticCheckRow(
+                icon: "antenna.radiowaves.left.and.right",
+                title: "Gateway Link",
+                detail: .verbatim(gateway.detail),
+                value: .verbatim(gateway.value),
+                color: gateway.color)
+            self.diagnosticCheckRow(
+                icon: "dot.radiowaves.left.and.right",
+                title: "Discovery",
+                detail: .verbatim(self.gatewayController.discoveryStatusText),
+                value: .verbatim(self.gatewayController.gateways.count.formatted()),
+                color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
+            let talkConfig = self.gatewayTalkConfigPresentation
+            self.diagnosticCheckRow(
+                icon: "waveform",
+                title: "Talk Config",
+                detail: .verbatim(talkConfig.detail),
+                value: .verbatim(talkConfig.value),
+                color: talkConfig.color)
+            self.diagnosticCheckRow(
+                icon: "bell",
+                title: "Notifications",
+                detail: "Approval and event alert channel",
+                value: .verbatim(self.notificationPresentation.text),
+                color: self.notificationPresentation.color)
+            self.diagnosticCheckRow(
+                icon: "rectangle.on.rectangle",
+                title: "Screen Capture",
+                detail: "Live foreground capture state",
+                value: .verbatim(self.appModel.screenRecordActive
+                    ? String(localized: "live")
+                    : String(localized: "idle")),
+                color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
+            self.diagnosticCheckRow(
+                icon: "mic",
+                title: "Voice Wake",
+                detail: .verbatim(self.appModel.voiceWake.statusText),
+                value: .verbatim(self.voiceWakeEnabled
+                    ? String(localized: "on")
+                    : String(localized: "off")),
+                color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func diagnosticCheckRow(
         icon: String,
-        title: String,
-        detail: String,
-        value: String,
+        title: OpenClawTextValue,
+        detail: OpenClawTextValue,
+        value: OpenClawTextValue,
         color: Color) -> some View
     {
         HStack(spacing: 12) {
-            ProIconBadge(systemName: icon, color: color)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Text(detail)
-                    .font(.caption)
+            SettingsIcon(systemName: icon, color: color)
+            VStack(alignment: .leading, spacing: 2) {
+                title.text
+                    .font(OpenClawType.subheadSemiBold)
+                detail.text
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            ProValuePill(value: value, color: color)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-
-    func detailListCard(@ViewBuilder content: () -> some View) -> some View {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0, content: content)
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    func detailRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.caption)
+            value.text
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(.caption)
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 42)
     }
 
-    func reconnectGateway() async {
+    func reconnectGateway(ingressAttention: GatewayIngressController.Attention? = nil) async {
         guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         guard !self.isReconnectingGateway else { return }
         self.isReconnectingGateway = true
+        self.gatewayActionStatusText = nil
         defer { self.isReconnectingGateway = false }
-        await self.gatewayController.connectLastKnown()
+        let result = if let ingressAttention {
+            await gatewayController.retryGatewayIngress(ingressAttention)
+        } else {
+            await gatewayController.connectActiveGateway()
+        }
+        if case let .failed(message) = result {
+            gatewayActionStatusText = message
+        }
+    }
+
+    func switchGateway(to entry: GatewaySettingsStore.GatewayRegistryEntry) async {
+        guard self.connectingGateway == nil else { return }
+        self.connectingGateway = .gateway(entry.id)
+        self.gatewayActionStatusText = String(
+            format: String(localized: "Switching to %@…"),
+            entry.name)
+        defer {
+            self.connectingGateway = nil
+            self.refreshGatewayRegistry()
+        }
+        switch await self.gatewayController.switchToGateway(stableID: entry.stableID) {
+        case .accepted:
+            self.gatewayActionStatusText = nil
+            self.gatewayAuthFields.selectTarget(
+                entry.stableID,
+                instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                allowManualOverride: false)
+        case let .failed(message):
+            self.gatewayActionStatusText = message
+        case .superseded:
+            self.gatewayActionStatusText = nil
+        }
+    }
+
+    func forgetGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) async {
+        self.pendingForgetGateway = nil
+        guard await self.gatewayController.forgetGateway(stableID: entry.stableID) else {
+            self.setupStatusText = String(
+                format: String(localized: "Could not forget %@."),
+                entry.name)
+            self.refreshGatewayRegistry()
+            return
+        }
+        if GatewayStableIdentifier.matches(self.gatewayAuthFields.targetStableID, entry.stableID) {
+            self.gatewayAuthFields = .init()
+        }
+        self.setupStatusText = String(
+            format: String(localized: "Forgot %@."),
+            entry.name)
+        self.refreshGatewayRegistry()
+    }
+
+    func refreshGatewayRegistry() {
+        self.gatewayRegistry = self.appModel.loadDisplayedGatewayRegistry()
+    }
+
+    func gatewayEndpointSummary(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> String {
+        switch entry.kind {
+        case .manual:
+            let endpoint = if let host = entry.host, let port = entry.port {
+                "\(host):\(port)"
+            } else {
+                String(localized: "Saved endpoint unavailable")
+            }
+            return entry.useTLS ? "\(endpoint) • TLS" : endpoint
+        case .discovered:
+            return entry.useTLS
+                ? String(localized: "Discovered • TLS")
+                : String(localized: "Discovered")
+        }
     }
 
     @MainActor
@@ -152,127 +209,213 @@ extension SettingsProTab {
         }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
-        self.registerForRemoteNotificationsIfEnrollmentReady()
+        IOSDeviceSettingsActions.registerForRemoteNotificationsIfEnrollmentReady(
+            status: notificationSettings.authorizationStatus)
 
-        let issueCount = SettingsDiagnostics.issueCount(
+        self.diagnosticsIssueCount = SettingsDiagnostics.issues(
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationsAllowed: self.notificationStatus == .allowed)
-        self.diagnosticsIssueCount = issueCount
-        self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
+            notificationsAllowed: self.notificationPresentation.isActive).count
+        self.diagnosticsLastRunText = Date().formatted(date: .omitted, time: .shortened)
     }
 
     func syncSettingsState() {
+        self.refreshGatewayRegistry()
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
+        let activeManual = self.gatewayRegistry.activeEntry
+        if activeManual?.kind == .manual,
+           activeManual?.host?.caseInsensitiveCompare(self.manualGatewayHost) == .orderedSame,
+           activeManual?.port == self.manualGatewayPort
+        {
+            self.manualGatewayContextPath = activeManual?.contextPath
+        } else {
+            self.manualGatewayContextPath = nil
+        }
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
-        self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
-        self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
-        self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+        guard !self.appModel.isLocalGatewayFixtureEnabled,
+              let stableID = self.currentManualGatewayStableID
+        else {
+            self.gatewayAuthFields = .init()
+            return
+        }
+        self.gatewayAuthFields.load(
+            instanceId: trimmedInstanceId,
+            targetStableID: stableID)
+    }
+
+    func syncAfterOnboardingReset() {
+        self.invalidateGatewaySetupAttempt()
+        self.setupStatusText = nil
+        self.stagedGatewaySetupLink = nil
+        self.gatewayAuthFields.pendingOverride = nil
+        self.syncSettingsState()
+        self.pendingTargetSuppression.releaseAutoConnect(controller: self.gatewayController)
     }
 
     func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
-        self.connectingGatewayID = gateway.id
-        defer { self.connectingGatewayID = nil }
+        let supersededSetupLease = self.takeStagedGatewaySetupSuppression()
+        defer {
+            if let supersededSetupLease {
+                self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
+            }
+        }
+        self.connectingGateway = .gateway(gateway.id)
+        defer {
+            self.connectingGateway = nil
+            self.refreshGatewayRegistry()
+        }
         self.manualGatewayEnabled = false
-        GatewaySettingsStore.savePreferredGatewayStableID(gateway.stableID)
-        GatewaySettingsStore.saveLastDiscoveredGatewayStableID(gateway.stableID)
+        self.gatewayAuthFields.selectTarget(
+            gateway.stableID,
+            instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowManualOverride: false)
+        GatewaySettingsStore.saveDiscoveredGatewayStableID(gateway.stableID, preferred: true)
         if let err = await self.gatewayController.connectWithDiagnostics(gateway) {
             self.setupStatusText = err
         }
     }
 
     func applySetupCodeAndConnect() async {
+        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
+        defer {
+            self.finishGatewaySetupAttempt(attemptID)
+            self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController)
+        }
         self.setupStatusText = nil
-        guard self.applySetupCode() else { return }
+        guard await self.applySetupCode(attemptID: attemptID) else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
-            self.setupStatusText = "Failed: invalid port"
+            self.setupStatusText = String(localized: "Failed: invalid port")
             return
         }
         guard await self.preflightGateway(host: host) else { return }
-        self.setupStatusText = "Setup code applied. Connecting..."
-        await self.connectManual()
+        self.setupStatusText = String(localized: "Setup code applied. Connecting...")
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
-    func applyPendingGatewaySetupLinkIfNeeded() {
-        guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
+    func applyGatewaySetupLink(_ link: GatewayConnectDeepLink) {
+        // Only the root-selected Gateway destination may destructively claim a
+        // setup link; other Settings views can remain mounted behind onboarding.
+        self.showQRScanner = false
+        self.scannerResultHandoff.cancel()
+        let lease = self.gatewayController.cancelPendingConnectionAttempts()
+        self.pendingTargetSuppression.replace(owner: .setupLink, lease: lease)
         self.setupCode = ""
         self.setupStatusText = nil
         self.stagedGatewaySetupLink = link
-        let security = link.tls ? "TLS" : "plain"
-        self.setupStatusText = "Setup link loaded for \(link.host):\(link.port) (\(security)). Tap Connect to apply."
+        let security = link.tls ? String(localized: "TLS") : String(localized: "plain")
+        self.setupStatusText = String(
+            format: String(
+                localized: "Setup link loaded for %@:%@ (%@). Tap Connect to apply."),
+            link.host,
+            link.port.formatted(),
+            security)
     }
 
     @discardableResult
-    func applySetupCode() -> Bool {
-        let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        let stagedLink = self.stagedGatewaySetupLink
+    func applySetupCode(attemptID: GatewaySetupAttempt) async -> Bool {
+        let raw = setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stagedLink = stagedGatewaySetupLink
         guard !raw.isEmpty || stagedLink != nil else {
-            self.setupStatusText = "Paste a setup code to continue."
+            self.setupStatusText = String(localized: "Paste a setup code to continue.")
             return false
         }
 
         if AppleReviewDemoMode.isSetupCode(raw) {
             self.stagedGatewaySetupLink = nil
             self.setupCode = ""
-            self.setupStatusText = "Apple Review demo mode enabled."
+            self.setupStatusText = String(localized: "Apple Review demo mode enabled.")
             self.appModel.enterAppleReviewDemoMode()
+            self.pendingTargetSuppression.releaseAutoConnect(.setupLink, controller: self.gatewayController)
             return false
         }
 
-        guard let link = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
-            self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
+        guard let parsedLink = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
+            self.setupStatusText = String(
+                localized: "Setup code not recognized or uses an insecure ws:// gateway URL.")
             return false
         }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return false }
+        guard await self.applyGatewayLink(link) else { return false }
         self.stagedGatewaySetupLink = nil
-        self.applyGatewayLink(link)
+        self.setupCode = ""
         return true
     }
 
-    func applyGatewayLink(_ link: GatewayConnectDeepLink) {
+    func applyGatewayLink(_ link: GatewayConnectDeepLink) async -> Bool {
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
+            guard await GatewayOnboardingReset.prepareForBootstrapPairing(
+                appModel: self.appModel,
+                instanceId: instanceId,
+                gatewayStableID: setupAuth.targetStableID)
+            else {
+                self.setupStatusText = self.appModel.gatewayStatusText
+                return false
+            }
+        }
         self.manualGatewayHost = link.host
         self.manualGatewayPort = link.port
         self.manualGatewayPortText = String(link.port)
         self.manualGatewayTLS = link.tls
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
-        if setupAuth.hasBootstrapToken {
-            GatewayOnboardingReset.prepareForBootstrapPairing(appModel: self.appModel, instanceId: instanceId)
-        }
+        self.manualGatewayContextPath = link.contextPath
+        self.gatewayAuthFields.targetStableID = setupAuth.targetStableID
         if !instanceId.isEmpty {
-            GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: instanceId)
+            GatewaySettingsStore.saveGatewayCredentials(
+                token: setupAuth.token,
+                bootstrapToken: setupAuth.bootstrapToken,
+                password: setupAuth.password,
+                gatewayStableID: setupAuth.targetStableID,
+                suppressStoredDeviceAuth: true,
+                instanceId: instanceId)
         }
-        if setupAuth.shouldApplyTokenField {
-            self.gatewayToken = setupAuth.token
-            if !instanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayToken(setupAuth.token, instanceId: instanceId)
-            }
-        }
-        if setupAuth.shouldApplyPasswordField {
-            self.gatewayPassword = setupAuth.password
-            if !instanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayPassword(setupAuth.password, instanceId: instanceId)
-            }
-        }
-        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
+        self.gatewayAuthFields.token = setupAuth.token
+        self.gatewayAuthFields.password = setupAuth.password
+        self.gatewayAuthFields.pendingOverride = setupAuth.manualAuthOverride
+        return true
     }
 
     func openGatewayQRScanner() {
-        self.appModel.disconnectGateway()
-        self.connectingGatewayID = nil
-        self.setupStatusText = "Opening QR scanner..."
+        self.invalidateGatewaySetupAttempt()
+        let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+        self.stagedGatewaySetupLink = nil
+        self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
+        self.scannerScanID = self.scannerResultHandoff.beginScan()
+        self.connectingGateway = nil
+        self.setupStatusText = String(localized: "Opening QR scanner...")
         self.showQRScanner = true
+    }
+
+    func queueScannedResult(_ result: QRScannerResult, scanID: UInt64) {
+        guard self.scannerResultHandoff.queue(result, scanID: scanID) else { return }
+        self.setupStatusText = String(localized: "QR loaded. Closing scanner...")
+        self.showQRScanner = false
+    }
+
+    func processQueuedScannerResult() {
+        let delivery = self.scannerResultHandoff.processAfterDismissal { result in
+            switch result {
+            case let .gatewayLink(link):
+                self.handleScannedGatewayLink(link)
+            case let .setupCode(code):
+                self.handleScannedSetupCode(code)
+            }
+        }
+        if delivery == nil {
+            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
+        }
     }
 
     func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
         self.showQRScanner = false
+        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
         self.setupCode = ""
-        self.applyGatewayLink(link)
-        self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
-        Task { await self.connectAfterScannedGatewayLink() }
+        Task { await self.connectAfterScannedGatewayLink(link, attemptID: attemptID) }
     }
 
     func handleScannedSetupCode(_ code: String) {
@@ -280,66 +423,117 @@ extension SettingsProTab {
         self.showQRScanner = false
         self.setupCode = ""
         self.stagedGatewaySetupLink = nil
-        self.setupStatusText = "Apple Review demo mode enabled."
+        self.setupStatusText = String(localized: "Apple Review demo mode enabled.")
         self.appModel.enterAppleReviewDemoMode()
+        self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
     }
 
-    func connectAfterScannedGatewayLink() async {
+    func clearStagedGatewaySetupLink() {
+        guard self.stagedGatewaySetupLink != nil else { return }
+        self.stagedGatewaySetupLink = nil
+        self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController)
+    }
+
+    private func takeStagedGatewaySetupSuppression() -> GatewayConnectionController.AutoConnectSuppressionLease? {
+        self.stagedGatewaySetupLink = nil
+        return self.pendingTargetSuppression.take(ifOwnedBy: .setupLink)
+    }
+
+    func connectAfterScannedGatewayLink(_ parsedLink: GatewayConnectDeepLink, attemptID: GatewaySetupAttempt) async {
+        defer {
+            self.finishGatewaySetupAttempt(attemptID)
+            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
+        }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return }
+        guard await self.applyGatewayLink(link) else { return }
+        self.setupStatusText = String(
+            format: String(localized: "QR loaded. Connecting to %@:%@..."),
+            link.host,
+            link.port.formatted())
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
-            self.setupStatusText = "Failed: invalid port"
+            self.setupStatusText = String(localized: "Failed: invalid port")
             return
         }
         guard await self.preflightGateway(host: host) else { return }
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
-    func connectManual() async {
+    func connectManual(setupAttemptID: GatewaySetupAttempt? = nil) async {
+        let admissionCheckpoint = setupAttemptID?.admissionCheckpoint ?? gatewayController.ingress.admissionCheckpoint()
+        if let setupAttemptID {
+            guard self.setupAttemptID == setupAttemptID else { return }
+        } else {
+            self.invalidateGatewaySetupAttempt()
+        }
+        let supersededSetupLease = self.takeStagedGatewaySetupSuppression()
+        defer {
+            if let supersededSetupLease {
+                self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
+            }
+        }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
-            self.setupStatusText = "Failed: host required"
+            self.setupStatusText = String(localized: "Failed: host required")
             return
         }
-        guard self.manualPortIsValid else {
-            self.setupStatusText = "Failed: invalid port"
+        guard self.manualPortIsValid, let port = self.resolvedManualPort(host: host) else {
+            self.setupStatusText = String(localized: "Failed: invalid port")
             return
         }
-        self.connectingGatewayID = "manual"
+        self.connectingGateway = .manual
         self.manualGatewayEnabled = true
-        defer { self.connectingGatewayID = nil }
-        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
-            token: self.gatewayToken,
-            pendingOverride: self.pendingManualAuthOverride,
-            password: self.gatewayPassword)
-        self.pendingManualAuthOverride = nil
-        await self.gatewayController.connectManual(
+        defer {
+            self.connectingGateway = nil
+            self.refreshGatewayRegistry()
+        }
+        let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
-            port: self.manualGatewayPort,
-            useTLS: self.manualGatewayTLS,
-            authOverride: authOverride)
+            port: port,
+            contextPath: self.manualGatewayContextPath)
+        self.gatewayAuthFields.selectTarget(
+            stableID,
+            instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowManualOverride: true)
+        self.manualConnectGeneration &+= 1
+        let generation = self.manualConnectGeneration
+        let authOverride = self.gatewayAuthFields.prepareManualConnection(
+            instanceId: GatewaySettingsStore.currentInstanceID(),
+            targetStableID: stableID)
+        let result = await self.gatewayController.connectManual(
+            host: host,
+            port: port,
+            useTLS: manualGatewayTLS,
+            contextPath: manualGatewayContextPath,
+            authOverride: authOverride,
+            admissionCheckpoint: admissionCheckpoint)
+        guard !Task.isCancelled,
+              generation == self.manualConnectGeneration,
+              GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID)
+        else { return }
+        self.gatewayAuthFields.pendingOverride = authOverride?.unconsumed
+        if case let .failed(message) = result {
+            self.setupStatusText = message
+        }
     }
 
     func preflightGateway(host: String) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
-            self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
-            return false
-        }
         self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
         return true
     }
 
-    func resetOnboarding() {
-        self.connectingGatewayID = nil
+    func resetOnboarding() async {
+        self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
         self.setupCode = ""
         self.gatewayAutoConnect = false
         self.suppressCredentialPersist = true
         defer { self.suppressCredentialPersist = false }
-        self.gatewayToken = ""
-        self.gatewayPassword = ""
-        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+        self.gatewayAuthFields = .init()
+        await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
         self.onboardingComplete = false
         self.hasConnectedOnce = false
         self.manualGatewayEnabled = false
@@ -347,72 +541,24 @@ extension SettingsProTab {
         self.onboardingRequestID += 1
     }
 
-    func retryGatewayConnectionFromProblem() async {
-        if self.manualGatewayEnabled || self.connectingGatewayID == "manual" {
-            await self.connectManual()
-        } else {
-            await self.gatewayController.connectLastKnown()
-        }
+    func beginGatewaySetupAttempt() -> GatewaySetupAttempt? {
+        guard connectingGateway == nil else { return nil }
+        manualConnectGeneration &+= 1
+        let attemptID = GatewaySetupAttempt(admissionCheckpoint: gatewayController.ingress.admissionCheckpoint())
+        setupAttemptID = attemptID
+        connectingGateway = .setupCode
+        return attemptID
     }
 
-    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
-        GatewayProblemPrimaryAction.title(
-            for: problem,
-            retryTitle: "Retry connection",
-            resetTitle: "Reset onboarding")
+    func finishGatewaySetupAttempt(_ attemptID: GatewaySetupAttempt) {
+        guard setupAttemptID == attemptID else { return }
+        self.invalidateGatewaySetupAttempt()
     }
 
-    func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
-        if problem.suggestsOnboardingReset {
-            self.resetOnboarding()
-            return
-        }
-        if problem.canTrustRotatedCertificate {
-            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
-            return
-        }
-        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
-            return
-        }
-        guard problem.retryable else { return }
-        await self.retryGatewayConnectionFromProblem()
-    }
-
-    func handleLocationModeChange(_ newValue: String) {
-        guard !self.isChangingLocationMode else { return }
-        guard newValue != self.previousLocationModeRaw else { return }
-        guard let mode = OpenClawLocationMode(rawValue: newValue) else { return }
-        let previous = self.previousLocationModeRaw
-        Task {
-            await self.applyLocationMode(mode, rawValue: newValue, previous: previous)
-        }
-    }
-
-    @MainActor
-    func applyLocationMode(
-        _ mode: OpenClawLocationMode,
-        rawValue: String,
-        previous: String) async
-    {
-        self.isChangingLocationMode = true
-        self.locationStatusText = nil
-        defer { self.isChangingLocationMode = false }
-
-        if mode == .off {
-            self.previousLocationModeRaw = rawValue
-            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-            return
-        }
-
-        let granted = await self.appModel.requestLocationPermissions(mode: mode)
-        if granted {
-            self.previousLocationModeRaw = rawValue
-            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        } else {
-            self.locationModeRaw = previous
-            self.previousLocationModeRaw = previous
-            self.locationStatusText = "Location permission was not granted."
-        }
+    func invalidateGatewaySetupAttempt() {
+        self.manualConnectGeneration &+= 1
+        self.setupAttemptID = nil
+        self.connectingGateway = nil
     }
 
     func refreshNotificationSettings() {
@@ -420,50 +566,9 @@ extension SettingsProTab {
             let status = settings.authorizationStatus
             Task { @MainActor in
                 self.applyNotificationStatus(status)
-                self.registerForRemoteNotificationsIfEnrollmentReady()
+                IOSDeviceSettingsActions.registerForRemoteNotificationsIfEnrollmentReady(status: status)
             }
         }
-    }
-
-    func handleNotificationAction() {
-        if self.notificationStatus.shouldOpenNotificationSettings {
-            self.openNotificationSettings()
-            return
-        }
-        guard self.notificationStatus == .notSet else { return }
-
-        if PushBuildConfig.current.usesOpenClawHostedRelay {
-            self.showNotificationRelayDisclosure = true
-            return
-        }
-        self.requestNotificationAuthorizationFromSettings()
-    }
-
-    func requestNotificationAuthorizationFromSettings() {
-        guard !self.isRequestingNotificationAuthorization else { return }
-        PushEnrollmentConsent.markDisclosureAccepted()
-        self.isRequestingNotificationAuthorization = true
-        Task {
-            let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
-                .alert,
-                .badge,
-                .sound,
-            ])) ?? false
-            let settings = await UNUserNotificationCenter.current().notificationSettings()
-            await MainActor.run {
-                self.isRequestingNotificationAuthorization = false
-                self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
-                guard granted else { return }
-                self.registerForRemoteNotificationsIfEnrollmentReady()
-            }
-        }
-    }
-
-    @MainActor
-    func registerForRemoteNotificationsIfEnrollmentReady() {
-        guard PushEnrollmentConsent.disclosureAccepted else { return }
-        guard self.notificationStatus.allowsNotifications else { return }
-        UIApplication.shared.registerForRemoteNotifications()
     }
 
     @MainActor
@@ -471,40 +576,118 @@ extension SettingsProTab {
         self.notificationStatus = SettingsNotificationStatus(status)
     }
 
-    func persistGatewayToken(_ value: String) {
-        guard !self.suppressCredentialPersist else { return }
-        let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instanceId.isEmpty else { return }
-        GatewaySettingsStore.saveGatewayToken(
-            value.trimmingCharacters(in: .whitespacesAndNewlines),
-            instanceId: instanceId)
+    var currentManualGatewayStableID: String? {
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, let port = self.resolvedManualPort(host: host) else { return nil }
+        return GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: host,
+            port: port,
+            contextPath: self.manualGatewayContextPath)
     }
 
-    func persistGatewayPassword(_ value: String) {
-        guard !self.suppressCredentialPersist else { return }
-        let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instanceId.isEmpty else { return }
-        GatewaySettingsStore.saveGatewayPassword(
-            value.trimmingCharacters(in: .whitespacesAndNewlines),
-            instanceId: instanceId)
+    var gatewayCredentialTargetStableID: String? {
+        // Auth fields follow the selected route. Otherwise a discovered-gateway retry can save
+        // credentials under the unrelated manual endpoint and immediately reload an empty bundle.
+        self.gatewayAuthFields.targetStableID ?? self.currentManualGatewayStableID
     }
 
-    func openNotificationSettings() {
-        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
-        UIApplication.shared.open(url)
+    var gatewayCustomHeadersTargetStableID: String? {
+        guard let stableID = self.gatewayCredentialTargetStableID else { return nil }
+        if GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID) {
+            return self.manualGatewayTLS ? stableID : nil
+        }
+        if let active = self.appModel.activeGatewayConnectConfig,
+           GatewayStableIdentifier.matches(active.effectiveStableID, stableID)
+        {
+            return active.url.scheme?.lowercased() == "wss" ? stableID : nil
+        }
+        return nil
+    }
+
+    static func gatewayAccessAttention(
+        in registry: GatewaySettingsStore.GatewayRegistry,
+        ingress: GatewayIngressController) -> GatewayIngressController.Attention?
+    {
+        guard let selected = registry.activeEntry,
+              let attention = ingress.attention,
+              GatewayStableIdentifier.matches(selected.stableID, attention.stableID)
+        else { return nil }
+        return attention
+    }
+
+    static func gatewayAccessSessionTarget(
+        in registry: GatewaySettingsStore.GatewayRegistry,
+        ingress: GatewayIngressController) -> (stableID: String, origin: CloudflareAccessOrigin)?
+    {
+        // Access belongs to the selected saved profile, not the editable manual
+        // credential fields. Resolve its durable grant origin through the ingress owner.
+        guard let selected = registry.activeEntry,
+              let origin = ingress.sessionOrigin(stableID: selected.stableID)
+        else { return nil }
+        return (selected.stableID, origin)
+    }
+
+    var manualGatewayEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualGatewayEnabled },
+            set: { enabled in
+                self.manualGatewayEnabled = enabled
+                guard enabled, let stableID = self.currentManualGatewayStableID else { return }
+                self.gatewayAuthFields.selectTarget(
+                    stableID,
+                    instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                    allowManualOverride: true)
+            })
+    }
+
+    func gatewayCredentialBinding(
+        _ field: WritableKeyPath<GatewayConnectionController.ManualAuthOverride.Fields, String>) -> Binding<String>
+    {
+        Binding(
+            get: { self.gatewayAuthFields[keyPath: field] },
+            set: { value in
+                self.gatewayAuthFields[keyPath: field] = value
+                guard !self.suppressCredentialPersist else { return }
+                self.gatewayAuthFields.persist(
+                    instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                    targetStableID: self.gatewayCredentialTargetStableID)
+            })
+    }
+
+    var manualHostBinding: Binding<String> {
+        Binding(
+            get: { self.manualGatewayHost },
+            set: { value in
+                self.updateManualTarget {
+                    self.manualGatewayHost = value
+                }
+            })
     }
 
     func title(for route: SettingsRoute) -> String {
         switch route {
-        case .gateway: "Gateway"
-        case .approvals: "Approvals"
-        case .permissions: "Permissions"
-        case .channels: "Channels"
-        case .voice: "Voice & Talk"
-        case .diagnostics: "Diagnostics"
-        case .privacy: "Privacy"
-        case .notifications: "Notifications"
-        case .about: "About"
+        case .gateway: String(localized: "Gateway")
+        case .appleWatch: String(localized: "Apple Watch")
+        case .approvals: String(localized: "Approvals")
+        case .diagnostics: String(localized: "Diagnostics")
+        case .licenses: String(localized: "Licenses")
+        case .about: String(localized: "About")
+        }
+    }
+
+    func sendDirectWatchSetup() async {
+        guard !self.isSendingWatchDirectSetup else { return }
+        self.isSendingWatchDirectSetup = true
+        self.watchDirectSetupStatusText = String(localized: "Preparing one-time setup…")
+        defer { self.isSendingWatchDirectSetup = false }
+        do {
+            let result = try await self.appModel.sendDirectWatchSetup()
+            self.watchDirectSetupStatusText = result.deliveredImmediately
+                ? String(localized: "Setup sent. Open OpenClaw on the watch to connect.")
+                : String(
+                    localized: "Setup queued for the watch. Open OpenClaw before the code expires.")
+        } catch {
+            self.watchDirectSetupStatusText = error.localizedDescription
         }
     }
 
@@ -512,10 +695,23 @@ extension SettingsProTab {
         Binding(
             get: { self.manualGatewayPortText },
             set: { newValue in
-                let filtered = newValue.filter(\.isNumber)
-                self.manualGatewayPortText = filtered
-                self.manualGatewayPort = Int(filtered) ?? 0
+                self.updateManualTarget {
+                    let filtered = newValue.filter(\.isNumber)
+                    self.manualGatewayPortText = filtered
+                    self.manualGatewayPort = Int(filtered) ?? 0
+                }
             })
+    }
+
+    private func updateManualTarget(_ update: () -> Void) {
+        let previousStableID = self.currentManualGatewayStableID
+        self.manualGatewayContextPath = nil
+        update()
+        if GatewayStableIdentifier.key(previousStableID) !=
+            GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+        {
+            self.gatewayAuthFields = .init()
+        }
     }
 
     var manualPortIsValid: Bool {
@@ -524,20 +720,15 @@ extension SettingsProTab {
     }
 
     func resolvedManualPort(host: String) -> Int? {
-        if self.manualGatewayPort > 0 {
-            return self.manualGatewayPort <= 65535 ? self.manualGatewayPort : nil
-        }
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if self.manualGatewayTLS, trimmed.lowercased().hasSuffix(".ts.net") {
-            return 443
-        }
-        return 18789
+        guard self.manualGatewayPortText.isEmpty || self.manualGatewayPort > 0 else { return nil }
+        return GatewayConnectionController.resolvedManualPort(
+            host: host,
+            port: self.manualGatewayPort)
     }
 
     var setupStatusLine: String? {
         if let problem = self.appModel.lastGatewayProblem {
-            return problem.message
+            return problem.localizedMessage
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -559,19 +750,14 @@ extension SettingsProTab {
             || self.stagedGatewaySetupLink != nil
     }
 
-    var tailnetWarningText: String? {
-        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty, Self.isTailnetHostOrIP(host), !Self.hasTailnetIPv4() else { return nil }
-        return "This gateway is on your tailnet. Turn on Tailscale on this device, then tap Connect."
-    }
-
     func friendlyGatewayMessage(from raw: String) -> String? {
         let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if lower.contains("pairing required") {
-            return "Pairing required. Run /pair approve in your OpenClaw chat, then connect again."
+            return String(
+                localized: "Pairing required. Run /pair approve in your OpenClaw chat, then connect again.")
         }
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
-            return "Secure handshake failed. Check Tailscale, then connect again."
+            return String(localized: "Secure handshake failed. Connect again.")
         }
         if lower.contains("tls fingerprint verification timed out")
             || lower.contains("no tls endpoint detected")
@@ -579,83 +765,53 @@ extension SettingsProTab {
             return raw.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if lower.contains("timed out") {
-            return "Connection timed out. Make sure Tailscale is connected, then try again."
+            return String(
+                localized: "Connection timed out. Check the gateway and your network, then try again.")
         }
         if lower.contains("unauthorized role") {
-            return "Connected, but some controls are restricted for nodes. This is expected."
+            return String(
+                localized: "Connected, but some controls are restricted for nodes. This is expected.")
         }
         return nil
     }
 
     func isTransientSetupStatus(_ raw: String) -> Bool {
         let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return lower == "setup code applied. connecting..."
-            || lower.hasPrefix("qr loaded. connecting to ")
-            || lower == "checking gateway reachability..."
+        let setupApplied = String(localized: "Setup code applied. Connecting...").lowercased()
+        let checkingReachability = String(localized: "Checking gateway reachability...").lowercased()
+        let qrFormat = String(localized: "QR loaded. Connecting to %@:%@...").lowercased()
+        return lower == setupApplied
+            || Self.localizedFormat(qrFormat, matches: lower)
+            || lower == checkingReachability
     }
 
-    var shouldShowRealtimeVoicePicker: Bool {
-        let providerSelection = TalkModeProviderSelection.resolved(self.talkProviderSelectionRaw)
-        return providerSelection == .openAIRealtime || self.appModel.talkMode.gatewayTalkUsesRealtime
-    }
+    static func localizedFormat(_ format: String, matches value: String) -> Bool {
+        guard let placeholder = try? NSRegularExpression(pattern: #"%(\d+\$)?@"#) else {
+            return format == value
+        }
+        let formatRange = NSRange(format.startIndex..., in: format)
+        let matches = placeholder.matches(in: format, range: formatRange)
+        guard !matches.isEmpty else { return format == value }
 
-    var talkProviderSelectionBinding: Binding<String> {
-        Binding(
-            get: { self.talkProviderSelectionRaw },
-            set: { newValue in
-                let selection = TalkModeProviderSelection.resolved(newValue)
-                self.talkProviderSelectionRaw = selection.rawValue
-                self.appModel.setTalkProviderSelection(selection.rawValue)
-            })
-    }
-
-    var talkRealtimeVoiceSelectionBinding: Binding<String> {
-        Binding(
-            get: { self.talkRealtimeVoiceSelectionRaw },
-            set: { newValue in
-                let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(newValue) ?? ""
-                self.talkRealtimeVoiceSelectionRaw = voice
-                self.appModel.setTalkRealtimeVoiceSelection(voice)
-            })
-    }
-
-    var talkSpeakerphoneBinding: Binding<Bool> {
-        Binding(
-            get: { self.talkSpeakerphoneEnabled },
-            set: { newValue in
-                self.talkSpeakerphoneEnabled = newValue
-                self.appModel.setTalkSpeakerphoneEnabled(newValue)
-            })
-    }
-
-    var talkApiKeyStatus: String {
-        guard self.appModel.talkMode.gatewayTalkConfigLoaded else { return "Not loaded" }
-        return self.appModel.talkMode.gatewayTalkApiKeyConfigured ? "Configured" : "Not configured"
-    }
-
-    var gatewayTalkActiveVoiceDetail: String {
-        let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { return "Not active" }
-        if subtitle.isEmpty { return title }
-        return "\(title) • \(subtitle)"
-    }
-
-    var gatewayTalkLastIssueDetail: String? {
-        let detail = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return detail.isEmpty ? nil : detail
+        var pattern = "^"
+        var cursor = format.startIndex
+        for match in matches {
+            guard let range = Range(match.range, in: format) else { return false }
+            pattern += NSRegularExpression.escapedPattern(for: String(format[cursor..<range.lowerBound]))
+            pattern += #"[\s\S]+?"#
+            cursor = range.upperBound
+        }
+        pattern += NSRegularExpression.escapedPattern(for: String(format[cursor...]))
+        pattern += "$"
+        return value.range(of: pattern, options: .regularExpression) != nil
     }
 
     func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
         var lines: [String] = []
         if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
         if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
-        let gw = gateway.gatewayPort.map(String.init)
-        let canvas = gateway.canvasPort.map(String.init)
-        if gw != nil || canvas != nil {
-            lines.append("Ports: gateway \(gw ?? "-") / canvas \(canvas ?? "-")")
+        if let gatewayPort = gateway.gatewayPort {
+            lines.append("Port: \(gatewayPort)")
         }
         return lines.isEmpty ? [gateway.debugID] : lines
     }
@@ -665,19 +821,21 @@ extension SettingsProTab {
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
-    var gatewayStatusDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
-        return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
+    /// First-run state: no paired gateways yet (local gateway fixtures fake a
+    /// pairing), so the status card surfaces Scan QR as the primary action.
+    var gatewayNeedsPairing: Bool {
+        self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
     }
 
-    var gatewayStatusValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
-        return self.gatewayConnected ? "online" : "offline"
-    }
-
-    var gatewayStatusColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return OpenClawBrand.accent }
-        return self.gatewayConnected ? OpenClawBrand.ok : .secondary
+    var gatewayStatusPresentation: (detail: String, value: String, color: Color) {
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return (String(localized: "Apple Review demo mode"), String(localized: "demo"), OpenClawBrand.accent)
+        }
+        let connected = self.gatewayConnected
+        return (
+            connected ? String(localized: "Connected") : self.appModel.gatewayDisplayStatusText,
+            connected ? String(localized: "online") : String(localized: "offline"),
+            connected ? OpenClawBrand.ok : .secondary)
     }
 
     var gatewayDiagnosticConnected: Bool {
@@ -690,156 +848,113 @@ extension SettingsProTab {
 
     var approvalEmptyDetail: String {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return "Live gateway requests are disabled in demo mode."
+            return String(localized: "Live gateway requests are disabled in demo mode.")
         }
-        if self.notificationsNeedAttention {
-            return "Foreground approvals still appear while OpenClaw is connected."
+        if self.notificationPresentation.needsAttention {
+            return String(
+                localized: "Foreground approvals still appear while OpenClaw is connected.")
         }
-        return self.gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway."
+        return self.gatewayConnected
+            ? String(localized: "Gateway requests will appear here.")
+            : String(localized: "Connect to the gateway.")
     }
 
-    var gatewayTalkConfigDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode only" }
-        return self.appModel.talkMode.gatewayTalkTransportLabel
-    }
-
-    var gatewayTalkConfigValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
-        return self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing"
-    }
-
-    var gatewayTalkConfigColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return .secondary }
-        return self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary
+    var gatewayTalkConfigPresentation: (detail: String, value: String, color: Color) {
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return (String(localized: "Demo mode only"), String(localized: "demo"), .secondary)
+        }
+        let loaded = self.appModel.talkMode.gatewayTalkConfigLoaded
+        return (
+            self.appModel.talkMode.gatewayTalkTransportLabel,
+            loaded ? String(localized: "loaded") : String(localized: "missing"),
+            loaded ? OpenClawBrand.ok : .secondary)
     }
 
     var gatewayAddress: String {
-        self.appModel.gatewayRemoteAddress ?? "Waiting for gateway"
+        self.appModel.gatewayRemoteAddress ?? String(localized: "Waiting for gateway")
     }
 
     var gatewayServer: String {
         self.appModel.gatewayServerName ?? "OpenClaw Gateway"
     }
 
-    var permissionsDetail: String {
-        var enabled = 0
-        if self.cameraEnabled { enabled += 1 }
-        if self.locationModeRaw != OpenClawLocationMode.off.rawValue { enabled += 1 }
-        if self.preventSleep { enabled += 1 }
-        return "\(enabled) enabled"
-    }
-
-    var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
-        self.appModel.pendingExecApprovalPrompt
-    }
-
-    var notificationsNeedAttention: Bool {
-        switch self.notificationStatus {
-        case .allowed, .checking:
-            false
-        case .notAllowed, .notSet, .unknown:
-            true
+    var approvalWaitingText: String {
+        if self.appModel.pendingExecApprovalCount == 1 {
+            return String(localized: "1 waiting")
         }
+        return String(
+            format: String(localized: "%@ waiting"),
+            self.appModel.pendingExecApprovalCount.formatted())
     }
 
     var approvalItems: [SettingsApprovalItem] {
-        guard let pendingApproval else { return [] }
+        guard let pendingApproval = self.appModel.pendingExecApprovalPrompt else { return [] }
+        let pendingTitle = pendingApproval.commandPreview.map(OpenClawTextValue.verbatim)
+            ?? OpenClawTextValue.localized("Review gateway action")
+        let agentDetail = String(
+            format: String(localized: "Agent: %@"),
+            self.appModel.activeAgentName)
         return [
             SettingsApprovalItem(
                 id: "pending-real",
                 icon: "terminal.fill",
-                title: pendingApproval.commandPreview ?? "Review gateway action",
-                detail: "Agent: \(self.appModel.activeAgentName)",
-                priority: self.appModel.pendingExecApprovalPromptResolving ? "Resolving" : "High",
+                title: pendingTitle,
+                detail: .verbatim(agentDetail),
+                priority: self.appModel.pendingExecApprovalPromptResolving
+                    ? .localized("Resolving")
+                    : .localized("High"),
                 color: OpenClawBrand.danger),
             SettingsApprovalItem(
                 id: "pending-context",
                 icon: "doc.text.fill",
-                title: pendingApproval.allowsAllowAlways ? "Permission can be saved" : "One-time approval",
+                title: pendingApproval.allowsAllowAlways
+                    ? .localized("Permission can be saved")
+                    : .localized("One-time approval"),
                 detail: "Gateway request",
-                priority: pendingApproval.allowsAllowAlways ? "Medium" : "Review",
+                priority: pendingApproval.allowsAllowAlways
+                    ? .localized("Medium")
+                    : .localized("Review"),
                 color: OpenClawBrand.warn),
         ]
     }
 
-    var voiceDetail: String {
-        if self.talkEnabled, self.voiceWakeEnabled { return "Talk + Wake" }
-        if self.talkEnabled { return "Talk on" }
-        if self.voiceWakeEnabled { return "Wake on" }
-        return "Off"
-    }
-
-    var diagnosticsDetail: String {
-        "System checks"
-    }
-
     var diagnosticsHealthValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
-        if self.gatewayConnected { return "ready" }
-        if self.gatewayController.gateways.isEmpty { return "check" }
-        return "partial"
+        if self.appModel.isAppleReviewDemoModeEnabled { return String(localized: "demo") }
+        if self.gatewayConnected { return String(localized: "ready") }
+        if self.gatewayController.gateways.isEmpty { return String(localized: "check") }
+        return String(localized: "partial")
     }
 
-    var diagnosticsRunValue: String {
-        guard let diagnosticsIssueCount else { return "pending" }
-        return diagnosticsIssueCount == 0 ? "pass" : "\(diagnosticsIssueCount)"
+    var diagnosticsRunPresentation: (value: String, color: Color) {
+        guard let diagnosticsIssueCount else { return (String(localized: "pending"), .secondary) }
+        return (
+            diagnosticsIssueCount == 0 ? String(localized: "pass") : diagnosticsIssueCount.formatted(),
+            diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn)
     }
 
-    var diagnosticsRunColor: Color {
-        guard let diagnosticsIssueCount else { return .secondary }
-        return diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn
+    var notificationDisclosureAccepted: Bool {
+        !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
     }
 
-    var privacyDetail: String {
-        let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return location == .off ? "Location off" : "Location \(self.locationLabel)"
-    }
-
-    var locationLabel: String {
-        switch OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off {
-        case .off: "Off"
-        case .whileUsing: "While Using"
-        case .always: "Always"
-        }
-    }
-
-    var notificationStatusText: String {
-        self.notificationStatus.text
-    }
-
-    var notificationActionText: String {
-        self.notificationStatus.actionTitle
-    }
-
-    var notificationStatusDetail: String {
+    var notificationPresentation: SettingsNotificationPresentation {
         switch self.notificationStatus {
         case .checking:
-            "Checking iOS notification permission."
+            return .checking
         case .allowed:
-            "OpenClaw can show approval prompts and event alerts when the app is not active."
+            if !self.notificationServingEnabled {
+                return .off
+            }
+            if !self.notificationDisclosureAccepted {
+                return .setup
+            }
+            return .enabled
         case .notAllowed:
-            "Notifications have been denied. Enable them in iOS Settings."
+            return .denied
         case .notSet:
-            "Enable notifications to receive approval prompts and event alerts outside the app."
+            return .notSet
         case .unknown:
-            "OpenClaw cannot determine the current notification permission state."
+            return .unknown
         }
-    }
-
-    var notificationRelayDetail: String {
-        if PushBuildConfig.current.usesOpenClawHostedRelay {
-            let host = PushBuildConfig.current.relayBaseURL.flatMap {
-                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host
-            } ?? "ios-push-relay.openclaw.ai"
-            return """
-            This build uses OpenClaw's hosted push relay at \(host) for notification \
-            delivery data.
-            """
-        }
-        return "This build is not configured to use OpenClaw's hosted push relay."
-    }
-
-    var notificationRelayDisclosureMessage: String {
-        "Enabling this sends delivery data through OpenClaw's hosted push relay."
     }
 }

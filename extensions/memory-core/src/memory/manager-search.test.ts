@@ -1,83 +1,57 @@
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  ensureMemoryIndexSchema,
-  loadSqliteVecExtension,
-  requireNodeSqlite,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
-import { searchKeyword, searchVector } from "./manager-search.js";
-import { vectorToBlob } from "./vector-blob.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { searchKeyword, searchKeywordWithFallback } from "./manager-search.js";
+import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
+import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
-function insertKeywordFixture(
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+type KeywordSearchOptions = Omit<Parameters<typeof searchKeyword>[0], "db" | "query">;
+
+function searchKeywordFixture(
   db: DatabaseSync,
-  params: {
-    text: string;
-    id: string;
-    path: string;
-    source: "memory" | "sessions";
-    model: string;
-    startLine: number;
-    endLine: number;
-  },
-): void {
-  db.prepare(
-    "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(
-    params.id,
-    params.path,
-    params.source,
-    params.startLine,
-    params.endLine,
-    `${params.id}:hash`,
-    params.model,
-    params.text,
-    JSON.stringify([0]),
-    Date.now(),
-  );
-  db.prepare(
-    "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(
-    params.text,
-    params.id,
-    params.path,
-    params.source,
-    params.model,
-    params.startLine,
-    params.endLine,
-  );
+  query: string,
+  options: Partial<KeywordSearchOptions> = {},
+) {
+  return searchKeyword({
+    db,
+    ftsTable: "memory_index_chunks_fts",
+    query,
+    ftsTokenizer: "unicode61",
+    limit: 10,
+    snippetMaxChars: 200,
+    sourceFilter: { sql: "", params: [] },
+    ...options,
+  });
+}
+
+function supportsFts(): boolean {
+  const { db, schema } = createMemorySearchDb();
+  try {
+    return schema.ftsAvailable;
+  } finally {
+    db.close();
+  }
 }
 
 describe("searchKeyword trigram fallback", () => {
-  const { DatabaseSync } = requireNodeSqlite();
-
   function supportsTrigramFts(): boolean {
-    const db = new DatabaseSync(":memory:");
+    const { db, schema } = createMemorySearchDb({ ftsTokenizer: "trigram" });
     try {
-      const result = ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: true,
-        ftsTokenizer: "trigram",
-      });
-      return result.ftsAvailable;
+      return schema.ftsAvailable;
     } finally {
       db.close();
     }
   }
 
   function createTrigramDb() {
-    const db = new DatabaseSync(":memory:");
-    const result = ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: false,
-      ftsEnabled: true,
-      ftsTokenizer: "trigram",
-    });
-    if (!result.ftsAvailable) {
+    const { db, schema } = createMemorySearchDb({ ftsTokenizer: "trigram" });
+    if (!schema.ftsAvailable) {
       db.close();
-      throw new Error(`FTS5 trigram unavailable: ${result.ftsError ?? "unknown error"}`);
+      throw new Error(`FTS5 trigram unavailable: ${schema.ftsError ?? "unknown error"}`);
     }
     return db;
   }
@@ -94,22 +68,11 @@ describe("searchKeyword trigram fallback", () => {
           text: row.text,
           id: row.id,
           path: row.path,
-          source: "memory",
-          model: "mock-embed",
-          startLine: 1,
           endLine: 1,
         });
       }
-      return await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: params.query,
+      return await searchKeywordFixture(db, params.query, {
         ftsTokenizer: "trigram",
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-        buildFtsQuery,
-        bm25RankToScore,
         boostFallbackRanking: params.boostFallbackRanking,
       });
     } finally {
@@ -119,14 +82,34 @@ describe("searchKeyword trigram fallback", () => {
 
   const itWithTrigramFts = supportsTrigramFts() ? it : it.skip;
 
-  itWithTrigramFts("finds short Chinese queries with substring fallback", async () => {
-    const results = await runSearch({
-      rows: [{ id: "1", path: "memory/zh.md", text: "今天玩成语接龙游戏" }],
-      query: "成语",
-    });
-    expect(results.map((row) => row.id)).toContain("1");
-    expect(results[0]?.textScore).toBe(1);
-  });
+  itWithTrigramFts.each([
+    { query: "成语", text: "今天玩成语接龙游戏", unrelated: "今天看电影" },
+    { query: "AI", text: "Use ai for classification", unrelated: "Use rules for classification" },
+    { query: "42", text: "The answer is 42", unrelated: "The answer is 24" },
+    { query: "C_", text: "Keep the C_ prefix", unrelated: "Keep the CA prefix" },
+    { query: "ΔΕ", text: "The δε project", unrelated: "The δζ project" },
+    { query: "МО", text: "The мо project", unrelated: "The ми project" },
+    { query: "Σ", text: "ς", unrelated: "τ" },
+    { query: "S", text: "ſ", unrelated: "z" },
+    { query: "K", text: "K", unrelated: "q" },
+    { query: "Ǆ", text: "ǅ", unrelated: "ǈ" },
+  ])(
+    "finds the short literal query $query with substring fallback",
+    async ({ query, text, unrelated }) => {
+      const results = await runSearch({
+        rows: [
+          { id: "match", path: "memory/match.md", text },
+          { id: "unrelated", path: "memory/unrelated.md", text: unrelated },
+        ],
+        query,
+      });
+      expect(results.map((row) => row.id)).toEqual(["match"]);
+      // LIKE substring fallback carries no BM25 ranking signal, so textScore is 0
+      // (recall only); the hybrid merge must not treat it as a perfect match.
+      expect(results[0]?.textScore).toBe(0);
+      expect(results[0]?.hasBodyMatch).toBe(true);
+    },
+  );
 
   itWithTrigramFts("finds short Japanese and Korean queries with substring fallback", async () => {
     const japaneseResults = await runSearch({
@@ -142,15 +125,35 @@ describe("searchKeyword trigram fallback", () => {
     expect(koreanResults.map((row) => row.id)).toEqual(["ko"]);
   });
 
-  itWithTrigramFts(
-    "keeps MATCH semantics for long trigram terms while requiring short CJK substrings",
-    async () => {
+  itWithTrigramFts.each([
+    {
+      query: "成语接龙 游戏",
+      match: "今天玩成语接龙游戏",
+      partial: "今天玩成语接龙",
+      short: "游戏",
+    },
+    {
+      query: "shipping UK",
+      match: "Shipping across the UK",
+      partial: "Shipping across the EU",
+      short: "UK office",
+    },
+    {
+      query: "shipping ΔΕ",
+      match: "Shipping for the δε project",
+      partial: "Shipping for the δζ project",
+      short: "δε office",
+    },
+  ])(
+    "keeps MATCH semantics while requiring every term in $query",
+    async ({ query, match, partial, short }) => {
       const results = await runSearch({
         rows: [
-          { id: "match", path: "memory/good.md", text: "今天玩成语接龙游戏" },
-          { id: "partial", path: "memory/partial.md", text: "今天玩成语接龙" },
+          { id: "match", path: "memory/good.md", text: match },
+          { id: "partial", path: "memory/partial.md", text: partial },
+          { id: "short", path: "memory/short.md", text: short },
         ],
-        query: "成语接龙 游戏",
+        query,
       });
       expect(results.map((row) => row.id)).toEqual(["match"]);
       expect(results[0]?.textScore).toBeGreaterThan(0);
@@ -219,119 +222,16 @@ describe("searchKeyword trigram fallback", () => {
 });
 
 describe("searchKeyword FTS MATCH fallback", () => {
-  const { DatabaseSync } = requireNodeSqlite();
-
-  function supportsFts(): boolean {
-    const db = new DatabaseSync(":memory:");
-    try {
-      const result = ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: true,
-      });
-      return result.ftsAvailable;
-    } finally {
-      db.close();
-    }
-  }
-
   function createFtsDb() {
-    const db = new DatabaseSync(":memory:");
-    const result = ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: false,
-      ftsEnabled: true,
-    });
-    if (!result.ftsAvailable) {
+    const { db, schema } = createMemorySearchDb();
+    if (!schema.ftsAvailable) {
       db.close();
-      throw new Error(`FTS5 unavailable: ${result.ftsError ?? "unknown error"}`);
+      throw new Error(`FTS5 unavailable: ${schema.ftsError ?? "unknown error"}`);
     }
     return db;
   }
 
   const itWithFts = supportsFts() ? it : it.skip;
-
-  itWithFts("falls back to LIKE search when FTS MATCH throws", async () => {
-    const db = createFtsDb();
-    try {
-      insertKeywordFixture(db, {
-        text: "The Agent framework handles API calls and cron jobs",
-        id: "1",
-        path: "doc.md",
-        source: "sessions",
-        model: "mock-embed",
-        startLine: 1,
-        endLine: 5,
-      });
-      insertKeywordFixture(db, {
-        text: "Deploy the database cluster on Hetzner",
-        id: "2",
-        path: "ops.md",
-        source: "sessions",
-        model: "mock-embed",
-        startLine: 1,
-        endLine: 3,
-      });
-
-      // Simulate a buildFtsQuery that produces a broken MATCH expression
-      const brokenBuildFtsQuery = () => "BROKEN_QUERY_SYNTAX <<<";
-
-      const results = await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: "Agent",
-        ftsTokenizer: "unicode61",
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-        buildFtsQuery: brokenBuildFtsQuery,
-        bm25RankToScore,
-      });
-
-      // LIKE fallback should find "Agent" in the first row
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.id).toBe("1");
-      // Fallback results have textScore=1 (no BM25 ranking)
-      expect(results[0]?.textScore).toBe(1);
-    } finally {
-      db.close();
-    }
-  });
-
-  itWithFts("returns BM25-scored results when FTS MATCH succeeds", async () => {
-    const db = createFtsDb();
-    try {
-      insertKeywordFixture(db, {
-        text: "The Transformer architecture powers modern LLMs",
-        id: "1",
-        path: "ml.md",
-        source: "memory",
-        model: "mock-embed",
-        startLine: 1,
-        endLine: 3,
-      });
-
-      const results = await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: "Transformer",
-        ftsTokenizer: "unicode61",
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-        buildFtsQuery,
-        bm25RankToScore,
-      });
-
-      expect(results.length).toBe(1);
-      expect(results[0]?.id).toBe("1");
-      // BM25 score should be a real computed value, not the fallback default
-      expect(results[0]?.textScore).toBeGreaterThan(0);
-      expect(results[0]?.textScore).toBeLessThan(1);
-    } finally {
-      db.close();
-    }
-  });
 
   itWithFts("applies source filter in LIKE fallback", async () => {
     const db = createFtsDb();
@@ -341,31 +241,20 @@ describe("searchKeyword FTS MATCH fallback", () => {
         id: "1",
         path: "doc.md",
         source: "sessions",
-        model: "mock-embed",
-        startLine: 1,
         endLine: 3,
       });
       insertKeywordFixture(db, {
         text: "Agent design patterns",
         id: "2",
         path: "notes.md",
-        source: "memory",
-        model: "mock-embed",
-        startLine: 1,
         endLine: 3,
       });
 
-      const brokenBuildFtsQuery = () => "BROKEN <<<";
-      const results = await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: "Agent",
-        ftsTokenizer: "unicode61",
-        limit: 10,
-        snippetMaxChars: 200,
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
+      });
+      const results = await searchKeywordFixture(db, "Agent", {
         sourceFilter: { sql: " AND source IN (?)", params: ["sessions"] },
-        buildFtsQuery: brokenBuildFtsQuery,
-        bm25RankToScore,
       });
 
       expect(results.length).toBe(1);
@@ -385,8 +274,6 @@ describe("searchKeyword FTS MATCH fallback", () => {
         id: "1",
         path: "doc.md",
         source: "sessions",
-        model: "mock-embed",
-        startLine: 1,
         endLine: 5,
       });
       // Only "Agent" appears in this row
@@ -395,25 +282,15 @@ describe("searchKeyword FTS MATCH fallback", () => {
         id: "2",
         path: "arch.md",
         source: "sessions",
-        model: "mock-embed",
-        startLine: 1,
         endLine: 3,
       });
 
       // A single-substring LIKE '%Agent cron%' would miss row 1 because
       // the words are not adjacent. Per-token LIKE should find it.
-      const brokenBuildFtsQuery = () => "BROKEN <<<";
-      const results = await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: "Agent cron",
-        ftsTokenizer: "unicode61",
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-        buildFtsQuery: brokenBuildFtsQuery,
-        bm25RankToScore,
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
       });
+      const results = await searchKeywordFixture(db, "Agent cron");
 
       // Per-token fallback: both "Agent" AND "cron" must match
       expect(results.length).toBe(1);
@@ -432,29 +309,20 @@ describe("searchKeyword FTS MATCH fallback", () => {
         id: "1",
         path: "doc.md",
         source: "sessions",
-        model: "mock-embed",
-        startLine: 1,
         endLine: 1,
       });
 
-      await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: "test",
-        ftsTokenizer: "unicode61",
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-        buildFtsQuery: () => "BROKEN <<<",
-        bm25RankToScore,
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
       });
+      await searchKeywordFixture(db, "test");
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const [warning] = warnSpy.mock.calls[0] ?? [];
       expect(typeof warning).toBe("string");
       expect(
         (warning as string | undefined)?.startsWith(
-          "memory search: FTS5 MATCH failed, falling back to LIKE: ",
+          "memory search: FTS5 MATCH failed, falling back to substring search: ",
         ),
       ).toBe(true);
     } finally {
@@ -464,66 +332,158 @@ describe("searchKeyword FTS MATCH fallback", () => {
   });
 });
 
-describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
-  const { DatabaseSync } = requireNodeSqlite();
+describe("searchKeyword boosted relevance", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "preserves %s relevance differences before dated-note decay",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        const notes = [
+          "Quartz compass calibration: coefficient 17. Quartz compass calibration was completed, verified and approved. Record the quartz compass calibration coefficient 17 for future measurements.",
+          "We discussed quartz compass calibration in planning. The next meeting will schedule a demonstration; no coefficient or measurement was recorded.",
+          "The garden committee reviewed watering schedules, planted new herbs and replaced several flower pots. Volunteers will meet on Saturday to organize tools and prepare fresh soil for the spring beds.",
+          "Dinner planning covered a vegetable soup, fresh bread and a fruit dessert. We compared grocery prices and agreed to prepare the meal together after shopping on Friday afternoon.",
+          "The walking group selected a route through the forest and checked the weather forecast. Everyone will bring drinking water, comfortable boots and a jacket for the afternoon outing.",
+        ];
+        for (const [index, text] of notes.entries()) {
+          insertKeywordFixture(db, {
+            id: String(index),
+            path: `memory/2026-10-${index === 0 ? "05" : "06"}-note-${index}.md`,
+            text: `user: ${text}`,
+          });
+        }
+        const query = "quartz compass calibration";
+        const raw = await searchKeywordFixture(db, query, { ftsTokenizer });
+        const boosted = await searchKeywordFixture(db, query, {
+          ftsTokenizer,
+          boostFallbackRanking: true,
+        });
+        await expect(
+          searchKeywordFixture(db, `quartz quartz ${query}`, {
+            ftsTokenizer,
+            boostFallbackRanking: true,
+          }),
+        ).resolves.toEqual(boosted);
+        expect(boosted.map((row) => row.id)).toEqual(["0", "1"]);
+        expect(boosted.map((row) => row.textScore)).toEqual(raw.map((row) => row.textScore));
+        for (const row of boosted) {
+          expect(row.score).toBeGreaterThan(row.textScore);
+          expect(row.score).toBeLessThan(1);
+        }
+        expect(boosted[0]!.score).toBeGreaterThan(boosted[1]!.score);
 
-  function supportsFts(): boolean {
-    const db = new DatabaseSync(":memory:");
+        const decayed = await applyTemporalDecayToHybridResults({
+          results: boosted,
+          temporalDecay: { enabled: true, halfLifeDays: 30 },
+          nowMs: Date.UTC(2026, 9, 6),
+        });
+        expect(decayed[0]!.score).toBeLessThan(boosted[0]!.score);
+        expect(decayed[0]!.score).toBeGreaterThan(decayed[1]!.score);
+      } finally {
+        db.close();
+      }
+    },
+  );
+});
+
+describe("searchKeyword ranked limits", () => {
+  it.each([
+    { ftsTokenizer: "unicode61", query: "common", matchAny: false },
+    { ftsTokenizer: "trigram", query: "common", matchAny: false },
+    { ftsTokenizer: "trigram", query: "common UK", matchAny: true },
+    { ftsTokenizer: "trigram", query: "missing UK", matchAny: true },
+  ] as const)(
+    "stops examining scoped candidates after filling the $ftsTokenizer result window for $query",
+    async ({ ftsTokenizer, query, matchAny }) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (let index = 0; index < 64; index++) {
+          insertKeywordFixture(db, {
+            id: `chunk-${index}`,
+            path: `memory/${index}.md`,
+            text: "common keyword UK",
+            source: index % 2 === 0 ? "memory" : "sessions",
+          });
+        }
+        let examined = 0;
+        db.function("observe_keyword_candidate", () => {
+          examined++;
+          return 1;
+        });
+        const results = await searchKeywordFixture(db, query, {
+          ftsTokenizer,
+          matchAny,
+          limit: 3,
+          sourceFilter: {
+            sql: " AND source IN (?) AND observe_keyword_candidate() = 1",
+            params: ["sessions"],
+          },
+        });
+        expect(results.map((row) => row.id)).toEqual(["chunk-1", "chunk-3", "chunk-5"]);
+        expect(examined).toBeLessThanOrEqual(6);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it("preserves default BM25 scores without changing a configured rank mapping", async () => {
+    const { db } = createMemorySearchDb();
     try {
-      const result = ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: true,
+      insertKeywordFixture(db, {
+        id: "weak",
+        path: "memory/weak.md",
+        text: "common " + "unrelated ".repeat(20),
       });
-      return result.ftsAvailable;
+      insertKeywordFixture(db, {
+        id: "strong",
+        path: "memory/strong.md",
+        text: "common common common",
+      });
+      const expected = await searchKeywordFixture(db, "common");
+      expect(expected.map((row) => row.id)).toEqual(["strong", "weak"]);
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts(memory_index_chunks_fts, rank) VALUES ('rank', 'bm25(0.0)')",
+      ).run();
+
+      await expect(searchKeywordFixture(db, "common")).resolves.toEqual(expected);
+      expect(
+        db
+          .prepare("SELECT rank FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+          .all("common")
+          .map((row) => row.rank),
+      ).toEqual([-0, -0]);
     } finally {
       db.close();
     }
-  }
+  });
+});
 
+describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
   const itWithFts = supportsFts() ? it : it.skip;
 
   itWithFts("returns FTS hits indexed under a different embedding model", async () => {
-    const db = new DatabaseSync(":memory:");
+    const { db, schema } = createMemorySearchDb();
     try {
-      const result = ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: true,
-      });
-      if (!result.ftsAvailable) {
-        throw new Error(result.ftsError ?? "FTS unavailable");
+      if (!schema.ftsAvailable) {
+        throw new Error(schema.ftsError ?? "FTS unavailable");
       }
       insertKeywordFixture(db, {
         text: "Persona notes for Clyde the assistant",
         id: "clyde-old",
         path: "memory/persona.md",
-        source: "memory",
         model: "bge-m3",
-        startLine: 1,
         endLine: 3,
       });
       insertKeywordFixture(db, {
         text: "Persona notes for Clyde the assistant",
         id: "clyde-new",
         path: "memory/persona.md",
-        source: "memory",
         model: "nomic-embed-text",
-        startLine: 1,
         endLine: 3,
       });
 
-      const results = await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: "Clyde",
-        ftsTokenizer: "unicode61",
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-        buildFtsQuery,
-        bm25RankToScore,
-      });
+      const results = await searchKeywordFixture(db, "Clyde");
 
       expect(results.map((row) => row.id).toSorted()).toEqual(["clyde-new", "clyde-old"]);
     } finally {
@@ -532,23 +492,16 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
   });
 
   itWithFts("does not return orphaned old-model FTS rows without a live chunk", async () => {
-    const db = new DatabaseSync(":memory:");
+    const { db, schema } = createMemorySearchDb();
     try {
-      const result = ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: true,
-      });
-      if (!result.ftsAvailable) {
-        throw new Error(result.ftsError ?? "FTS unavailable");
+      if (!schema.ftsAvailable) {
+        throw new Error(schema.ftsError ?? "FTS unavailable");
       }
       insertKeywordFixture(db, {
         text: "Current Clyde notes",
         id: "live-clyde",
         path: "memory/persona.md",
-        source: "memory",
         model: "nomic-embed-text",
-        startLine: 1,
         endLine: 3,
       });
       db.prepare(
@@ -563,17 +516,7 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
         3,
       );
 
-      const results = await searchKeyword({
-        db,
-        ftsTable: "memory_index_chunks_fts",
-        query: "Clyde",
-        ftsTokenizer: "unicode61",
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-        buildFtsQuery,
-        bm25RankToScore,
-      });
+      const results = await searchKeywordFixture(db, "Clyde");
 
       expect(results.map((row) => row.id)).toEqual(["live-clyde"]);
     } finally {
@@ -582,483 +525,121 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
   });
 });
 
-describe("searchVector sqlite-vec KNN", () => {
-  const { DatabaseSync } = requireNodeSqlite();
-
-  it("batches fallback chunk scoring without materializing all candidates", async () => {
-    type ChunkRow = {
-      rowid: number;
-      id: string;
-      path: string;
-      start_line: number;
-      end_line: number;
-      text: string;
-      embedding: string;
-      source: string;
-    };
-
-    const chunkRows: ChunkRow[] = Array.from({ length: 513 }, (_, index) => {
-      const vector: [number, number] = index === 511 ? [1, 0] : index === 512 ? [0.9, 0.1] : [0, 1];
-      return {
-        rowid: index + 1,
-        id: `target-${index}`,
-        path: `memory/target-${index}.md`,
-        start_line: 1,
-        end_line: 1,
-        text: `chunk target-${index}`,
-        embedding: JSON.stringify(vector),
-        source: "memory",
-      };
-    });
-    const batchSizes: number[] = [];
-    const prepare = vi.fn((sql: string) => {
-      expect(sql).toContain("SELECT rowid, id, path");
-      expect(sql).toContain("ORDER BY rowid ASC");
-      expect(sql).toContain("LIMIT ?");
-      return {
-        all: (_model: string, lastRowid: number, limit: number) => {
-          const batch = chunkRows.filter((row) => row.rowid > lastRowid).slice(0, limit);
-          batchSizes.push(batch.length);
-          return batch;
-        },
-      };
-    });
-
-    const results = await searchVector({
-      db: { prepare } as unknown as Parameters<typeof searchVector>[0]["db"],
-      vectorTable: "memory_index_chunks_vec",
-      providerModel: "target-model",
-      queryVec: [1, 0],
-      limit: 2,
-      snippetMaxChars: 200,
-      ensureVectorReady: async () => false,
-      sourceFilterVec: { sql: "", params: [] },
-      sourceFilterChunks: { sql: "", params: [] },
-    });
-
-    expect(results.map((row) => row.id)).toEqual(["target-511", "target-512"]);
-    expect(batchSizes).toEqual([256, 256, 1]);
-  });
-
-  it("yields to the event loop during large fallback scans (issue #81172)", async () => {
-    // Real Nextcloud-scale corpus where the vec0 fast path is unavailable
-    // (e.g., extension not loaded or dimension mismatch with active model)
-    // used to pin the main thread for the entire fallback scan, blocking
-    // channel I/O. After fix the loop yields after each full
-    // FALLBACK_VECTOR_BATCH_SIZE batch so a setImmediate-scheduled task can
-    // interleave between batches.
-    const db = new DatabaseSync(":memory:");
-    try {
-      ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: false,
-      });
-
-      const insertChunk = db.prepare(
-        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      );
-      // Just over 3x the yield batch (FALLBACK_VECTOR_BATCH_SIZE=256), so we
-      // expect at least 3 yield points to fire during the scan.
-      const N = 1024;
-      for (let i = 0; i < N; i += 1) {
-        insertChunk.run(
-          `chunk-${i}`,
-          `memory/chunk-${i}.md`,
-          "memory",
-          1,
-          1,
-          `hash-${i}`,
-          "yield-model",
-          `chunk ${i}`,
-          // Tiny 2-dim embeddings: the test asserts the yielding *cadence*,
-          // not real similarity scoring (other tests cover scoring).
-          JSON.stringify([Math.cos(i), Math.sin(i)]),
-          i,
-        );
-      }
-
-      // Heartbeat captures whether the event loop gets a chance to run between
-      // setImmediate batches. With the pre-fix synchronous loop, this would
-      // fire zero times during searchVector. With the fix it should fire at
-      // least once because we yield ≥3 times across 1024 rows.
-      let heartbeats = 0;
-      const heartbeatInterval = setInterval(() => {
-        heartbeats += 1;
-      }, 0);
-
+describe("searchKeyword relaxed question ranking", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "keeps the answer inside a bounded %s candidate pool",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
       try {
-        const results = await searchVector({
-          db,
-          vectorTable: "memory_index_chunks_vec",
-          providerModel: "yield-model",
-          queryVec: [1, 0],
-          limit: 4,
-          snippetMaxChars: 200,
-          ensureVectorReady: async () => false,
-          sourceFilterVec: { sql: "", params: [] },
-          sourceFilterChunks: { sql: "", params: [] },
-        });
-        expect(results).toHaveLength(4);
-        // ≥1 heartbeat proves the event loop was given a chance to run during
-        // the scan. (Exact counts depend on machine speed; we only check the
-        // qualitative property that the loop is no longer fully blocked.)
-        expect(heartbeats).toBeGreaterThan(0);
+        for (let index = 0; index < 202; index += 1) {
+          insertKeywordFixture(db, {
+            id: `note-${index}`,
+            path: `memory/note-${index}.md`,
+            text:
+              index === 0
+                ? "user: Tag v0.78.42.0 is an annotated tag object 0b1698f pointing at the release commit."
+                : "user: annotated tag object hash created v0",
+          });
+        }
+        const query = "What is the annotated tag object hash created for v0.78.42.0?";
+        const options = { ftsTokenizer, limit: 200, matchAny: true };
+        const results = await searchKeywordFixture(db, query, options);
+        expect(results).toHaveLength(200);
+        expect(results[0]?.id).toBe("note-0");
+        expect(results[0]?.textScore).toBeGreaterThan(results[1]?.textScore ?? 0);
+        // Expansion lowercases terms; it must not add a second BM25 vote.
+        await expect(searchKeywordFixture(db, query.toUpperCase(), options)).resolves.toEqual(
+          results,
+        );
       } finally {
-        clearInterval(heartbeatInterval);
+        db.close();
       }
-    } finally {
-      db.close();
-    }
-  });
-
-  // ===== Fallback path boundary coverage (issue #81172 review diligence) =====
-
-  function createFallbackDb(): InstanceType<typeof DatabaseSync> {
-    const db = new DatabaseSync(":memory:");
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: false,
-      ftsEnabled: false,
-    });
-    return db;
-  }
-
-  function insertFallbackChunk(
-    db: InstanceType<typeof DatabaseSync>,
-    params: {
-      id: string;
-      model: string;
-      vector: number[];
     },
-  ): void {
-    db.prepare(
-      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      params.id,
-      `memory/${params.id}.md`,
-      "memory",
-      1,
-      1,
-      params.id,
-      params.model,
-      `chunk ${params.id}`,
-      JSON.stringify(params.vector),
-      1,
-    );
-  }
+  );
+});
 
-  it("returns an empty result set when no chunks match the provider model", async () => {
-    const db = createFallbackDb();
-    try {
-      // One chunk with a different model must not appear in results.
-      insertFallbackChunk(db, { id: "other-only", model: "other-model", vector: [1, 0] });
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "target-model",
-        queryVec: [1, 0],
-        limit: 5,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => false,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
-      });
-      expect(results).toEqual([]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("searches provider-declared model aliases while excluding arbitrary paths", async () => {
-    const db = createFallbackDb();
-    try {
-      insertFallbackChunk(db, { id: "canonical", model: "canonical-model", vector: [1, 0] });
-      insertFallbackChunk(db, { id: "alias", model: "/cache/default.gguf", vector: [0.9, 0.1] });
-      insertFallbackChunk(db, { id: "arbitrary", model: "/other/default.gguf", vector: [1, 0] });
-
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "canonical-model",
-        providerModelAliases: ["/cache/default.gguf"],
-        queryVec: [1, 0],
-        limit: 5,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => false,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
-      });
-
-      expect(results.map((row) => row.id)).toEqual(["canonical", "alias"]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("searches an empty primary model without requiring aliases", async () => {
-    const db = createFallbackDb();
-    try {
-      insertFallbackChunk(db, { id: "empty-primary", model: "", vector: [1, 0] });
-      insertFallbackChunk(db, { id: "other", model: "other-model", vector: [1, 0] });
-
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "",
-        queryVec: [1, 0],
-        limit: 5,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => false,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
-      });
-
-      expect(results.map((row) => row.id)).toEqual(["empty-primary"]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("handles a single matching row (below the yield batch size)", async () => {
-    const db = createFallbackDb();
-    try {
-      insertFallbackChunk(db, { id: "lone", model: "target-model", vector: [1, 0] });
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "target-model",
-        queryVec: [1, 0],
-        limit: 5,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => false,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
-      });
-      expect(results.map((r) => r.id)).toEqual(["lone"]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("handles an exact batch-size boundary (FALLBACK_VECTOR_BATCH_SIZE rows)", async () => {
-    // When N === FALLBACK_VECTOR_BATCH_SIZE exactly, the loop produces one
-    // full batch and then must take one extra empty-batch step before
-    // breaking; verify no row is dropped or double-counted at the seam.
-    const db = createFallbackDb();
-    try {
-      const N = 256;
-      for (let i = 0; i < N; i += 1) {
-        // Each chunk gets a unique vector so cosine scoring is well-defined.
-        insertFallbackChunk(db, {
-          id: `chunk-${i}`,
-          model: "target-model",
-          vector: [Math.cos(i), Math.sin(i)],
-        });
-      }
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "target-model",
-        queryVec: [1, 0],
-        limit: 3,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => false,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
-      });
-      expect(results).toHaveLength(3);
-      // Strictly decreasing scores confirms top-K maintenance is intact.
-      for (let i = 1; i < results.length; i += 1) {
-        expect(results[i - 1].score).toBeGreaterThan(results[i].score);
-      }
-    } finally {
-      db.close();
-    }
-  });
-
-  it("preserves top-K ordering vs. a naive reference cosine implementation", async () => {
-    // Guards against accidental algorithmic regressions from the control-flow
-    // refactor: insert 200 chunks with random vectors and assert our patched
-    // fallback search returns the same top-K by id, in the same order, as a
-    // straight-line JS reference that scores every row.
-    const db = createFallbackDb();
-    try {
-      const dim = 16;
-      const N = 200;
-      const limit = 5;
-      // Use a deterministic seed-free PRNG-equivalent: hash-derived floats so
-      // the test is repeatable across machines.
-      const vectorFor = (i: number, j: number): number => {
-        const s = Math.sin(i * 31 + j * 17 + 3) * 1000;
-        return s - Math.floor(s) - 0.5;
-      };
-      const chunks: Array<{ id: string; vector: number[] }> = [];
-      for (let i = 0; i < N; i += 1) {
-        const vector = Array.from({ length: dim }, (_, j) => vectorFor(i, j));
-        chunks.push({ id: `chunk-${i}`, vector });
-        insertFallbackChunk(db, { id: `chunk-${i}`, model: "target-model", vector });
-      }
-      const queryVec = Array.from({ length: dim }, (_, j) => vectorFor(-1, j));
-
-      function refCosine(a: number[], b: number[]): number {
-        let dot = 0;
-        let normA = 0;
-        let normB = 0;
-        const len = Math.min(a.length, b.length);
-        for (let i = 0; i < len; i += 1) {
-          dot += a[i] * b[i];
-          normA += a[i] * a[i];
-          normB += b[i] * b[i];
+describe("searchKeyword zero-hit fallback", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "preserves AND precision and bounds %s retries",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (const row of [
+          { id: "full", path: "memory/full.md", text: "alpha beta" },
+          { id: "partial", path: "memory/partial.md", text: "alpha" },
+          { id: "path", path: "memory/exact.md", text: "unrelated" },
+          { id: "dotted", path: "memory/dotted.md", text: "i\u0307" },
+        ]) {
+          insertKeywordFixture(db, row);
         }
-        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+        const prepare = vi.spyOn(db, "prepare");
+        const search = (query: string) =>
+          searchKeywordWithFallback({
+            db,
+            body: {
+              query,
+              ftsTokenizer,
+              ftsTable: "memory_index_chunks_fts",
+              limit: 10,
+              snippetMaxChars: 200,
+              sourceFilter: { sql: "", params: [] },
+            },
+            path: {
+              query,
+              ftsTokenizer,
+              pathFtsTable: "memory_index_paths_fts",
+              limit: 10,
+              snippetMaxChars: 200,
+              sourceFilter: { sql: "", params: [] },
+            },
+          });
+        const bodyQueries = () =>
+          prepare.mock.calls.filter(([sql]) => /FROM memory_index_chunks_fts\b/.test(sql)).length;
+
+        expect((await search("alpha beta")).body.rows.map((row) => row.id)).toEqual(["full"]);
+        expect(bodyQueries()).toBe(1);
+        prepare.mockClear();
+        const exact = await search("exact.md");
+        expect(exact.body.rows).toEqual([]);
+        expect(exact.path.rows.map((row) => row.id)).toEqual(["path"]);
+        expect(bodyQueries()).toBe(1);
+        prepare.mockClear();
+        const relaxed = await search("alpha beta missing");
+        expect(relaxed.body.error).toBeUndefined();
+        expect(relaxed.body.rows.map((row) => row.id).toSorted()).toEqual(["full", "partial"]);
+        expect(bodyQueries()).toBe(2);
+        prepare.mockClear();
+        expect((await search("İ missing")).body.rows.map((row) => row.id)).toEqual(["dotted"]);
+      } finally {
+        db.close();
       }
-      const referenceTopIds = chunks
-        .map((c) => ({ id: c.id, score: refCosine(queryVec, c.vector) }))
-        .toSorted((a, b) => b.score - a.score)
-        .slice(0, limit)
-        .map((r) => r.id);
+    },
+  );
 
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "target-model",
-        queryVec,
-        limit,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => false,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
-      });
-      expect(results.map((r) => r.id)).toEqual(referenceTopIds);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("picks up rows inserted during the inter-batch event-loop yield (rowid cursor)", async () => {
-    // The fix's rowid-paginated batches yield via setImmediate between batches.
-    // Schedule an INSERT to land in that yield gap and verify the search picks
-    // up the new rows in the next batch: no double-counting, no missed rows.
-    const db = createFallbackDb();
+  it("combines canonical MATCH and short trigram OR terms without scoring substring-only hits", async () => {
+    const { db } = createMemorySearchDb({ ftsTokenizer: "trigram" });
     try {
-      // 257 baseline rows: first batch sees 256 (score 0 vs. query), second
-      // batch would have seen just 1 until our setImmediate insert lands.
-      const baselineCount = 257;
-      for (let i = 0; i < baselineCount; i += 1) {
-        insertFallbackChunk(db, {
-          id: `baseline-${i}`,
-          model: "target-model",
-          // Perpendicular to the query: cosine 0.
-          vector: [0, 1],
-        });
+      for (const row of [
+        { id: "long", path: "memory/long.md", text: "cafe\u0301" },
+        { id: "short", path: "memory/short.md", text: "uk plans" },
+        { id: "other", path: "memory/other.md", text: "unrelated" },
+      ]) {
+        insertKeywordFixture(db, row);
       }
-
-      // setImmediate fires during the search's first inter-batch yield. We
-      // queue an insert of two near-perfect matches; their rowids (258, 259)
-      // are strictly greater than `lastRowid` (256), so the rowid cursor
-      // must include them in batch 2.
-      let inserted = false;
-      const insertDuringYield = (): void => {
-        if (inserted) {
-          return;
-        }
-        inserted = true;
-        insertFallbackChunk(db, {
-          id: "winner-A",
-          model: "target-model",
-          vector: [1, 0],
-        });
-        insertFallbackChunk(db, {
-          id: "winner-B",
-          model: "target-model",
-          vector: [0.9, 0.1],
-        });
-      };
-      setImmediate(insertDuringYield);
-
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "target-model",
-        queryVec: [1, 0],
-        limit: 2,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => false,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
+      insertKeywordFixture(db, {
+        id: "hidden",
+        path: "sessions/hidden.md",
+        text: "café UK",
+        source: "sessions",
       });
-
-      // The winners must dominate the top-2. If the rowid cursor were broken
-      // (either skipping or duplicating rows past the yield), one of these
-      // would be wrong.
-      expect(inserted).toBe(true);
-      expect(results.map((r) => r.id)).toEqual(["winner-A", "winner-B"]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
-    const db = new DatabaseSync(":memory:", { allowExtension: true });
-    try {
-      const loaded = await loadSqliteVecExtension({ db });
-      expect(loaded.ok, loaded.error).toBe(true);
-      ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: false,
+      const results = await searchKeywordFixture(db, "café UK", {
+        ftsTokenizer: "trigram",
+        matchAny: true,
+        sourceFilter: { sql: " AND source = ?", params: ["memory"] },
       });
-      db.exec(`
-        CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
-          id TEXT PRIMARY KEY,
-          embedding FLOAT[2]
-        );
-      `);
-
-      const insertChunk = db.prepare(
-        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      );
-      const insertVector = db.prepare(
-        "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
-      );
-      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
-        insertChunk.run(
-          params.id,
-          `memory/${params.id}.md`,
-          "memory",
-          1,
-          1,
-          params.id,
-          params.model,
-          `chunk ${params.id}`,
-          JSON.stringify(params.vector),
-          1,
-        );
-        insertVector.run(params.id, vectorToBlob(params.vector));
-      };
-
-      for (let i = 0; i < 20; i += 1) {
-        addChunk({ id: `other-${i}`, model: "other-model", vector: [1, i / 1000] });
-      }
-      addChunk({ id: "target-1", model: "target-model", vector: [0.5, 0.5] });
-      addChunk({ id: "target-2", model: "target-model", vector: [0.4, 0.6] });
-      addChunk({ id: "alias-1", model: "alias-model", vector: [0.45, 0.55] });
-
-      const results = await searchVector({
-        db,
-        vectorTable: "memory_index_chunks_vec",
-        providerModel: "target-model",
-        providerModelAliases: ["alias-model"],
-        queryVec: [1, 0],
-        limit: 2,
-        snippetMaxChars: 200,
-        ensureVectorReady: async () => true,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
-      });
-
-      expect(results.map((row) => row.id)).toEqual(["target-1", "alias-1"]);
+      expect(results.map((row) => row.id)).toEqual(["long", "short"]);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+      expect(results[1]?.textScore).toBe(0);
     } finally {
       db.close();
     }

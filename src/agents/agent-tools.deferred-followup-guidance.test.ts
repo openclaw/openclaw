@@ -1,19 +1,34 @@
-/**
- * Tests cron-aware deferred follow-up guidance in exec/process descriptions.
- * Protects the model-facing text selected after tool filtering.
- */
+/** Tests model-facing descriptions selected from the final authorized tool set. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
-import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "./channel-tool-metadata.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
+import {
+  describeSessionsSearchTool,
+  describeSessionsSendTool,
+  describeSessionsSpawnTool,
+} from "./tool-description-presets.js";
+import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
+import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
-function findToolDescription(toolName: string, includeCron: boolean) {
-  const tools = applyDeferredFollowupToolDescriptions([
-    { name: "exec", description: "exec base" },
-    { name: "process", description: "process base" },
-    ...(includeCron ? [{ name: "cron", description: "cron base" }] : []),
-  ] as AnyAgentTool[]);
+function findToolDescription(
+  toolName: string,
+  schedulerToolName?: "automations" | "cron",
+  hasProcessTool = true,
+) {
+  const tools = withMockedPlatform("linux", () =>
+    applyToolAvailabilityDescriptions([
+      { name: "exec", description: "exec base" },
+      ...(hasProcessTool ? [{ name: "process", description: "process base" }] : []),
+      ...(schedulerToolName ? [{ name: schedulerToolName, description: "scheduler base" }] : []),
+    ] as AnyAgentTool[]),
+  );
   const tool = tools.find((entry) => entry.name === toolName);
   return {
     toolNames: tools.map((entry) => entry.name),
@@ -21,47 +36,212 @@ function findToolDescription(toolName: string, includeCron: boolean) {
   };
 }
 
-describe("createOpenClawCodingTools deferred follow-up guidance", () => {
-  it("keeps cron-specific guidance when cron survives filtering", () => {
-    const exec = findToolDescription("exec", true);
-    const process = findToolDescription("process", true);
+describe("createOpenClawCodingTools availability guidance", () => {
+  it.each([
+    { available: [], mode: "suggest", deferred: false },
+    { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },
+  ] as const)(
+    "separates collector waits from announcing yields: $available $mode deferred=$deferred",
+    ({ available, mode, deferred }) => {
+      const availableNames = new Set<string>(available);
+      const toolOptions = {
+        config: {
+          agents: { entries: { main: {} } },
+          tools: { swarm: true },
+        },
+        agentSessionKey: "agent:main:main",
+      };
+      const spawn = createSessionsSpawnTool(toolOptions);
+      const tools = applyToolAvailabilityDescriptions([
+        spawn,
+        ...available.map((name) =>
+          name === "sessions_yield"
+            ? createSessionsYieldTool()
+            : createAgentsWaitTool({ ...toolOptions, agentId: "main" }),
+        ),
+      ]);
+      const toolNames = tools.map((tool) => tool.name);
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        subagentDelegationMode: mode,
+        toolNames: deferred ? ["tool_search"] : toolNames,
+        capabilityToolNames: deferred ? toolNames : [],
+      });
+      const guidance = [prompt, ...tools.map((tool) => tool.description)].join("\n");
+      expect.soft(guidance).not.toContain("completion push-based.");
+      expect.soft(guidance).not.toContain("Need results before reply: `sessions_yield`");
+      expect
+        .soft(guidance)
+        .not.toContain("End turn after subagent spawn; results arrive next message");
+      for (const name of ["agents_wait", "sessions_yield"] as const) {
+        expect(guidance.includes(name)).toBe(availableNames.has(name));
+      }
+      if (availableNames.has("agents_wait")) {
+        expect.soft(guidance).toMatch(/collector[^.\n]*no completion notification/i);
+        expect(guidance).toMatch(/await with agents_wait/);
+        for (const field of ["collect", "outputSchema", "groupId"]) {
+          expect(spawn.parameters).toHaveProperty(`properties.${field}`);
+        }
+      } else {
+        for (const field of ["collect", "outputSchema", "groupId"]) {
+          expect(spawn.parameters).not.toHaveProperty(`properties.${field}`);
+        }
+        expect(guidance).not.toContain("collect=true");
+      }
+    },
+  );
 
-    expect(exec.toolNames).toEqual(["exec", "process", "cron"]);
+  it("uses canonical automation guidance for the retained cron alias", () => {
+    const schedulerToolName = "cron";
+    const exec = findToolDescription("exec", schedulerToolName);
+    const process = findToolDescription("process", schedulerToolName);
+
+    expect(exec.toolNames).toEqual(["exec", "process", schedulerToolName]);
     expect(exec.description).toBe(
-      "Execute shell commands with background continuation for work that starts now. Use yieldMs/background to continue later via process tool. For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention. Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process.description).toBe(
-      "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention. Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+      "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
     );
   });
 
-  it("drops cron-specific guidance when cron is unavailable", () => {
-    const exec = findToolDescription("exec", false);
-    const process = findToolDescription("process", false);
+  it("keeps shell-quoting guidance without background continuation", () => {
+    const exec = findToolDescription("exec", undefined, false);
 
-    expect(exec.toolNames).toEqual(["exec", "process"]);
     expect(exec.description).toBe(
-      "Execute shell commands with background continuation for work that starts now. Use yieldMs/background to continue later via process tool. For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
-    );
-    expect(process.description).toBe(
-      "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention.",
+      "Run shell and wait for completion. Omit host to use the session's configured host. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
   });
 
-  it("preserves ownership metadata when replacing process descriptions", () => {
-    const processTool = {
+  it("preserves plugin and channel ownership when replacing descriptions", () => {
+    const originalTool = {
       name: "process",
       description: "plugin process",
     } as AnyAgentTool;
-    setPluginToolMeta(processTool, { pluginId: "example", optional: false });
-    setChannelAgentToolMeta(processTool as never, { channelId: "example-channel" });
+    setPluginToolMeta(originalTool, { pluginId: "example", optional: false });
+    setChannelAgentToolMeta(originalTool as never, { channelId: "example-channel" });
 
-    const [updated] = applyDeferredFollowupToolDescriptions([processTool]);
+    const [updated] = applyToolAvailabilityDescriptions([originalTool]);
 
-    expect(updated).not.toBe(processTool);
-    expect(getPluginToolMeta(updated)).toEqual({ pluginId: "example", optional: false });
+    expect(updated).not.toBe(originalTool);
+    expect(getPluginToolMeta(expectDefined(updated, "updated test invariant"))).toEqual({
+      pluginId: "example",
+      optional: false,
+    });
     expect(getChannelAgentToolMeta(updated as never)).toEqual({
       channelId: "example-channel",
     });
+  });
+
+  it("mentions sessions_spawn only when it survives tool filtering", () => {
+    const withoutSpawn = applyToolAvailabilityDescriptions([
+      { name: "agents_list", description: "base" },
+      { name: "agents_wait", description: "base" },
+    ] as AnyAgentTool[]);
+    const withSpawn = applyToolAvailabilityDescriptions([
+      ...withoutSpawn,
+      { name: "sessions_spawn", description: "spawn" },
+    ] as AnyAgentTool[]);
+
+    for (const tool of withoutSpawn) {
+      expect(tool.description).not.toContain("sessions_spawn");
+    }
+    for (const tool of withSpawn.filter((entry) => entry.name !== "sessions_spawn")) {
+      expect(tool.description).toContain("sessions_spawn");
+    }
+  });
+
+  it("describes only executable conversation routes", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      { name: "sessions_send", description: describeSessionsSendTool() },
+      ...["conversations_list", "conversations_send"].map((name) => ({
+        name,
+        description: "available",
+      })),
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain("conversations_list");
+    expect(tool?.description).toContain("conversations_send");
+    expect(tool?.description).not.toContain("conversations_turn");
+  });
+
+  it("keeps authorized history guidance and the prepared session URL", () => {
+    const sessionLinkBase = "https://gateway.example/control";
+    const [tool] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_search",
+        description: describeSessionsSearchTool({ sessionLinkBase }),
+      },
+      { name: "sessions_history", description: "history" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain("Search visible past sessions");
+    expect(tool?.description).toContain("sessions_history");
+    expect(tool?.description).toContain(`${sessionLinkBase}/chat/<agentId>`);
+    expect(tool?.description.indexOf("Follow up with sessions_history")).toBeLessThan(
+      tool?.description.indexOf("When pointing the user at a session") ?? Infinity,
+    );
+  });
+
+  it("restores conversation lookup guidance only when lookup is authorized", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      createConversationsSendTool(),
+      { name: "conversations_list", description: "lookup" } as AnyAgentTool,
+    ]);
+
+    expect(tool?.description).toBe(
+      "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
+    );
+  });
+
+  it("keeps only authorized spawn follow-ups without losing prepared runtime facts", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_spawn",
+        description: describeSessionsSpawnTool({
+          acpAvailable: false,
+          threadAvailable: true,
+          sessionToolsVisibility: "self",
+          swarmEnabled: true,
+        }),
+      },
+      { name: "agents_list", description: "agent lookup" },
+      { name: "sessions_history", description: "history" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain("configured agent (see agents_list);");
+    expect(tool?.description).toContain("sessions_history");
+    expect(tool?.description).not.toContain("agents_wait");
+    expect(tool?.description).not.toContain("`subagents`");
+    expect(tool?.description).toContain("persistent/thread-bound");
+    expect(tool?.description).toContain("(self: current session only)");
+    expect(tool?.description).not.toContain('runtime="acp"');
+    // Transcript access alone does not expose execution/delivery diagnostics.
+    expect(tool?.description).not.toContain("When diagnosing a missing result");
+  });
+
+  it("preserves original inline spawn guidance when every follow-up remains available", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      createSessionsSpawnTool({ config: { tools: { swarm: true } } }),
+      createAgentsWaitTool({}),
+      ...["agents_list", "subagents", "sessions_history"].map((name) => ({
+        name,
+        description: "available",
+      })),
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain(
+      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
+    );
+    expect(tool?.description).not.toContain("trial-and-error");
+    expect(tool?.description).toContain("configured agent (see agents_list);");
+    expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
+    expect(tool?.description).toContain("(all: all sessions, cross-agent per tools.agentToAgent)");
+    expect(tool?.description).toContain(
+      "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
+    );
+    expect(tool?.description).toContain(
+      "When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
+    );
   });
 });

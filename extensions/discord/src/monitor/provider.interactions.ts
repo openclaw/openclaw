@@ -1,13 +1,19 @@
-// Discord provider module implements model/runtime integration.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
-import type { BaseCommand, BaseMessageInteractiveComponent, Modal } from "../internal/discord.js";
-import { createDiscordVoiceCommand } from "../voice/command.js";
+import { createDiscordActivityButton } from "../activities/interaction.js";
+import {
+  getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalClientEnabled,
+} from "../exec-approvals.js";
+import type {
+  BaseMessageInteractiveComponent,
+  DiscordCommand,
+  Modal,
+} from "../internal/discord.js";
+import { createDiscordVoiceCommand, DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import {
   createAgentComponentControls,
   createDiscordComponentControls,
@@ -17,26 +23,31 @@ import {
   createDiscordExecApprovalButtonContext,
   createExecApprovalButton,
 } from "./exec-approvals.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
+import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import type { DiscordProviderCommandSpec } from "./provider.commands.js";
+import { createDiscordQuestionButton } from "./questions.js";
 import type { ThreadBindingManager } from "./thread-bindings.types.js";
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 export function createDiscordProviderInteractionSurface(params: {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
+  applicationId?: string;
   token: string;
-  commandSpecs: NativeCommandSpec[];
+  commandSpecs: DiscordProviderCommandSpec[];
   nativeEnabled: boolean;
   voiceEnabled: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";
-  useAccessGroups: boolean;
   sessionPrefix: string;
   ephemeralDefault: boolean;
   threadBindings: ThreadBindingManager;
@@ -45,46 +56,52 @@ export function createDiscordProviderInteractionSurface(params: {
   allowFrom: DiscordAccountConfig["allowFrom"];
   dmPolicy: NonNullable<DiscordAccountConfig["dmPolicy"]>;
   runtime: RuntimeEnv;
-  channelRuntime?: ChannelRuntimeSurface;
+  channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   createNativeCommand?: typeof createDiscordNativeCommand;
-}): {
-  commands: BaseCommand[];
-  components: BaseMessageInteractiveComponent[];
-  modals: Modal[];
-} {
+}) {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
-  const commands: BaseCommand[] = params.commandSpecs.map((spec) =>
-    createNativeCommand({
-      command: spec,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      ephemeralDefault: params.ephemeralDefault,
-      threadBindings: params.threadBindings,
-    }),
-  );
-  if (params.nativeEnabled && params.voiceEnabled) {
-    commands.push(
-      createDiscordVoiceCommand({
-        cfg: params.cfg,
-        discordConfig: params.discordConfig,
-        accountId: params.accountId,
+  const accountContext = {
+    readPolicy: params.readPolicy,
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+    accountId: params.accountId,
+  };
+  const commandContext: DiscordCommandArgContext = {
+    ...accountContext,
+    sessionPrefix: params.sessionPrefix,
+    threadBindings: params.threadBindings,
+    buildContext: params.channelRuntime?.inbound.buildContext,
+    dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
+  };
+  const commands: DiscordCommand[] = params.commandSpecs.map((spec) => {
+    if (
+      params.nativeEnabled &&
+      params.voiceEnabled &&
+      spec.name === DISCORD_VOICE_COMMAND_SPEC.name
+    ) {
+      return createDiscordVoiceCommand({
+        ...accountContext,
         groupPolicy: params.groupPolicy,
-        useAccessGroups: params.useAccessGroups,
         getManager: () => params.voiceManagerRef.current,
         ephemeralDefault: params.ephemeralDefault,
-      }),
-    );
-  }
+      });
+    }
+    return createNativeCommand({
+      ...commandContext,
+      command: spec,
+      ephemeralDefault: params.ephemeralDefault,
+    });
+  });
 
   const execApprovalsConfig = params.discordConfig.execApprovals ?? {};
-  const execApprovalsEnabled = isDiscordExecApprovalClientEnabled({
+  const execApprovalOptions = {
     cfg: params.cfg,
     accountId: params.accountId,
     configOverride: execApprovalsConfig,
-  });
+  };
+  const execApprovalsEnabled = isDiscordExecApprovalClientEnabled(execApprovalOptions);
+  const approvalActionsEnabled = getDiscordExecApprovalApprovers(execApprovalOptions).length > 0;
   if (execApprovalsEnabled) {
     registerChannelRuntimeContext({
       channelRuntime: params.channelRuntime,
@@ -99,32 +116,39 @@ export function createDiscordProviderInteractionSurface(params: {
     });
   }
 
+  const componentContext = {
+    ...accountContext,
+    runtime: params.runtime,
+    token: params.token,
+    guildEntries: params.guildEntries,
+    allowFrom: params.allowFrom,
+    dmPolicy: params.dmPolicy,
+  };
   const components: BaseMessageInteractiveComponent[] = [
-    createDiscordCommandArgFallbackButton({
+    createDiscordQuestionButton({
       cfg: params.cfg,
-      discordConfig: params.discordConfig,
       accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      threadBindings: params.threadBindings,
+      authContext: componentContext,
     }),
-    createDiscordModelPickerFallbackButton({
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      threadBindings: params.threadBindings,
-    }),
-    createDiscordModelPickerFallbackSelect({
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      threadBindings: params.threadBindings,
-    }),
+    ...[
+      createDiscordCommandArgFallbackButton,
+      createDiscordModelPickerFallbackButton,
+      createDiscordModelPickerFallbackSelect,
+    ].map((create) => create(commandContext)),
   ];
+  const activityButton = createDiscordActivityButton(
+    {
+      ...componentContext,
+      channelRuntime: params.channelRuntime,
+    },
+    params.applicationId,
+  );
+  if (activityButton) {
+    components.push(activityButton);
+  }
   const modals: Modal[] = [];
 
-  if (execApprovalsEnabled) {
+  if (approvalActionsEnabled) {
     components.push(
       createExecApprovalButton(
         createDiscordExecApprovalButtonContext({
@@ -136,18 +160,7 @@ export function createDiscordProviderInteractionSurface(params: {
     );
   }
 
-  const agentComponentsConfig = params.discordConfig.agentComponents ?? {};
-  if (agentComponentsConfig.enabled ?? true) {
-    const componentContext = {
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      guildEntries: params.guildEntries,
-      allowFrom: params.allowFrom,
-      dmPolicy: params.dmPolicy,
-      runtime: params.runtime,
-      token: params.token,
-    };
+  if (params.discordConfig.agentComponents?.enabled ?? true) {
     components.push(...createAgentComponentControls.map((create) => create(componentContext)));
     components.push(...createDiscordComponentControls.map((create) => create(componentContext)));
     modals.push(createDiscordComponentModal(componentContext));

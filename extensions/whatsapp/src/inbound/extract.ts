@@ -1,116 +1,20 @@
-// Whatsapp plugin module implements extract behavior.
 import type { proto } from "baileys";
 import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatLocationText,
+  type ChannelInboundMediaInput,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
-import { jidToE164 } from "../text-runtime.js";
+import { jidToE164 } from "../targets-runtime.js";
 import { parseVcard } from "../vcard.js";
+import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";
 
-const MESSAGE_WRAPPER_KEYS = [
-  "botInvokeMessage",
-  "ephemeralMessage",
-  "viewOnceMessage",
-  "viewOnceMessageV2",
-  "viewOnceMessageV2Extension",
-  "documentWithCaptionMessage",
-  "groupMentionedMessage",
-] as const;
-
-const MESSAGE_CONTENT_KEYS = [
-  "conversation",
-  "extendedTextMessage",
-  "imageMessage",
-  "videoMessage",
-  "audioMessage",
-  "documentMessage",
-  "stickerMessage",
-  "locationMessage",
-  "liveLocationMessage",
-  "contactMessage",
-  "contactsArrayMessage",
-  "buttonsResponseMessage",
-  "listResponseMessage",
-  "templateButtonReplyMessage",
-  "interactiveResponseMessage",
-  "buttonsMessage",
-  "listMessage",
-] as const;
-
-function fallbackNormalizeMessageContent(
-  message: proto.IMessage | undefined,
-): proto.IMessage | undefined {
-  let current = message as unknown;
-  while (current && typeof current === "object") {
-    let unwrapped = false;
-    for (const key of MESSAGE_WRAPPER_KEYS) {
-      const candidate = (current as Record<string, unknown>)[key];
-      if (
-        candidate &&
-        typeof candidate === "object" &&
-        "message" in (candidate as Record<string, unknown>) &&
-        (candidate as { message?: unknown }).message
-      ) {
-        current = (candidate as { message: unknown }).message;
-        unwrapped = true;
-        break;
-      }
-    }
-    if (!unwrapped) {
-      break;
-    }
-  }
-  return current as proto.IMessage | undefined;
-}
-
-function normalizeMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  if (typeof normalizeMessageContent === "function") {
-    return normalizeMessageContent(message);
-  }
-  return fallbackNormalizeMessageContent(message);
-}
-
-function fallbackGetContentType(
-  message: proto.IMessage | undefined,
-): keyof proto.IMessage | undefined {
-  const normalized = fallbackNormalizeMessageContent(message);
-  if (!normalized || typeof normalized !== "object") {
-    return undefined;
-  }
-  for (const key of MESSAGE_CONTENT_KEYS) {
-    if ((normalized as Record<string, unknown>)[key] != null) {
-      return key as keyof proto.IMessage;
-    }
-  }
-  return undefined;
-}
-
-function getMessageContentType(
-  message: proto.IMessage | undefined,
-): keyof proto.IMessage | undefined {
-  if (typeof getContentType === "function") {
-    return getContentType(message);
-  }
-  return fallbackGetContentType(message);
-}
-
-function extractMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  if (typeof extractMessageContent === "function") {
-    return extractMessageContent(message);
-  }
-  const normalized = fallbackNormalizeMessageContent(message);
-  const contentType = fallbackGetContentType(normalized);
-  if (!normalized || !contentType || contentType === "conversation") {
-    return normalized;
-  }
-  const candidate = (normalized as Record<string, unknown>)[contentType];
-  return candidate && typeof candidate === "object" ? (candidate as proto.IMessage) : normalized;
-}
-
 function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | undefined {
-  const contentType = getMessageContentType(message);
+  const contentType = getContentType(message);
   const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
   if (
     candidate &&
@@ -119,9 +23,9 @@ function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | u
     (candidate as { message?: unknown }).message &&
     typeof (candidate as { message: unknown }).message === "object"
   ) {
-    const inner = normalizeMessage((candidate as { message: proto.IMessage }).message);
+    const inner = normalizeMessageContent((candidate as { message: proto.IMessage }).message);
     if (inner) {
-      const innerType = getMessageContentType(inner);
+      const innerType = getContentType(inner);
       if (innerType && innerType !== contentType) {
         return inner;
       }
@@ -130,9 +34,14 @@ function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | u
   return undefined;
 }
 
-function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[] {
+type WhatsAppInboundMessageProjection = readonly proto.IMessage[];
+type WhatsAppInboundMessageSource = proto.IMessage | WhatsAppInboundMessageProjection | undefined;
+
+export function projectWhatsAppInboundMessage(
+  message: proto.IMessage | undefined,
+): WhatsAppInboundMessageProjection {
   const chain: proto.IMessage[] = [];
-  let current = normalizeMessage(message);
+  let current = normalizeMessageContent(message);
   while (current && chain.length < 4) {
     chain.push(current);
     current = getFutureProofInnerMessage(current);
@@ -140,13 +49,42 @@ function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[
   return chain;
 }
 
-function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const chain = buildMessageChain(message);
-  return chain.at(-1);
+function isWhatsAppInboundMessageProjection(
+  message: WhatsAppInboundMessageSource,
+): message is WhatsAppInboundMessageProjection {
+  return Array.isArray(message);
+}
+
+function resolveWhatsAppInboundMessageProjection(
+  message: WhatsAppInboundMessageSource,
+): WhatsAppInboundMessageProjection {
+  return isWhatsAppInboundMessageProjection(message)
+    ? message
+    : projectWhatsAppInboundMessage(message);
+}
+
+export function findMessageSection<K extends keyof proto.IMessage>(
+  rawMessage: proto.IMessage | undefined,
+  sectionNames: readonly K[],
+): { name: K; value: Record<string, unknown> } | undefined {
+  const chain = projectWhatsAppInboundMessage(rawMessage);
+  for (const name of sectionNames) {
+    for (const message of chain) {
+      const value = message[name];
+      if (isRecord(value)) {
+        return { name, value };
+      }
+    }
+  }
+  return undefined;
+}
+
+function unwrapMessage(message: WhatsAppInboundMessageSource): proto.IMessage | undefined {
+  return resolveWhatsAppInboundMessageProjection(message).at(-1);
 }
 
 function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextInfo | undefined {
-  const contentType = getMessageContentType(message);
+  const contentType = getContentType(message);
   const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
   const contextInfo =
     candidate && typeof candidate === "object" && "contextInfo" in candidate
@@ -196,9 +134,9 @@ function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextI
 }
 
 export function extractContextInfo(
-  message: proto.IMessage | undefined,
+  message: WhatsAppInboundMessageSource,
 ): proto.IContextInfo | undefined {
-  for (const candidate of buildMessageChain(message)) {
+  for (const candidate of resolveWhatsAppInboundMessageProjection(message)) {
     const contextInfo = extractContextInfoFromMessage(candidate);
     if (contextInfo) {
       return contextInfo;
@@ -207,36 +145,42 @@ export function extractContextInfo(
   return undefined;
 }
 
-export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
-  const message = unwrapMessage(rawMessage);
-  if (!message) {
+export function extractMentionedJids(message: WhatsAppInboundMessageSource): string[] | undefined {
+  // Context ownership already follows Baileys envelopes without entering quoted messages.
+  const mentionedJids = extractContextInfo(message)?.mentionedJid?.filter(Boolean);
+  if (!mentionedJids?.length) {
     return undefined;
   }
-
-  const candidates: Array<string[] | null | undefined> = [
-    message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.imageMessage?.contextInfo?.mentionedJid,
-    message.videoMessage?.contextInfo?.mentionedJid,
-    message.documentMessage?.contextInfo?.mentionedJid,
-    message.audioMessage?.contextInfo?.mentionedJid,
-    message.stickerMessage?.contextInfo?.mentionedJid,
-    message.buttonsResponseMessage?.contextInfo?.mentionedJid,
-    message.listResponseMessage?.contextInfo?.mentionedJid,
-  ];
-
-  const flattened = candidates.flatMap((arr) => arr ?? []).filter(Boolean);
-  if (flattened.length === 0) {
-    return undefined;
-  }
-  return uniqueStrings(flattened);
+  return uniqueStrings(mentionedJids);
 }
 
-export function extractText(rawMessage: proto.IMessage | undefined): string | undefined {
-  const message = unwrapMessage(rawMessage);
+function extractNativeFlowResponseText(
+  response: proto.Message.IInteractiveResponseMessage | null | undefined,
+): string | undefined {
+  const paramsJson = response?.nativeFlowResponseMessage?.paramsJson;
+  if (!paramsJson) {
+    return undefined;
+  }
+  try {
+    const params: unknown = JSON.parse(paramsJson);
+    if (!isRecord(params)) {
+      return undefined;
+    }
+    return [params.title, params.id].find(
+      (value): value is string => typeof value === "string" && Boolean(value.trim()),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export function extractText(source: WhatsAppInboundMessageSource): string | undefined {
+  const projection = resolveWhatsAppInboundMessageProjection(source);
+  const message = unwrapMessage(projection);
   if (!message) {
     return undefined;
   }
-  const extracted = extractMessage(message);
+  const extracted = extractMessageContent(message);
   const candidates = [message, extracted && extracted !== message ? extracted : undefined];
   for (const candidate of candidates) {
     if (!candidate) {
@@ -252,30 +196,58 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
     const caption =
       candidate.imageMessage?.caption ??
       candidate.videoMessage?.caption ??
+      candidate.ptvMessage?.caption ??
       candidate.documentMessage?.caption;
     if (caption?.trim()) {
       return caption.trim();
     }
+    const interactiveSelection = [
+      candidate.buttonsResponseMessage?.selectedDisplayText,
+      candidate.buttonsResponseMessage?.selectedButtonId,
+      candidate.listResponseMessage?.title,
+      candidate.listResponseMessage?.singleSelectReply?.selectedRowId,
+      candidate.templateButtonReplyMessage?.selectedDisplayText,
+      candidate.templateButtonReplyMessage?.selectedId,
+      candidate.interactiveResponseMessage?.body?.text,
+      extractNativeFlowResponseText(candidate.interactiveResponseMessage),
+    ].find((value) => Boolean(value?.trim()));
+    if (interactiveSelection) {
+      return interactiveSelection.trim();
+    }
+    const poll =
+      candidate.pollCreationMessage ??
+      candidate.pollCreationMessageV2 ??
+      candidate.pollCreationMessageV3 ??
+      candidate.pollCreationMessageV5;
+    if (poll) {
+      const question = poll.name?.trim();
+      const options = (poll.options ?? [])
+        .map((option) => option.optionName?.trim())
+        .filter((option): option is string => Boolean(option));
+      const pollText = [question, ...options.map((option) => `- ${option}`)]
+        .filter(Boolean)
+        .join("\n");
+      if (pollText) {
+        return pollText;
+      }
+    }
   }
-  const contactPlaceholder =
-    extractContactPlaceholder(message) ??
+  return (
+    extractContactPlaceholder(projection) ??
     (extracted && extracted !== message
       ? extractContactPlaceholder(extracted as proto.IMessage | undefined)
-      : undefined);
-  if (contactPlaceholder) {
-    return contactPlaceholder;
-  }
-  return undefined;
+      : undefined)
+  );
 }
 
-export function extractExternalAdReplyContext(rawMessage: proto.IMessage | undefined):
+export function extractExternalAdReplyContext(source: WhatsAppInboundMessageSource):
   | {
       title?: string;
       sourceUrl?: string;
       body?: string;
     }
   | undefined {
-  const message = unwrapMessage(rawMessage);
+  const message = unwrapMessage(source);
   const adReply =
     message?.imageMessage?.contextInfo?.externalAdReply ??
     message?.videoMessage?.contextInfo?.externalAdReply;
@@ -288,33 +260,34 @@ export function extractExternalAdReplyContext(rawMessage: proto.IMessage | undef
   return title || sourceUrl || body ? { title, sourceUrl, body } : undefined;
 }
 
-export function extractMediaPlaceholder(
-  rawMessage: proto.IMessage | undefined,
-): string | undefined {
-  const message = unwrapMessage(rawMessage);
+export function extractMediaKind(
+  source: WhatsAppInboundMessageSource,
+): NonNullable<ChannelInboundMediaInput["kind"]> | undefined {
+  const message = unwrapMessage(source);
   if (!message) {
     return undefined;
   }
   if (message.imageMessage) {
-    return "<media:image>";
+    return "image";
   }
-  if (message.videoMessage) {
-    return message.videoMessage.gifPlayback === true ? "<media:gif>" : "<media:video>";
+  if (message.videoMessage || message.ptvMessage) {
+    // GIF playback is a video transport detail; no downstream behavior needs a new GIF kind.
+    return "video";
   }
   if (message.audioMessage) {
-    return "<media:audio>";
+    return "audio";
   }
   if (message.documentMessage) {
-    return "<media:document>";
+    return "document";
   }
   if (message.stickerMessage) {
-    return "<media:sticker>";
+    return "sticker";
   }
   return undefined;
 }
 
-function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): string | undefined {
-  const contactContext = extractContactContext(rawMessage);
+function extractContactPlaceholder(source: WhatsAppInboundMessageSource): string | undefined {
+  const contactContext = extractContactContext(source);
   if (!contactContext) {
     return undefined;
   }
@@ -326,34 +299,21 @@ function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): stri
 }
 
 export function extractContactContext(
-  rawMessage: proto.IMessage | undefined,
+  source: WhatsAppInboundMessageSource,
 ): WhatsAppStructuredContactContext | undefined {
-  const message = unwrapMessage(rawMessage);
+  const message = unwrapMessage(source);
   if (!message) {
     return undefined;
   }
   const contact = message.contactMessage ?? undefined;
-  if (contact) {
-    const { name, phones } = describeContact({
-      displayName: contact.displayName,
-      vcard: contact.vcard,
-    });
-    return {
-      kind: "contact",
-      total: 1,
-      contacts: [{ name, phones }],
-    };
-  }
-  const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
-  if (!contactsArray || contactsArray.length === 0) {
+  const contacts = contact ? [contact] : message.contactsArrayMessage?.contacts;
+  if (!contacts?.length) {
     return undefined;
   }
   return {
-    kind: "contacts",
-    total: contactsArray.length,
-    contacts: contactsArray.map((entry) =>
-      describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
-    ),
+    kind: contact ? "contact" : "contacts",
+    total: contacts.length,
+    contacts: contacts.map(describeContact),
   };
 }
 
@@ -368,83 +328,62 @@ function describeContact(input: { displayName?: string | null; vcard?: string | 
 }
 
 export function extractLocationData(
-  rawMessage: proto.IMessage | undefined,
+  source: WhatsAppInboundMessageSource,
 ): NormalizedLocation | null {
-  const message = unwrapMessage(rawMessage);
-  if (!message) {
-    return null;
-  }
-
-  const live = message.liveLocationMessage ?? undefined;
-  if (live) {
-    const latitudeRaw = live.degreesLatitude;
-    const longitudeRaw = live.degreesLongitude;
-    if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = latitudeRaw;
-      const longitude = longitudeRaw;
-      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-        return {
-          latitude,
-          longitude,
-          accuracy: live.accuracyInMeters ?? undefined,
-          caption: live.caption ?? undefined,
-          source: "live",
-          isLive: true,
-        };
-      }
+  const message = unwrapMessage(source);
+  for (const [location, locationSource] of [
+    [message?.liveLocationMessage, "live"],
+    [message?.locationMessage, "pin"],
+  ] as const) {
+    const latitude = location?.degreesLatitude;
+    const longitude = location?.degreesLongitude;
+    if (
+      !location ||
+      latitude == null ||
+      longitude == null ||
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude)
+    ) {
+      continue;
     }
-  }
-
-  const location = message.locationMessage ?? undefined;
-  if (location) {
-    const latitudeRaw = location.degreesLatitude;
-    const longitudeRaw = location.degreesLongitude;
-    if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = latitudeRaw;
-      const longitude = longitudeRaw;
-      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-        const isLive = Boolean(location.isLive);
-        return {
-          latitude,
-          longitude,
-          accuracy: location.accuracyInMeters ?? undefined,
-          name: location.name ?? undefined,
-          address: location.address ?? undefined,
-          caption: location.comment ?? undefined,
-          source: isLive ? "live" : location.name || location.address ? "place" : "pin",
-          isLive,
-        };
-      }
+    const coordinates = { latitude, longitude, accuracy: location.accuracyInMeters ?? undefined };
+    if (locationSource === "live") {
+      return {
+        ...coordinates,
+        caption: location.caption ?? undefined,
+        source: locationSource,
+        isLive: true,
+      };
     }
+    const isLive = Boolean(location.isLive);
+    return {
+      ...coordinates,
+      name: location.name ?? undefined,
+      address: location.address ?? undefined,
+      caption: location.comment ?? undefined,
+      source: isLive ? "live" : location.name || location.address ? "place" : "pin",
+      isLive,
+    };
   }
 
   return null;
 }
 
 export function describeReplyContext(
-  rawMessage: proto.IMessage | undefined,
+  source: WhatsAppInboundMessageSource,
 ): WhatsAppReplyContext | null {
-  const message = unwrapMessage(rawMessage);
+  const projection = resolveWhatsAppInboundMessageProjection(source);
+  const message = unwrapMessage(projection);
   if (!message) {
     return null;
   }
-  const contextInfo = extractContextInfo(message);
-  const quoted = normalizeMessage(contextInfo?.quotedMessage as proto.IMessage | undefined);
-  if (!quoted) {
-    return null;
-  }
-  const location = extractLocationData(quoted);
-  const locationText = location ? formatLocationText(location) : undefined;
-  const text = extractText(quoted);
-  let body: string | undefined = [text, locationText].filter(Boolean).join("\n").trim();
-  if (!body) {
-    body = extractMediaPlaceholder(quoted);
-  }
-  if (!body) {
-    const quotedType = quoted ? getMessageContentType(quoted) : undefined;
-    logVerbose(
-      `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
-    );
+  const contextProjection =
+    projection.length === 1 && projection[0] === message
+      ? projection
+      : projectWhatsAppInboundMessage(message);
+  const contextInfo = extractContextInfo(contextProjection);
+  const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
+  if (!quoted && !contextInfo?.stanzaId) {
     return null;
   }
   const senderJid = contextInfo?.participant ?? undefined;
@@ -452,27 +391,36 @@ export function describeReplyContext(
     jid: senderJid,
     label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
   });
+  if (!quoted) {
+    // Baileys may preserve a real reply ID while omitting its private quoted payload.
+    return {
+      id: contextInfo?.stanzaId || undefined,
+      body: "[quoted message unavailable]",
+      sender,
+    };
+  }
+  const quotedProjection = projectWhatsAppInboundMessage(quoted);
+  const location = extractLocationData(quotedProjection);
+  const locationText = location ? formatLocationText(location) : undefined;
+  const text = extractText(quotedProjection);
+  const body = [text, locationText].filter(Boolean).join("\n").trim();
+  const mediaKind = extractMediaKind(quotedProjection);
+  const media = mediaKind
+    ? { kind: mediaKind, contentType: resolveInboundMediaMimetype(quoted) }
+    : undefined;
+  if (!body && !media) {
+    const quotedType = getContentType(quoted);
+    logVerbose(
+      `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
+    );
+    return null;
+  }
   return {
     id: contextInfo?.stanzaId || undefined,
     body,
+    media,
     sender,
   };
-}
-
-function hasInteractiveResponseContent(message: proto.IMessage | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  // Button/list/template/interactive selections that the existing four
-  // extractors do not cover. Treat any presence of these keys as user
-  // content — Baileys never delivers these as receipts or protocol
-  // envelopes, only as explicit user choices.
-  return Boolean(
-    message.buttonsResponseMessage ||
-    message.listResponseMessage ||
-    message.templateButtonReplyMessage ||
-    message.interactiveResponseMessage,
-  );
 }
 
 /**
@@ -482,25 +430,19 @@ function hasInteractiveResponseContent(message: proto.IMessage | undefined): boo
  * `messages.upsert` stream as real messages but should not trigger pairing
  * access-control side effects.
  */
-export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): boolean {
-  if (!rawMessage) {
-    return false;
-  }
-  if (extractText(rawMessage)) {
-    return true;
-  }
-  if (extractMediaPlaceholder(rawMessage)) {
-    return true;
-  }
-  if (extractLocationData(rawMessage)) {
-    return true;
-  }
-  // Walk wrappers (ephemeral, viewOnce, etc.) — interactive responses
-  // can arrive nested.
-  for (const candidate of buildMessageChain(rawMessage)) {
-    if (hasInteractiveResponseContent(candidate)) {
-      return true;
-    }
-  }
-  return false;
+export function hasInboundUserContent(source: WhatsAppInboundMessageSource): boolean {
+  const projection = resolveWhatsAppInboundMessageProjection(source);
+  return Boolean(
+    extractText(projection) ||
+    extractMediaKind(projection) ||
+    extractLocationData(projection) ||
+    // Interactive choices can be nested in wrappers and carry no extractable text.
+    projection.some(
+      (message) =>
+        message.buttonsResponseMessage ||
+        message.listResponseMessage ||
+        message.templateButtonReplyMessage ||
+        message.interactiveResponseMessage,
+    ),
+  );
 }

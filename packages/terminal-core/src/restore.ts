@@ -1,4 +1,3 @@
-// Terminal Core module implements restore behavior.
 import { clearActiveProgressLine } from "./progress-line.js";
 
 const RESET_SEQUENCE =
@@ -19,6 +18,15 @@ type RestoreTerminalStateOptions = {
    * Default: false.
    */
   resumeStdinIfPaused?: boolean;
+
+  /**
+   * Stream to write the ANSI reset sequence to.
+   * Callers that emit structured data to stdout should route the reset to
+   * stderr so parseable output stays clean.
+   *
+   * Default: process.stdout.
+   */
+  resetStream?: NodeJS.WriteStream;
 };
 
 function reportRestoreFailure(scope: string, err: unknown, reason?: string): void {
@@ -38,33 +46,25 @@ export function restoreTerminalState(
   // Docker TTY note: resuming stdin can keep a container process alive even
   // after the wizard is "done" (stdin_open: true), making installers appear hung.
   const resumeStdin = options.resumeStdinIfPaused ?? options.resumeStdin ?? false;
-  try {
-    clearActiveProgressLine();
-  } catch (err) {
-    reportRestoreFailure("progress line", err, reason);
-  }
+  const resetStream = options.resetStream ?? process.stdout;
+  const restore = (scope: string, action: () => void) => {
+    try {
+      action();
+    } catch (err) {
+      reportRestoreFailure(scope, err, reason);
+    }
+  };
+  restore("progress line", clearActiveProgressLine);
 
   const stdin = process.stdin;
   if (stdin.isTTY && typeof stdin.setRawMode === "function") {
-    try {
-      stdin.setRawMode(false);
-    } catch (err) {
-      reportRestoreFailure("raw mode", err, reason);
-    }
+    restore("raw mode", () => stdin.setRawMode(false));
     if (resumeStdin && typeof stdin.isPaused === "function" && stdin.isPaused()) {
-      try {
-        stdin.resume();
-      } catch (err) {
-        reportRestoreFailure("stdin resume", err, reason);
-      }
+      restore("stdin resume", () => stdin.resume());
     }
   }
 
-  if (process.stdout.isTTY) {
-    try {
-      process.stdout.write(RESET_SEQUENCE);
-    } catch (err) {
-      reportRestoreFailure("stdout reset", err, reason);
-    }
+  if (resetStream.isTTY) {
+    restore("terminal reset", () => resetStream.write(RESET_SEQUENCE));
   }
 }

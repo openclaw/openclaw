@@ -1,0 +1,55 @@
+import crypto from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+
+const LAUNCH_TICKET_TTL_MS = 5 * 60_000;
+const LAUNCH_TICKET_LIMIT = 1000;
+
+type LaunchTicket = {
+  accountId: string;
+  userId: string;
+  expiresAtMs: number;
+};
+
+export type TelegramMiniAppLaunchTickets = {
+  issue: (params: { accountId: string; userId: string }) => string;
+  consume: (params: { ticket: string; accountId: string; userId: string }) => boolean;
+};
+
+export function createTelegramMiniAppLaunchTickets(): TelegramMiniAppLaunchTickets {
+  const tickets = new Map<string, LaunchTicket>();
+
+  return {
+    issue({ accountId, userId }) {
+      pruneExpiredMiniAppEntries(tickets, (launch) => launch.expiresAtMs);
+      const ticket = crypto.randomBytes(32).toString("base64url");
+      tickets.set(ticket, {
+        accountId,
+        userId,
+        expiresAtMs: Date.now() + LAUNCH_TICKET_TTL_MS,
+      });
+      pruneMapToMaxSize(tickets, LAUNCH_TICKET_LIMIT);
+      return ticket;
+    },
+    consume({ ticket, accountId, userId }) {
+      pruneExpiredMiniAppEntries(tickets, (launch) => launch.expiresAtMs);
+      const launch = tickets.get(ticket);
+      if (!launch || launch.accountId !== accountId || launch.userId !== userId) {
+        return false;
+      }
+      tickets.delete(ticket);
+      return true;
+    },
+  };
+}
+
+export function pruneExpiredMiniAppEntries<T>(
+  entries: Map<string, T>,
+  expiresAt: (value: T) => number,
+): void {
+  const now = Date.now();
+  for (const [key, value] of entries) {
+    if (expiresAt(value) <= now) {
+      entries.delete(key);
+    }
+  }
+}

@@ -1,44 +1,13 @@
-// Discord plugin module implements subagent hooks behavior.
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
-import {
-  formatThreadBindingDisabledError,
-  formatThreadBindingSpawnDisabledError,
-  resolveThreadBindingSpawnPolicy,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordAccount } from "./accounts.js";
 import {
-  autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
   type ThreadBindingTargetKind,
-  unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
-
-function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
-}
-
-type DiscordSubagentSpawningEvent = {
-  threadRequested?: boolean;
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-  childSessionKey: string;
-  agentId: string;
-  label?: string;
-};
+import { ensureBindingsLoadedAsync } from "./monitor/thread-bindings.state.js";
 
 type DiscordSubagentEndedEvent = {
   targetSessionKey: string;
@@ -58,20 +27,6 @@ type DiscordSubagentDeliveryTargetEvent = {
   };
 };
 
-type DiscordSubagentSpawningResult =
-  | {
-      status: "ok";
-      threadBindingReady?: boolean;
-      deliveryOrigin?: {
-        channel: "discord";
-        accountId?: string;
-        to: string;
-        threadId?: string | number;
-      };
-    }
-  | { status: "error"; error: string }
-  | undefined;
-
 type DiscordSubagentDeliveryTargetResult =
   | {
       origin: {
@@ -83,142 +38,60 @@ type DiscordSubagentDeliveryTargetResult =
     }
   | undefined;
 
-function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "subagent" || normalized === "acp") {
-    return normalized;
-  }
-  return undefined;
-}
-
-export async function handleDiscordSubagentSpawning(
-  api: OpenClawPluginApi,
-  event: DiscordSubagentSpawningEvent,
-): Promise<DiscordSubagentSpawningResult> {
-  if (!event.threadRequested) {
-    return undefined;
-  }
-  const channel = normalizeOptionalLowercaseString(event.requester?.channel);
-  if (channel !== "discord") {
-    return undefined;
-  }
-  const account = resolveDiscordAccount({
-    cfg: api.config,
-    accountId: event.requester?.accountId,
-  });
-  const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
-    cfg: api.config,
-    channel: "discord",
-    accountId: account.accountId,
-    kind: "subagent",
-  });
-  if (!threadBindingPolicy.enabled) {
-    return {
-      status: "error" as const,
-      error: formatThreadBindingDisabledError({
-        channel: threadBindingPolicy.channel,
-        accountId: threadBindingPolicy.accountId,
-        kind: "subagent",
-      }),
-    };
-  }
-  if (!threadBindingPolicy.spawnEnabled) {
-    return {
-      status: "error" as const,
-      error: formatThreadBindingSpawnDisabledError({
-        channel: threadBindingPolicy.channel,
-        accountId: threadBindingPolicy.accountId,
-        kind: "subagent",
-      }),
-    };
-  }
-  try {
-    const agentId = event.agentId?.trim() || "subagent";
-    const binding = await autoBindSpawnedDiscordSubagent({
-      cfg: api.config,
-      accountId: account.accountId,
-      channel: event.requester?.channel,
-      to: event.requester?.to,
-      threadId: event.requester?.threadId,
-      childSessionKey: event.childSessionKey,
-      agentId,
-      label: event.label,
-      boundBy: "system",
-    });
-    if (!binding) {
-      return {
-        status: "error" as const,
-        error:
-          "Unable to create or bind a Discord thread for this subagent session. Session mode is unavailable for this target.",
-      };
-    }
-    return {
-      status: "ok" as const,
-      threadBindingReady: true,
-      deliveryOrigin: {
-        channel: "discord",
-        accountId: account.accountId,
-        to: `channel:${binding.threadId}`,
-        threadId: binding.threadId,
-      },
-    };
-  } catch (err) {
-    return {
-      status: "error" as const,
-      error: `Discord thread bind failed: ${summarizeError(err)}`,
-    };
-  }
-}
-
-export function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
-  unbindThreadBindingsBySessionKey({
+export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+  const targetKind = normalizeOptionalLowercaseString(event.targetKind);
+  await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
-    targetKind: normalizeThreadBindingTargetKind(event.targetKind),
+    targetKind: targetKind === "subagent" || targetKind === "acp" ? targetKind : undefined,
     reason: event.reason,
     sendFarewell: event.sendFarewell,
   });
 }
 
+function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTargetEvent): boolean {
+  return Boolean(
+    event.expectsCompletionMessage &&
+    normalizeOptionalLowercaseString(event.requesterOrigin?.channel) === "discord",
+  );
+}
+
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
-  if (!event.expectsCompletionMessage) {
+  return shouldResolveDiscordDeliveryTarget(event)
+    ? resolveDiscordDeliveryTarget(event)
+    : undefined;
+}
+
+export async function handleDiscordSubagentDeliveryTargetAsync(
+  event: DiscordSubagentDeliveryTargetEvent,
+): Promise<DiscordSubagentDeliveryTargetResult> {
+  if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }
-  const requesterChannel = normalizeOptionalLowercaseString(event.requesterOrigin?.channel);
-  if (requesterChannel !== "discord") {
-    return undefined;
-  }
+  await ensureBindingsLoadedAsync();
+  return resolveDiscordDeliveryTarget(event);
+}
+
+function resolveDiscordDeliveryTarget(
+  event: DiscordSubagentDeliveryTargetEvent,
+): DiscordSubagentDeliveryTargetResult {
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
-  const requesterThreadId =
-    event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
-      ? (normalizeOptionalStringifiedId(event.requesterOrigin.threadId) ?? "")
-      : "";
+  const requesterThreadId = normalizeOptionalStringifiedId(event.requesterOrigin?.threadId);
   const bindings = listThreadBindingsBySessionKey({
     targetSessionKey: event.childSessionKey,
     ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
     targetKind: "subagent",
   });
-  if (bindings.length === 0) {
-    return undefined;
-  }
-
-  let binding: (typeof bindings)[number] | undefined;
-  if (requesterThreadId) {
-    binding = bindings.find((entry) => {
-      if (entry.threadId !== requesterThreadId) {
-        return false;
-      }
-      if (requesterAccountId && entry.accountId !== requesterAccountId) {
-        return false;
-      }
-      return true;
-    });
-  }
-  if (!binding && bindings.length === 1) {
-    binding = bindings[0];
-  }
+  const binding =
+    (requesterThreadId
+      ? bindings.find(
+          (entry) =>
+            entry.threadId === requesterThreadId &&
+            (!requesterAccountId || entry.accountId === requesterAccountId),
+        )
+      : undefined) ?? (bindings.length === 1 ? bindings[0] : undefined);
   if (!binding) {
     return undefined;
   }

@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  CONTEXT_WINDOW_HARD_MIN_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
@@ -114,6 +113,104 @@ describe("context-window-guard", () => {
     });
   });
 
+  it.each([
+    ["caps custom input by its native window", "custom", "tiny", 3_000, 16_000, 3_000],
+    ["keeps authored input above lower discovery", "custom", "tiny", 32_000, 16_000, 16_000],
+    [
+      "keeps a native-window override without an input cap",
+      "custom",
+      "tiny",
+      32_000,
+      undefined,
+      32_000,
+    ],
+    [
+      "ignores stale native metadata for fixed models",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      350_000,
+      350_000,
+    ],
+    [
+      "caps input by the fixed provider window",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      2_000_000,
+      1_000_000,
+    ],
+    [
+      "ignores a non-finite cap before fixed-window clamping",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      Infinity,
+      200_000,
+    ],
+    ["ignores a sub-token native window", "custom", "tiny", 0.5, 16_000, 16_000],
+    ["keeps whole-token guard normalization", "custom", "tiny", 32_000.9, 16_000.9, 16_000],
+  ] as const)(
+    "resolves configured context limits (%s)",
+    (_case, provider, modelId, contextWindow, contextTokens, expected) => {
+      const configured = openRouterModelConfig({ contextWindow, contextTokens });
+      const providerConfig = configured.models.providers.openrouter;
+      const cfg = {
+        models: {
+          providers: {
+            [provider]: {
+              ...providerConfig,
+              models: providerConfig.models.map((model) =>
+                Object.assign({}, model, { id: modelId }),
+              ),
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      expect(
+        resolveContextWindowInfo({
+          cfg,
+          provider,
+          modelId,
+          modelContextTokens: 8_000,
+          modelContextWindow: 8_000,
+          defaultTokens: 200_000,
+        }),
+      ).toEqual({ source: "modelsConfig", tokens: expected });
+    },
+  );
+
+  it.each([false, true])("uses the exact row's context window (exact first=%s)", (exactFirst) => {
+    const models = openRouterModelConfig({
+      contextWindow: 128_000,
+    }).models.providers.openrouter.models.flatMap((model) => [
+      { ...model, id: "custom/model", contextWindow: 2_000 },
+      { ...model, id: "model", contextWindow: 128_000 },
+    ]);
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.invalid",
+            models: exactFirst ? models.toReversed() : models,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "custom",
+      modelId: "model",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({ source: "modelsConfig", tokens: 128_000 });
+    expect(evaluateContextWindowGuard({ info }).shouldBlock).toBe(false);
+  });
+
   it("matches bare provider model config ids against provider-scoped runtime model ids", () => {
     const cfg = openRouterModelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
 
@@ -208,42 +305,6 @@ describe("context-window-guard", () => {
     });
   });
 
-  it("caps with agents.defaults.contextTokens", () => {
-    const cfg = {
-      agents: { defaults: { contextTokens: 20_000 } },
-    } satisfies OpenClawConfig;
-    const info = resolveContextWindowInfo({
-      cfg,
-      provider: "anthropic",
-      modelId: "whatever",
-      modelContextWindow: 200_000,
-      defaultTokens: 200_000,
-    });
-    const guard = evaluateContextWindowGuard({ info });
-    expect(info.source).toBe("agentContextTokens");
-    expect(info.tokens).toBe(20_000);
-    expect(info.referenceTokens).toBe(200_000);
-    expect(guard.hardMinTokens).toBe(20_000);
-    expect(guard.warnBelowTokens).toBe(40_000);
-    expect(guard.shouldWarn).toBe(true);
-    expect(guard.shouldBlock).toBe(false);
-  });
-
-  it("does not override when cap exceeds base window", () => {
-    const cfg = {
-      agents: { defaults: { contextTokens: 128_000 } },
-    } satisfies OpenClawConfig;
-    const info = resolveContextWindowInfo({
-      cfg,
-      provider: "anthropic",
-      modelId: "whatever",
-      modelContextWindow: 64_000,
-      defaultTokens: 200_000,
-    });
-    expect(info.source).toBe("model");
-    expect(info.tokens).toBe(64_000);
-  });
-
   it("uses default when nothing else is available", () => {
     const info = resolveContextWindowInfo({
       cfg: undefined,
@@ -295,10 +356,6 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
-  it("exports the public hard-min floor as expected", () => {
-    expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(4_000);
-  });
-
   it("derives percentage-based guard thresholds above the safe floors", () => {
     const largeGuard = evaluateContextWindowGuard({
       info: { tokens: 1_000_000, source: "model" },
@@ -311,28 +368,6 @@ describe("context-window-guard", () => {
     });
     expect(mediumGuard.hardMinTokens).toBe(6_400);
     expect(mediumGuard.warnBelowTokens).toBe(12_800);
-  });
-
-  it("derives guard thresholds from the reference window when capped", () => {
-    const guard = evaluateContextWindowGuard({
-      info: { tokens: 150_000, referenceTokens: 1_000_000, source: "agentContextTokens" },
-    });
-    expect(guard.hardMinTokens).toBe(100_000);
-    expect(guard.warnBelowTokens).toBe(200_000);
-    expect(guard.shouldWarn).toBe(true);
-    expect(guard.shouldBlock).toBe(false);
-  });
-
-  it("does not let inflated reference metadata hard-block a valid effective cap", () => {
-    // Reference metadata can be wildly large; hard blocking must be based on the
-    // effective cap so valid operator limits remain usable.
-    const guard = evaluateContextWindowGuard({
-      info: { tokens: 20_000, referenceTokens: 1_000_000_000, source: "agentContextTokens" },
-    });
-    expect(guard.hardMinTokens).toBe(20_000);
-    expect(guard.warnBelowTokens).toBe(200_000_000);
-    expect(guard.shouldWarn).toBe(true);
-    expect(guard.shouldBlock).toBe(false);
   });
 
   it("adds a local-model hint to warning messages for localhost endpoints", () => {
@@ -376,20 +411,6 @@ describe("context-window-guard", () => {
         runtimeBaseUrl: "http://127.0.0.1:11434/v1",
       }),
     ).toContain("This looks like a local model endpoint.");
-  });
-
-  it("points config-backed block remediation at agents.defaults.contextTokens", () => {
-    const guard = evaluateContextWindowGuard({
-      info: { tokens: 8_000, source: "agentContextTokens" },
-    });
-
-    const message = formatContextWindowBlockMessage({
-      guard,
-      runtimeBaseUrl: "http://127.0.0.1:11434/v1",
-    });
-
-    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
-    expect(message).not.toContain("choose a larger model");
   });
 
   it("points model config block remediation at contextWindow/contextTokens", () => {

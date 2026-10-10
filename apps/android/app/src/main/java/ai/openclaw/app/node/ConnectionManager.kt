@@ -1,9 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
-import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -15,23 +13,48 @@ import android.os.Build
 /**
  * Builds gateway connect metadata from current Android permissions, settings, and device identity.
  */
-class ConnectionManager(
+class ConnectionManager internal constructor(
   private val prefs: SecurePrefs,
-  private val cameraEnabled: () -> Boolean,
-  private val locationMode: () -> LocationMode,
-  private val voiceWakeMode: () -> VoiceWakeMode,
-  private val motionActivityAvailable: () -> Boolean,
-  private val motionPedometerAvailable: () -> Boolean,
-  private val sendSmsAvailable: () -> Boolean,
-  private val readSmsAvailable: () -> Boolean,
-  private val smsSearchPossible: () -> Boolean,
-  private val callLogAvailable: () -> Boolean,
-  private val photosAvailable: () -> Boolean,
-  private val hasRecordAudioPermission: () -> Boolean,
-  private val installedAppsSharingEnabled: () -> Boolean,
-  private val manualTls: () -> Boolean,
+  private val advertisedCapabilities: () -> List<String>,
+  private val advertisedCommands: () -> List<String>,
+  private val inlineWidgetsAvailable: () -> Boolean,
+  private val permissionSnapshot: () -> AndroidPermissionSnapshot,
+  private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
+    internal val legacyOperatorScopes: List<String> =
+      listOf(
+        "operator.approvals",
+        "operator.read",
+        "operator.write",
+      )
+
+    internal val nativeClientOperatorScopes: List<String> =
+      listOf(
+        // admin matches iOS fresh token/password connects and is required for
+        // sessions.patch (model switching); stored tokens keep their granted scopes.
+        "operator.admin",
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      )
+
+    internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
+    internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
+    internal const val USAGE_REFRESHING_CLIENT_CAPABILITY = "usage-refreshing"
+    internal const val MODEL_SELECTION_POLICY_CLIENT_CAPABILITY = "model-selection-policy"
+
+    internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
+      val normalized =
+        storedScopes
+          .map { it.trim() }
+          .filter { it.isNotEmpty() }
+          .distinct()
+      return normalized.ifEmpty { legacyOperatorScopes }
+    }
+
     /**
      * Decide whether a discovered/manual endpoint must use pinned TLS or can stay local cleartext.
      */
@@ -53,78 +76,19 @@ class ConnectionManager(
       if (isManual) {
         // Manual remote hosts default to TLS; only local manual hosts may honor the cleartext toggle.
         if (!manualTlsEnabled && cleartextAllowedHost) return null
-        if (!stored.isNullOrBlank()) {
-          return GatewayTlsParams(
-            required = true,
-            expectedFingerprint = stored,
-            allowTOFU = false,
-            stableId = stableId,
-          )
-        }
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
+      } else {
+        val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
+        if (stored == null && !hinted && cleartextAllowedHost) return null
       }
 
-      // Prefer stored pins. Never let discovery-provided TXT override a stored fingerprint.
-      if (!stored.isNullOrBlank()) {
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = stored,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
-      if (hinted) {
-        // TXT is unauthenticated. Do not treat the advertised fingerprint as authoritative.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      if (!cleartextAllowedHost) {
-        // Non-loopback discovered hosts require TLS even without TXT hints.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      return null
+      // TXT may require TLS, but only a stored pin is authoritative.
+      return GatewayTlsParams(
+        expectedFingerprint = stored,
+      )
     }
   }
 
-  private fun runtimeFlags(): NodeRuntimeFlags =
-    NodeRuntimeFlags(
-      cameraEnabled = cameraEnabled(),
-      locationEnabled = locationMode() != LocationMode.Off,
-      sendSmsAvailable = sendSmsAvailable(),
-      readSmsAvailable = readSmsAvailable(),
-      smsSearchPossible = smsSearchPossible(),
-      callLogAvailable = callLogAvailable(),
-      photosAvailable = photosAvailable(),
-      voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
-      motionActivityAvailable = motionActivityAvailable(),
-      motionPedometerAvailable = motionPedometerAvailable(),
-      installedAppsSharingEnabled = installedAppsSharingEnabled(),
-      debugBuild = BuildConfig.DEBUG,
-    )
-
-  /** Builds the gateway-advertised node.invoke command list from current permission and feature state. */
-  fun buildInvokeCommands(): List<String> = InvokeCommandRegistry.advertisedCommands(runtimeFlags())
-
-  /** Builds the gateway-advertised capability list from current permission and feature state. */
-  fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
+  fun buildPermissions(): Map<String, Boolean> = permissionSnapshot().gatewayPermissions()
 
   /**
    * Debug Android builds advertise a dev version so gateway logs do not look like release clients.
@@ -138,16 +102,6 @@ class ConnectionManager(
     }
   }
 
-  /** Human-readable Android device model used in gateway client metadata. */
-  fun resolveModelIdentifier(): String? =
-    listOfNotNull(Build.MANUFACTURER, Build.MODEL)
-      .joinToString(" ")
-      .trim()
-      .ifEmpty { null }
-
-  /**
-   * User-Agent used for gateway telemetry and troubleshooting.
-   */
   fun buildUserAgent(): String {
     val version = resolvedVersionName()
     val release =
@@ -159,53 +113,50 @@ class ConnectionManager(
   }
 
   /** Client identity block shared by node and operator gateway sessions. */
-  fun buildClientInfo(
-    clientId: String,
-    clientMode: String,
-  ): GatewayClientInfo =
+  fun buildClientInfo(clientMode: String): GatewayClientInfo =
     GatewayClientInfo(
-      id = clientId,
+      id = "openclaw-android",
       displayName = prefs.displayName.value,
       version = resolvedVersionName(),
       platform = "android",
       mode = clientMode,
       instanceId = prefs.instanceId.value,
       deviceFamily = "Android",
-      modelIdentifier = resolveModelIdentifier(),
+      modelIdentifier = listOfNotNull(Build.MANUFACTURER, Build.MODEL).joinToString(" ").trim().ifEmpty { null },
     )
 
-  /** Connect options for the Android node session that exposes phone capabilities. */
   fun buildNodeConnectOptions(): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "node",
       scopes = emptyList(),
-      caps = buildCapabilities(),
-      commands = buildInvokeCommands(),
-      permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
+      caps = advertisedCapabilities(),
+      commands = advertisedCommands(),
+      permissions = buildPermissions(),
+      client = buildClientInfo(clientMode = "node"),
       userAgent = buildUserAgent(),
     )
 
-  /** Connect options for the Android operator session that drives approvals and UI actions. */
-  fun buildOperatorConnectOptions(): GatewayConnectOptions =
+  fun buildOperatorConnectOptions(
+    scopes: List<String> = nativeClientOperatorScopes,
+  ): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "operator",
-      scopes =
-        listOf(
-          "operator.approvals",
-          "operator.read",
-          "operator.write",
-        ),
-      caps = emptyList(),
+      scopes = scopes,
+      caps =
+        buildList {
+          add(AGENT_KIND_CLIENT_CAPABILITY)
+          if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
+          add(USAGE_REFRESHING_CLIENT_CAPABILITY)
+          add(MODEL_SELECTION_POLICY_CLIENT_CAPABILITY)
+        },
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
+      client = buildClientInfo(clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
 
-  /** Resolves persisted TLS pin policy for a concrete gateway endpoint. */
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
-    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls())
+    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls(endpoint))
   }
 }

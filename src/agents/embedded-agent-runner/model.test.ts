@@ -1,258 +1,256 @@
 // Broad coverage for embedded runner model resolution behavior.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { discoverAuthStorageFacts, discoverModels } from "../agent-model-discovery.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../auth-profiles.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.owner.js";
+import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
 import {
-  PLUGIN_MODEL_CATALOG_FILE,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-} from "../plugin-model-catalog.js";
-import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
+  createEmptyPreparedModelRuntimeFixture,
+  guardModelFixtureAuth,
+} from "./model.fixture.test-support.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+import { createPreparedConfiguredRuntimeModelLookup } from "./model.static-id.js";
+
+let state: OpenClawTestState;
+let auth: ReturnType<typeof guardModelFixtureAuth>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "model-resolution" });
+  auth = guardModelFixtureAuth(state.root);
+});
+afterEach(async () => {
+  try {
+    auth.verify();
+  } finally {
+    auth.spy.mockRestore();
+    clearRuntimeAuthProfileStoreSnapshots();
+    await state.cleanup();
+  }
+});
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
-const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
-const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
+  vi.fn<
+    (params: {
+      provider: string;
+      cfg?: { models?: { providers?: Record<string, { baseUrl?: string }> } };
+    }) => {
+      ambiguous?: true;
+      provider: string;
+      transport?: { api?: "azure-openai-responses"; baseUrl?: string };
+    }
+  >(),
+);
+const preparedSnapshotState = vi.hoisted(() => ({
+  enabled: true,
+  getInputs: [] as Array<Record<string, unknown>>,
+  snapshots: new Map<string, unknown>(),
+  configuredRuntimeModels: [] as PreparedModelRuntimeSnapshot["configuredRuntimeModels"],
+  inlineProviderModels: [] as PreparedModelRuntimeSnapshot["inlineProviderModels"],
+}));
 
-vi.mock("../model-suppression.js", () => {
-  // Mirrors the canonical manifest-driven suppression in
-  // extensions/qwen/openclaw.plugin.json and src/plugins/manifest-model-suppression.ts.
-  function isQwenCodingPlanBaseUrl(value: string | undefined): boolean {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-      return false;
-    }
-    try {
-      const hostname = new URL(trimmed).hostname.toLowerCase().replace(/\.+$/, "");
-      return (
-        hostname === "coding.dashscope.aliyuncs.com" ||
-        hostname === "coding-intl.dashscope.aliyuncs.com"
-      );
-    } catch {
-      return false;
-    }
-  }
+vi.mock("../../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
+}));
 
-  function resolveConfiguredQwenBaseUrl(config: unknown): string | undefined {
-    const providers = (config as { models?: { providers?: Record<string, { baseUrl?: string }> } })
-      ?.models?.providers;
-    if (!providers) {
-      return undefined;
-    }
-    for (const [provider, entry] of Object.entries(providers)) {
-      const normalizedProvider = provider.trim().toLowerCase();
-      if (normalizedProvider !== "qwen" && normalizedProvider !== "modelstudio") {
-        continue;
-      }
-      const baseUrl = entry?.baseUrl?.trim();
-      if (baseUrl) {
-        return baseUrl;
-      }
-    }
-    return undefined;
-  }
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
+}));
 
-  function isUnsupportedXaiMultiAgentModel(provider?: string, id?: string): boolean {
-    return provider === "xai" && id?.trim().toLowerCase() === "grok-4.20-multi-agent-0309";
-  }
+vi.mock("../model-suppression.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../model-suppression.js")>();
 
   return {
-    shouldSuppressBuiltInModel: ({
-      provider,
-      id,
-      baseUrl,
-      config,
-    }: {
-      provider?: string;
-      id?: string;
-      baseUrl?: string;
-      config?: unknown;
-    }) => {
-      if (
-        (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
-        id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
-      ) {
-        return true;
-      }
-      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
-        return true;
-      }
-      return (
-        (provider === "qwen" || provider === "modelstudio") &&
-        id?.trim().toLowerCase() === "qwen3.6-plus" &&
-        isQwenCodingPlanBaseUrl(baseUrl ?? resolveConfiguredQwenBaseUrl(config))
-      );
-    },
+    ...actual,
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
       if (
-        (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
+        (provider === "openai" || provider === "azure-openai-responses") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
         return true;
       }
-      return isUnsupportedXaiMultiAgentModel(provider, id);
+      return false;
     },
-    buildSuppressedBuiltInModelError: ({
-      provider,
-      id,
-      config,
-    }: {
-      provider?: string;
-      id?: string;
-      config?: unknown;
-    }) => {
+    buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
       if (
-        (provider === "qwen" || provider === "modelstudio") &&
-        id?.trim().toLowerCase() === "qwen3.6-plus" &&
-        isQwenCodingPlanBaseUrl(resolveConfiguredQwenBaseUrl(config))
-      ) {
-        return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
-      }
-      if (
-        (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
+        (provider === "openai" || provider === "azure-openai-responses") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
         return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
       }
-      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
-        return "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.";
-      }
       return undefined;
     },
   };
 });
 
-vi.mock("../agent-model-discovery.js", () => ({
-  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
-  discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
-}));
-
-vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
-  resolveRuntimeSyntheticAuthProviderRefs: resolveRuntimeSyntheticAuthProviderRefsMock,
-  resolveRuntimeExternalAuthProviderRefs: resolveRuntimeExternalAuthProviderRefsMock,
-}));
-
-vi.mock("./model.static-catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./model.static-catalog.js")>();
+vi.mock("../prepared-model-runtime.js", async () => {
+  const discovery = await import("../agent-model-discovery.js");
+  const discoveryContext = await import("../model-discovery-context.js");
+  const { PreparedModelRuntimeOwnerNotPublishedError } =
+    await import("../prepared-model-runtime.errors.js");
+  const createSnapshot = (input: {
+    agentId?: string;
+    agentDir: string;
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+  }) => {
+    const workspaceDir = discoveryContext.resolveModelWorkspaceDir(
+      input.config,
+      input.workspaceDir,
+      input.agentId,
+    );
+    const key = `${input.agentId ?? ""}\u0000${input.agentDir}\u0000${workspaceDir ?? ""}`;
+    const current = preparedSnapshotState.snapshots.get(key);
+    if (current) {
+      return current;
+    }
+    const { authStorage } = discovery.discoverAuthStorageFacts(input.agentDir);
+    const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
+      ...(input.config ? { config: input.config } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
+    if (!("fork" in modelRegistry)) {
+      Object.assign(modelRegistry, { fork: () => modelRegistry });
+    }
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const snapshot = {
+      catalogOwner: undefined,
+      agentDir: input.agentDir,
+      ...(workspaceDir ? { workspaceDir } : {}),
+      activeProjectKeys: [],
+      config: input.config ?? {},
+      authModes: {},
+      metadataSnapshot,
+      allowGatewaySubagentBinding: false,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
+      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+        preparedSnapshotState.configuredRuntimeModels,
+        metadataSnapshot,
+      ),
+      inlineProviderModels: preparedSnapshotState.inlineProviderModels,
+      createStores: () => ({ authStorage, modelRegistry }),
+    };
+    preparedSnapshotState.snapshots.set(key, snapshot);
+    return snapshot;
+  };
   return {
-    ...actual,
-    resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
-    resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+    PreparedModelRuntimeOwnerNotPublishedError,
+    getPreparedModelRuntimeSnapshot: (input: Parameters<typeof createSnapshot>[0]) => {
+      preparedSnapshotState.getInputs.push(input);
+      return preparedSnapshotState.enabled ? createSnapshot(input) : undefined;
+    },
+    loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
+      createSnapshot(input),
   };
 });
 
-import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
+vi.mock("../agent-model-discovery.js", () => ({
+  discoverAuthStorageFacts: vi.fn(() => ({ authStorage: { mocked: true } })),
+  discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+}));
 
-const mockGetOpenRouterModelCapabilities = vi.fn<
-  (modelId: string) => OpenRouterModelCapabilities | undefined
->(() => undefined);
-const mockLoadOpenRouterModelCapabilities = vi.fn<(modelId: string) => Promise<void>>(
-  async () => {},
-);
-vi.mock("./openrouter-model-capabilities.js", () => ({
-  getOpenRouterModelCapabilities: (modelId: string) => mockGetOpenRouterModelCapabilities(modelId),
-  loadOpenRouterModelCapabilities: (modelId: string) =>
-    mockLoadOpenRouterModelCapabilities(modelId),
+vi.mock("./model.static-catalog.js", () => ({
+  canonicalizeManifestModelCatalogProviderAlias: (params: { provider: string }) =>
+    resolveManifestModelCatalogProviderAliasMetadataMock(params).provider,
+  resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
+  resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+  resolveManifestModelCatalogProviderAliasMetadata:
+    resolveManifestModelCatalogProviderAliasMetadataMock,
+  resolveManifestModelCatalogProviderTransport: (params: { provider: string }) =>
+    resolveManifestModelCatalogProviderAliasMetadataMock(params).transport,
 }));
 
 import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
-import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
+import type { Model } from "../../llm/types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
-import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import { buildInlineProviderModels } from "./model.inline-provider.js";
-import { resolveModel, resolveModelAsync, resolveModelWithRegistry } from "./model.js";
+import { expectUnknownModelErrorResult } from "./model.forward-compat.test-support.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
+import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
+  makeOpenClawConfigFixture,
   makeModel,
   mockDiscoveredModel,
-  OPENAI_CODEX_TEMPLATE_MODEL,
   mockOpenAICodexTemplateModel,
+  OPENAI_CODEX_TEMPLATE_MODEL,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
 beforeEach(() => {
+  preparedSnapshotState.enabled = true;
+  preparedSnapshotState.getInputs.length = 0;
+  preparedSnapshotState.snapshots.clear();
+  preparedSnapshotState.configuredRuntimeModels = [];
+  preparedSnapshotState.inlineProviderModels = [];
   clearRuntimeAuthProfileStoreSnapshots();
-  resetModelDiscoveryCacheForTest();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
-  vi.mocked(discoverAuthStorage).mockClear();
-  resolveRuntimeSyntheticAuthProviderRefsMock.mockReset();
-  resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue([]);
-  resolveRuntimeExternalAuthProviderRefsMock.mockReset();
-  resolveRuntimeExternalAuthProviderRefsMock.mockReturnValue([]);
-  mockGetOpenRouterModelCapabilities.mockReset();
-  mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
-  mockLoadOpenRouterModelCapabilities.mockReset();
-  mockLoadOpenRouterModelCapabilities.mockResolvedValue();
+  vi.mocked(discoverAuthStorageFacts).mockClear();
   resolveBundledStaticCatalogModelMock.mockReset();
   resolveBundledProviderStaticCatalogModelMock.mockReset();
+  resolveManifestModelCatalogProviderAliasMetadataMock.mockReset();
+  resolveManifestModelCatalogProviderAliasMetadataMock.mockImplementation(({ provider, cfg }) => {
+    const normalized = provider.trim().toLowerCase();
+    const canonicalProvider =
+      normalized === "moonshotai" || normalized === "moonshot-ai" ? "moonshot" : provider;
+    const transport =
+      provider === "azure-openai-responses" && cfg?.models?.providers?.[provider]?.baseUrl
+        ? { api: "azure-openai-responses" as const }
+        : undefined;
+    return {
+      provider: canonicalProvider,
+      ...(transport ? { transport } : {}),
+    };
+  });
 });
 
 function createRuntimeHooks() {
-  // Runtime hooks emulate provider plugin model discovery, transport
-  // normalization, and OpenRouter capability loading without plugin imports.
+  // Keep model-resolution tests independent of provider execution runtimes.
   return createProviderRuntimeTestMock({
-    handledDynamicProviders: [
-      "openrouter",
-      "github-copilot",
-      "openai",
-      "openai",
-      "anthropic",
-      "zai",
-    ],
-    getOpenRouterModelCapabilities: (modelId: string) =>
-      mockGetOpenRouterModelCapabilities(modelId),
-    loadOpenRouterModelCapabilities: async (modelId: string) => {
-      await mockLoadOpenRouterModelCapabilities(modelId);
-    },
+    handledDynamicProviders: ["openrouter", "github-copilot", "openai", "anthropic", "zai"],
   });
 }
 
-function resolveModelForTest(
+async function resolveModelForTest(
   provider: string,
   modelId: string,
-  agentDir?: string,
   cfg?: OpenClawConfig,
+  options?: Parameters<typeof resolveModelAsync>[4],
 ) {
   // Most tests use fixed auth storage to keep assertions focused on model
   // resolution rather than auth discovery.
-  const resolvedAgentDir = agentDir ?? "/tmp/agent";
-  return resolveModel(provider, modelId, agentDir, cfg, {
+  const agentDir = state.agentDir();
+  return await resolveModelAsync(provider, modelId, agentDir, cfg, {
     authStorage: { mocked: true } as never,
-    modelRegistry: discoverModels({ mocked: true } as never, resolvedAgentDir),
-    runtimeHooks: createRuntimeHooks(),
-  });
-}
-
-function resolveModelAsyncForTest(
-  provider: string,
-  modelId: string,
-  agentDir?: string,
-  cfg?: OpenClawConfig,
-  options?: { retryTransientProviderRuntimeMiss?: boolean },
-) {
-  const resolvedAgentDir = agentDir ?? "/tmp/agent";
-  return resolveModelAsync(provider, modelId, agentDir, cfg, {
-    authStorage: { mocked: true } as never,
-    modelRegistry: discoverModels({ mocked: true } as never, resolvedAgentDir),
+    modelRegistry: discoverModels({ mocked: true } as never, agentDir),
     ...options,
-    runtimeHooks: createRuntimeHooks(),
+    runtimeHooks: options?.runtimeHooks ?? createRuntimeHooks(),
   });
 }
 
-type ResolveModelForTestResult =
-  | ReturnType<typeof resolveModelForTest>
-  | Awaited<ReturnType<typeof resolveModelAsyncForTest>>;
+type ResolveModelForTestResult = Awaited<ReturnType<typeof resolveModelForTest>>;
 
 function expectResolvedModel(result: ResolveModelForTestResult) {
   if (result.error !== undefined) {
@@ -283,90 +281,178 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<stri
   return call[0] as Record<string, unknown>;
 }
 
+function mockMinimalModelDiscovery(
+  provider: string,
+  modelId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  mockDiscoveredModel(discoverModels, {
+    provider,
+    modelId,
+    templateModel: { ...makeModel(modelId), provider, ...overrides },
+  });
+}
+
+function makeProviderConfig(
+  provider: string,
+  overrides: Record<string, unknown> = {},
+): OpenClawConfig {
+  return makeOpenClawConfigFixture({
+    models: {
+      providers: {
+        [provider]: { models: [], ...overrides },
+      },
+    },
+  });
+}
+
+function makeOpenAIStaticModel(): Model {
+  return {
+    ...makeModel("gpt-5.5"),
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  };
+}
+
+function createAzureRuntimeHooks() {
+  return {
+    ...createRuntimeHooks(),
+    runProviderDynamicModel: vi.fn<ProviderRuntimeHooks["runProviderDynamicModel"]>(
+      ({ provider, context }) =>
+        provider === "azure-openai-responses" && context.modelId === "gpt-5.5"
+          ? makeOpenAIStaticModel()
+          : undefined,
+    ),
+  };
+}
+
+const deepSeekCatalogCompat = {
+  supportsUsageInStreaming: true,
+  supportsReasoningEffort: true,
+  maxTokensField: "max_tokens" as const,
+};
+
+function makeDeepSeekCatalogModel(overrides: Partial<Model> = {}): Model {
+  const { compat, ...modelOverrides } = overrides;
+  return {
+    provider: "deepseek",
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    api: "openai-completions",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+    ...modelOverrides,
+    ...(compat ? { compat: { ...deepSeekCatalogCompat, ...compat } } : {}),
+  };
+}
+
+function makeConfiguredDeepSeekModel(
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  const { compat, ...modelOverrides } = overrides;
+  return {
+    ...makeModel("deepseek-v4-pro"),
+    name: "Custom DeepSeek V4 Pro",
+    contextWindow: 32_768,
+    maxTokens: 4_096,
+    ...modelOverrides,
+    ...(compat ? { compat: { ...compat } } : {}),
+  };
+}
+
+function makeDeepSeekConfig(
+  modelOverrides: Partial<ModelDefinitionConfig> = {},
+  providerOverrides: Partial<ModelProviderConfig> = {},
+): OpenClawConfig {
+  return makeProviderConfig("deepseek", {
+    models: [makeConfiguredDeepSeekModel(modelOverrides)],
+    ...providerOverrides,
+  });
+}
+
 describe("resolveModel", () => {
-  it("reuses agent discovery stores while the agent model files are unchanged", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        provider: "openai",
-        ...makeModel("gpt-5.5"),
-      },
-    });
-
-    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
-    expect(discoverModels).toHaveBeenCalledTimes(1);
+  registerModelAuthReadTests({
+    getAgentDir: () => state.agentDir(),
+    getAuthSpy: () => auth.spy,
+    createRuntimeHooks,
+    makeProviderConfig,
+    expectResolvedModel,
+    expectRecordFields,
   });
 
-  it("invalidates agent discovery stores when generated plugin catalogs change", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-plugin-"));
-    const agentDir = path.join(rootDir, "agent");
-    fs.mkdirSync(agentDir, { recursive: true });
-    mockDiscoveredModel(discoverModels, {
-      provider: "zai",
-      modelId: "glm-5.1",
-      templateModel: {
-        provider: "zai",
-        ...makeModel("glm-5.1"),
+  it("replaces models-add metadata with a preferred prepared model", async () => {
+    const prepareProviderDynamicModel = vi.fn(async () => ({
+      ...makeModel("prepared-model"),
+      provider: "acme",
+      name: "Prepared Model",
+      api: "openai-completions" as const,
+      baseUrl: "https://discovered.example/v1",
+      input: ["text" as const],
+      contextWindow: 65_536,
+      maxTokens: 8_192,
+    }));
+    const runProviderDynamicModel = vi.fn(() => undefined);
+    const cfg = makeProviderConfig("acme", {
+      api: "openai-responses",
+      baseUrl: "https://configured.example/v1",
+      models: [
+        {
+          ...makeModel("prepared-model"),
+          name: "Configured Model",
+          contextWindow: 32_768,
+          maxTokens: 4_096,
+          metadataSource: "models-add",
+        },
+      ],
+    });
+    const result = await resolveModelAsync("acme", "prepared-model", state.agentDir(), cfg, {
+      runtimeHooks: {
+        ...createRuntimeHooks(),
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+        shouldPreferProviderRuntimeResolvedModel: () => true,
       },
+      skipAgentDiscovery: true,
     });
 
-    const first = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
-      runtimeHooks: createRuntimeHooks(),
+    expectRecordFields(expectResolvedModel(result), {
+      name: "Prepared Model",
+      api: "openai-responses",
+      baseUrl: "https://configured.example/v1",
+      contextWindow: 65_536,
     });
-    const catalogPath = path.join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {},
-      }),
-    );
-    const second = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+    expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
+    expect(runProviderDynamicModel).not.toHaveBeenCalled();
   });
 
-  it("invalidates agent discovery stores when inherited default auth changes", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-"));
-    const agentDir = path.join(rootDir, "agent");
-    const defaultAgentDir = path.join(rootDir, "default-agent");
+  it("reuses inherited auth from one lifecycle generation", async () => {
+    const agentDir = state.agentDir("worker");
+    const defaultAgentDir = state.agentDir();
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(defaultAgentDir, { recursive: true });
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
-        list: [
-          { id: "main", default: true, agentDir: defaultAgentDir },
-          { id: "worker", agentDir },
-        ],
-      },
-    } as unknown as OpenClawConfig;
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        provider: "openai",
-        ...makeModel("gpt-5.5"),
+        defaults: { authInheritance: { agentId: "main" } },
+        entries: {
+          main: { agentDir: defaultAgentDir },
+          worker: { agentDir },
+        },
       },
     });
+    mockMinimalModelDiscovery("openai", "gpt-5.5");
 
-    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
-      runtimeHooks: createRuntimeHooks(),
-    });
+    const options = { agentId: "worker", runtimeHooks: createRuntimeHooks() };
+    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
     saveAuthProfileStore(
       {
         version: 1,
@@ -375,90 +461,60 @@ describe("resolveModel", () => {
       defaultAgentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
-      runtimeHooks: createRuntimeHooks(),
-    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the resolved default agent workspace for cached model discovery", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-workspace-"));
-    const agentDir = path.join(rootDir, "agent");
-    const workspaceDir = path.join(rootDir, "workspace");
+  it("uses the resolved default agent directory and workspace for prepared discovery", async () => {
+    const agentDir = state.agentDir("workspace-agent");
     fs.mkdirSync(agentDir, { recursive: true });
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        provider: "openai",
-        ...makeModel("gpt-5.5"),
+    const cfg = makeOpenClawConfigFixture({
+      agents: {
+        entries: { "workspace-agent": { agentDir, workspace: state.workspaceDir } },
       },
     });
-    const cfg = {
-      agents: {
-        list: [{ id: "workspace-agent", default: true, agentDir, workspace: workspaceDir }],
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModel("openai", "gpt-5.5", agentDir, cfg, {
+    mockMinimalModelDiscovery("openai", "gpt-5.5");
+    const result = await resolveModelAsync("openai", "gpt-5.5", undefined, cfg, {
       runtimeHooks: createRuntimeHooks(),
     });
-
     expectResolvedModel(result);
     expect(discoverModels).toHaveBeenCalledWith(
       expect.anything(),
       agentDir,
-      expect.objectContaining({ workspaceDir }),
+      expect.objectContaining({ workspaceDir: state.workspaceDir }),
     );
   });
 
-  it("invalidates agent discovery stores when implicit main auth changes without config", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-state-"));
-    const agentDir = path.join(rootDir, "agents", "worker", "agent");
-    const mainAgentDir = path.join(rootDir, "agents", "main", "agent");
-    fs.mkdirSync(agentDir, { recursive: true });
-    fs.mkdirSync(mainAgentDir, { recursive: true });
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: rootDir }, async () => {
-        mockDiscoveredModel(discoverModels, {
-          provider: "openai",
-          modelId: "gpt-5.5",
-          templateModel: {
-            provider: "openai",
-            ...makeModel("gpt-5.5"),
-          },
-        });
+  it("passes config into model discovery when auth storage is prebuilt", async () => {
+    const agentDir = state.agentDir("configured");
+    const workspaceDir = state.path("workspace-configured");
+    const authStorage = { mocked: true } as never;
+    const cfg = makeProviderConfig("openai", {
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+      models: [{ id: "gpt-5.5", baseUrl: "https://api.openai.com/v1" }],
+    });
+    mockMinimalModelDiscovery("openai", "gpt-5.5");
 
-        const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
-          runtimeHooks: createRuntimeHooks(),
-        });
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
-          },
-          mainAgentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-        );
-        const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
-          runtimeHooks: createRuntimeHooks(),
-        });
+    const options = {
+      authStorage,
+      workspaceDir,
+      runtimeHooks: createRuntimeHooks(),
+    };
+    const result = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
 
-        expectResolvedModel(first);
-        expectResolvedModel(second);
-        expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-        expect(discoverModels).toHaveBeenCalledTimes(2);
-      });
-    } finally {
-      fs.rmSync(rootDir, { recursive: true, force: true });
-    }
+    expectResolvedModel(result);
+    expect(discoverModels).toHaveBeenCalledWith(authStorage, agentDir, {
+      config: cfg,
+      workspaceDir,
+    });
   });
 
-  it("does not cache agent discovery stores while runtime auth snapshots are active", async () => {
+  it("keeps runtime auth snapshots inside the lifecycle generation", async () => {
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         store: {
@@ -469,120 +525,30 @@ describe("resolveModel", () => {
         } as never,
       },
     ]);
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        provider: "openai",
-        ...makeModel("gpt-5.5"),
-      },
-    });
+    mockMinimalModelDiscovery("openai", "gpt-5.5");
 
-    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+    const first = await resolveModelAsync("openai", "gpt-5.5", state.agentDir(), undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
-    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+    const second = await resolveModelAsync("openai", "gpt-5.5", state.agentDir(), undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache agent discovery stores while plugin auth overlays are active", async () => {
-    resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue(["runtime-provider"]);
-    resolveRuntimeExternalAuthProviderRefsMock.mockReturnValue(["external-provider"]);
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        provider: "openai",
-        ...makeModel("gpt-5.5"),
-      },
-    });
-
-    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
-  });
-
-  it("skips OpenClaw auth and model discovery during dynamic model resolution", async () => {
-    const result = await resolveModelAsync(
-      "openrouter",
-      "openrouter/auto",
-      "/tmp/agent",
-      undefined,
-      {
-        runtimeHooks: createRuntimeHooks(),
-        skipAgentDiscovery: true,
-      },
-    );
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "openrouter",
-      id: "openrouter/auto",
-    });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
-    expect(discoverModels).not.toHaveBeenCalled();
-  });
-
-  it("resolves opt-in bundled static catalog rows while skipping agent discovery", async () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "mistral",
-      id: "mistral-medium-3-5",
-      name: "Mistral Medium 3.5",
-      api: "openai-completions",
-      baseUrl: "https://api.mistral.ai/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 262144,
-      maxTokens: 8192,
-    });
-
-    const result = await resolveModelAsync(
-      "mistral",
-      "mistral-medium-3-5",
-      "/tmp/agent",
-      undefined,
-      {
-        allowBundledStaticCatalogFallback: true,
-        runtimeHooks: createRuntimeHooks(),
-        skipAgentDiscovery: true,
-      },
-    );
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "mistral",
-      id: "mistral-medium-3-5",
-      api: "openai-completions",
-      baseUrl: "https://api.mistral.ai/v1",
-      reasoning: true,
-      contextWindow: 262144,
-      maxTokens: 8192,
-    });
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
-      provider: "mistral",
-      modelId: "mistral-medium-3-5",
-      cfg: undefined,
-      workspaceDir: undefined,
-    });
-    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
-    expect(discoverModels).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const config = {};
+    const preparedModelRuntime = createEmptyPreparedModelRuntimeFixture({
+      agentDir: state.agentDir(),
+      config,
+      metadataSnapshot,
+      createStores: createEmptyAgentDiscoveryStores,
+    });
     resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
       provider: "google",
       id: "gemini-3.1-pro-preview",
@@ -599,10 +565,11 @@ describe("resolveModel", () => {
     const result = await resolveModelAsync(
       "google",
       "gemini-3.1-pro-preview",
-      "/tmp/agent",
+      state.agentDir(),
       undefined,
       {
         allowBundledStaticCatalogFallback: true,
+        preparedModelRuntime,
         runtimeHooks: createRuntimeHooks(),
         skipAgentDiscovery: true,
       },
@@ -622,286 +589,65 @@ describe("resolveModel", () => {
       modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
+      metadataSnapshot,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
+      metadataSnapshot,
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
-  it("falls back to bundled static catalog rows without agent discovery", async () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "openai",
-      id: "gpt-5.3-codex",
-      name: "GPT-5.3 Codex",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-      contextWindow: 400_000,
-      maxTokens: 128_000,
+  it("keeps the prepared auth mode through async provider model resolution", async () => {
+    const authProfileId = "openai:prepared";
+    auth.spy.mockImplementation(() => {
+      throw new Error("Prepared auth mode must not read auth storage");
     });
     const baseRuntimeHooks = createRuntimeHooks();
     const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
-    const runProviderDynamicModel = vi.fn(() => undefined);
-
-    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
-      allowBundledStaticCatalogFallback: true,
-      preferBundledStaticCatalogTransport: true,
-      runtimeHooks: {
-        ...baseRuntimeHooks,
-        prepareProviderDynamicModel,
-        runProviderDynamicModel,
-      },
-      skipAgentDiscovery: true,
-    });
-
-    expectRecordFields(expectResolvedModel(result), {
+    const runProviderDynamicModel = vi.fn((params: { context: { authProfileMode?: string } }) => ({
       provider: "openai",
-      id: "gpt-5.3-codex",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-    });
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledTimes(1);
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.3-codex",
-        cfg,
-      }),
-    );
-    expect(prepareProviderDynamicModel).toHaveBeenCalled();
-    expect(runProviderDynamicModel).toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
-    expect(discoverModels).not.toHaveBeenCalled();
-  });
-
-  it("resolves a deferred Fireworks manifest id from the bundled static catalog", async () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "fireworks",
-      id: "accounts/fireworks/models/kimi-k2p6",
-      name: "Kimi K2.6",
-      api: "openai-completions",
-      baseUrl: "https://api.fireworks.ai/inference/v1",
-      reasoning: false,
-      input: ["text", "image"],
-      cost: { input: 0.95, output: 4, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 262144,
-      maxTokens: 262144,
-    });
-
-    const result = await resolveModelAsync(
-      "fireworks",
-      "accounts/fireworks/models/kimi-k2p6",
-      "/tmp/agent",
-      undefined,
-      {
-        allowBundledStaticCatalogFallback: true,
-        runtimeHooks: createRuntimeHooks(),
-        skipAgentDiscovery: true,
-      },
-    );
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "fireworks",
-      id: "accounts/fireworks/models/kimi-k2p6",
-      api: "openai-completions",
-      baseUrl: "https://api.fireworks.ai/inference/v1",
-      contextWindow: 262144,
-      maxTokens: 262144,
-    });
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "fireworks",
-        modelId: "accounts/fireworks/models/kimi-k2p6",
-      }),
-    );
-  });
-
-  it("prefers user openclaw.json config over the Fireworks manifest for the same id", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValue({
-      ...makeModel("accounts/fireworks/models/kimi-k2p6"),
-      provider: "fireworks",
-      name: "Kimi K2.6",
-      api: "openai-completions",
-      baseUrl: "https://api.fireworks.ai/inference/v1",
-      input: ["text", "image"],
-      contextWindow: 262_144,
-      maxTokens: 262_144,
-    });
-    const cfg = {
-      models: {
-        providers: {
-          fireworks: {
-            api: "openai-completions",
-            baseUrl: "https://api.fireworks.ai/inference/v1",
-            models: [
-              {
-                ...makeModel("accounts/fireworks/models/kimi-k2p6"),
-                name: "Kimi K2.6 (user override)",
-                contextWindow: 300_000,
-                maxTokens: 300_000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest(
-      "fireworks",
-      "accounts/fireworks/models/kimi-k2p6",
-      "/tmp/agent",
-      cfg,
-    );
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "fireworks",
-      id: "accounts/fireworks/models/kimi-k2p6",
-      contextWindow: 300_000,
-      maxTokens: 300_000,
-    });
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "fireworks",
-        modelId: "accounts/fireworks/models/kimi-k2p6",
-        cfg,
-      }),
-    );
-  });
-
-  it("keeps provider dynamic metadata for runtime-preferred models", async () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "openai",
-      id: "gpt-5.5-pro",
-      name: "GPT-5.5 Pro",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 123_456,
-      maxTokens: 64_000,
-    });
-    const baseRuntimeHooks = createRuntimeHooks();
-    const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
-    const runProviderDynamicModel = vi.fn(() => ({
-      provider: "openai",
-      id: "gpt-5.5-pro",
-      name: "GPT-5.5 Pro",
-      api: "openai-chatgpt-responses" as const,
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
+      ...makeModel("gpt-5.5"),
+      api:
+        params.context.authProfileMode === "api_key"
+          ? ("openai-responses" as const)
+          : ("openai-chatgpt-responses" as const),
+      baseUrl:
+        params.context.authProfileMode === "api_key"
+          ? "https://api.openai.com/v1"
+          : "https://chatgpt.com/backend-api",
     }));
-    const shouldPreferProviderRuntimeResolvedModel = vi.fn(() => true);
 
-    const result = await resolveModelAsync("openai", "gpt-5.5-pro", "/tmp/agent", undefined, {
-      allowBundledStaticCatalogFallback: true,
+    const result = await resolveModelAsync("openai", "gpt-5.5", state.agentDir(), undefined, {
+      authProfileId,
+      authProfileMode: "api_key",
       runtimeHooks: {
         ...baseRuntimeHooks,
         prepareProviderDynamicModel,
         runProviderDynamicModel,
-        shouldPreferProviderRuntimeResolvedModel,
       },
       skipAgentDiscovery: true,
     });
 
     expectRecordFields(expectResolvedModel(result), {
       provider: "openai",
-      id: "gpt-5.5-pro",
-      api: "openai-chatgpt-responses",
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    });
-    expect(prepareProviderDynamicModel).toHaveBeenCalled();
-    expect(runProviderDynamicModel).toHaveBeenCalled();
-    expect(shouldPreferProviderRuntimeResolvedModel).toHaveBeenCalled();
-  });
-
-  it("looks up each static fallback candidate with its own normalized model id", async () => {
-    resolveBundledStaticCatalogModelMock.mockImplementation(({ provider, modelId }) => ({
-      provider,
-      id: modelId,
-      name: modelId,
+      id: "gpt-5.5",
       api: "openai-responses",
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    }));
-
-    const anthropicResult = await resolveModelAsync(
-      "anthropic",
-      "anthropic/claude-haiku-4-5",
-      "/tmp/agent",
-      undefined,
-      {
-        allowBundledStaticCatalogFallback: true,
-        runtimeHooks: createRuntimeHooks(),
-        skipAgentDiscovery: true,
-        skipProviderRuntimeHooks: true,
-      },
-    );
-    const openaiResult = await resolveModelAsync("openai", "gpt-4o", "/tmp/agent", undefined, {
-      allowBundledStaticCatalogFallback: true,
-      runtimeHooks: createRuntimeHooks(),
-      skipAgentDiscovery: true,
-      skipProviderRuntimeHooks: true,
+      baseUrl: "https://api.openai.com/v1",
     });
-
-    expectRecordFields(expectResolvedModel(anthropicResult), {
-      provider: "anthropic",
-      id: "claude-haiku-4-5",
+    expectRecordFields(mockCallArg(prepareProviderDynamicModel).context, {
+      authProfileId,
+      authProfileMode: "api_key",
     });
-    expectRecordFields(expectResolvedModel(openaiResult), {
-      provider: "openai",
-      id: "gpt-4o",
+    expectRecordFields(mockCallArg(runProviderDynamicModel).context, {
+      authProfileId,
+      authProfileMode: "api_key",
     });
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
-      provider: "anthropic",
-      modelId: "claude-haiku-4-5",
-      cfg: undefined,
-      workspaceDir: undefined,
-    });
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
-      provider: "openai",
-      modelId: "gpt-4o",
-      cfg: undefined,
-      workspaceDir: undefined,
-    });
-    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "claude-haiku-4-5",
-      }),
-    );
-    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelId: "anthropic/claude-haiku-4-5",
-      }),
-    );
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
-    expect(discoverModels).not.toHaveBeenCalled();
   });
 
   it("applies provider overrides to bundled static catalog rows while skipping agent discovery", async () => {
@@ -918,26 +664,20 @@ describe("resolveModel", () => {
         image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
       },
     });
-    const cfg = {
-      models: {
-        providers: {
-          mistral: {
-            baseUrl: "https://mistral-proxy.example.com/v1",
-            api: "openai-completions",
-            headers: { "X-Proxy": "static-fast-path" },
-            request: { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } },
-            localService: {
-              command: "/opt/mistral/start",
-              args: ["--port", "18080"],
-              healthUrl: "http://127.0.0.1:18080/health",
-            },
-            models: [],
-          },
-        },
+    const cfg = makeProviderConfig("mistral", {
+      baseUrl: "https://mistral-proxy.example.com/v1",
+      api: "openai-completions",
+      headers: { "X-Proxy": "static-fast-path" },
+      request: { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } },
+      localService: {
+        command: "/opt/mistral/start",
+        args: ["--port", "18080"],
+        healthUrl: "http://127.0.0.1:18080/health",
       },
-    } as unknown as OpenClawConfig;
+      models: [],
+    });
 
-    const result = await resolveModelAsync("mistral", "mistral-medium-3-5", "/tmp/agent", cfg, {
+    const result = await resolveModelAsync("mistral", "mistral-medium-3-5", state.agentDir(), cfg, {
       allowBundledStaticCatalogFallback: true,
       runtimeHooks: createRuntimeHooks(),
       skipAgentDiscovery: true,
@@ -954,338 +694,33 @@ describe("resolveModel", () => {
       args: ["--port", "18080"],
       healthUrl: "http://127.0.0.1:18080/health",
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
-  it("merges bundled static media input into resolved models when opted in", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5-pro",
-      templateModel: {
-        id: "gpt-5.5-pro",
-        name: "GPT-5.5 Pro",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 272_000,
-        maxTokens: 128_000,
-      },
-    });
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "openai",
-      id: "gpt-5.5-pro",
-      name: "GPT-5.5 Pro",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 272_000,
-      maxTokens: 128_000,
-      mediaInput: {
-        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
-      },
+  it("leaves maxTokens undefined when no configured or catalog value is available (regression: #98295)", async () => {
+    // Strict providers reject synthesized caps above their own completion-token ceiling.
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
+    const cfg = makeProviderConfig("xiaomi", {
+      baseUrl: "https://api.xiaomimimo.com/v1",
+      models: [{ id: "mimo-v2.5-pro", name: "mimo-v2.5-pro" }],
     });
 
-    const result = await resolveModelAsync("openai", "gpt-5.5-pro", "/tmp/agent", undefined, {
-      allowBundledStaticCatalogFallback: true,
-      authStorage: { mocked: true } as never,
-      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
-      runtimeHooks: createRuntimeHooks(),
-      skipAgentDiscovery: true,
-    });
+    const result = await resolveModelForTest("xiaomi", "mimo-v2.5-pro", cfg);
+    const model = expectResolvedModel(result);
 
-    expect((expectResolvedModel(result) as { mediaInput?: unknown }).mediaInput).toEqual({
-      image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
-    });
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
-      provider: "openai",
-      modelId: "gpt-5.5-pro",
-      cfg: undefined,
-      workspaceDir: undefined,
-    });
+    expect(model.id).toBe("mimo-v2.5-pro");
+    expect(model.baseUrl).toBe("https://api.xiaomimimo.com/v1");
+    expect(model.maxTokens).toBeUndefined();
   });
 
-  it("merges configured media input with discovered model metadata", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "custom",
-      modelId: "vision-model",
-      templateModel: {
-        id: "vision-model",
-        name: "Vision Model",
-        provider: "custom",
-        api: "openai-responses",
-        baseUrl: "https://models.example.com/v1",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
-        mediaInput: {
-          image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
-        },
-      },
-    });
-
-    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://models.example.com/v1",
-            models: [
-              {
-                id: "vision-model",
-                name: "Vision Model",
-                mediaInput: { image: { maxBytes: 1 } },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-
-    expect((expectResolvedModel(result) as { mediaInput?: unknown }).mediaInput).toEqual({
-      image: { maxBytes: 1, maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
-    });
-  });
-
-  it("does not use bundled static catalog rows unless the caller opts in", async () => {
-    const result = await resolveModelAsync(
-      "mistral",
-      "mistral-medium-3-5",
-      "/tmp/agent",
-      undefined,
-      {
-        runtimeHooks: createRuntimeHooks(),
-        skipAgentDiscovery: true,
-      },
+  it("inherits bundled static transport for configured provider fallback models", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(
+      makeDeepSeekCatalogModel({ compat: deepSeekCatalogCompat }),
     );
+    const cfg = makeDeepSeekConfig({ compat: { supportsReasoningEffort: false } }, { baseUrl: "" });
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: mistral/mistral-medium-3-5");
-    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
-    expect(discoverModels).not.toHaveBeenCalled();
-  });
-
-  it("defaults model input to text when discovery omits input", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "custom",
-      modelId: "missing-input",
-      templateModel: {
-        id: "missing-input",
-        name: "missing-input",
-        api: "openai-completions",
-        provider: "custom",
-        baseUrl: "http://localhost:9999",
-        reasoning: false,
-        // NOTE: deliberately omit input to simulate buggy/custom catalogs.
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
-      },
-    });
-
-    const result = resolveModelForTest("custom", "missing-input", "/tmp/agent", {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9999",
-            api: "openai-completions",
-            // Intentionally keep this minimal — the discovered model provides the rest.
-            models: [{ id: "missing-input", name: "missing-input" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-
-    expect(expectResolvedModel(result).input).toEqual(["text"]);
-  });
-
-  it("defaults missing model cost before handing models to OpenClaw", () => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "",
-            api: "openai-responses",
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                api: "openai-responses",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 400_000,
-                maxTokens: 128_000,
-              },
-            ],
-          },
-        },
-      },
-    };
-
-    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "openai",
-      id: "gpt-5.5",
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    });
-  });
-
-  it("includes provider baseUrl in fallback model", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.baseUrl).toBe("http://localhost:9000");
-    expect(model.provider).toBe("custom");
-    expect(model.id).toBe("missing-model");
-    expect(model.api).toBe("openai-completions");
-  });
-
-  it("defaults baseUrl-only Google fallback models to native Gemini transport", () => {
-    const cfg = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("google", "gemini-2.5-flash-lite", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.provider).toBe("google");
-    expect(model.id).toBe("gemini-2.5-flash-lite");
-    expect(model.api).toBe("google-generative-ai");
-    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
-  });
-
-  it("defaults baseUrl-only Google Vertex fallback models to native Vertex transport", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "google-vertex": {
-            baseUrl: "https://aiplatform.googleapis.com",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("google-vertex", "gemini-2.5-flash", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.provider).toBe("google-vertex");
-    expect(model.id).toBe("gemini-2.5-flash");
-    expect(model.api).toBe("google-vertex");
-    expect(model.baseUrl).toBe("https://aiplatform.googleapis.com");
-  });
-
-  it("uses bundled static metadata for configured provider fallback token limits", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "xiaomi-token-plan",
-      id: "mimo-v2.5-pro",
-      name: "Xiaomi MiMo V2.5 Pro",
-      api: "openai-completions",
-      baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      maxTokens: 32_000,
-    });
-    const cfg = {
-      models: {
-        providers: {
-          "xiaomi-token-plan": {
-            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.name).toBe("Xiaomi MiMo V2.5 Pro");
-    expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
-    expect(model.contextWindow).toBe(1_048_576);
-    expect(model.maxTokens).toBe(32_000);
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
-      provider: "xiaomi-token-plan",
-      modelId: "mimo-v2.5-pro",
-      cfg,
-      workspaceDir: expect.any(String),
-      includeRuntimeDiscovery: true,
-    });
-  });
-
-  it("inherits bundled static transport for configured provider fallback models", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        maxTokensField: "max_tokens",
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          deepseek: {
-            baseUrl: "",
-            models: [
-              {
-                id: "deepseek-v4-pro",
-                name: "Custom DeepSeek V4 Pro",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_768,
-                maxTokens: 4_096,
-                compat: {
-                  supportsReasoningEffort: false,
-                },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("deepseek", "deepseek-v4-pro", cfg);
     const model = expectResolvedModel(result);
 
     expectRecordFields(model, {
@@ -1299,7 +734,7 @@ describe("resolveModel", () => {
     expect(model.compat).toEqual(
       expect.objectContaining({
         supportsUsageInStreaming: true,
-        supportsReasoningEffort: false,
+        supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       }),
     );
@@ -1313,56 +748,17 @@ describe("resolveModel", () => {
   });
 
   it("fills missing configured provider runtime transport from bundled static metadata", async () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        maxTokensField: "max_tokens",
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          deepseek: {
-            models: [
-              {
-                id: "deepseek-v4-pro",
-                name: "Custom DeepSeek V4 Pro",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_768,
-                maxTokens: 4_096,
-                thinkingLevelMap: { off: null },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(
+      makeDeepSeekCatalogModel({ compat: deepSeekCatalogCompat }),
+    );
+    const cfg = makeDeepSeekConfig({ thinkingLevelMap: { off: null } });
     const baseRuntimeHooks = createRuntimeHooks();
     const runProviderDynamicModel = vi.fn(() => ({
       provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "Custom DeepSeek V4 Pro",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32_768,
-      maxTokens: 4_096,
+      ...makeConfiguredDeepSeekModel(),
     }));
 
-    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", state.agentDir(), cfg, {
       runtimeHooks: {
         ...baseRuntimeHooks,
         runProviderDynamicModel,
@@ -1388,218 +784,16 @@ describe("resolveModel", () => {
     expect(runProviderDynamicModel).toHaveBeenCalled();
   });
 
-  it("resolves configured DeepSeek probe models through bundled static transport without agent discovery", async () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        maxTokensField: "max_tokens",
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          deepseek: {
-            models: [
-              {
-                id: "deepseek-v4-pro",
-                name: "Custom DeepSeek V4 Pro",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_768,
-                maxTokens: 4_096,
-                thinkingLevelMap: { off: null },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
-      runtimeHooks: createRuntimeHooks(),
-      skipAgentDiscovery: true,
-    });
-    const model = expectResolvedModel(result);
-
-    expectRecordFields(model, {
-      name: "Custom DeepSeek V4 Pro",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-      reasoning: false,
-      contextWindow: 32_768,
-      maxTokens: 4_096,
-    });
-    expect(model.compat).toEqual(
-      expect.objectContaining({
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        maxTokensField: "max_tokens",
-      }),
+  it("keeps bundled static baseUrl when provider api is configured without a baseUrl", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(
+      makeDeepSeekCatalogModel({ api: "openai-responses" }),
     );
-    expect((model as { thinkingLevelMap?: unknown }).thinkingLevelMap).toEqual({ off: null });
-  });
+    const cfg = makeDeepSeekConfig(
+      { thinkingLevelMap: { off: null } },
+      { api: "openai-completions" },
+    );
 
-  it("keeps provider runtime transport ahead of bundled static fallback metadata", async () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-    });
-    const cfg = {
-      models: {
-        providers: {
-          deepseek: {
-            models: [
-              {
-                id: "deepseek-v4-pro",
-                name: "Custom DeepSeek V4 Pro",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_768,
-                maxTokens: 4_096,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const baseRuntimeHooks = createRuntimeHooks();
-    const runProviderDynamicModel = vi.fn(() => ({
-      provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "Runtime DeepSeek V4 Pro",
-      api: "openai-responses" as const,
-      baseUrl: "https://runtime.deepseek.example/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32_768,
-      maxTokens: 4_096,
-    }));
-
-    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
-      runtimeHooks: {
-        ...baseRuntimeHooks,
-        runProviderDynamicModel,
-      },
-      skipAgentDiscovery: true,
-    });
-    const model = expectResolvedModel(result);
-
-    expectRecordFields(model, {
-      api: "openai-responses",
-      baseUrl: "https://runtime.deepseek.example/v1",
-      reasoning: false,
-      contextWindow: 32_768,
-      maxTokens: 4_096,
-    });
-    expect(runProviderDynamicModel).toHaveBeenCalled();
-  });
-
-  it("keeps configured transport overrides ahead of bundled static fallback metadata", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-    });
-    const cfg = {
-      models: {
-        providers: {
-          deepseek: {
-            baseUrl: "https://deepseek-proxy.example.com/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "deepseek-v4-pro",
-                name: "Custom DeepSeek V4 Pro",
-                baseUrl: "https://deepseek-model-proxy.example.com/v1",
-                api: "openai-responses",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_768,
-                maxTokens: 4_096,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expectRecordFields(model, {
-      api: "openai-responses",
-      baseUrl: "https://deepseek-model-proxy.example.com/v1",
-      contextWindow: 32_768,
-      maxTokens: 4_096,
-    });
-  });
-
-  it("keeps bundled static baseUrl when provider api is configured without a baseUrl", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "deepseek",
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      api: "openai-responses",
-      baseUrl: "https://api.deepseek.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-    });
-    const cfg = {
-      models: {
-        providers: {
-          deepseek: {
-            api: "openai-completions",
-            models: [
-              {
-                id: "deepseek-v4-pro",
-                name: "Custom DeepSeek V4 Pro",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_768,
-                maxTokens: 4_096,
-                thinkingLevelMap: { off: null },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("deepseek", "deepseek-v4-pro", cfg);
     const model = expectResolvedModel(result);
 
     expectRecordFields(model, {
@@ -1611,479 +805,44 @@ describe("resolveModel", () => {
     expect(model.thinkingLevelMap).toEqual({ off: null });
   });
 
-  it("keeps provider token overrides ahead of bundled static fallback metadata", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      provider: "xiaomi-token-plan",
-      id: "mimo-v2.5-pro",
-      name: "Xiaomi MiMo V2.5 Pro",
+  it("merges exact rows before provider defaults while preserving empty headers", async () => {
+    const cfg = makeProviderConfig("custom", {
+      api: "anthropic-messages",
+      baseUrl: "https://provider.example.test/v1",
+      models: [
+        { ...makeModel("Model"), headers: {} },
+        {
+          ...makeModel(" Model "),
+          api: "openai-completions",
+          baseUrl: "https://duplicate.example.test/v1",
+          headers: { "x-route": "duplicate" },
+        },
+      ],
+    });
+    const { model: resolved } = await resolveModelAsync("custom", "Model", state.agentDir(), cfg, {
+      ...createEmptyAgentDiscoveryStores(),
+      runtimeHooks: createRuntimeHooks(),
+    });
+    expect.soft(resolved).toMatchObject({
+      id: "Model",
       api: "openai-completions",
-      baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      contextTokens: 500_000,
-      maxTokens: 32_000,
+      baseUrl: "https://duplicate.example.test/v1",
     });
-    const cfg = {
-      models: {
-        providers: {
-          "xiaomi-token-plan": {
-            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
-            api: "openai-completions",
-            contextWindow: 100_000,
-            contextTokens: 90_000,
-            maxTokens: 512,
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expectRecordFields(model, {
-      contextWindow: 100_000,
-      contextTokens: 90_000,
-      maxTokens: 512,
-    });
+    expect.soft(resolved?.headers).toEqual(undefined);
   });
 
-  it("does not synthesize unknown models from timeout-only provider overlays", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            timeoutSeconds: 300,
-            baseUrl: "",
-            models: [],
-          },
-        },
+  it("drops SecretRef marker provider headers in fallback models", async () => {
+    const cfg = makeProviderConfig("custom", {
+      baseUrl: "http://localhost:9000",
+      headers: {
+        Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+        "X-Managed": "secretref-managed",
+        "X-Custom-Auth": "token-123",
       },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai", "typo-model", "/tmp/agent", cfg);
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: openai/typo-model");
-  });
-
-  it("does not create fallback models from provider overlays alone", () => {
-    const cfg = {
-      models: {
-        providers: {
-          typoProvider: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    } satisfies OpenClawConfigInput;
-
-    const result = resolveModelForTest(
-      "typoProvider",
-      "typoed-model",
-      "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
-    );
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: typoProvider/typoed-model");
-  });
-
-  it("does not create fallback models from built-in provider api overlays", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-responses",
-          },
-        },
-      },
-    } satisfies OpenClawConfigInput;
-
-    const result = resolveModelForTest(
-      "openai",
-      "typoed-model",
-      "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
-    );
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: openai/typoed-model");
-  });
-
-  it("resolves per-model api and baseUrl override in fallback model", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "my-router": {
-            baseUrl: "http://localhost:8080",
-            api: "ollama",
-            models: [
-              {
-                id: "my-router/claude",
-                name: "Claude via Router",
-                api: "anthropic-messages",
-                input: ["text", "image"],
-                contextWindow: 200_000,
-              },
-              {
-                id: "my-router/gpt",
-                name: "GPT via Router",
-                api: "openai-completions",
-                baseUrl: "http://localhost:8080/v1",
-                input: ["text"],
-                contextWindow: 400_000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const claude = resolveModelForTest("my-router", "my-router/claude", "/tmp/agent", cfg);
-    const claudeModel = expectResolvedModel(claude);
-    expect(claudeModel.api).toBe("anthropic-messages");
-    expect(claudeModel.baseUrl).toBe("http://localhost:8080");
-    expect(claudeModel.maxTokens).toBeUndefined();
-
-    const gpt = resolveModelForTest("my-router", "my-router/gpt", "/tmp/agent", cfg);
-    const gptModel = expectResolvedModel(gpt);
-    expect(gptModel.api).toBe("openai-completions");
-    expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
-  });
-
-  it("preserves normalized inline provider transport when static metadata is merged", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "my-gemini": {
-            api: "google-generative-ai",
-            baseUrl: "https://generativelanguage.googleapis.com",
-            models: [
-              {
-                id: "gemini-pro",
-                name: "Gemini Pro",
-                input: ["text"],
-                contextWindow: 32_768,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("my-gemini", "gemini-pro", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.api).toBe("google-generative-ai");
-    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
-  });
-
-  it("defaults baseUrl-only local custom fallback models to chat completions", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "local-agent-proxy/gpt-5.2" },
-        },
-      },
-      models: {
-        providers: {
-          "local-agent-proxy": {
-            baseUrl: "http://127.0.0.1:3000/v1",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("local-agent-proxy", "gpt-5.2", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expectRecordFields(model, {
-      provider: "local-agent-proxy",
-      id: "gpt-5.2",
-      api: "openai-completions",
-      baseUrl: "http://127.0.0.1:3000/v1",
-    });
-    expect(getModelProviderRequestTransport(model)).toBeUndefined();
-  });
-
-  it("attaches provider localService metadata to configured fallback models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          ds4: {
-            baseUrl: "http://127.0.0.1:18000/v1",
-            api: "openai-completions",
-            localService: {
-              command: "/opt/ds4/ds4-server",
-              args: ["--port", "18000"],
-              healthUrl: "http://127.0.0.1:18000/v1/models",
-              readyTimeoutMs: 180_000,
-              idleStopMs: 0,
-            },
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("ds4", "deepseek-v4-flash", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(getModelProviderLocalService(model)).toEqual({
-      command: "/opt/ds4/ds4-server",
-      args: ["--port", "18000"],
-      healthUrl: "http://127.0.0.1:18000/v1/models",
-      readyTimeoutMs: 180_000,
-      idleStopMs: 0,
-    });
-  });
-
-  it("resolves explicitly configured qwen3.6-plus before Coding Plan built-in suppression", () => {
-    const cfg = {
-      models: {
-        providers: {
-          qwen: {
-            baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "qwen3.6-plus",
-                name: "qwen3.6-plus",
-                input: ["text", "image"],
-                reasoning: false,
-                contextWindow: 1_000_000,
-                maxTokens: 65_536,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("qwen", "qwen3.6-plus", "/tmp/agent", cfg);
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "qwen",
-      id: "qwen3.6-plus",
-      api: "openai-completions",
-      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    });
-  });
-
-  it("keeps unconfigured qwen3.6-plus suppressed on Coding Plan endpoints", () => {
-    const cfg = {
-      models: {
-        providers: {
-          qwen: {
-            baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("qwen", "qwen3.6-plus", "/tmp/agent", cfg);
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
-    );
-  });
-
-  it("#74451: resolves explicitly configured openai/gpt-5.4-mini inline entries", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                id: "gpt-5.4-mini",
-                name: "GPT-5.4 mini",
-                api: "openai-chatgpt-responses",
-                contextWindow: 400_000,
-                maxTokens: 128_000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai", "gpt-5.4-mini", "/tmp/agent", cfg);
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      api: "openai-chatgpt-responses",
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("normalizes Google fallback baseUrls for custom providers", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "google-paid": {
-            baseUrl: "https://generativelanguage.googleapis.com",
-            api: "google-generative-ai",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("google-paid", "missing-model", "/tmp/agent", cfg);
-
-    expect(expectResolvedModel(result).baseUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta",
-    );
-  });
-
-  it("normalizes configured Google override baseUrls when provider api is omitted", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "google",
-      modelId: "gemini-2.5-pro",
-      templateModel: {
-        ...makeModel("gemini-2.5-pro"),
-        provider: "google",
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      },
+      models: [makeModel("listed-model")],
     });
 
-    const cfg = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com",
-            models: [{ id: "gemini-2.5-pro", name: "gemini-2.5-pro" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("google", "gemini-2.5-pro", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.api).toBe("google-generative-ai");
-    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
-  });
-
-  it("normalizes custom api.openai.com providers to responses transport", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "custom-openai": {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                provider: "custom-openai",
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom-openai", "gpt-5.4", "/tmp/agent", cfg);
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "custom-openai",
-      id: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-  });
-
-  it("normalizes custom api.x.ai providers to responses transport", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "custom-xai": {
-            baseUrl: "https://api.x.ai/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("grok-4.1-fast"),
-                provider: "custom-xai",
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom-xai", "grok-4.1-fast", "/tmp/agent", cfg);
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "custom-xai",
-      id: "grok-4.1-fast",
-      api: "openai-responses",
-      baseUrl: "https://api.x.ai/v1",
-    });
-  });
-
-  it("adds GitHub Copilot IDE headers to dynamic resolved model headers for native compaction", () => {
-    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent");
-    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
-
-    expect(model.headers).toEqual({
-      ...buildCopilotIdeHeaders(),
-      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-      "Openai-Organization": "github-copilot",
-    });
-  });
-
-  it("adds GitHub Copilot IDE headers to configured resolved model headers for native compaction", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "github-copilot": {
-            baseUrl: "https://api.githubcopilot.com",
-            api: "openai-responses",
-            models: [makeModel("gpt-5.5")],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
-
-    expect(model.headers).toEqual({
-      ...buildCopilotIdeHeaders(),
-      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-      "Openai-Organization": "github-copilot",
-    });
-  });
-
-  it("includes provider headers in provider fallback model", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            headers: { "X-Custom-Auth": "token-123" },
-            models: [makeModel("listed-model")],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    // Requesting a non-listed model forces the providerCfg fallback branch.
-    const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("custom", "missing-model", cfg);
     const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
     expect(model.headers).toEqual({
@@ -2091,95 +850,11 @@ describe("resolveModel", () => {
     });
   });
 
-  it("drops SecretRef marker provider headers in fallback models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            headers: {
-              Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-              "X-Managed": "secretref-managed",
-              "X-Custom-Auth": "token-123",
-            },
-            models: [makeModel("listed-model")],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
-
-    expect(model.headers).toEqual({
-      "X-Custom-Auth": "token-123",
+  it("merges configured model params with agent defaults for resolved models", async () => {
+    mockMinimalModelDiscovery("ollama", "qwen3:32b", {
+      params: { num_ctx: 4096, keep_alive: "1m" },
     });
-  });
-
-  it("drops marker headers from discovered models.json entries", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "custom",
-      modelId: "listed-model",
-      templateModel: {
-        ...makeModel("listed-model"),
-        provider: "custom",
-        headers: {
-          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-          "X-Managed": "secretref-managed",
-          "X-Static": "tenant-a",
-        },
-      },
-    });
-
-    const result = resolveModelForTest("custom", "listed-model", "/tmp/agent");
-    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
-
-    expect(model.headers).toEqual({
-      "X-Static": "tenant-a",
-    });
-  });
-
-  it("prefers matching configured model metadata for fallback token limits", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            models: [
-              {
-                ...makeModel("model-a"),
-                contextWindow: 4096,
-                maxTokens: 1024,
-              },
-              {
-                ...makeModel("model-b"),
-                contextWindow: 262144,
-                maxTokens: 32768,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.contextWindow).toBe(262144);
-    expect(model.maxTokens).toBe(32768);
-  });
-
-  it("merges configured model params with agent defaults for resolved models", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "ollama",
-      modelId: "qwen3:32b",
-      templateModel: {
-        ...makeModel("qwen3:32b"),
-        provider: "ollama",
-        params: { num_ctx: 4096, keep_alive: "1m" },
-      },
-    });
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           models: {
@@ -2202,9 +877,9 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
-    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("ollama", "qwen3:32b", cfg);
 
     expect(result.error).toBeUndefined();
     expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
@@ -2214,108 +889,8 @@ describe("resolveModel", () => {
     });
   });
 
-  it("applies configured provider params to resolved models", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "ollama",
-      modelId: "qwen3:32b",
-      templateModel: {
-        ...makeModel("qwen3:32b"),
-        provider: "ollama",
-        params: { keep_alive: "1m" },
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            params: { num_ctx: 65536, top_p: 0.9 },
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
-      keep_alive: "1m",
-      num_ctx: 65536,
-      top_p: 0.9,
-    });
-  });
-
-  it("resolves provider request timeout metadata for configured provider models", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "ollama",
-      modelId: "qwen3:32b",
-      templateModel: {
-        ...makeModel("qwen3:32b"),
-        provider: "ollama",
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            timeoutSeconds: 300,
-            models: [makeModel("qwen3:32b")],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
-      300_000,
-    );
-  });
-
-  it("resolves provider request timeout metadata from built-in provider overlays", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        ...makeModel("gpt-5.5"),
-        provider: "openai",
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    } satisfies OpenClawConfigInput;
-
-    const result = resolveModelForTest(
-      "openai",
-      "gpt-5.5",
-      "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
-    );
-
-    expect(result.error).toBeUndefined();
-    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
-      600_000,
-    );
-  });
-
-  it("caps oversized provider request timeout metadata at the timer-safe ceiling", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        ...makeModel("gpt-5.5"),
-        provider: "openai",
-      },
-    });
+  it("caps oversized provider request timeout metadata at the timer-safe ceiling", async () => {
+    mockMinimalModelDiscovery("openai", "gpt-5.5");
     const cfg = {
       models: {
         providers: {
@@ -2326,12 +901,7 @@ describe("resolveModel", () => {
       },
     } satisfies OpenClawConfigInput;
 
-    const result = resolveModelForTest(
-      "openai",
-      "gpt-5.5",
-      "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
-    );
+    const result = await resolveModelForTest("openai", "gpt-5.5", makeOpenClawConfigFixture(cfg));
 
     expect(result.error).toBeUndefined();
     expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
@@ -2339,87 +909,9 @@ describe("resolveModel", () => {
     );
   });
 
-  it("uses provider-level context defaults over discovered metadata", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "ollama",
-      modelId: "qwen3.5:9b",
-      templateModel: {
-        ...makeModel("qwen3.5:9b"),
-        provider: "ollama",
-        contextWindow: 216_000,
-        contextTokens: 216_000,
-        maxTokens: 65_536,
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            contextWindow: 8_192,
-            contextTokens: 8_000,
-            models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model?.contextWindow).toBe(8_192);
-    expect((result.model as { contextTokens?: number } | undefined)?.contextTokens).toBe(8_000);
-    expect(result.model?.maxTokens).toBe(8_192);
-  });
-
-  it("keeps per-model context values above provider-level defaults", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "ollama",
-      modelId: "qwen3.5:9b",
-      templateModel: {
-        ...makeModel("qwen3.5:9b"),
-        provider: "ollama",
-        contextWindow: 216_000,
-        maxTokens: 65_536,
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            contextWindow: 8_192,
-            maxTokens: 4_096,
-            models: [
-              {
-                id: "qwen3.5:9b",
-                name: "qwen3.5:9b",
-                contextWindow: 16_384,
-                maxTokens: 12_000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model?.contextWindow).toBe(16_384);
-    expect(result.model?.maxTokens).toBe(12_000);
-  });
-
-  it("applies agent default model params without explicit provider config", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "ollama",
-      modelId: "llama3.2",
-      templateModel: {
-        ...makeModel("llama3.2"),
-        provider: "ollama",
-      },
-    });
-    const cfg = {
+  it("applies agent default model params without explicit provider config", async () => {
+    mockMinimalModelDiscovery("ollama", "llama3.2");
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           models: {
@@ -2429,9 +921,9 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
-    const result = resolveModelForTest("ollama", "llama3.2", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("ollama", "llama3.2", cfg);
 
     expect(result.error).toBeUndefined();
     expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
@@ -2439,373 +931,73 @@ describe("resolveModel", () => {
     });
   });
 
-  it("propagates reasoning from matching configured fallback model", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            models: [
-              {
-                ...makeModel("model-a"),
-                reasoning: false,
-              },
-              {
-                ...makeModel("model-b"),
-                reasoning: true,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
-
-    expect(result.model?.reasoning).toBe(true);
-  });
-
-  it("propagates compat from matching configured fallback model", () => {
-    const cfg = {
-      models: {
-        providers: {
-          vllm: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("Qwen/Qwen3-8B"),
-                compat: { thinkingFormat: "qwen-chat-template" },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model?.compat).toEqual(
-      expect.objectContaining({ thinkingFormat: "qwen-chat-template" }),
-    );
-    expect(result.model?.reasoning).toBe(false);
-  });
-
-  it("lets configured vLLM Qwen compat override stale discovered reasoning", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "vllm",
-      modelId: "Qwen/Qwen3-8B",
-      templateModel: {
-        ...makeModel("Qwen/Qwen3-8B"),
-        provider: "vllm",
-        api: "openai-completions",
-        baseUrl: "http://localhost:9000",
-        reasoning: false,
-        compat: { supportsStrictMode: false },
-      },
+  it("infers provider-level Azure transport aliases from the configured endpoint", async () => {
+    const cfg = makeProviderConfig("azure-openai-responses", {
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+      models: [],
     });
-    const cfg = {
-      models: {
-        providers: {
-          vllm: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                id: "Qwen/Qwen3-8B",
-                name: "Qwen/Qwen3-8B",
-                compat: { thinkingFormat: "qwen-chat-template" },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    resolveBundledStaticCatalogModelMock.mockReturnValue(makeOpenAIStaticModel());
 
-    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model?.reasoning).toBe(true);
-    expect(result.model?.compat).toEqual(
-      expect.objectContaining({
-        supportsStrictMode: false,
-        thinkingFormat: "qwen-chat-template",
-      }),
-    );
-  });
-
-  it("infers reasoning for matching vLLM Qwen compat fallback models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          vllm: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                id: "Qwen/Qwen3-8B",
-                name: "Qwen/Qwen3-8B",
-                compat: { thinkingFormat: "qwen-chat-template" },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model?.reasoning).toBe(true);
-  });
-
-  it("propagates image input capability from matching configured fallback model", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            models: [
-              {
-                ...makeModel("model-a"),
-                input: ["text"],
-              },
-              {
-                ...makeModel("model-b"),
-                input: ["text", "image"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
-
-    expect(result.model?.input).toEqual(["text", "image"]);
-  });
-
-  it("propagates image input when configured model ids include the provider prefix", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("custom/vision-model"),
-                input: ["text", "image"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("azure-openai-responses", "gpt-5.5", cfg, {
+      allowBundledStaticCatalogFallback: true,
+      preferBundledStaticCatalogTransport: true,
+      skipAgentDiscovery: true,
+    });
 
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
-      provider: "custom",
-      id: "custom/vision-model",
-      input: ["text", "image"],
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
     });
   });
 
-  it("does not match provider-prefixed configured model ids through core provider aliases", () => {
-    const cfg = {
-      models: {
-        providers: {
-          volcengine: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("volcengine/vision-model"),
-                input: ["text", "image"],
-              },
-            ],
-          },
+  it.each([false, true])(
+    "keeps manifest alias transport ownership (provider config=%s)",
+    async (configured) => {
+      const cfg = configured
+        ? makeProviderConfig("azure-openai-responses", {
+            baseUrl: "",
+            params: { temperature: 0.2 },
+          })
+        : undefined;
+      resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
+        provider: "azure-openai-responses",
+        transport: {
+          api: "azure-openai-responses",
+          baseUrl: "https://manifest-alias.example.com/openai/v1",
         },
-      },
-    } as unknown as OpenClawConfig;
+      });
+      const result = await resolveModelForTest("azure-openai-responses", "gpt-5.5", cfg, {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createAzureRuntimeHooks(),
+        skipAgentDiscovery: true,
+      });
+      expect(result.error).toBeUndefined();
+      expectRecordFields(result.model, {
+        provider: "azure-openai-responses",
+        id: "gpt-5.5",
+        api: "azure-openai-responses",
+        baseUrl: "https://manifest-alias.example.com/openai/v1",
+      });
+    },
+  );
 
-    const result = resolveModelForTest("bytedance", "vision-model", "/tmp/agent", cfg);
-
-    expect(result.error).toBe("Unknown model: bytedance/vision-model");
-  });
-
-  it("resolves direct moonshotai refs through manifest-owned provider aliases", () => {
-    const cfg = {
-      models: {
-        providers: {
-          moonshot: {
-            baseUrl: "https://api.moonshot.ai/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("kimi-k2.6"),
-                name: "Kimi K2.6",
-                input: ["text", "image"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("moonshotai", "kimi-k2.6", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "moonshot",
-      id: "kimi-k2.6",
+  it("rejects configured fallbacks for ambiguous manifest aliases", async () => {
+    resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
+      provider: "azure-openai-responses",
+      ambiguous: true,
     });
-  });
-
-  it("resolves direct moonshot-ai refs through manifest-owned provider aliases", () => {
-    const cfg = {
-      models: {
-        providers: {
-          moonshot: {
-            baseUrl: "https://api.moonshot.ai/v1",
-            api: "openai-completions",
-            models: [makeModel("kimi-k2.6")],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("moonshot-ai", "kimi-k2.6", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "moonshot",
-      id: "kimi-k2.6",
+    const cfg = makeProviderConfig("azure-openai-responses", {
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+      api: "azure-openai-responses",
+      models: [makeModel("gpt-5.5")],
     });
-  });
-
-  it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("meta/vision-model"),
-                input: ["text", "image"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
-
-    expect(result.model?.id).toBe("vision-model");
-    expect(result.model?.input).toEqual(["text"]);
-  });
-
-  it("resolves custom MLX-style Hugging Face ids without adding the provider prefix", () => {
-    const modelId = "mlx-community/Qwen3-30B-A3B-6bit";
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: `mlx/${modelId}` },
-        },
-      },
-      models: {
-        providers: {
-          mlx: {
-            baseUrl: "http://127.0.0.1:8080/v1",
-            apiKey: "mlx-local",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel(modelId),
-                contextWindow: 131072,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("mlx", modelId, "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "mlx",
-      id: modelId,
-      api: "openai-completions",
-      baseUrl: "http://127.0.0.1:8080/v1",
-    });
-  });
-
-  it("prefers provider-prefixed configured metadata over discovered text-only models", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "custom",
-      modelId: "vision-model",
-      templateModel: {
-        ...makeModel("vision-model"),
-        provider: "custom",
-        input: ["text"],
-      },
-    });
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("custom/vision-model"),
-                input: ["text", "image"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "custom",
-      id: "custom/vision-model",
-      input: ["text", "image"],
-    });
-  });
-
-  it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            models: [
-              {
-                ...makeModel("model-a"),
-                input: ["text", "image"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("custom", "typoed-model", "/tmp/agent", cfg);
-
-    expect(result.model?.id).toBe("typoed-model");
-    expect(result.model?.input).toEqual(["text"]);
+    const result = await resolveModelForTest("azure-openai-responses", "gpt-5.5", cfg);
+    expectUnknownModelErrorResult(result, "azure-openai-responses", "gpt-5.5");
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
   });
 
   it("explains when an agent model entry is missing provider model registration", async () => {
@@ -2822,18 +1014,37 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = await resolveModelAsync("microsoft-foundry", "Kimi-K2.6-1", "/tmp/agent", cfg, {
-      runtimeHooks: createRuntimeHooks(),
-      skipAgentDiscovery: true,
-    });
+    const result = await resolveModelAsync(
+      "microsoft-foundry",
+      "Kimi-K2.6-1",
+      state.agentDir(),
+      cfg,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
 
     expect(result.error).toBe(
       'Unknown model: microsoft-foundry/Kimi-K2.6-1. Found agents.defaults.models["microsoft-foundry/Kimi-K2.6-1"], but no matching models.providers["microsoft-foundry"].models[] entry. Add { "id": "Kimi-K2.6-1", "name": "Kimi-K2.6-1" } to models.providers["microsoft-foundry"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.',
     );
   });
 
+  it("suggests running doctor for a legacy openai-codex model entry", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { models: { "openai-codex/gpt-5.4": {} } } },
+    };
+    const result = await resolveModelAsync("openai-codex", "gpt-5.4", state.agentDir(), cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+    expect(result.error).toBe(
+      'Unknown model: openai-codex/gpt-5.4. "openai-codex" is a legacy provider ID. Run `openclaw doctor --fix` to migrate legacy model and provider config to the current OpenAI format. If the provider has no authenticated profile, run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
   it("points runtime-bound model entries at the runtime catalog instead of provider registration", async () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           models: {
@@ -2843,609 +1054,64 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
-    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex", state.agentDir(), cfg, {
       runtimeHooks: createRuntimeHooks(),
       skipAgentDiscovery: true,
     });
 
     expect(result.error).toBe(
-      'Unknown model: openai/gpt-5.3-codex. Found agents.defaults.models["openai/gpt-5.3-codex"] bound to the "codex" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["openai"].models[] — registering it there will not make it usable. Confirm "gpt-5.3-codex" is still offered by the "codex" runtime and switch agents.defaults.model.primary to a currently available model (run `openclaw models list --provider openai` to list them). See https://docs.openclaw.ai/concepts/model-providers.',
+      'Unknown model: openai/gpt-5.3-codex. Found agents.defaults.models["openai/gpt-5.3-codex"] bound to the "codex" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["openai"].models[] — registering it there will not make it usable. Confirm "gpt-5.3-codex" is still offered by the "codex" runtime and switch agents.defaults.model.primary to a currently available model (run `openclaw models list --refresh --provider openai` to list them). See https://docs.openclaw.ai/concepts/model-providers.',
     );
   });
 
-  it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "azure-openai-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                name: "gpt-5.4",
-                api: "azure-openai-responses",
-                input: ["text"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+  it("repairs stale text-only Foundry discovered rows without config overrides", async () => {
+    mockMinimalModelDiscovery("microsoft-foundry", "gpt-5.4", {
+      baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      api: "azure-openai-responses",
+      contextWindow: 128000,
+      maxTokens: 16384,
+    });
 
-    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("microsoft-foundry", "gpt-5.4");
 
     expect(result.model?.input).toEqual(["text", "image"]);
   });
 
-  it("repairs stale text-only Anthropic fallback rows for Claude vision models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            api: "anthropic-messages",
-            models: [
-              {
-                ...makeModel("claude-sonnet-4-5"),
-                name: "claude-sonnet-4-5",
-                api: "anthropic-messages",
-                input: ["text"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
-
-    expect(result.model?.input).toEqual(["text", "image"]);
-  });
-
-  it("repairs stale text-only Foundry discovered rows for GPT-family models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "azure-openai-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                name: "gpt-5.4",
-                api: "azure-openai-responses",
-                input: ["text"],
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    mockDiscoveredModel(discoverModels, {
-      provider: "microsoft-foundry",
-      modelId: "gpt-5.4",
-      templateModel: {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        provider: "microsoft-foundry",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        api: "azure-openai-responses",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 16384,
-      },
-    });
-
-    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
-
-    expect(result.model?.input).toEqual(["text", "image"]);
-  });
-
-  it("repairs stale text-only Foundry discovered rows without config overrides", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "microsoft-foundry",
-      modelId: "gpt-5.4",
-      templateModel: {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        provider: "microsoft-foundry",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        api: "azure-openai-responses",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 16384,
-      },
-    });
-
-    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent");
-
-    expect(result.model?.input).toEqual(["text", "image"]);
-  });
-
-  it("matches prefixed OpenRouter native ids in configured fallback models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "https://openrouter.ai/api/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("openrouter/healer-alpha"),
-                reasoning: true,
-                input: ["text", "image"],
-                contextWindow: 262144,
-                maxTokens: 65536,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const models = buildInlineProviderModels(cfg.models?.providers ?? {});
-    const model = models.find((entry) => entry.id === "openrouter/healer-alpha");
-    expectRecordFields(model, {
-      provider: "openrouter",
-      id: "openrouter/healer-alpha",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 262144,
-      maxTokens: 65536,
-    });
-  });
-
-  it("uses OpenRouter API capabilities for unknown models when cache is populated", () => {
-    mockGetOpenRouterModelCapabilities.mockReturnValue({
-      name: "Healer Alpha",
-      input: ["text", "image"],
-      reasoning: true,
-      supportsTools: false,
-      contextWindow: 262144,
-      maxTokens: 65536,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    });
-
-    const result = resolveModelForTest("openrouter", "openrouter/healer-alpha", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    const resolvedModel = expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "openrouter/healer-alpha",
-      name: "Healer Alpha",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 262144,
-      maxTokens: 65536,
-    });
-    expect((resolvedModel.compat as { supportsTools?: boolean } | undefined)?.supportsTools).toBe(
-      false,
-    );
-  });
-
-  it("falls back to text-only when OpenRouter API cache is empty", () => {
-    mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
-
-    const result = resolveModelForTest("openrouter", "openrouter/healer-alpha", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "openrouter/healer-alpha",
-      reasoning: false,
+  it("rejects stale openai gpt-5.3-codex-spark discovery rows", async () => {
+    mockMinimalModelDiscovery("openai", "gpt-5.3-codex-spark", {
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+      name: "GPT-5.3 Codex Spark",
       input: ["text"],
     });
-  });
-
-  it("uses provider-normalized model ids for OpenRouter transport", () => {
-    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
-    mockDiscoveredModel(discoverModels, {
-      provider: "openrouter",
-      modelId,
-      templateModel: {
-        ...makeModel(modelId),
-        provider: "openrouter",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-      },
-    });
-    const baseRuntimeHooks = createRuntimeHooks();
-    const normalizeProviderResolvedModelWithPlugin = vi.fn(
-      (params: { context: { model: { id: string } } }) => ({
-        ...params.context.model,
-        id: params.context.model.id.slice("openrouter/".length),
-      }),
+    const result = await resolveModelForTest("openai", "gpt-5.3-codex-spark");
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
-
-    const result = resolveModel("openrouter", modelId, "/tmp/agent", undefined, {
-      authStorage: { mocked: true } as never,
-      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
-      runtimeHooks: {
-        ...baseRuntimeHooks,
-        normalizeProviderResolvedModelWithPlugin,
-      },
-    });
-
-    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openrouter",
-        context: expect.objectContaining({
-          modelId,
-          model: expect.objectContaining({ id: modelId }),
-        }),
-      }),
-    );
-    expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "anthropic/claude-sonnet-4.6",
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
   });
 
-  it("matches prefixed Hugging Face ids against discovered registry models", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "huggingface",
-      modelId: "deepseek-ai/DeepSeek-R1",
-      templateModel: {
-        ...makeModel("deepseek-ai/DeepSeek-R1"),
-        provider: "huggingface",
-        baseUrl: "https://router.huggingface.co/v1",
-        reasoning: true,
-        input: ["text"],
-      },
-    });
-
-    const result = resolveModelForTest(
-      "huggingface",
-      "huggingface/deepseek-ai/DeepSeek-R1",
-      "/tmp/agent",
-    );
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "huggingface",
-      id: "deepseek-ai/DeepSeek-R1",
-      reasoning: true,
-      input: ["text"],
-    });
-  });
-
-  it("preloads OpenRouter capabilities before first async resolve of an unknown model", async () => {
-    mockLoadOpenRouterModelCapabilities.mockImplementation(async (modelId) => {
-      if (modelId === "google/gemini-3.1-flash-image-preview") {
-        mockGetOpenRouterModelCapabilities.mockReturnValue({
-          name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
-          input: ["text", "image"],
-          reasoning: true,
-          contextWindow: 65536,
-          maxTokens: 65536,
-          cost: { input: 0.5, output: 3, cacheRead: 0, cacheWrite: 0 },
-        });
-      }
-    });
-
-    const result = await resolveModelAsyncForTest(
-      "openrouter",
-      "google/gemini-3.1-flash-image-preview",
-      "/tmp/agent",
-    );
-
-    expect(mockLoadOpenRouterModelCapabilities).toHaveBeenCalledWith(
-      "google/gemini-3.1-flash-image-preview",
-    );
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "google/gemini-3.1-flash-image-preview",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 65536,
-      maxTokens: 65536,
-    });
-  });
-
-  it("skips OpenRouter preload for models already present in the registry", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openrouter",
-      modelId: "openrouter/healer-alpha",
-      templateModel: {
-        id: "openrouter/healer-alpha",
-        name: "Healer Alpha",
-        api: "openai-completions",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 262144,
-        maxTokens: 65536,
-      },
-    });
-
-    const result = await resolveModelAsyncForTest(
-      "openrouter",
-      "openrouter/healer-alpha",
-      "/tmp/agent",
-    );
-
-    expect(mockLoadOpenRouterModelCapabilities).not.toHaveBeenCalled();
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "openrouter/healer-alpha",
-      input: ["text", "image"],
-    });
-  });
-
-  it("prefers configured provider api metadata over discovered registry model", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "onehub",
-      modelId: "glm-5",
-      templateModel: {
-        id: "glm-5",
-        name: "GLM-5 (cached)",
-        provider: "onehub",
-        api: "anthropic-messages",
-        baseUrl: "https://old-provider.example.com/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 2048,
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          onehub: {
-            baseUrl: "http://new-provider.example.com/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("glm-5"),
-                api: "openai-completions",
-                reasoning: true,
-                contextWindow: 198000,
-                maxTokens: 16000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("onehub", "glm-5", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "onehub",
-      id: "glm-5",
-      api: "openai-completions",
-      baseUrl: "http://new-provider.example.com/v1",
-      reasoning: true,
-      contextWindow: 198000,
-      maxTokens: 16000,
-    });
-  });
-
-  it("prefers exact provider config over normalized alias match when both keys exist", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "bedrock",
-      modelId: "bedrock-alias-exact-test",
-      templateModel: {
-        id: "bedrock-alias-exact-test",
-        name: "Bedrock alias test",
-        provider: "bedrock",
-        api: "openai-completions",
-        baseUrl: "https://default-provider.example.com/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 2048,
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          "amazon-bedrock": {
-            baseUrl: "https://canonical-bedrock.example.com/v1",
-            api: "openai-completions",
-            headers: { "X-Provider": "canonical" },
-            models: [{ ...makeModel("bedrock-alias-exact-test"), reasoning: false }],
-          },
-          bedrock: {
-            baseUrl: "https://alias-bedrock.example.com/v1",
-            api: "anthropic-messages",
-            headers: { "X-Provider": "alias" },
-            models: [
-              {
-                ...makeModel("bedrock-alias-exact-test"),
-                api: "anthropic-messages",
-                reasoning: true,
-                contextWindow: 262144,
-                maxTokens: 32768,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("bedrock", "bedrock-alias-exact-test", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "bedrock",
-      id: "bedrock-alias-exact-test",
-      api: "anthropic-messages",
-      baseUrl: "https://alias-bedrock.example.com",
-      reasoning: true,
-      contextWindow: 262144,
-      maxTokens: 32768,
-      headers: { "X-Provider": "alias" },
-    });
-  });
-
-  it("builds an openai fallback for gpt-5.4", () => {
+  it("prefers alias-specific overrides over canonical ones for gpt-5.4-codex", async () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
-  });
-
-  it("upgrades stale exact openai gpt-5.4 registry metadata via forward-compat", () => {
-    vi.mocked(discoverModels).mockReturnValue({
-      find: vi.fn((provider: string, modelId: string) => {
-        if (provider !== "openai") {
-          return null;
-        }
-        if (modelId === "gpt-5.4") {
-          return {
-            ...OPENAI_CODEX_TEMPLATE_MODEL,
-            id: "gpt-5.4",
-            name: "GPT-5.4",
-            contextWindow: 272000,
-          };
-        }
-        if (modelId === "gpt-5.3-codex") {
-          return {
-            ...OPENAI_CODEX_TEMPLATE_MODEL,
-            id: "gpt-5.3-codex",
-            name: "GPT-5.3 Codex",
-          };
-        }
-        return null;
-      }),
-    } as unknown as ReturnType<typeof discoverModels>);
-
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      contextWindow: 1_050_000,
-      maxTokens: 128000,
-    });
-  });
-
-  it("accepts available exact openai gpt-5.3-codex registry metadata", () => {
-    vi.mocked(discoverModels).mockReturnValue({
-      find: vi.fn((provider: string, modelId: string) => {
-        if (provider !== "openai") {
-          return null;
-        }
-        if (modelId === "gpt-5.3-codex") {
-          return {
-            ...OPENAI_CODEX_TEMPLATE_MODEL,
-            id: "gpt-5.3-codex",
-            name: "GPT-5.3 Codex",
-            contextWindow: 272000,
-          };
-        }
-        return null;
-      }),
-    } as unknown as ReturnType<typeof discoverModels>);
-
-    const result = resolveModelForTest("openai", "gpt-5.3-codex", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.3-codex",
-      contextWindow: 272000,
-    });
-  });
-
-  it("canonicalizes the legacy openai gpt-5.4-codex alias at runtime", () => {
-    mockOpenAICodexTemplateModel(discoverModels);
-
-    const result = resolveModelForTest("openai", "gpt-5.4-codex", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
-    expect(result.model?.id).toBe("gpt-5.4");
-    expect(result.model?.name).toBe("gpt-5.4");
-  });
-
-  it("applies canonical openai overrides when resolving the gpt-5.4-codex alias", () => {
-    mockOpenAICodexTemplateModel(discoverModels);
-
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://proxy.example.com/backend-api",
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                contextWindow: 123456,
-                contextTokens: 65432,
-                maxTokens: 7777,
-                reasoning: false,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai", "gpt-5.4-codex", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
+    const cfg = makeProviderConfig("openai", {
       api: "openai-chatgpt-responses",
-      baseUrl: "https://proxy.example.com/backend-api",
-      contextWindow: 123456,
-      contextTokens: 65432,
-      maxTokens: 7777,
-      reasoning: false,
-    });
-  });
-
-  it("prefers alias-specific overrides over canonical ones for gpt-5.4-codex", () => {
-    mockOpenAICodexTemplateModel(discoverModels);
-
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                contextWindow: 222222,
-                maxTokens: 22222,
-              },
-              {
-                ...makeModel("gpt-5.4-codex"),
-                contextWindow: 111111,
-                maxTokens: 11111,
-              },
-            ],
-          },
+      models: [
+        {
+          ...makeModel("gpt-5.4"),
+          contextWindow: 222222,
+          maxTokens: 22222,
         },
-      },
-    } as unknown as OpenClawConfig;
+        {
+          ...makeModel("gpt-5.4-codex"),
+          contextWindow: 111111,
+          maxTokens: 11111,
+        },
+      ],
+    });
 
-    const result = resolveModelForTest("openai", "gpt-5.4-codex", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("openai", "gpt-5.4-codex", cfg);
 
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
@@ -3456,766 +1122,27 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai fallback for gpt-5.4-mini", () => {
-    mockOpenAICodexTemplateModel(discoverModels);
-
-    const result = resolveModelForTest("openai", "gpt-5.4-mini", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
-      contextWindow: 400_000,
-      contextTokens: 272_000,
-    });
-  });
-
-  it("does not build an openai fallback for removed gpt-5.3-codex-spark", () => {
-    mockOpenAICodexTemplateModel(discoverModels);
-
-    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
-    );
-  });
-
-  it("does not build a configured fallback for unsupported xAI multi-agent models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          xai: {
-            baseUrl: "https://api.x.ai/v1",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("xai", "grok-4.20-multi-agent-0309", "/tmp/agent", cfg);
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.",
-    );
-  });
-
-  it("rejects stale openai gpt-5.3-codex-spark discovery rows", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.3-codex-spark",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
-        name: "GPT-5.3 Codex Spark",
-        input: ["text"],
-      },
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
-    );
-  });
-
-  it("prefers runtime-resolved openai gpt-5.4 metadata when it has a larger context window", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
-        contextWindow: 128_000,
-        contextTokens: 32_000,
-        input: ["text"],
-      },
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
+  it("prefers runtime-resolved openai gpt-5.4 metadata when it has a larger context window", async () => {
+    mockMinimalModelDiscovery("openai", "gpt-5.4", {
+      ...OPENAI_CODEX_TEMPLATE_MODEL,
       id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-    });
-  });
-
-  it("lets official openai metadata override stale configured model rows", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.5-pro"),
-                api: "openai-chatgpt-responses",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 400_000,
-                contextTokens: 64_000,
-                maxTokens: 32_000,
-                metadataSource: "models-add",
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai", "gpt-5.5-pro", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.5-pro",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("resolves openai gpt-5.5 through the direct API fallback when discovery omits OAuth metadata", () => {
-    const result = resolveModelForTest("openai", "gpt-5.5");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("preserves unmarked manual openai metadata overrides", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
-        name: "GPT-5.5",
-        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 400_000,
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.5"),
-                api: "openai-chatgpt-responses",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
-                contextWindow: 555_555,
-                contextTokens: 111_111,
-                maxTokens: 22_222,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.5",
-      cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
-      contextWindow: 555_555,
-      contextTokens: 111_111,
-      maxTokens: 22_222,
-    });
-  });
-
-  it("prefers runtime-resolved openai gpt-5.4 metadata during async resolution too", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
-        contextWindow: 128_000,
-        contextTokens: 32_000,
-      },
-    });
-
-    const result = await resolveModelAsyncForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-    });
-  });
-
-  it("normalizes stale discovered openai /backend-api/v1 metadata", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
-        baseUrl: "https://chatgpt.com/backend-api/v1",
-      },
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
-  });
-
-  it("normalizes stale discovered openrouter /v1 metadata", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openrouter",
-      modelId: "openai/gpt-5.4",
-      templateModel: {
-        provider: "openrouter",
-        id: "openai/gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8_192,
-      },
-    });
-
-    const result = resolveModelForTest("openrouter", "openai/gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "openai/gpt-5.4",
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
-  });
-
-  it("normalizes discovered openai metadata when api is missing", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
-        api: undefined,
-      },
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
-  });
-
-  it("passes configured workspaceDir to runtime preference hooks", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
-        contextWindow: 128_000,
-        contextTokens: 32_000,
-      },
-    });
-
-    const shouldPreferRuntimeResolvedModel = vi.fn(
-      (params: { workspaceDir?: string; context: { agentDir?: string } }) =>
-        params.workspaceDir === "/tmp/workspace" && params.context.agentDir === "/tmp/agent-state",
-    );
-    const runProviderDynamicModel = vi.fn(
-      (params: { workspaceDir?: string; context: { provider: string; modelId: string } }) =>
-        params.workspaceDir === "/tmp/workspace" &&
-        params.context.provider === "openai" &&
-        params.context.modelId === "gpt-5.4"
-          ? ({
-              ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-              name: "GPT-5.4",
-            } as ReturnType<typeof buildOpenAICodexForwardCompatExpectation>)
-          : undefined,
-    );
-    const runtimeHooks = {
-      ...createRuntimeHooks(),
-      shouldPreferProviderRuntimeResolvedModel: shouldPreferRuntimeResolvedModel,
-      runProviderDynamicModel,
-    };
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: "/tmp/workspace",
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent-state", cfg, {
-      authStorage: { mocked: true } as never,
-      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent-state"),
-      runtimeHooks,
-    });
-
-    const preferInput = mockCallArg(shouldPreferRuntimeResolvedModel);
-    expectRecordFields(preferInput, {
-      provider: "openai",
-      workspaceDir: "/tmp/workspace",
-    });
-    expectRecordFields(preferInput.context, {
-      agentDir: "/tmp/agent-state",
-      workspaceDir: "/tmp/workspace",
-    });
-    const dynamicInput = mockCallArg(runProviderDynamicModel);
-    expectRecordFields(dynamicInput, {
-      provider: "openai",
-      workspaceDir: "/tmp/workspace",
-    });
-    expectRecordFields(dynamicInput.context, {
-      agentDir: "/tmp/agent-state",
-      modelId: "gpt-5.4",
-      provider: "openai",
-    });
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-    });
-  });
-
-  it("passes configured workspaceDir through direct registry dynamic hooks", () => {
-    const runProviderDynamicModel = vi.fn(
-      (params: {
-        workspaceDir?: string;
-        context: { workspaceDir?: string; provider: string; modelId: string };
-      }) =>
-        params.workspaceDir === "/tmp/workspace" &&
-        params.context.workspaceDir === "/tmp/workspace" &&
-        params.context.provider === "openai" &&
-        params.context.modelId === "gpt-5.4"
-          ? ({
-              ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-              name: "GPT-5.4",
-            } as ReturnType<typeof buildOpenAICodexForwardCompatExpectation>)
-          : undefined,
-    );
-    const runtimeHooks = {
-      ...createRuntimeHooks(),
-      runProviderDynamicModel,
-    };
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: "/tmp/workspace",
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = resolveModelWithRegistry({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      agentDir: "/tmp/agent-state",
-      cfg,
-      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent-state"),
-      runtimeHooks,
-    });
-
-    const dynamicInput = mockCallArg(runProviderDynamicModel);
-    expectRecordFields(dynamicInput, {
-      workspaceDir: "/tmp/workspace",
-    });
-    expectRecordFields(dynamicInput.context, {
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent-state",
-      modelId: "gpt-5.4",
-      provider: "openai",
-    });
-    expectRecordFields(result, {
-      provider: "openai",
-      id: "gpt-5.4",
-    });
-  });
-
-  it("resolves discovered openai gpt-5.4-mini rows", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4-mini",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
-        name: "GPT-5.4 Mini",
-        contextWindow: 64_000,
-        input: ["text"],
-      },
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4-mini", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      name: "GPT-5.4 Mini",
-      contextWindow: 64_000,
+      name: "GPT-5.4",
+      contextWindow: 128_000,
+      contextTokens: 32_000,
       input: ["text"],
     });
-  });
 
-  it("rejects stale direct openai gpt-5.3-codex-spark discovery rows", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.3-codex-spark",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
-    );
-  });
-
-  it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4",
-        name: "GPT-5.2",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://proxy.example.com/v1",
-            headers: { "X-Proxy-Auth": "token-123" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg);
+    const result = await resolveModelForTest("openai", "gpt-5.4");
 
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
       provider: "openai",
       id: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://proxy.example.com/v1",
-    });
-    expectRecordFields((result.model as unknown as { headers?: Record<string, string> }).headers, {
-      "X-Proxy-Auth": "token-123",
-    });
-  });
-
-  it("applies configured overrides to github-copilot dynamic models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "github-copilot": {
-            baseUrl: "https://proxy.example.com/v1",
-            api: "openai-completions",
-            headers: { "X-Proxy-Auth": "token-123" },
-            models: [
-              {
-                ...makeModel("gpt-5.4-mini"),
-                reasoning: true,
-                input: ["text"],
-                contextWindow: 256000,
-                maxTokens: 32000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("github-copilot", "gpt-5.4-mini", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "github-copilot",
-      id: "gpt-5.4-mini",
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com/v1",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 256000,
-      maxTokens: 32000,
-    });
-    expectRecordFields((result.model as unknown as { headers?: Record<string, string> }).headers, {
-      "X-Proxy-Auth": "token-123",
-    });
-  });
-
-  it("resolves github-copilot Claude dynamic models to anthropic-messages by default", () => {
-    const result = resolveModelForTest("github-copilot", "claude-sonnet-4.6", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "github-copilot",
-      id: "claude-sonnet-4.6",
-      api: "anthropic-messages",
-    });
-  });
-
-  it("builds an openai fallback for gpt-5.5 when the live catalog cache is cold", () => {
-    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_050_000,
       contextTokens: 272_000,
-      maxTokens: 128_000,
-      mediaInput: {
-        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
-      },
-    });
-  });
-
-  it("builds an openai fallback for gpt-5.4 mini from the gpt-5.4-mini template", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4-mini",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4-mini",
-        name: "GPT-5 mini",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      }),
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4-mini", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("builds an openai fallback for gpt-5.4 nano from the gpt-5.4-nano template", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4-nano",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4-nano",
-        name: "GPT-5 nano",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      }),
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4-nano", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4-nano",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-  });
-
-  it("keeps proxied openai completions transport untouched", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://proxy.example.com/v1",
-      }),
-    });
-
-    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com/v1",
-    });
-  });
-
-  it("normalizes stale native xai completions transport to responses", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "xai",
-      modelId: "grok-4.20-beta-latest-reasoning",
-      templateModel: buildForwardCompatTemplate({
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
-        provider: "xai",
-        api: "openai-completions",
-        baseUrl: "https://api.x.ai/v1",
-      }),
-    });
-
-    const result = resolveModelForTest("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "xai",
-      id: "grok-4.20-beta-latest-reasoning",
-      api: "openai-responses",
-      baseUrl: "https://api.x.ai/v1",
-    });
-  });
-
-  it("normalizes stale native xai completions transport after plugin model normalization", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "xai",
-      modelId: "grok-4.20-beta-latest-reasoning",
-      templateModel: buildForwardCompatTemplate({
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
-        provider: "xai",
-        api: "openai-completions",
-        baseUrl: "https://api.x.ai/v1",
-      }),
-    });
-
-    const result = resolveModel("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent", undefined, {
-      authStorage: { mocked: true } as never,
-      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
-      runtimeHooks: {
-        buildProviderUnknownModelHintWithPlugin: () => undefined,
-        prepareProviderDynamicModel: async () => {},
-        runProviderDynamicModel: () => undefined,
-        applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>
-          provider === "xai" &&
-          context.model.api === "openai-completions" &&
-          context.model.baseUrl === "https://api.x.ai/v1"
-            ? {
-                ...context.model,
-                api: "openai-responses",
-              }
-            : undefined,
-        normalizeProviderResolvedModelWithPlugin: ({ provider, context }) =>
-          provider === "xai" ? (context.model as never) : undefined,
-        normalizeProviderTransportWithPlugin: () => undefined,
-      },
-    });
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "xai",
-      id: "grok-4.20-beta-latest-reasoning",
-      api: "openai-responses",
-      baseUrl: "https://api.x.ai/v1",
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

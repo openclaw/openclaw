@@ -8,6 +8,7 @@ import {
   maybeRepairDiscordNumericIds,
   scanDiscordNumericIdEntries,
 } from "./doctor.js";
+import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 function getDiscordCompatibilityNormalizer(): NonNullable<
   typeof discordDoctor.normalizeCompatibilityConfig
@@ -20,26 +21,26 @@ function getDiscordCompatibilityNormalizer(): NonNullable<
 }
 
 describe("discord doctor", () => {
-  it("normalizes legacy discord streaming aliases for runtime config", () => {
+  it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
     const normalize = getDiscordCompatibilityNormalizer();
-
     const result = normalize({
       cfg: {
         channels: {
           discord: {
-            streamMode: "block",
-            chunkMode: "newline",
-            blockStreaming: true,
-            draftChunk: {
-              minChars: 120,
-            },
-            accounts: {
-              work: {
-                streaming: false,
-                blockStreamingCoalesce: {
-                  idleMs: 250,
+            gatewayInfoTimeoutMs: 1,
+            gatewayReadyTimeoutMs: 2,
+            gatewayRuntimeReadyTimeoutMs: 3,
+            eventQueue: { listenerTimeout: 4 },
+            retry: { attempts: 5 },
+            voice: {
+              realtime: {
+                providers: {
+                  custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } },
                 },
               },
+            },
+            accounts: {
+              work: { eventQueue: { maxConcurrency: 6 }, retry: { attempts: 7 } },
             },
           },
         },
@@ -47,158 +48,102 @@ describe("discord doctor", () => {
     });
 
     expect(result.config.channels?.discord).toEqual({
-      streaming: {
-        mode: "block",
-        chunkMode: "newline",
-        block: {
-          enabled: true,
-        },
-        preview: {
-          chunk: {
-            minChars: 120,
-          },
+      voice: {
+        realtime: {
+          providers: { custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } } },
         },
       },
+      accounts: { work: {} },
+    });
+    expect(result.changes).toContain("Removed retired Discord tuning knobs.");
+  });
+
+  it("keeps delivery-only aliases mode-free and preserves explicit legacy progress", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    const deliveryOnly = normalize({
+      cfg: {
+        channels: {
+          discord: { blockStreaming: true },
+        },
+      } as never,
+    });
+
+    const deliveryOnlyMigrated = deliveryOnly.config.channels?.discord as Record<string, unknown>;
+    expect(deliveryOnlyMigrated).toEqual({
+      streaming: { block: { enabled: true } },
+    });
+    expect(resolveDiscordPreviewStreamMode(deliveryOnlyMigrated)).toBe("progress");
+    expect(deliveryOnly.changes).toEqual([
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+    ]);
+
+    const explicitProgress = normalize({
+      cfg: {
+        channels: {
+          discord: { streamMode: "progress", blockStreaming: true },
+        },
+      } as never,
+    });
+    const explicitProgressMigrated = explicitProgress.config.channels?.discord as Record<
+      string,
+      unknown
+    >;
+    expect(explicitProgressMigrated).toEqual({
+      streaming: { mode: "progress", block: { enabled: true } },
+    });
+    expect(resolveDiscordPreviewStreamMode(explicitProgressMigrated)).toBe("progress");
+    expect(explicitProgress.changes).toEqual([
+      "Moved channels.discord.streamMode → channels.discord.streaming.mode (progress).",
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+    ]);
+  });
+
+  it("seeds the inherited root streaming settings when migrating account delivery aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    // Account `streaming` objects replace the root object wholesale on merge,
+    // so the migrated account must carry the settings it previously inherited.
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
+            accounts: { work: { chunkMode: "newline" } },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
       accounts: {
         work: {
           streaming: {
             mode: "off",
-            block: {
-              coalesce: {
-                idleMs: 250,
-              },
-            },
+            chunkMode: "newline",
+            block: { coalesce: { idleMs: 5 } },
           },
         },
       },
     });
     expect(result.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-      "Moved channels.discord.chunkMode → channels.discord.streaming.chunkMode.",
-      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
-      "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
-      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
-      "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
+      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
+      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 
-  it("moves account voice.tts.edge into providers.microsoft", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            accounts: {
-              main: {
-                voice: {
-                  tts: {
-                    edge: {
-                      voice: "en-US-JennyNeural",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.changes).toContain(
-      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
-    );
-    const mainTts = result.config.channels?.discord?.accounts?.main?.voice?.tts as
-      | Record<string, unknown>
-      | undefined;
-    expect(mainTts?.providers).toEqual({
-      microsoft: {
-        voice: "en-US-JennyNeural",
-      },
-    });
-    expect(mainTts?.edge).toBeUndefined();
-  });
-
-  it("does not move unsupported root and account tts provider aliases", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            tts: {
-              edge: {
-                voice: "en-US-RootNeural",
-              },
-            },
-            voice: {
-              tts: {
-                edge: {
-                  voice: "en-US-VoiceNeural",
-                },
-              },
-            },
-            accounts: {
-              main: {
-                tts: {
-                  edge: {
-                    voice: "en-US-AccountNeural",
-                  },
-                },
-                voice: {
-                  tts: {
-                    edge: {
-                      voice: "en-US-AccountVoiceNeural",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
-      "Moved channels.discord.voice.tts.edge → channels.discord.voice.tts.providers.microsoft.",
-    ]);
-    const discordConfig = result.config.channels?.discord as
-      | {
-          tts?: Record<string, unknown>;
-          voice?: { tts?: Record<string, unknown> };
-          accounts?: {
-            main?: {
-              tts?: Record<string, unknown>;
-              voice?: { tts?: Record<string, unknown> };
-            };
-          };
-        }
-      | undefined;
-    expect(discordConfig?.tts).toEqual({
-      edge: {
-        voice: "en-US-RootNeural",
-      },
-    });
-    expect(discordConfig?.accounts?.main?.tts).toEqual({
-      edge: {
-        voice: "en-US-AccountNeural",
-      },
-    });
-    expect(discordConfig?.voice?.tts).toEqual({
-      providers: {
-        microsoft: {
-          voice: "en-US-VoiceNeural",
+  it("preserves supported provider maps and channel bindings", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          voice: { tts: { providers: { openai: { voice: "alloy" } } } },
+          guilds: { agentId: { channels: { allow: { enabled: false } } } },
         },
       },
-    });
-    expect(discordConfig?.accounts?.main?.voice?.tts).toEqual({
-      providers: {
-        microsoft: {
-          voice: "en-US-AccountVoiceNeural",
-        },
-      },
-    });
+      bindings: [{ agentId: "main", match: { channel: "discord" } }],
+    };
+    expect(getDiscordCompatibilityNormalizer()({ cfg })).toEqual({ config: cfg, changes: [] });
   });
 
   it("removes unsupported Discord realtime wake names", () => {
@@ -263,177 +208,6 @@ describe("discord doctor", () => {
     );
   });
 
-  it("moves legacy guild channel allow toggles into enabled", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  general: {
-                    allow: false,
-                  },
-                },
-              },
-            },
-            accounts: {
-              work: {
-                guilds: {
-                  "200": {
-                    channels: {
-                      help: {
-                        allow: true,
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Moved channels.discord.guilds.100.channels.general.allow → channels.discord.guilds.100.channels.general.enabled.",
-      "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
-    ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
-      enabled: false,
-    });
-    expect(
-      result.config.channels?.discord?.accounts?.work?.guilds?.["200"]?.channels?.help,
-    ).toEqual({
-      enabled: true,
-    });
-  });
-
-  it("moves legacy guild channel agentId into a top-level route binding", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  "200": {
-                    requireMention: false,
-                    agentId: "video",
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Moved channels.discord.guilds.100.channels.200.agentId → top-level bindings[] route for Discord channel 200.",
-    ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toEqual({
-      requireMention: false,
-    });
-    expect(result.config.bindings).toEqual([
-      {
-        agentId: "video",
-        match: {
-          channel: "discord",
-          guildId: "100",
-          peer: { kind: "channel", id: "200" },
-        },
-      },
-    ]);
-  });
-
-  it("moves account-scoped guild channel agentId into an account-scoped route binding", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            accounts: {
-              work: {
-                guilds: {
-                  "100": {
-                    channels: {
-                      "200": {
-                        agentId: "support",
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        bindings: [{ agentId: "main", match: { channel: "discord" } }],
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Moved channels.discord.accounts.work.guilds.100.channels.200.agentId → top-level bindings[] route for Discord channel 200.",
-    ]);
-    expect(
-      result.config.channels?.discord?.accounts?.work?.guilds?.["100"]?.channels?.["200"],
-    ).toStrictEqual({});
-    expect(result.config.bindings).toEqual([
-      { agentId: "main", match: { channel: "discord" } },
-      {
-        agentId: "support",
-        match: {
-          channel: "discord",
-          accountId: "work",
-          guildId: "100",
-          peer: { kind: "channel", id: "200" },
-        },
-      },
-    ]);
-  });
-
-  it("removes legacy guild channel agentId when a matching route binding already exists", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const existingBinding = {
-      agentId: "video",
-      match: {
-        channel: "discord",
-        guildId: "100",
-        peer: { kind: "channel", id: "200" },
-      },
-    };
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  "200": {
-                    agentId: "video",
-                  },
-                },
-              },
-            },
-          },
-        },
-        bindings: [existingBinding],
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Removed channels.discord.guilds.100.channels.200.agentId; a matching top-level bindings[] route already exists for Discord channel 200.",
-    ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toStrictEqual({});
-    expect(result.config.bindings).toEqual([existingBinding]);
-  });
-
   it("finds numeric id entries across discord scopes", () => {
     const cfg = {
       channels: {
@@ -477,7 +251,9 @@ describe("discord doctor", () => {
 
     const result = maybeRepairDiscordNumericIds(cfg, "openclaw doctor --fix");
     expect(result.config.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["99"]);
+    expect(
+      (result.config.channels?.discord?.dm as { allowFrom?: string[] } | undefined)?.allowFrom,
+    ).toEqual(["99"]);
     expect(result.config.channels?.discord?.guilds?.main?.users).toEqual(["111"]);
     expect(result.config.channels?.discord?.guilds?.main?.roles).toEqual(["222"]);
     expect(result.changes).not.toHaveLength(0);
@@ -492,6 +268,13 @@ describe("discord doctor", () => {
 
     expect(warnings[0]).toContain("cannot be auto-repaired");
     expect(warnings[1]).toContain("openclaw doctor --fix");
+  });
+
+  it("recommends the supported name-matching config key", async () => {
+    const warnings = await discordDoctor.collectMutableAllowlistWarnings?.({
+      cfg: { channels: { discord: { allowFrom: ["alice"] } } },
+    });
+    expect(warnings?.join("\n")).toContain("channels.discord.dangerouslyAllowNameMatching=true");
   });
 
   it("warns when default env fallback token is missing after migration", async () => {
@@ -520,19 +303,45 @@ describe("discord doctor", () => {
     ).toStrictEqual([missingTokenWarning]);
   });
 
-  it("does not warn about DISCORD_BOT_TOKEN when a non-default account is selected", () => {
+  it("warns when Discord transcript auto-start cannot choose between voice accounts", async () => {
     const cfg = {
+      transcripts: {
+        autoStart: [
+          {
+            providerId: "discord-voice",
+            guildId: "guild-1",
+            channelId: "channel-1",
+          },
+          {
+            providerId: "discord-voice",
+            accountId: "alpha",
+            guildId: "guild-1",
+            channelId: "channel-2",
+          },
+          { providerId: "meeting", meetingUrl: "https://meet.example.test/standup" },
+        ],
+      },
       channels: {
         discord: {
           accounts: {
-            work: {
-              token: "Bot work-token",
-            },
+            alpha: { token: "alpha-token", voice: { enabled: true } },
+            bravo: { token: "bravo-token", voice: { enabled: true } },
           },
         },
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
+    const warnings =
+      (await discordDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      })) ?? [];
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("transcripts.autoStart[0]");
+    expect(warnings[0]).toContain("Multiple Discord accounts are enabled for voice");
+    expect(warnings[0]).toContain("transcripts.autoStart[0].accountId");
+    expect(warnings[0]).toContain("channels.discord.defaultAccount");
   });
 });

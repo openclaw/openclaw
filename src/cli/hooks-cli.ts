@@ -1,14 +1,18 @@
-// Hooks CLI for listing, checking, toggling, installing, and updating hook integrations.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Command } from "commander";
 import {
-  decorativeEmoji,
-  decorativePrefix,
-} from "../../packages/terminal-core/src/decorative-emoji.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { decorativePrefix } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId,
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope.js";
+import { getRuntimeConfig, transformConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
@@ -16,140 +20,136 @@ import {
   type HookStatusReport,
 } from "../hooks/hooks-status.js";
 import { resolveHookEntries } from "../hooks/policy.js";
-import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { buildPluginDiagnosticsReport } from "../plugins/status.js";
+import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plugin-ids.js";
+import { withPluginDiagnosticsReport } from "../plugins/status.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
+import { summarizeStringEntries } from "../shared/string-sample.js";
+import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
+import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
+import {
+  formatHookInfo,
+  formatHookMissingSummary,
+  formatHooksCheck,
+  formatHooksList,
+  type HooksListOptions,
+  type HooksReportOptions,
+} from "./hooks-cli.format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
-import { runPluginInstallCommand } from "./plugins-install-command.js";
-import { runPluginUpdateCommand } from "./plugins-update-command.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
+import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
 
-export type HooksListOptions = {
-  json?: boolean;
-  eligible?: boolean;
-  verbose?: boolean;
-};
+const GATEWAY_HOOKS_STATUS_TIMEOUT_MS = 1_500;
 
-export type HookInfoOptions = {
-  json?: boolean;
-};
+type HooksReportTarget = ReturnType<typeof resolveHooksReportTarget>;
 
-export type HooksCheckOptions = {
-  json?: boolean;
-};
-
-export type HooksUpdateOptions = {
-  all?: boolean;
-  dryRun?: boolean;
-};
-
-function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
-  return resolveHookEntries([...pluginEntries, ...workspaceEntries]);
+function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string) {
+  const requested = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
+  const requestedAgentId = requested ? normalizeAgentId(requested) : undefined;
+  if (requestedAgentId) {
+    resolveConfiguredAgentId(config, requestedAgentId);
+  }
+  const agentId =
+    requestedAgentId ??
+    tryResolveLegacyCompatibilityAgentId(config) ??
+    resolveDefaultAgentId(config, {
+      surface: "hooks status reporting",
+      hint: "Pass --agent <id> to select a configured agent.",
+    });
+  return { agentId, workspaceDir: resolveAgentWorkspaceDir(config, agentId) };
 }
 
-function buildHooksReport(config: OpenClawConfig): HookStatusReport {
+async function withHooksReport<T>(
+  config: OpenClawConfig,
+  target: HooksReportTarget,
+  consume: (report: HookStatusReport) => T,
+): Promise<T> {
   // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const workspaceDir = target.workspaceDir;
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
-  const pluginReport = buildPluginDiagnosticsReport({ config, workspaceDir });
-  const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
-  const entries = mergeHookEntries(pluginEntries, workspaceEntries);
-  return buildWorkspaceHookStatus(workspaceDir, { config, entries });
+  // Native plugin hooks only exist after registration. Match the Gateway's startup
+  // plan so active hooks remain visible without executing unrelated installed plugins.
+  const startup = loadGatewayStartupPluginPlanWithMetadata({
+    config,
+    workspaceDir,
+    env: process.env,
+  });
+  return withPluginDiagnosticsReport(
+    {
+      config,
+      workspaceDir,
+      onlyPluginIds: startup.plan.pluginIds,
+      metadataSnapshot: startup.metadataSnapshot,
+    },
+    (pluginReport) => {
+      const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
+      const entries = resolveHookEntries([...pluginEntries, ...workspaceEntries]);
+      return consume(buildWorkspaceHookStatus(workspaceDir, { config, entries }));
+    },
+  );
 }
 
-function resolveHookForToggle(
+async function loadHooksReport<T>(
+  agentId: string | undefined,
+  consume: (report: HookStatusReport) => T,
+): Promise<T> {
+  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const target = resolveHooksReportTarget(config, agentId);
+  const { callGateway } = await import("../gateway/call.js");
+  let report: HookStatusReport;
+  try {
+    report = await callGateway<HookStatusReport>({
+      config,
+      method: "hooks.status",
+      params: { agentId: target.agentId },
+      timeoutMs: GATEWAY_HOOKS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch (error) {
+    if (
+      !(await canFallbackToImplicitLocalGateway({
+        config,
+        error,
+        legacyMethod: "hooks.status",
+        legacyAgentId: true,
+      }))
+    ) {
+      throw error;
+    }
+    // Only implicit local Gateways may use offline or older-Gateway discovery.
+    return withHooksReport(config, target, consume);
+  }
+  return consume(report);
+}
+
+function resolveHookSelection(
   report: HookStatusReport,
   hookName: string,
-  opts?: { requireEligible?: boolean },
-): HookStatusEntry {
-  const hook = report.hooks.find((h) => h.name === hookName);
-  if (!hook) {
-    throw new Error(`Hook "${hookName}" not found`);
-  }
-  if (hook.managedByPlugin) {
+): HookStatusEntry | undefined {
+  // A metadata key may alias another hook's name; exact names always win.
+  const nameMatches = report.hooks.filter((hook) => hook.name === hookName);
+  const matches =
+    nameMatches.length > 0 ? nameMatches : report.hooks.filter((hook) => hook.hookKey === hookName);
+  if (matches.length > 1) {
+    const candidates = summarizeStringEntries({
+      entries: matches.map((hook) => `${hook.name} (${hook.hookKey})`),
+      limit: 5,
+    });
     throw new Error(
-      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+      `Hook "${hookName}" is ambiguous; matches: ${candidates}. Use a unique hook name or hook key.`,
     );
   }
-  if (opts?.requireEligible && !hook.requirementsSatisfied) {
-    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
-  }
-  return hook;
-}
-
-function buildConfigWithHookEnabled(params: {
-  config: OpenClawConfig;
-  hookName: string;
-  enabled: boolean;
-  ensureHooksEnabled?: boolean;
-}): OpenClawConfig {
-  const entries = { ...params.config.hooks?.internal?.entries };
-  entries[params.hookName] = { ...entries[params.hookName], enabled: params.enabled };
-
-  const internal = {
-    ...params.config.hooks?.internal,
-    ...(params.ensureHooksEnabled ? { enabled: true } : {}),
-    entries,
-  };
-
-  return {
-    ...params.config,
-    hooks: {
-      ...params.config.hooks,
-      internal,
-    },
-  };
-}
-
-function formatHookStatus(hook: HookStatusEntry): string {
-  if (hook.loadable) {
-    return theme.success("✓ ready");
-  }
-  if (!hook.enabledByConfig) {
-    return theme.warn(decorativePrefix("⏸", "disabled"));
-  }
-  return theme.error("✗ missing");
-}
-
-function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const name = theme.command(hook.name);
-  return emoji ? `${emoji} ${name}` : name;
-}
-
-function formatHookSource(hook: HookStatusEntry): string {
-  if (!hook.managedByPlugin) {
-    return hook.source;
-  }
-  return `plugin:${hook.pluginId ?? "unknown"}`;
-}
-
-function formatHookMissingSummary(hook: HookStatusEntry): string {
-  const missing: string[] = [];
-  if (hook.missing.bins.length > 0) {
-    missing.push(`bins: ${hook.missing.bins.join(", ")}`);
-  }
-  if (hook.missing.anyBins.length > 0) {
-    missing.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
-  }
-  if (hook.missing.env.length > 0) {
-    missing.push(`env: ${hook.missing.env.join(", ")}`);
-  }
-  if (hook.missing.config.length > 0) {
-    missing.push(`config: ${hook.missing.config.join(", ")}`);
-  }
-  if (hook.missing.os.length > 0) {
-    missing.push(`os: ${hook.missing.os.join(", ")}`);
-  }
-  return missing.join("; ");
-}
-
-function exitHooksCliWithError(err: unknown): never {
-  defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
-  process.exit(1);
+  return matches[0];
 }
 
 function writeHooksOutput(value: string, json: boolean | undefined): void {
@@ -160,376 +160,175 @@ function writeHooksOutput(value: string, json: boolean | undefined): void {
   defaultRuntime.log(value);
 }
 
-async function runHooksCliAction(action: () => Promise<void> | void): Promise<void> {
-  try {
-    await action();
-  } catch (err) {
-    exitHooksCliWithError(err);
-  }
-}
-
-/**
- * Format the hooks list output
- */
-export function formatHooksList(report: HookStatusReport, opts: HooksListOptions): string {
-  const hooks = opts.eligible ? report.hooks.filter((h) => h.loadable) : report.hooks;
-
-  if (opts.json) {
-    const jsonReport = {
-      workspaceDir: report.workspaceDir,
-      managedHooksDir: report.managedHooksDir,
-      hooks: hooks.map((h) => ({
-        name: h.name,
-        description: h.description,
-        emoji: h.emoji,
-        eligible: h.loadable,
-        disabled: !h.enabledByConfig,
-        enabledByConfig: h.enabledByConfig,
-        requirementsSatisfied: h.requirementsSatisfied,
-        loadable: h.loadable,
-        blockedReason: h.blockedReason,
-        source: h.source,
-        pluginId: h.pluginId,
-        events: h.events,
-        homepage: h.homepage,
-        missing: h.missing,
-        managedByPlugin: h.managedByPlugin,
-      })),
-    };
-    return JSON.stringify(jsonReport, null, 2);
-  }
-
-  if (hooks.length === 0) {
-    const message = opts.eligible
-      ? `No eligible hooks found. Run \`${formatCliCommand("openclaw hooks list")}\` to see all hooks.`
-      : "No hooks found.";
-    return message;
-  }
-
-  const eligible = hooks.filter((h) => h.loadable);
-  const tableWidth = getTerminalTableWidth();
-  const rows = hooks.map((hook) => {
-    const missing = formatHookMissingSummary(hook);
-    return {
-      Status: formatHookStatus(hook),
-      Hook: formatHookName(hook),
-      Description: theme.muted(hook.description),
-      Source: formatHookSource(hook),
-      Missing: missing ? theme.warn(missing) : "",
-    };
+async function runOneShotHooksCliAction(
+  action: () => Promise<number | void>,
+  failureOwner: "command" | "root" = "command",
+): Promise<void> {
+  const result = await action().catch((err: unknown) => {
+    rethrowExpectedCliError(err);
+    const message = formatErrorMessage(err);
+    const humanOutput = `${theme.error("Error:")} ${message}`;
+    if (failureOwner === "root") {
+      throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
+    }
+    defaultRuntime.error(humanOutput);
+    defaultRuntime.exit(1);
+    throw new Error("unreachable");
   });
-
-  const columns = [
-    { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Hook", header: "Hook", minWidth: 18, flex: true },
-    { key: "Description", header: "Description", minWidth: 24, flex: true },
-    { key: "Source", header: "Source", minWidth: 12, flex: true },
-  ];
-  if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
-  }
-
-  const lines: string[] = [];
-  lines.push(
-    `${theme.heading("Hooks")} ${theme.muted(`(${eligible.length}/${hooks.length} ready)`)}`,
-  );
-  lines.push(
-    renderTable({
-      width: tableWidth,
-      columns,
-      rows,
-    }).trimEnd(),
-  );
-  return lines.join("\n");
+  const exitCode = typeof result === "number" ? result : 0;
+  // CLI setup and handlers can leave ref'd handles behind. Defer exit until
+  // runCli finishes shared teardown and drains both output streams.
+  requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
-
-/**
- * Format detailed info for a single hook
- */
-export function formatHookInfo(
-  report: HookStatusReport,
-  hookName: string,
-  opts: HookInfoOptions,
-): string {
-  const hook = report.hooks.find((h) => h.name === hookName || h.hookKey === hookName);
-
-  if (!hook) {
-    if (opts.json) {
-      return JSON.stringify({ error: "not found", hook: hookName }, null, 2);
-    }
-    return `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
-  }
-
-  if (opts.json) {
-    return JSON.stringify(
-      {
-        ...hook,
-        eligible: hook.loadable,
-        disabled: !hook.enabledByConfig,
-      },
-      null,
-      2,
-    );
-  }
-
-  const lines: string[] = [];
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const status = hook.loadable
-    ? theme.success("✓ Ready")
-    : !hook.enabledByConfig
-      ? theme.warn(decorativePrefix("⏸", "Disabled"))
-      : theme.error("✗ Missing requirements");
-
-  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
-  lines.push("");
-  lines.push(hook.description);
-  lines.push("");
-
-  // Details
-  lines.push(theme.heading("Details:"));
-  if (hook.managedByPlugin) {
-    lines.push(`${theme.muted("  Source:")} ${hook.source} (${hook.pluginId ?? "unknown"})`);
-  } else {
-    lines.push(`${theme.muted("  Source:")} ${hook.source}`);
-  }
-  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`);
-  lines.push(`${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`);
-  if (hook.homepage) {
-    lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
-  }
-  if (hook.events.length > 0) {
-    lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
-  }
-  if (hook.managedByPlugin) {
-    lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
-  }
-  if (hook.blockedReason) {
-    lines.push(`${theme.muted("  Blocked reason:")} ${hook.blockedReason}`);
-  }
-
-  // Requirements
-  const hasRequirements =
-    hook.requirements.bins.length > 0 ||
-    hook.requirements.anyBins.length > 0 ||
-    hook.requirements.env.length > 0 ||
-    hook.requirements.config.length > 0 ||
-    hook.requirements.os.length > 0;
-
-  if (hasRequirements) {
-    lines.push("");
-    lines.push(theme.heading("Requirements:"));
-    if (hook.requirements.bins.length > 0) {
-      const binsStatus = hook.requirements.bins.map((bin) => {
-        const missing = hook.missing.bins.includes(bin);
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
-      });
-      lines.push(`${theme.muted("  Binaries:")} ${binsStatus.join(", ")}`);
-    }
-    if (hook.requirements.anyBins.length > 0) {
-      const anyBinsStatus =
-        hook.missing.anyBins.length > 0
-          ? theme.error(`✗ (any of: ${hook.requirements.anyBins.join(", ")})`)
-          : theme.success(`✓ (any of: ${hook.requirements.anyBins.join(", ")})`);
-      lines.push(`${theme.muted("  Any binary:")} ${anyBinsStatus}`);
-    }
-    if (hook.requirements.env.length > 0) {
-      const envStatus = hook.requirements.env.map((env) => {
-        const missing = hook.missing.env.includes(env);
-        return missing ? theme.error(`✗ ${env}`) : theme.success(`✓ ${env}`);
-      });
-      lines.push(`${theme.muted("  Environment:")} ${envStatus.join(", ")}`);
-    }
-    if (hook.requirements.config.length > 0) {
-      const configStatus = hook.configChecks.map((check) => {
-        return check.satisfied ? theme.success(`✓ ${check.path}`) : theme.error(`✗ ${check.path}`);
-      });
-      lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
-    }
-    if (hook.requirements.os.length > 0) {
-      const osStatus =
-        hook.missing.os.length > 0
-          ? theme.error(`✗ (${hook.requirements.os.join(", ")})`)
-          : theme.success(`✓ (${hook.requirements.os.join(", ")})`);
-      lines.push(`${theme.muted("  OS:")} ${osStatus}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Format check output
- */
-export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptions): string {
-  if (opts.json) {
-    const eligible = report.hooks.filter((h) => h.loadable);
-    const notEligible = report.hooks.filter((h) => !h.loadable);
-    return JSON.stringify(
-      {
-        total: report.hooks.length,
-        eligible: eligible.length,
-        notEligible: notEligible.length,
-        hooks: {
-          eligible: eligible.map((h) => h.name),
-          notEligible: notEligible.map((h) => ({
-            name: h.name,
-            blockedReason: h.blockedReason,
-            missing: h.missing,
-          })),
-        },
-      },
-      null,
-      2,
-    );
-  }
-
-  const eligible = report.hooks.filter((h) => h.loadable);
-  const notEligible = report.hooks.filter((h) => !h.loadable);
-
-  const lines: string[] = [];
-  lines.push(theme.heading("Hooks Status"));
-  lines.push("");
-  lines.push(`${theme.muted("Total hooks:")} ${report.hooks.length}`);
-  lines.push(`${theme.success("Ready:")} ${eligible.length}`);
-  lines.push(`${theme.warn("Not ready:")} ${notEligible.length}`);
-
-  if (notEligible.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Hooks not ready:"));
-    for (const hook of notEligible) {
-      const reasons = [];
-      if (hook.blockedReason && hook.blockedReason !== "missing requirements") {
-        reasons.push(hook.blockedReason);
-      }
-      if (hook.missing.bins.length > 0) {
-        reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
-      }
-      if (hook.missing.anyBins.length > 0) {
-        reasons.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
-      }
-      if (hook.missing.env.length > 0) {
-        reasons.push(`env: ${hook.missing.env.join(", ")}`);
-      }
-      if (hook.missing.config.length > 0) {
-        reasons.push(`config: ${hook.missing.config.join(", ")}`);
-      }
-      if (hook.missing.os.length > 0) {
-        reasons.push(`os: ${hook.missing.os.join(", ")}`);
-      }
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-export async function enableHook(hookName: string): Promise<void> {
-  const snapshot = await readConfigFileSnapshot();
-  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
-  const nextConfig = buildConfigWithHookEnabled({
-    config,
-    hookName,
-    enabled: true,
-    ensureHooksEnabled: true,
+async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
+  const committed = await transformConfigFile({
+    transform: (config) =>
+      withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) => {
+        const hook = resolveHookSelection(report, hookName);
+        if (!hook) {
+          throw new Error(
+            `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+          );
+        }
+        if (hook.managedByPlugin) {
+          throw new Error(
+            `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+          );
+        }
+        if (enabled && !hook.requirementsSatisfied) {
+          const missing = formatHookMissingSummary(hook, 3);
+          const installHint = hook.install.length
+            ? ` Install options: ${summarizeStringEntries({
+                entries: hook.install.map((option) => option.label),
+                limit: 3,
+              })}.`
+            : "";
+          throw new Error(
+            `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
+          );
+        }
+        const entries = { ...config.hooks?.internal?.entries };
+        entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
+        const nextConfig: OpenClawConfig = {
+          ...config,
+          hooks: {
+            ...config.hooks,
+            internal: {
+              ...config.hooks?.internal,
+              ...(enabled ? { enabled: true } : {}),
+              entries,
+            },
+          },
+        };
+        return { nextConfig, result: { name: hook.name, emoji: hook.emoji } };
+      }),
   });
-
-  await replaceConfigFile({
-    nextConfig,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-  });
-  defaultRuntime.log(
-    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
-  );
-}
-
-export async function disableHook(hookName: string): Promise<void> {
-  const snapshot = await readConfigFileSnapshot();
-  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const hook = resolveHookForToggle(buildHooksReport(config), hookName);
-  const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
-
-  await replaceConfigFile({
-    nextConfig,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-  });
-  defaultRuntime.log(
-    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
-  );
+  const selectedHook = expectDefined(committed.result, "hook mutation result");
+  const prefix = enabled
+    ? `${theme.success("✓")} Enabled hook:`
+    : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
+  const name = selectedHook.emoji
+    ? `${selectedHook.emoji} ${theme.command(selectedHook.name)}`
+    : decorativePrefix("🔗", theme.command(selectedHook.name));
+  defaultRuntime.log(`${prefix} ${name}`);
 }
 
 export function registerHooksCli(program: Command): void {
   const hooks = program
     .command("hooks")
     .description("Manage internal agent hooks")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.openclaw.ai/cli/hooks")}\n`,
-    );
+    .option("--agent <id>", "Agent id to inspect")
+    .option("--json", "Output as JSON", false)
+    .addHelpText("after", () => formatDocsHelp("/cli/hooks"));
+  const hasJsonOutput = (opts: { json?: boolean } | undefined): boolean =>
+    Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
+  hooks.hook("preAction", (_thisCommand, actionCommand) => {
+    const parentAgent = hooks.opts<{ agent?: string }>().agent;
+    if (parentAgent !== undefined && !parentAgent.trim()) {
+      throw new Error("--agent must not be blank");
+    }
+    if (
+      parentAgent &&
+      actionCommand !== hooks &&
+      !new Set(["list", "info", "check", "enable", "disable"]).has(actionCommand.name())
+    ) {
+      throw new Error(
+        `openclaw hooks ${actionCommand.name()} does not support --agent; the option only selects an owner for read-only hook reports.`,
+      );
+    }
+  });
+
+  const reportAction =
+    (format: (report: HookStatusReport, opts: HooksListOptions) => string) =>
+    (opts: HooksListOptions, command: Command) =>
+      runOneShotHooksCliAction(async () => {
+        const json = hasJsonOutput(opts);
+        const output = await loadHooksReport(
+          resolveOptionFromCommand<string>(command, "agent"),
+          (report) => format(report, { ...opts, json }),
+        );
+        writeHooksOutput(output, json);
+      }, "root");
+  const runHooksList = reportAction(formatHooksList);
 
   hooks
     .command("list")
     .description("List all hooks")
+    .option("--agent <id>", "Agent id to inspect")
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
-    .action(async (opts) =>
-      runHooksCliAction(async () => {
-        const config = getRuntimeConfig();
-        const report = buildHooksReport(config);
-        writeHooksOutput(formatHooksList(report, opts), opts.json);
-      }),
-    );
+    .action(runHooksList);
 
   hooks
     .command("info <name>")
     .description("Show detailed information about a hook")
+    .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
-    .action(async (name, opts) =>
-      runHooksCliAction(async () => {
-        const config = getRuntimeConfig();
-        const report = buildHooksReport(config);
-        writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
-      }),
+    .action(async (name, opts: HooksReportOptions, command: Command) =>
+      runOneShotHooksCliAction(async () => {
+        const json = hasJsonOutput(opts);
+        const result = await loadHooksReport(
+          resolveOptionFromCommand<string>(command, "agent"),
+          (report) => {
+            const hook = resolveHookSelection(report, name);
+            return {
+              output: formatHookInfo(hook, name, { ...opts, json }),
+              exitCode: hook ? 0 : 1,
+            };
+          },
+        );
+        writeHooksOutput(result.output, json);
+        return result.exitCode;
+      }, "root"),
     );
 
   hooks
     .command("check")
     .description("Check hooks eligibility status")
+    .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
-    .action(async (opts) =>
-      runHooksCliAction(async () => {
-        const config = getRuntimeConfig();
-        const report = buildHooksReport(config);
-        writeHooksOutput(formatHooksCheck(report, opts), opts.json);
-      }),
-    );
+    .action(reportAction(formatHooksCheck));
 
-  hooks
-    .command("enable <name>")
-    .description("Enable a hook")
-    .action(async (name) =>
-      runHooksCliAction(async () => {
-        await enableHook(name);
-      }),
-    );
-
-  hooks
-    .command("disable <name>")
-    .description("Disable a hook")
-    .action(async (name) =>
-      runHooksCliAction(async () => {
-        await disableHook(name);
-      }),
-    );
+  for (const enabled of [true, false]) {
+    hooks
+      .command(`${enabled ? "enable" : "disable"} <name>`)
+      .description(enabled ? "Enable a hook" : "Disable a hook")
+      .option("--agent <id>", "Agent id whose workspace to inspect")
+      .action(async (name, _opts: { agent?: string }, command: Command) =>
+        runOneShotHooksCliAction(() =>
+          setHookEnabled(name, enabled, resolveOptionFromCommand<string>(command, "agent")),
+        ),
+      );
+  }
 
   hooks
     .command("relay", { hidden: true })
     .description("Internal native harness hook relay")
     .requiredOption("--provider <provider>", "Native harness provider")
     .requiredOption("--relay-id <id>", "Native hook relay id")
+    .option("--state-db <path>", "Shared state database path")
+    .option("--remote-credential <path>", "Dedicated harness relay credential file")
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
     .option(
@@ -538,9 +337,7 @@ export function registerHooksCli(program: Command): void {
     )
     .option("--timeout <ms>", "Gateway timeout in ms", "5000")
     .action(async (opts: NativeHookRelayCliOptions) =>
-      runHooksCliAction(async () => {
-        process.exitCode = await runNativeHookRelayCli(opts);
-      }),
+      runOneShotHooksCliAction(() => runNativeHookRelayCli(opts)),
     );
 
   hooks
@@ -549,11 +346,23 @@ export function registerHooksCli(program: Command): void {
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
+    .option("--force", "Confirm non-ClawHub sources and overwrite an existing hook pack", false)
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
+      false,
+    )
+    .action(async (raw: string, opts: RunPluginInstallCommandParams["opts"]) => {
+      const { runPluginInstallCommand } = await import("./plugins-install-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
-      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
+      await runPluginInstallCommand({
+        raw,
+        opts,
+        allowInstallPolicyWarningPrompt: true,
+        invalidateRuntimeCache: false,
+      });
     });
 
   hooks
@@ -562,18 +371,18 @@ export function registerHooksCli(program: Command): void {
     .argument("[id]", "Hook pack id (omit with --all)")
     .option("--all", "Update all tracked hooks", false)
     .option("--dry-run", "Show what would change without writing", false)
-    .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
+      false,
+    )
+    .action(async (id: string | undefined, opts: RunPluginUpdateCommandParams["opts"]) => {
+      const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks update` is deprecated; use `openclaw plugins update`."),
       );
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({ ids: id ? [id] : [], opts });
     });
 
-  hooks.action(async () =>
-    runHooksCliAction(async () => {
-      const config = getRuntimeConfig();
-      const report = buildHooksReport(config);
-      defaultRuntime.log(formatHooksList(report, {}));
-    }),
-  );
+  hooks.action(runHooksList);
 }

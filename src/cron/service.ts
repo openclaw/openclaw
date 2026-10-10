@@ -5,66 +5,169 @@ import type {
   CronServiceRunResult,
 } from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
-import * as ops from "./service/ops.js";
+import * as lifecycleOps from "./service/ops-lifecycle.js";
+import * as mutationOps from "./service/ops-mutations.js";
+import * as readOps from "./service/ops-read.js";
+import type { OnExitRunOptions } from "./service/ops-run-preparation.js";
+import * as runOps from "./service/ops-run.js";
+import * as streamOps from "./service/ops-stream.js";
 import {
+  type CronAddOptions,
   type CronServiceDeps,
+  type CronRunMode,
+  type CronUpdatePrecondition,
+  type CronUpdateOptions,
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
-export type { CronEvent, CronServiceDeps } from "./service/state.js";
+export type { CronEvent } from "./service/state.js";
 
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {
+  stopAndDrain?: () => Promise<void>;
   private readonly state;
+  private startInProgress = 0;
+  private startState: { generation: number; promise: Promise<void> } | null = null;
 
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
   }
 
   async start() {
-    await ops.start(this.state);
+    const generation = this.state.lifecycleGeneration;
+    const pending = this.startState;
+    if (pending) {
+      try {
+        await pending.promise;
+      } catch (err) {
+        if (pending.generation === generation) {
+          throw err;
+        }
+      }
+      if (pending.generation === generation) {
+        return;
+      }
+      await this.start();
+      return;
+    }
+    const promise = this.startOnce(generation);
+    this.startState = { generation, promise };
+    try {
+      await promise;
+    } finally {
+      if (this.startState?.promise === promise) {
+        this.startState = null;
+      }
+    }
+  }
+
+  private async startOnce(generation: number) {
+    this.startInProgress += 1;
+    this.state.schedulerStarted = false;
+    try {
+      const start = () => lifecycleOps.start(this.state);
+      await (this.state.deps.runSchedulerOwned
+        ? this.state.deps.runSchedulerOwned(start)
+        : start());
+      if (generation !== this.state.lifecycleGeneration) {
+        lifecycleOps.stop(this.state);
+        return;
+      }
+      this.state.schedulerStarted = !this.state.stopped;
+    } finally {
+      this.startInProgress -= 1;
+    }
   }
 
   stop() {
-    ops.stop(this.state);
+    lifecycleOps.stop(this.state);
+  }
+
+  /** Joins stopped timer generations from outside their callbacks. */
+  async waitForIdle(): Promise<void> {
+    await this.state.schedulerDrain;
+  }
+
+  pauseScheduling() {
+    lifecycleOps.pauseScheduling(this.state);
+  }
+
+  resumeScheduling() {
+    lifecycleOps.resumeScheduling(this.state);
+  }
+
+  getSuspensionBlockerCount() {
+    return this.startInProgress;
   }
 
   async status() {
-    return await ops.status(this.state);
+    return await readOps.status(this.state);
   }
 
   async list(opts?: { includeDisabled?: boolean }) {
-    return await ops.list(this.state, opts);
+    return await readOps.list(this.state, opts);
   }
 
-  async listPage(opts?: CronListPageOptions) {
-    return await ops.listPage(this.state, opts);
+  async listPage(opts?: CronListPageOptions, matchesJob?: (job: CronJob) => boolean) {
+    return await readOps.listPage(this.state, opts, matchesJob);
   }
 
-  async add(input: CronJobCreate) {
-    return await ops.add(this.state, input);
+  async add(input: CronJobCreate, opts?: CronAddOptions) {
+    return await mutationOps.add(this.state, input, opts);
   }
 
-  async update(id: string, patch: CronJobPatch) {
-    return await ops.update(this.state, id, patch);
+  async removeStaleJobFamily(
+    family: { declarationKey: string; name: string; ownerPluginTag: string },
+    opts?: { commitGuard?: () => void },
+  ) {
+    return await mutationOps.removeStaleJobFamily(this.state, family, opts);
   }
 
-  async remove(id: string) {
-    return await ops.remove(this.state, id);
+  async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
+    return await mutationOps.update(this.state, id, patch, opts);
+  }
+
+  async updateWithPrecondition(
+    id: string,
+    patch: CronJobPatch,
+    precondition: CronUpdatePrecondition,
+    opts?: CronUpdateOptions,
+  ) {
+    return await mutationOps.updateWithPrecondition(this.state, id, patch, precondition, opts);
+  }
+
+  async remove(id: string, opts?: { systemOwned?: boolean; commitGuard?: () => void }) {
+    return await mutationOps.remove(this.state, id, opts);
+  }
+
+  async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
+    return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
+  }
+
+  async quiesceJobs(jobs: readonly { id: string; revision: string }[], commitGuard: () => void) {
+    await mutationOps.quiesceJobs(this.state, jobs, commitGuard);
   }
 
   async run(
     id: string,
-    mode?: "due" | "force",
+    mode?: CronRunMode,
     opts?: CronServiceRunOptions,
   ): Promise<CronServiceRunResult> {
-    return await ops.run(this.state, id, mode, opts);
+    return await runOps.run(this.state, id, mode, opts);
   }
 
-  async enqueueRun(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {
-    const result = await ops.enqueueRun(this.state, id, mode);
+  async runOnExit(id: string, opts: OnExitRunOptions): Promise<CronServiceRunResult> {
+    return await runOps.runOnExit(this.state, id, opts);
+  }
+
+  async enqueueRun(
+    id: string,
+    mode?: CronRunMode,
+    opts?: { commitGuard?: () => void },
+  ): Promise<CronServiceRunResult> {
+    const result = await runOps.enqueueRun(this.state, id, mode, opts);
     if (result.ok && "runnable" in result) {
       // ops.enqueueRun resolves runnable dispositions before crossing the
       // public facade; leaking one would expose an internal scheduler detail.
@@ -73,19 +176,90 @@ export class CronService implements CronServiceContract {
     return result;
   }
 
+  async waitForManualRun(runId: string, timeoutMs: number, signal?: AbortSignal) {
+    return await runOps.waitForManualRun(this.state, runId, timeoutMs, signal);
+  }
+
   getJob(id: string): CronJob | undefined {
     return this.state.store?.jobs.find((job) => job.id === id);
   }
 
+  /** In-memory job snapshot; undefined until the store is loaded. */
+  getLoadedJobs(): readonly CronJob[] | undefined {
+    return this.state.store?.jobs;
+  }
+
   async readJob(id: string): Promise<CronJob | undefined> {
-    return await ops.readJob(this.state, id);
+    return await readOps.readJob(this.state, id);
+  }
+
+  async readScratch(id: string, options?: { assertCurrent?: () => void; signal?: AbortSignal }) {
+    return await readOps.readScratch(this.state, id, options);
+  }
+
+  async writeScratch(
+    id: string,
+    params: {
+      content: string | null;
+      expectedRevision?: number;
+      sourceSha256?: string;
+      commitGuard?: () => void;
+    },
+  ) {
+    return await readOps.writeScratch(this.state, id, params);
+  }
+
+  async recordExternalFailure(
+    id: string,
+    error: string,
+    statePatch: Partial<CronJob["state"]>,
+    source?: { scheduleKey: string; identity: string },
+  ): Promise<void> {
+    await streamOps.recordExternalFailure(this.state, id, error, statePatch, source);
+  }
+
+  async updateExternalState(
+    id: string,
+    streamScheduleKey: string,
+    streamSourceIdentity: string,
+    statePatch: Partial<CronJob["state"]>,
+  ): Promise<boolean> {
+    return await streamOps.updateExternalState(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+      statePatch,
+    );
+  }
+
+  async retireExternalStreamSource(
+    id: string,
+    streamScheduleKey: string,
+    streamSourceIdentity: string,
+  ): Promise<string | undefined> {
+    return await streamOps.retireExternalStreamSource(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+    );
+  }
+
+  async updateExternalCounters(
+    id: string,
+    counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
+  ): Promise<void> {
+    await streamOps.updateExternalCounters(this.state, id, counters);
   }
 
   getDefaultAgentId(): string | undefined {
-    return this.state.deps.defaultAgentId;
+    return this.state.deps.resolveDefaultAgentId
+      ? this.state.deps.resolveDefaultAgentId()
+      : this.state.deps.defaultAgentId;
   }
 
   wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {
-    return ops.wakeNow(this.state, opts);
+    return runOps.wakeNow(this.state, opts);
   }
 }

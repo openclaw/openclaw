@@ -1,34 +1,30 @@
-// Formats config validation issues for CLI and diagnostics.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import type { ConfigValidationIssue } from "./types.js";
 
 type ConfigIssueLineInput = {
   path?: string | null;
+  pathSegments?: readonly (string | number)[];
   message: string;
+  line?: number;
+  sourceFile?: string;
 };
 
 type ConfigIssueFormatOptions = {
   normalizeRoot?: boolean;
+  sourceFile?: string;
 };
 
 type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
   maxIssues?: number;
 };
 
-/** Normalize missing or blank config issue paths to the root marker used in CLI output. */
-export function normalizeConfigIssuePath(path: string | null | undefined): string {
-  if (typeof path !== "string") {
-    return "<root>";
-  }
-  const trimmed = path.trim();
-  return trimmed ? trimmed : "<root>";
-}
-
 /** Return the public config issue shape with a normalized path and non-empty allowed values. */
-export function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
+function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
-  return {
-    path: normalizeConfigIssuePath(issue.path),
+  const normalized: ConfigValidationIssue = {
+    path: normalizeOptionalString(issue.path) ?? "<root>",
     message: issue.message,
     ...(hasAllowedValues ? { allowedValues: issue.allowedValues } : {}),
     ...(hasAllowedValues &&
@@ -37,6 +33,13 @@ export function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValida
       ? { allowedValuesHiddenCount: issue.allowedValuesHiddenCount }
       : {}),
   };
+  if (issue.pathSegments) {
+    Object.defineProperty(normalized, "pathSegments", {
+      value: issue.pathSegments,
+      enumerable: false,
+    });
+  }
+  return normalized;
 }
 
 /** Normalize a batch of config validation issues for display or JSON output. */
@@ -46,14 +49,16 @@ export function normalizeConfigIssues(
   return issues.map((issue) => normalizeConfigIssue(issue));
 }
 
-function resolveIssuePathForLine(
-  path: string | null | undefined,
+function resolveIssueLocationPrefix(
+  issue: ConfigIssueLineInput,
   opts?: ConfigIssueFormatOptions,
 ): string {
-  if (opts?.normalizeRoot) {
-    return normalizeConfigIssuePath(path);
+  const sourceFile =
+    normalizeOptionalString(issue.sourceFile) ?? normalizeOptionalString(opts?.sourceFile);
+  if (!sourceFile || typeof issue.line !== "number" || issue.line <= 0) {
+    return "";
   }
-  return typeof path === "string" ? path : "";
+  return `${sanitizeTerminalText(sourceFile)}:${issue.line} — `;
 }
 
 /**
@@ -66,9 +71,19 @@ export function formatConfigIssueLine(
   opts?: ConfigIssueFormatOptions,
 ): string {
   const prefix = marker ? `${marker} ` : "";
-  const path = sanitizeTerminalText(resolveIssuePathForLine(issue.path, opts));
+  const locationPrefix = resolveIssueLocationPrefix(issue, opts);
+  const issuePath = issue.pathSegments?.length
+    ? formatConcreteConfigPath(issue.pathSegments)
+    : issue.path;
+  const path = sanitizeTerminalText(
+    opts?.normalizeRoot
+      ? (normalizeOptionalString(issuePath) ?? "<root>")
+      : typeof issuePath === "string"
+        ? issuePath
+        : "",
+  );
   const message = sanitizeTerminalText(issue.message);
-  return `${prefix}${path}: ${message}`;
+  return `${prefix}${locationPrefix}${path}: ${message}`;
 }
 
 /** Format config issues as terminal-safe lines with a shared marker prefix. */

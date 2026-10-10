@@ -1,7 +1,6 @@
 // Matrix tests cover index plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { registerMatrixCliMetadata } from "./cli-metadata.js";
 import entry, { registerMatrixFullRuntime } from "./index.js";
 
 const cliMocks = vi.hoisted(() => ({
@@ -12,7 +11,6 @@ const runtimeMocks = vi.hoisted(() => ({
   ensureMatrixCryptoRuntime: vi.fn(async () => {}),
   handleMatrixSubagentDeliveryTarget: vi.fn(() => "delivery-target"),
   handleMatrixSubagentEnded: vi.fn(async () => {}),
-  handleMatrixSubagentSpawning: vi.fn(async () => "spawned"),
   handleVerificationBootstrap: vi.fn(async () => {}),
   handleVerificationStatus: vi.fn(async () => {}),
   handleVerifyRecoveryKey: vi.fn(async () => {}),
@@ -26,7 +24,10 @@ vi.mock("./src/cli.js", () => {
 });
 
 vi.mock("./plugin-entry.handlers.runtime.js", () => runtimeMocks);
-vi.mock("./runtime-setter-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
+vi.mock("./runtime-setter-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-setter-api.js")>()),
+  setMatrixRuntime: runtimeMocks.setMatrixRuntime,
+}));
 vi.mock("./src/matrix/subagent-hooks.js", () => runtimeMocks);
 
 function requireFirstCliRegistration(mock: ReturnType<typeof vi.fn>) {
@@ -39,55 +40,6 @@ function requireFirstCliRegistration(mock: ReturnType<typeof vi.fn>) {
 
 describe("matrix plugin", () => {
   it("registers matrix CLI through a descriptor-backed lazy registrar", async () => {
-    const registerCli = vi.fn();
-    const registerGatewayMethod = vi.fn();
-    const api = createTestPluginApi({
-      id: "matrix",
-      name: "Matrix",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      registrationMode: "cli-metadata",
-      registerCli,
-      registerGatewayMethod,
-    });
-
-    registerMatrixCliMetadata(api);
-
-    expect(registerCli).toHaveBeenCalledTimes(1);
-    const [registrar, options] = requireFirstCliRegistration(registerCli);
-    expect(typeof registrar).toBe("function");
-    expect(options).toEqual({
-      descriptors: [
-        {
-          name: "matrix",
-          description: "Manage Matrix accounts, verification, devices, and profile state",
-          hasSubcommands: true,
-        },
-      ],
-    });
-    expect(cliMocks.registerMatrixCli).not.toHaveBeenCalled();
-
-    const program = { command: vi.fn() };
-    const result = registrar({ program } as never);
-
-    await result;
-    expect(cliMocks.registerMatrixCli).toHaveBeenCalledWith({ program });
-    expect(registerGatewayMethod).not.toHaveBeenCalled();
-  });
-
-  it("keeps runtime bootstrap and CLI metadata out of setup-only registration", () => {
-    expect(entry.kind).toBe("bundled-channel-entry");
-    expect(entry.id).toBe("matrix");
-    expect(entry.name).toBe("Matrix");
-    if (!entry.setChannelRuntime) {
-      throw new Error("expected Matrix runtime setter");
-    }
-    entry.setChannelRuntime({ marker: "runtime" } as never);
-    expect(runtimeMocks.setMatrixRuntime).not.toHaveBeenCalled();
-  });
-
-  it("wires CLI metadata through the bundled entry", () => {
     const registerCli = vi.fn();
     const registerGatewayMethod = vi.fn();
     const api = createTestPluginApi({
@@ -115,7 +67,22 @@ describe("matrix plugin", () => {
         },
       ],
     });
+    expect(cliMocks.registerMatrixCli).not.toHaveBeenCalled();
+
+    const program = { command: vi.fn() };
+    const result = registrar({ program } as never);
+
+    await result;
+    expect(cliMocks.registerMatrixCli).toHaveBeenCalledWith({ program });
     expect(registerGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("keeps runtime bootstrap and CLI metadata out of setup-only registration", () => {
+    if (!entry.setChannelRuntime) {
+      throw new Error("expected Matrix runtime setter");
+    }
+    entry.setChannelRuntime({ marker: "runtime" } as never);
+    expect(runtimeMocks.setMatrixRuntime).not.toHaveBeenCalled();
   });
 
   it("registers subagent lifecycle hooks during full runtime registration", async () => {

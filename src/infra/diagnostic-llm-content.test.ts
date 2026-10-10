@@ -4,7 +4,11 @@ import { resolveDiagnosticModelContentCapturePolicy } from "./diagnostic-llm-con
 
 describe("resolveDiagnosticModelContentCapturePolicy", () => {
   it("requires diagnostics, otel, traces, and explicit content capture", () => {
-    expect(resolveDiagnosticModelContentCapturePolicy({}).anyModelContent).toBe(false);
+    expect(resolveDiagnosticModelContentCapturePolicy({})).toMatchObject({
+      anyModelContent: false,
+      toolInputs: false,
+      toolOutputs: false,
+    });
     expect(
       resolveDiagnosticModelContentCapturePolicy({
         diagnostics: { enabled: false, otel: { enabled: true, captureContent: true } },
@@ -25,6 +29,8 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
     ).toMatchObject({
       inputMessages: true,
       outputMessages: true,
+      toolInputs: true,
+      toolOutputs: true,
       systemPrompt: false,
       toolDefinitions: true,
       anyModelContent: true,
@@ -36,13 +42,15 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
     ).toMatchObject({
       inputMessages: true,
       outputMessages: true,
+      toolInputs: true,
+      toolOutputs: true,
       systemPrompt: false,
       toolDefinitions: true,
       anyModelContent: true,
     });
   });
 
-  it("uses the object form for system prompt capture", () => {
+  it("rejects the retired object form of content capture", () => {
     expect(
       resolveDiagnosticModelContentCapturePolicy({
         diagnostics: {
@@ -53,6 +61,8 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
               enabled: true,
               inputMessages: true,
               outputMessages: false,
+              toolInputs: true,
+              toolOutputs: true,
               systemPrompt: true,
               toolDefinitions: true,
             },
@@ -60,96 +70,13 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
         },
       }),
     ).toMatchObject({
-      inputMessages: true,
-      outputMessages: false,
-      systemPrompt: true,
-      toolDefinitions: true,
-      anyModelContent: true,
-    });
-  });
-
-  it("gates tool definitions independently from input messages", () => {
-    expect(
-      resolveDiagnosticModelContentCapturePolicy({
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            captureContent: {
-              enabled: true,
-              inputMessages: true,
-              toolDefinitions: false,
-            },
-          },
-        },
-      }),
-    ).toMatchObject({
-      inputMessages: true,
-      toolDefinitions: false,
-      anyModelContent: true,
-    });
-
-    expect(
-      resolveDiagnosticModelContentCapturePolicy({
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            captureContent: {
-              enabled: true,
-              inputMessages: false,
-              toolDefinitions: true,
-            },
-          },
-        },
-      }),
-    ).toMatchObject({
       inputMessages: false,
-      toolDefinitions: true,
-      anyModelContent: true,
-    });
-  });
-
-  it("resolves tool content flags independently from model-visible content", () => {
-    const base = (captureContent: Record<string, unknown>) =>
-      resolveDiagnosticModelContentCapturePolicy({
-        diagnostics: {
-          enabled: true,
-          otel: { enabled: true, captureContent: { enabled: true, ...captureContent } },
-        },
-      });
-
-    // Tool input only: tool content on, model content off.
-    expect(base({ toolInputs: true })).toMatchObject({
-      toolInputs: true,
+      outputMessages: false,
+      toolInputs: false,
       toolOutputs: false,
+      systemPrompt: false,
+      toolDefinitions: false,
       anyModelContent: false,
-    });
-
-    // Tool output only.
-    expect(base({ toolOutputs: true })).toMatchObject({
-      toolInputs: false,
-      toolOutputs: true,
-    });
-
-    // Model content only: tool flags stay off.
-    expect(base({ inputMessages: true })).toMatchObject({
-      toolInputs: false,
-      toolOutputs: false,
-      anyModelContent: true,
-    });
-
-    // captureContent: true enables both families.
-    expect(
-      resolveDiagnosticModelContentCapturePolicy({
-        diagnostics: { enabled: true, otel: { enabled: true, captureContent: true } },
-      }),
-    ).toMatchObject({ anyModelContent: true, toolInputs: true, toolOutputs: true });
-
-    // Disabled config: no tool content.
-    expect(resolveDiagnosticModelContentCapturePolicy({})).toMatchObject({
-      toolInputs: false,
-      toolOutputs: false,
     });
   });
 });

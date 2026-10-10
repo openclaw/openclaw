@@ -5,22 +5,21 @@ summary: "Full reference for the skills.* config schema, agent allowlists, works
 read_when:
   - Configuring skill loading, install, or gating behavior
   - Setting per-agent skill visibility
-  - Adjusting Skill Workshop limits or approval policy
+  - Adjusting Skill Workshop learning mode or size limits
 ---
 
 Most skills configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific visibility lives under
-`agents.defaults.skills` and `agents.list[].skills`.
+`agents.defaults.skills` and `agents.entries.*.skills`.
 
 ```json5
 {
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
       watch: true,
-      watchDebounceMs: 250,
     },
     install: {
       preferBrew: true,
@@ -28,10 +27,7 @@ Most skills configuration lives under `skills` in
       allowUploadedArchives: false,
     },
     workshop: {
-      autonomous: { enabled: false },
-      allowSymlinkTargetWrites: false,
-      approvalPolicy: "pending",
-      maxPending: 50,
+      autonomous: { mode: "auto" },
       maxSkillBytes: 40000,
     },
     entries: {
@@ -48,7 +44,7 @@ Most skills configuration lives under `skills` in
 ```
 
 <Note>
-  For built-in image generation, use `agents.defaults.imageGenerationModel`
+  For built-in image generation, use `agents.defaults.mediaModels.image`
   plus the core `image_generate` tool instead of `skills.entries`. Skill
   entries are for custom or third-party skill workflows only.
 </Note>
@@ -56,25 +52,21 @@ Most skills configuration lives under `skills` in
 ## Loading (`skills.load`)
 
 <ParamField path="skills.load.extraDirs" type="string[]">
-  Additional skill directories to scan, at the lowest precedence (after bundled
-  and plugin skills). Paths are expanded with `~` support.
+  Additional skill directories to scan, at the lowest precedence (below
+  bundled and plugin skills). Paths are expanded with `~` support.
 </ParamField>
 
 <ParamField path="skills.load.allowSymlinkTargets" type="string[]">
-  Trusted real target directories that symlinked skill folders may resolve into,
-  even when the symlink lives outside the configured root. Use this for
+  Trusted real target directories that symlinked skill folders may resolve
+  into, even when the symlink lives outside the configured root. Use this for
   intentional sibling-repo layouts such as
-  `<workspace>/skills/manager -> ~/Projects/manager/skills`. Keep this list
-  narrow — do not point at broad roots like `~` or `~/Projects`.
+  `<workspace>/skills/manager -> ~/path/to/skills`. Keep this list
+  narrow — do not point at broad roots like `~` or a whole projects directory.
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
   Watch skill folders and refresh the skills snapshot when `SKILL.md` files
   change. Covers nested files under grouped skill roots.
-</ParamField>
-
-<ParamField path="skills.load.watchDebounceMs" type="number" default="250">
-  Debounce window for skill watcher events in milliseconds.
 </ParamField>
 
 ## Install (`skills.install`)
@@ -85,9 +77,12 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs — the Gateway runtime should still use Node (Bun is not recommended
-  for WhatsApp/Telegram). Use `openclaw setup --node-manager` for npm, pnpm,
-  or bun; set `"yarn"` manually for Yarn-backed skill installs.
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4+
+  with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
+  `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
+  `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
+  installs. Setup preserves this preference unless you pass `--node-manager`;
+  fresh configurations default to `npm`.
 </ParamField>
 
 <ParamField path="skills.install.allowUploadedArchives" type="boolean" default="false">
@@ -99,10 +94,10 @@ Most skills configuration lives under `skills` in
 ## Operator Install Policy (`security.installPolicy`)
 
 Use `security.installPolicy` when operators need a trusted local command to
-approve or block skill and plugin installs with host-specific policy. The policy
-runs after OpenClaw has staged source material and before the install or update
-continues. It applies to ClawHub skills, uploaded skills, Git/local skills,
-skill dependency installers, and plugin install/update sources.
+approve or block skill and plugin installs with host-specific policy. The
+policy runs after OpenClaw has staged source material and before the install
+or update continues. It applies to ClawHub skills, uploaded skills, Git/local
+skills, skill dependency installers, and plugin install/update sources.
 
 ```json5
 {
@@ -133,8 +128,8 @@ skill dependency installers, and plugin install/update sources.
 </ParamField>
 
 <ParamField path="security.installPolicy.targets" type='("skill" | "plugin")[]'>
-  Optional target filter. When omitted, policy applies to every supported target
-  so new installs do not unexpectedly fail open.
+  Optional target filter. When omitted, policy applies to every supported
+  target so new installs do not unexpectedly fail open.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.command" type="string">
@@ -151,7 +146,8 @@ skill dependency installers, and plugin install/update sources.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.noOutputTimeoutMs" type="number" default="timeoutMs">
-  Maximum time without stdout or stderr output before the policy fails closed.
+  Maximum time without stdout or stderr output before the policy fails
+  closed.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.maxOutputBytes" type="number" default="1048576">
@@ -163,40 +159,64 @@ skill dependency installers, and plugin install/update sources.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.passEnv" type="string[]">
-  Environment variable names copied from the OpenClaw process into the policy
-  process. Only named variables are passed.
+  Environment variable names copied from the OpenClaw process into the
+  policy process. Only named variables are passed.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.trustedDirs" type="string[]">
   Optional allowlist of directories that may contain the policy executable.
 </ParamField>
 
-<ParamField path="security.installPolicy.exec.allowInsecurePath" type="boolean" default="false">
-  Bypasses command path ownership and permission checks. Use only when the path
-  is protected by another mechanism.
-</ParamField>
-
-<ParamField path="security.installPolicy.exec.allowSymlinkCommand" type="boolean" default="false">
-  Allows the configured command path to be a symlink. The resolved target must
-  still satisfy the other path checks. Interpreter script arguments must be
-  direct regular files, not symlinks.
-</ParamField>
+The policy command and interpreter script arguments must be direct regular
+files with trusted ownership, restricted permissions, and verifiable parent
+directories. Symlinks and insecure paths are rejected.
 
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
-optional structured `source`, structured `origin`, and `request`. It must write
-one JSON object on stdout: `{ "protocolVersion": 1, "decision": "allow" }` or
-`{ "protocolVersion": 1, "decision": "block", "reason": "..." }`. Non-zero
-exit, timeout, malformed JSON, missing fields, or unsupported protocol versions
-fail closed.
+optional structured `source`, structured `origin`, and `request`. It must
+write one JSON object on stdout with an `allow`, `warn`, or `block` decision.
+`warn` and `block` require a non-empty `reason`; every decision may include a
+`findings` array. Each finding requires non-empty string `ruleId` and `message`
+fields plus a `severity` of `info`, `warn`, or `critical`. Optional `file` and
+`evidence` values must be non-empty strings; a finite numeric `line` is rounded
+down and clamped to the safe-integer range from 1 through `Number.MAX_SAFE_INTEGER`.
+Malformed finding entries are ignored, and
+invalid optional fields are omitted. A non-array `findings` value is treated as
+absent. Operator-facing reason and finding text are limited to 1,000 characters.
+OpenClaw retains at most 100 normalized findings for display. Only a `warn`
+response with more than 100 valid findings fails closed and cannot be
+acknowledged; `allow` and `block` retain the first 100. A warning stops the
+install before commit. A `warn` review whose fully rendered notice, including
+its title, target, sanitized reason and findings, and recovery guidance, exceeds
+the 4,000-character aggregate display limit fails closed without presenting a
+partial review. An over-budget `block` remains terminal with a
+bounded denial, while over-budget findings on `allow` are summarized in bounded
+diagnostic output. Interactive CLI
+plugin and skill commands ask the operator to type the target name using the
+same `install anyway` or `update anyway` copy as suspicious ClawHub releases,
+then run policy again before continuing. Declined and non-interactive commands
+on the direct CLI may use `--acknowledge-install-policy-warning` as explicit
+approval after review for every warning in that command invocation;
+every approved warning is re-evaluated before continuing.
+The Control UI can review and approve warnings for its plugin install request;
+that approval covers every warning in the invocation, and each warning is
+still re-evaluated. Other Gateway-backed and automatic installs remain blocked
+when they have no operator-confirmation flow. Use an equivalent direct plugin
+or skill command to review and approve the warning when one exists. Otherwise,
+change `security.installPolicy` to return `allow` for the reviewed request,
+then retry the managed flow. `--force` does not approve policy warnings. A `block`,
+non-zero exit, timeout, invalid JSON, non-object response, missing or invalid
+protocol version or decision, or missing or empty `warn`/`block` reason always
+fails closed.
 
-OpenClaw does not execute install policy during normal Gateway startup. Installs
-and updates fail closed when policy is enabled but unavailable. `openclaw doctor`
-performs static validation, and `openclaw doctor --deep` executes a synthetic
-install probe against the configured command.
+OpenClaw does not execute install policy during normal Gateway startup.
+Installs and updates fail closed when policy is enabled but unavailable.
+`openclaw doctor` performs static validation; `openclaw doctor --deep`
+executes a synthetic install check against the configured command.
 
 Bulk updates apply policy per target: a blocked skill or plugin update fails
-that target without disabling the policy or skipping later targets in the batch.
+that target without disabling the policy or skipping later targets in the
+batch.
 
 Example stdin:
 
@@ -260,9 +280,9 @@ process.stdin.on("end", () => {
 ## Bundled skill allowlist
 
 <ParamField path="skills.allowBundled" type="string[]">
-  Optional allowlist for **bundled** skills only. When set, only bundled skills
-  in the list are eligible. Managed, agent-level, and workspace skills are
-  unaffected.
+  Optional allowlist for **bundled** skills only. When set, only bundled
+  skills in the list are eligible. Managed, agent-level, and workspace
+  skills are unaffected.
 </ParamField>
 
 ## Per-skill entries (`skills.entries`)
@@ -272,9 +292,10 @@ Keys under `entries` match the skill `name` by default. If a skill defines
 (JSON5 allows quoted keys).
 
 <ParamField path="skills.entries.<key>.enabled" type="boolean">
-  `false` disables the skill even when bundled or installed. The `coding-agent`
-  bundled skill is opt-in — set it to `true` and ensure one of `claude`,
-  `codex`, `opencode`, or another supported CLI is installed and authenticated.
+  `false` disables the skill even when bundled or installed. The
+  `coding-agent` bundled skill is opt-in — set it to `true` and ensure one of
+  `claude`, `codex`, `opencode`, or another supported CLI is installed and
+  authenticated.
 </ParamField>
 
 <ParamField path="skills.entries.<key>.apiKey" type='string | { source, provider, id }'>
@@ -299,67 +320,75 @@ different visible skill set per agent.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
+      heartbeat: { agentId: "writer" },
+      systemAgent: { agentId: "writer" },
+      authInheritance: { agentId: "writer" },
     },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults entirely
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults entirely
+      "locked-down": { skills: [] }, // no skills
+    },
   },
+  talk: { agentId: "writer" },
 }
 ```
 
 <ParamField path="agents.defaults.skills" type="string[]">
-  Shared baseline allowlist inherited by agents that omit `agents.list[].skills`.
-  Omit entirely to leave skills unrestricted by default.
+  Shared baseline allowlist inherited by agents that omit
+  `agents.entries.*.skills`. Omit entirely to leave skills unrestricted by
+  default.
 </ParamField>
 
-<ParamField path="agents.list[].skills" type="string[]">
-  Explicit final skill set for that agent. Explicit lists **replace** inherited
-  defaults — they do not merge. Set to `[]` to expose no skills for that agent.
+<ParamField path="agents.entries.*.skills" type="string[]">
+  Explicit final skill set for that agent. Explicit lists **replace**
+  inherited defaults — they do not merge. Set to `[]` to expose no skills for
+  that agent.
 </ParamField>
 
 <Warning>
-  Agent skill allowlists are a visibility and loading filter for OpenClaw skill
-  discovery, prompts, slash-command discovery, sandbox sync, and skill
-  snapshots. They are not a shell-time authorization boundary. If an agent can
-  run host `exec`, that shell can still run external clients or read host files
-  that are visible to the execution user, including MCP client registries such
-  as `~/.openclaw/skills/config/mcporter.json`. For per-agent MCP isolation,
-  combine skill allowlists with sandbox/OS-user isolation, deny or tightly
-  allowlist host exec, and prefer per-agent credentials at the MCP server.
+  Agent skill allowlists are a visibility and loading filter for OpenClaw
+  skill discovery, prompts, slash-command discovery, sandbox sync, and skill
+  snapshots. They are not a shell-time authorization boundary. If an agent
+  can run host `exec`, that shell can still run external clients or read
+  host files that are visible to the execution user, including MCP client
+  registries such as `~/.openclaw/skills/config/mcporter.json`. For
+  per-agent MCP isolation, combine skill allowlists with sandbox/OS-user
+  isolation, deny or tightly allowlist host exec, and prefer per-agent
+  credentials at the MCP server.
 </Warning>
 
 ## Workshop (`skills.workshop`)
 
-<ParamField path="skills.workshop.autonomous.enabled" type="boolean" default="false">
-  When `true`, agents can create pending proposals from durable conversation
-  signals after successful turns. User-prompted skill creation always goes
-  through Skill Workshop regardless of this setting.
+<ParamField path="skills.workshop.autonomous.mode" type='"off" | "auto"' default='"auto"'>
+  `auto` lets agents save and update Workshop skills: a background review runs
+  after substantial work, and learned skills unused for 30 days are archived.
+  Review changes are announced in the conversation, and every change can be
+  undone. `off` disables the background review and unused-skill cleanup.
+  User-prompted skill creation, `/learn`, and manual learning sessions work in
+  both modes.
 </ParamField>
 
-<ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"pending"'>
-  `pending` requires operator approval before agent-initiated apply, reject, or
-  quarantine. `auto` allows those actions without approval.
-</ParamField>
-
-<ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
-  Allow Skill Workshop apply to write through workspace skill symlinks whose
-  real target is already trusted by `skills.load.allowSymlinkTargets`. Keep this
-  disabled unless generated proposal applies should mutate that shared skill
-  root.
-</ParamField>
-
-<ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per workspace.
-</ParamField>
+See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,
+and troubleshooting.
 
 <ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
-  Maximum proposal body size in bytes. Proposal descriptions are hard-capped at
-  160 bytes because they appear in discovery and listing output.
+  Maximum `SKILL.md` size in bytes for Workshop skills (allowed range:
+  1024-200000). Skill descriptions are capped at 1024 bytes separately; keep
+  them near 160 bytes because they appear in discovery and listing output.
 </ParamField>
+
+`openclaw doctor --fix` migrates configs from the removed proposal flow: it
+changes `autonomous.mode: "propose"` to `"off"` and deletes
+`skills.workshop.approvalPolicy` and `skills.workshop.maxPending`. Run
+`openclaw config set skills.workshop.autonomous.mode auto` to turn automatic
+learning back on.
+
+See [Skill Workshop](/tools/skill-workshop) for the skill lifecycle, CLI
+commands, agent tool parameters, and Gateway methods this config controls.
 
 ## Symlinked skill roots
 
@@ -373,45 +402,35 @@ To allow an intentional symlink layout, declare the trusted target:
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
 ```
 
-With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills` is
-accepted after realpath resolution. `extraDirs` scans the sibling repo directly;
-`allowSymlinkTargets` preserves the symlinked path for existing layouts.
+With this config, `<workspace>/skills/manager -> ~/path/to/skills`
+is accepted after realpath resolution. `extraDirs` scans the sibling repo
+directly; `allowSymlinkTargets` preserves the symlinked path for existing
+layouts.
 
-Skill Workshop apply does not write through those symlinks by default. To let
-Workshop apply mutate skills under already-trusted symlink targets, opt in
-separately:
-
-```json5
-{
-  skills: {
-    load: {
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
-    },
-    workshop: {
-      allowSymlinkTargetWrites: true,
-    },
-  },
-}
-```
+Skill Workshop uses each agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`
+containment boundary. It does not use `allowSymlinkTargets`, and it rejects
+symlinked skills that resolve outside that directory.
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
-already accept skill-directory symlinks (per-skill `SKILL.md` containment still
-applies).
+already accept skill-directory symlinks unconditionally (per-skill
+`SKILL.md` containment still applies) — `allowSymlinkTargets` is only needed
+for workspace, extra-dir, and project-agent (`<workspace>/.agents/skills`)
+roots.
 
 ## Sandboxed skills and env vars
 
 <Warning>
-  `skills.entries.<skill>.env` and `apiKey` apply to **host** runs only. Inside
-  a sandbox they have no effect — a skill that depends on `GEMINI_API_KEY` will
-  fail with `apiKey not configured` unless the sandbox is given the variable
-  separately.
+  `skills.entries.<skill>.env` and `apiKey` apply to **host** runs only.
+  Inside a sandbox they have no effect — a skill that depends on
+  `GEMINI_API_KEY` will fail with `apiKey not configured` unless the sandbox
+  is given the variable separately.
 </Warning>
 
 Pass secrets into a Docker sandbox with:
@@ -438,17 +457,9 @@ Pass secrets into a Docker sandbox with:
 
 ## Loading order reminder
 
-```text
-workspace/skills      (highest)
-workspace/.agents/skills
-~/.agents/skills
-~/.openclaw/skills
-bundled skills
-skills.load.extraDirs (lowest)
-```
-
-Changes to skills and config take effect on the next new session when the
-watcher is enabled, or on the next agent turn when the watcher detects a change.
+See [Loading order](/tools/skills#loading-order) for source precedence, including
+the per-agent Workshop tier, and [Snapshots and refresh](/tools/skills#snapshots-and-refresh)
+for when changes become visible.
 
 ## Related
 
@@ -460,7 +471,10 @@ watcher is enabled, or on the next agent turn when the watcher detects a change.
     Authoring custom workspace skills.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Proposal queue for agent-drafted skills.
+    Agent-learned skills, change history, and undo.
+  </Card>
+  <Card title="Self-learning" href="/tools/self-learning" icon="brain">
+    Automatic, undoable skill learning from completed work.
   </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
     Native slash-command catalog and chat directives.

@@ -1,7 +1,7 @@
 // Mocks plugin setup wizard flows for command and installer tests.
 import { vi, type Mock } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../channels/plugins/setup-wizard.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createRuntimeEnv } from "./plugin-runtime-env.js";
 
@@ -22,9 +22,7 @@ type QueuedWizardPrompter = {
   prompter: WizardPrompter;
 };
 
-export async function selectFirstWizardOption<T>(params: {
-  options: Array<{ value: T }>;
-}): Promise<T> {
+async function selectFirstWizardOption<T>(params: { options: Array<{ value: T }> }): Promise<T> {
   const first = params.options[0];
   if (!first) {
     throw new Error("no options");

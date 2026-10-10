@@ -6,34 +6,35 @@ read_when:
 title: "vLLM"
 ---
 
-vLLM can serve open-source (and some custom) models via an **OpenAI-compatible** HTTP API. OpenClaw connects to vLLM using the `openai-completions` API.
+vLLM serves open-source (and some custom) models through an **OpenAI-compatible** HTTP API. OpenClaw connects using the `openai-completions` API and can **auto-discover** models when you opt in with `VLLM_API_KEY`.
 
-OpenClaw can also **auto-discover** available models from vLLM when you opt in with `VLLM_API_KEY` (any value works if your server does not enforce auth). Use `vllm/*` in `agents.defaults.models` to keep discovery dynamic when you also configure a custom vLLM base URL.
-
-OpenClaw treats `vllm` as a local OpenAI-compatible provider that supports
-streamed usage accounting, so status/context token counts can update from
-`stream_options.include_usage` responses.
-
-| Property         | Value                                    |
-| ---------------- | ---------------------------------------- |
-| Provider ID      | `vllm`                                   |
-| API              | `openai-completions` (OpenAI-compatible) |
-| Auth             | `VLLM_API_KEY` environment variable      |
-| Default base URL | `http://127.0.0.1:8000/v1`               |
+| Property         | Value                                      |
+| ---------------- | ------------------------------------------ |
+| Provider ID      | `vllm`                                     |
+| API              | `openai-completions` (OpenAI-compatible)   |
+| Auth             | `VLLM_API_KEY` environment variable        |
+| Default base URL | `http://127.0.0.1:8000/v1`                 |
+| Streaming usage  | Supported (`stream_options.include_usage`) |
 
 ## Getting started
 
 <Steps>
   <Step title="Start vLLM with an OpenAI-compatible server">
-    Your base URL should expose `/v1` endpoints (e.g. `/v1/models`, `/v1/chat/completions`). vLLM commonly runs on:
+    Your base URL must expose `/v1` endpoints (`/v1/models`, `/v1/chat/completions`). Start the server with the model you want to serve:
 
+    ```bash
+    vllm serve <model-id>
     ```
+
+    See the [vLLM online serving docs](https://docs.vllm.ai/en/latest/serving/online_serving/) for flags. vLLM commonly runs on:
+
+    ```text
     http://127.0.0.1:8000/v1
     ```
 
   </Step>
   <Step title="Set the API key environment variable">
-    Any value works if your server does not enforce auth:
+    Any non-empty value works if your server does not enforce auth:
 
     ```bash
     export VLLM_API_KEY="vllm-local"
@@ -61,28 +62,31 @@ streamed usage accounting, so status/context token counts can update from
   </Step>
 </Steps>
 
+<Tip>
+For non-interactive setup (CI, scripting), pass the base URL, key, and model directly:
+
+```bash
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --mode local \
+  --auth-choice vllm \
+  --custom-base-url "http://127.0.0.1:8000/v1" \
+  --custom-api-key "vllm-local" \
+  --custom-model-id "your-model-id"
+```
+
+</Tip>
+
 ## Model discovery (implicit provider)
 
-When `VLLM_API_KEY` is set (or an auth profile exists) and you **do not** define `models.providers.vllm`, OpenClaw queries:
-
-```
-GET http://127.0.0.1:8000/v1/models
-```
-
-and converts the returned IDs into model entries.
+When `VLLM_API_KEY` is set (or an auth profile exists) and `models.providers.vllm` is **not** defined, OpenClaw queries `GET http://127.0.0.1:8000/v1/models` and converts the returned IDs into model entries.
 
 <Note>
-If you set `models.providers.vllm` explicitly, OpenClaw uses your declared models by default. Add `"vllm/*": {}` to `agents.defaults.models` when you want OpenClaw to query that configured provider's `/models` endpoint and include all advertised vLLM models.
+If you set `models.providers.vllm` explicitly, OpenClaw uses only your declared models. Add `"vllm/*": {}` to `agents.defaults.models` to make OpenClaw also query that configured provider's `/models` endpoint and include all advertised vLLM models.
 </Note>
 
-## Explicit configuration (manual models)
+## Explicit configuration
 
-Use explicit config when:
-
-- vLLM runs on a different host or port
-- You want to pin `contextWindow` or `maxTokens` values
-- Your server requires a real API key (or you want to control headers)
-- You connect to a trusted loopback, LAN, or Tailscale vLLM endpoint
+Configure explicitly when vLLM runs on a different host or port, you want to pin `contextWindow`/`maxTokens`, your server requires a real API key, or you connect to a trusted loopback, LAN, or Tailscale endpoint:
 
 ```json5
 {
@@ -92,7 +96,7 @@ Use explicit config when:
         baseUrl: "http://127.0.0.1:8000/v1",
         apiKey: "${VLLM_API_KEY}",
         api: "openai-completions",
-        timeoutSeconds: 300, // Optional: extend connect/header/body/request timeout for slow local models
+        timeoutSeconds: 300, // Optional: extend request timeout for slow local models
         models: [
           {
             id: "your-model-id",
@@ -110,8 +114,7 @@ Use explicit config when:
 }
 ```
 
-To keep this provider dynamic without manually listing every model, add a provider
-wildcard to the visible model catalog:
+To keep the provider dynamic without listing every model, add a wildcard to the visible model catalog:
 
 ```json5
 {
@@ -129,27 +132,21 @@ wildcard to the visible model catalog:
 
 <AccordionGroup>
   <Accordion title="Proxy-style behavior">
-    vLLM is treated as a proxy-style OpenAI-compatible `/v1` backend, not a native
-    OpenAI endpoint. This means:
+    vLLM is treated as a proxy-style OpenAI-compatible `/v1` backend, not a native OpenAI endpoint:
 
-    | Behavior | Applied? |
-    |----------|----------|
-    | Native OpenAI request shaping | No |
-    | `service_tier` | Not sent |
-    | Responses `store` | Not sent |
-    | Prompt-cache hints | Not sent |
-    | OpenAI reasoning-compat payload shaping | Not applied |
-    | Hidden OpenClaw attribution headers | Not injected on custom base URLs |
+    | Behavior                                | Applied?                         |
+    | --------------------------------------- | -------------------------------- |
+    | Native OpenAI request shaping           | No                               |
+    | `service_tier`                          | Not sent                         |
+    | Responses `store`                       | Not sent                         |
+    | Prompt-cache hints                      | Not sent                         |
+    | OpenAI reasoning-compat payload shaping | Not applied                      |
+    | Hidden OpenClaw attribution headers     | Not injected on custom base URLs |
 
   </Accordion>
 
   <Accordion title="Qwen thinking controls">
-    For Qwen models served through vLLM, set
-    `compat.thinkingFormat: "qwen-chat-template"` on the configured provider
-    model row when the server expects Qwen chat-template kwargs. Models
-    configured this way expose a binary `/think` profile (`off`, `on`) because
-    Qwen template thinking is an on/off request flag, not an OpenAI-style effort
-    ladder.
+    For Qwen models, set `compat.thinkingFormat: "qwen-chat-template"` on the model row when the server expects Qwen chat-template kwargs. These models expose a binary `/think` profile (`off`, `on`) because Qwen chat-template thinking is an on/off flag, not an OpenAI-style effort ladder.
 
     ```json5
     {
@@ -181,17 +178,29 @@ wildcard to the visible model catalog:
     }
     ```
 
-    Non-`off` thinking levels send `enable_thinking: true`. If your endpoint
-    expects DashScope-style top-level flags instead, use
-    `compat.thinkingFormat: "qwen"` to send `enable_thinking` at the request
-    root.
+    Non-`off` thinking levels send `enable_thinking: true`. If your endpoint expects DashScope-style top-level flags instead, use `compat.thinkingFormat: "qwen"` to send `enable_thinking` at the request root.
+
+    If your served template accepts effort levels, declare them in `compat.supportedReasoningEfforts`, for example `["low", "medium", "xhigh"]`. OpenClaw then exposes those `/think` choices plus `off`. The shared reasoning resolver maps the selected level to the declared wire value. With `qwen-chat-template`, that value goes in `chat_template_kwargs.reasoning_effort`; with `qwen`, it goes in root `reasoning_effort`.
+
+    Provider-native values are case-sensitive. Use `compat.reasoningEffortMap`, such as `{ low: "LOW", high: "HIGH" }`, to map logical choices to a declared native list such as `["LOW", "HIGH"]`. Unmapped native labels are not advertised as effort choices. Missing, empty, or unusable lists keep binary thinking, as does `compat.supportsReasoningEffort: false`.
+
+    The plugin prepares these mappings as model capabilities before session setup, so advanced choices such as `xhigh` and `max` also survive session-level clamping when their native wire labels differ.
+
+    The default remains `off`, including after upgrading an existing configured model. An explicit enabled level now sends its declared effort instead of silently using the template's default. Ordinary binary Qwen models keep their existing request shape. Per-model `params.extra_body` remains the final request-body override.
+
+  </Accordion>
+
+  <Accordion title="DeepSeek V4 thinking controls">
+    For vLLM model IDs containing `deepseek-v4` or `deepseek_v4`, configure `reasoning: true`. OpenClaw sends the selected effort through `chat_template_kwargs.reasoning_effort`, with both `thinking` and `enable_thinking` set to `true`. Declared efforts and `reasoningEffortMap` use the same shared resolver as other OpenAI-compatible models.
+
+    `/think off` sends both template flags as `false`, because vLLM enables DeepSeek thinking when either flag is true. Hosted DeepSeek's root `thinking` object and root `reasoning_effort` are removed. Existing explicit template kwargs and the final `params.extra_body` override remain authoritative. Explicit Qwen thinking formats take precedence over the model-name match.
+
+    This request shaping does not enable reasoning for catalog rows marked `reasoning: false` or change discovery heuristics. Configure the model explicitly if discovery does not recognize its reasoning capability.
 
   </Accordion>
 
   <Accordion title="Nemotron 3 thinking controls">
-    vLLM/Nemotron 3 can use chat-template kwargs to control whether reasoning is
-    returned as hidden reasoning or visible answer text. When an OpenClaw session
-    uses `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin sends:
+    For `vllm/nemotron-3-*` models with thinking off, the bundled plugin sends:
 
     ```json
     {
@@ -202,9 +211,7 @@ wildcard to the visible model catalog:
     }
     ```
 
-    To customize these values, set `chat_template_kwargs` under the model params.
-    If you also set `params.extra_body.chat_template_kwargs`, that value has
-    final precedence because `extra_body` is the last request-body override.
+    To customize these values, set `chat_template_kwargs` under the model params. If you also set `params.extra_body.chat_template_kwargs`, that value wins because `extra_body` is the last request-body override.
 
     ```json5
     {
@@ -228,20 +235,11 @@ wildcard to the visible model catalog:
   </Accordion>
 
   <Accordion title="Qwen tool calls appear as text">
-    First make sure vLLM was started with the right tool-call parser and chat
-    template for the model. For example, vLLM documents `hermes` for Qwen2.5
-    models and `qwen3_xml` for Qwen3-Coder models.
+    First confirm vLLM was started with the right tool-call parser and chat template for the model. vLLM documents `hermes` for Qwen2.5 models and `qwen3_xml` for Qwen3-Coder models.
 
-    Symptoms:
+    Symptoms: skills/tools never run, the assistant prints raw JSON/XML such as `{"name":"read","arguments":...}`, or vLLM returns an empty `tool_calls` array when OpenClaw sends `tool_choice: "auto"`.
 
-    - skills or tools never run
-    - the assistant prints raw JSON/XML such as `{"name":"read","arguments":...}`
-    - vLLM returns an empty `tool_calls` array when OpenClaw sends
-      `tool_choice: "auto"`
-
-    Some Qwen/vLLM combinations return structured tool calls only when the
-    request uses `tool_choice: "required"`. For those model entries, force the
-    OpenAI-compatible request field with `params.extra_body`:
+    Some Qwen/vLLM combinations return structured tool calls only when the request uses `tool_choice: "required"`. Force it per model with `params.extra_body`:
 
     ```json5
     {
@@ -261,23 +259,13 @@ wildcard to the visible model catalog:
     }
     ```
 
-    Replace `Qwen-Qwen2.5-Coder-32B-Instruct` with the exact id returned by:
-
-    ```bash
-    openclaw models list --provider vllm
-    ```
-
-    You can apply the same override from the CLI:
+    Replace the model id with the exact id from `openclaw models list --provider vllm`, or apply the same override from the CLI:
 
     ```bash
     openclaw config set agents.defaults.models '{"vllm/Qwen-Qwen2.5-Coder-32B-Instruct":{"params":{"extra_body":{"tool_choice":"required"}}}}' --strict-json --merge
     ```
 
-    This is an opt-in compatibility workaround. It makes every model turn with
-    tools require a tool call, so use it only for a dedicated local model entry
-    where that behavior is acceptable. Do not use it as a global default for all
-    vLLM models, and do not use a proxy that blindly converts arbitrary
-    assistant text into executable tool calls.
+    This is an opt-in workaround: it forces every turn with tools to make a tool call, so use it only for a dedicated model entry where that is acceptable. Do not set it as a global default for all vLLM models, and do not pair it with a proxy that converts arbitrary assistant text into executable tool calls.
 
   </Accordion>
 
@@ -316,8 +304,7 @@ wildcard to the visible model catalog:
 
 <AccordionGroup>
   <Accordion title="Slow first response or remote server timeout">
-    For large local models, remote LAN hosts, or tailnet links, set a
-    provider-scoped request timeout:
+    For large local models, remote LAN hosts, or tailnet links, set a provider-scoped request timeout:
 
     ```json5
     {
@@ -335,10 +322,7 @@ wildcard to the visible model catalog:
     }
     ```
 
-    `timeoutSeconds` applies to vLLM model HTTP requests only, including
-    connection setup, response headers, body streaming, and the total
-    guarded-fetch abort. Prefer this before increasing
-    `agents.defaults.timeoutSeconds`, which controls the whole agent run.
+    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls the whole agent run.
 
   </Accordion>
 
@@ -349,13 +333,7 @@ wildcard to the visible model catalog:
     curl http://127.0.0.1:8000/v1/models
     ```
 
-    If you see a connection error, verify the host, port, and that vLLM started with the OpenAI-compatible server mode.
-    For explicit loopback, LAN, or Tailscale endpoints, OpenClaw trusts the
-    exact configured `models.providers.vllm.baseUrl` origin for guarded model
-    requests. Metadata/link-local origins remain blocked without explicit
-    opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only
-    when vLLM requests must reach another private origin, and set it to `false`
-    to opt out of exact-origin trust.
+    If you see a connection error, verify the host, port, and that vLLM started in OpenAI-compatible server mode. OpenClaw trusts the exact configured `models.providers.vllm.baseUrl` origin for guarded model requests on loopback, LAN, and Tailscale endpoints. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only when vLLM requests must reach another private origin, or `false` to opt out of exact-origin trust.
 
   </Accordion>
 
@@ -373,14 +351,11 @@ wildcard to the visible model catalog:
   </Accordion>
 
   <Accordion title="Tools render as raw text">
-    If a Qwen model prints JSON/XML tool syntax instead of executing a skill,
-    check the Qwen guidance in Advanced configuration above. The usual fix is:
+    If a Qwen model prints JSON/XML tool syntax instead of executing a skill:
 
-    - start vLLM with the correct parser/template for that model
-    - confirm the exact model id with `openclaw models list --provider vllm`
-    - add a dedicated per-model `params.extra_body.tool_choice: "required"`
-      override only if `tool_choice: "auto"` still returns empty or text-only
-      tool calls
+    - Start vLLM with the correct parser/template for that model.
+    - Confirm the exact model id with `openclaw models list --provider vllm`.
+    - Add a dedicated per-model `params.extra_body.tool_choice: "required"` override only if `tool_choice: "auto"` still returns empty or text-only tool calls.
 
   </Accordion>
 </AccordionGroup>

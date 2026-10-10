@@ -1,4 +1,3 @@
-// Shared arithmetic helpers for cost/usage token totals.
 import type { CostUsageTotals } from "./session-cost-usage.types.js";
 
 export function createEmptyCostUsageTotals(): CostUsageTotals {
@@ -30,6 +29,7 @@ export function cloneCostUsageTotals(totals: CostUsageTotals): CostUsageTotals {
     cacheReadCost: totals.cacheReadCost,
     cacheWriteCost: totals.cacheWriteCost,
     missingCostEntries: totals.missingCostEntries,
+    ...(totals.missingCostByModel ? { missingCostByModel: { ...totals.missingCostByModel } } : {}),
   };
 }
 
@@ -45,4 +45,22 @@ export function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTot
   target.cacheReadCost += source.cacheReadCost;
   target.cacheWriteCost += source.cacheWriteCost;
   target.missingCostEntries += source.missingCostEntries;
+  if (source.missingCostByModel) {
+    target.missingCostByModel ??= {};
+    for (const [model, count] of Object.entries(source.missingCostByModel)) {
+      target.missingCostByModel[model] = (target.missingCostByModel[model] ?? 0) + count;
+    }
+  }
+}
+
+export function formatMissingCostEntries(totals: CostUsageTotals): string {
+  const byModel = Object.entries(totals.missingCostByModel ?? {})
+    .filter(([, count]) => count > 0)
+    .toSorted(
+      ([modelA, countA], [modelB, countB]) => countB - countA || modelA.localeCompare(modelB),
+    );
+  if (byModel.length === 0) {
+    return String(totals.missingCostEntries);
+  }
+  return `${totals.missingCostEntries} (${byModel.map(([model, count]) => `${model} ${count}`).join(", ")})`;
 }

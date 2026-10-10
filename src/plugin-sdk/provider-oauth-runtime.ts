@@ -1,12 +1,20 @@
 // Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
+import { randomBytes } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
 import type { Model } from "../llm/types.js";
+import { generatePkceVerifierChallenge } from "./oauth-utils.js";
+export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
 
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
+export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
+export {
+  decodeOpenAICodexJwtPayload,
+  resolveOpenAICodexAuthIdentity,
+} from "./provider-openai-chatgpt-auth.js";
 
 /** Normalized OAuth credential bundle persisted by provider auth profiles. */
 export type OAuthCredentials = {
@@ -116,161 +124,17 @@ export interface OAuthProviderInfo {
   available: boolean;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function renderOAuthPage(options: {
-  title: string;
-  heading: string;
-  message: string;
-  details?: string;
-}): string {
-  const title = escapeHtml(options.title);
-  const heading = escapeHtml(options.heading);
-  const message = escapeHtml(options.message);
-  const details = options.details ? escapeHtml(options.details) : undefined;
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title}</title>
-  <style>
-    :root {
-      --text: #fafafa;
-      --text-dim: #a1a1aa;
-      --page-bg: #09090b;
-      --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
-    * { box-sizing: border-box; }
-    html { color-scheme: dark; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      background: var(--page-bg);
-      color: var(--text);
-      font-family: var(--font-sans);
-      text-align: center;
-    }
-    main {
-      width: 100%;
-      max-width: 560px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-    }
-    .logo {
-      width: 72px;
-      height: 72px;
-      display: block;
-      margin-bottom: 24px;
-    }
-    h1 {
-      margin: 0 0 10px;
-      font-size: 28px;
-      line-height: 1.15;
-      font-weight: 650;
-      color: var(--text);
-    }
-    p {
-      margin: 0;
-      line-height: 1.7;
-      color: var(--text-dim);
-      font-size: 15px;
-    }
-    .details {
-      margin-top: 16px;
-      font-family: var(--font-mono);
-      font-size: 13px;
-      color: var(--text-dim);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <div class="logo">${LOGO_SVG}</div>
-    <h1>${heading}</h1>
-    <p>${message}</p>
-    ${details ? `<div class="details">${details}</div>` : ""}
-  </main>
-</body>
-</html>`;
-}
-
-/**
- * Renders the local OAuth callback success page after provider authentication completes.
- */
-export function oauthSuccessHtml(
-  /** Success message rendered in the local OAuth completion page. */
-  message: string,
-): string {
-  return renderOAuthPage({
-    title: "Authentication successful",
-    heading: "Authentication successful",
-    message,
-  });
-}
-
-/**
- * Renders the local OAuth callback error page without exposing raw credential material.
- */
-export function oauthErrorHtml(
-  /** Error message rendered in the local OAuth completion page. */
-  message: string,
-  /** Optional provider-specific error details rendered below the message. */
-  details?: string,
-): string {
-  return renderOAuthPage({
-    title: "Authentication failed",
-    heading: "Authentication failed",
-    message,
-    details,
-  });
-}
-
-function base64urlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/[=]/g, "");
-}
-
 /** Generates an OAuth PKCE verifier and SHA-256 challenge using base64url encoding. */
 export async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
-  const verifierBytes = new Uint8Array(32);
-  crypto.getRandomValues(verifierBytes);
-  const verifier = base64urlEncode(verifierBytes);
-
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const challenge = base64urlEncode(new Uint8Array(hashBuffer));
-
-  return { verifier, challenge };
+  return generatePkceVerifierChallenge();
 }
 
 /** Generates a random base64url OAuth state value for CSRF protection. */
-export function generateOAuthState(): string {
-  const stateBytes = new Uint8Array(32);
-  crypto.getRandomValues(stateBytes);
-  return base64urlEncode(stateBytes);
+function generateBase64UrlOAuthState(): string {
+  return randomBytes(32).toString("base64url");
 }
+
+export { generateBase64UrlOAuthState as generateOAuthState };
 
 /**
  * Parses callback URLs, raw query strings, `code#state`, or plain pasted codes.
@@ -285,14 +149,12 @@ export function parseOAuthAuthorizationInput(
     return {};
   }
 
-  try {
-    const url = new URL(value);
+  const url = URL.parse(value);
+  if (url) {
     return {
       code: url.searchParams.get("code") ?? undefined,
       state: url.searchParams.get("state") ?? undefined,
     };
-  } catch {
-    // Plain pasted code or query-string input.
   }
 
   if (value.includes("#")) {
@@ -394,7 +256,7 @@ export function withOAuthLoginAbort<T>(
       (error: unknown) => {
         // Preserve Error rejections but wrap non-Error provider/prompt values for lint-safe callers.
         cleanup();
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -412,18 +274,4 @@ export function buildOAuthRequestSignal(options: {
     return timeoutSignal;
   }
   return AbortSignal.any([options.signal, timeoutSignal]);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

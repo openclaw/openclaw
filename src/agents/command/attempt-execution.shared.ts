@@ -1,127 +1,75 @@
-/**
- * Shared session persistence and prompt-body helpers for agent attempt
- * execution paths.
- */
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
-import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
+/** Shared session persistence for agent attempt execution. */
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import {
-  formatAgentInternalEventsForPlainPrompt,
-  formatAgentInternalEventsForPrompt,
-} from "../internal-events.js";
-import {
-  hasInternalRuntimeContext,
-  stripInternalRuntimeContext,
-} from "../internal-runtime-context.js";
-import type { AgentCommandOpts } from "./types.js";
-
-/** Parameters for merging and persisting a session entry update. */
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 type PersistSessionEntryParams = {
+  agentId: string;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;
+  initialEntry: SessionEntry;
   entry: SessionEntry;
-  clearedFields?: string[];
-  preserveTranscriptMarkerUpdatedAt?: boolean;
+  creation?: Parameters<typeof buildSessionCreationStamp>[0];
+  assertCommitAllowed?: SessionSourceAssertion;
   shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
 /** Persists one session entry while keeping the caller's in-memory store aligned. */
-
-function normalizeTranscriptMarkerUpdatedAt(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-export async function persistSessionEntry(
+export async function persistAgentSession(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
   let rejectedMissingEntry = false;
-  const persisted = await patchSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+  let published = false;
+  const persisted = await patchSessionEntryCore(
+    { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
-      if (params.shouldPersist && !params.shouldPersist(context.existingEntry)) {
+      const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);
+      if (
+        (!context.existingEntry && shouldPersistCurrent !== true) ||
+        shouldPersistCurrent === false
+      ) {
         rejectedMissingEntry = !context.existingEntry;
         return null;
       }
-      const merged = mergeSessionEntry(context.existingEntry, params.entry);
-      if (params.preserveTranscriptMarkerUpdatedAt) {
-        const currentUpdatedAt = normalizeTranscriptMarkerUpdatedAt(
-          context.existingEntry?.updatedAt,
-        );
-        const markerUpdatedAt = normalizeTranscriptMarkerUpdatedAt(params.entry.updatedAt);
-        if (markerUpdatedAt !== undefined) {
-          merged.updatedAt = Math.max(currentUpdatedAt ?? 0, markerUpdatedAt);
-        }
+      if (!context.existingEntry) {
+        return {
+          ...params.entry,
+          ...(params.creation ? buildSessionCreationStamp(params.creation) : {}),
+        };
       }
-      for (const field of params.clearedFields ?? []) {
-        // Cleared fields only apply when the replacement entry did not set the
-        // field again; this preserves explicit false/null updates.
-        if (!Object.hasOwn(params.entry, field)) {
-          Reflect.deleteProperty(merged, field);
-        }
+      if (context.existingEntry.sessionId !== params.initialEntry.sessionId) {
+        return null;
       }
-      return merged;
+      // Agent turns persist broad snapshots. Project only this turn's changes
+      // so a stale snapshot cannot restore fields changed or cleared meanwhile.
+      return mergeSessionSnapshotChanges({
+        initial: params.initialEntry,
+        next: params.entry,
+        current: context.existingEntry,
+      });
     },
     {
       fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,
       replaceEntry: true,
+      ...sessionEntryCommitGuardOptions(params.assertCommitAllowed),
+      requireWriteSuccess: params.creation !== undefined,
+      onCommitted: (entry) => {
+        published = true;
+        params.sessionStore[params.sessionKey] = entry;
+      },
     },
   );
-  if (rejectedMissingEntry) {
+  if (rejectedMissingEntry || !persisted) {
     delete params.sessionStore[params.sessionKey];
     return undefined;
   }
-  if (persisted) {
+  if (!published) {
     params.sessionStore[params.sessionKey] = persisted;
-  } else {
-    delete params.sessionStore[params.sessionKey];
   }
-  return persisted ?? undefined;
-}
-
-/** Prepends hidden internal event context unless the body already carries it. */
-export function prependInternalEventContext(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  const renderedEvents = formatAgentInternalEventsForPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  return [renderedEvents, body].filter(Boolean).join("\n\n");
-}
-
-// ACP/plain transcript bodies cannot carry internal runtime context markup, so
-// render events as visible plain text before stripping hidden sections.
-function resolvePlainInternalEventBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  const renderedEvents = formatAgentInternalEventsForPlainPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  const visibleBody = stripInternalRuntimeContext(body).trim();
-  return [renderedEvents, visibleBody].filter(Boolean).join("\n\n") || body;
-}
-
-/** Resolves the prompt body submitted to ACP runtimes. */
-export function resolveAcpPromptBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  return events?.length ? resolvePlainInternalEventBody(body, events) : body;
-}
-
-/** Resolves the body stored in transcripts after internal event rendering. */
-export function resolveInternalEventTranscriptBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (!hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  return resolvePlainInternalEventBody(body, events);
+  return persisted;
 }

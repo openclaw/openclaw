@@ -1,13 +1,23 @@
-/**
- * Resolves hook-selected model state and pre-model attachments for a run.
- */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
+import { readClaimingHookAdmission } from "../../../plugins/hook-claim-admission.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
 } from "../../../plugins/types.js";
+import {
+  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isValidAgentHarnessSessionStoreEntry,
+  resolveAgentHarnessSessionStoreEntryError,
+  resolveSessionPinnedHarnessId,
+} from "../../../sessions/agent-harness-session-key.js";
+import { normalizeOptionalAgentRuntimeId } from "../../agent-runtime-id.js";
 import {
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
@@ -17,98 +27,101 @@ import {
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
+import { resolveModelContextWindowProfile } from "../../model-context-window.js";
 import { log } from "../logger.js";
-import { readAgentModelContextTokens } from "../model-context-tokens.js";
 
-type HookContext = {
-  agentId?: string;
-  sessionKey?: string;
+type HookRunnerLike = Pick<
+  NonNullable<ReturnType<typeof getGlobalHookRunner>>,
+  "hasHooks" | "runBeforeModelResolve"
+>;
+type HookContext = Parameters<HookRunnerLike["runBeforeModelResolve"]>[1];
+
+/** Durable harness sessions run only with their exact persisted identity and runtime lock. */
+export function resolveAgentHarnessRunAdmissionError(params: {
+  agentHarnessId?: string;
+  entry?: SessionEntry;
+  modelSelectionLocked?: boolean;
   sessionId: string;
-  workspaceDir: string;
-  messageProvider?: string;
-  trigger?: string;
-  channelId?: string;
-};
-
-type HookRunnerLike = {
-  hasHooks(hookName: string): boolean;
-  runBeforeModelResolve(
-    input: PluginHookBeforeModelResolveEvent,
-    context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
-  runBeforeAgentStart(
-    input: { prompt: string },
-    context: HookContext,
-  ): Promise<PluginHookBeforeAgentStartResult | undefined>;
-};
+  sessionKey?: string;
+}): string | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const entry = params.entry;
+  const reservedKey = isAgentHarnessSessionKey(sessionKey);
+  if (!entry) {
+    return reservedKey ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE : undefined;
+  }
+  // Rows created before harness supervision could already use this prefix. Only the
+  // durable lock makes an existing row harness-owned; missing reserved keys stay closed.
+  if (entry.modelSelectionLocked !== true) {
+    return undefined;
+  }
+  if (!isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+    return resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
+  }
+  const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  const durableHarnessId = resolveSessionPinnedHarnessId(entry);
+  const matchesRequestedRuntime =
+    params.modelSelectionLocked === true && requestedHarnessId === durableHarnessId;
+  const matchesDurableRuntime =
+    entry.sessionId === params.sessionId && durableHarnessId !== undefined;
+  return matchesRequestedRuntime && matchesDurableRuntime
+    ? undefined
+    : reservedKey
+      ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE
+      : AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
+}
 
 /**
- * Runs model-selection hooks before resolving the runtime model. The dedicated
- * `before_model_resolve` hook wins over legacy `before_agent_start` overrides
- * when both provide provider/model changes.
+ * Runs model-selection hooks before resolving the runtime model.
  */
 export async function resolveHookModelSelection(params: {
   prompt: string;
   attachments?: PluginHookBeforeModelResolveAttachment[];
   provider: string;
   modelId: string;
+  modelSelectionLocked?: boolean;
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
-  let provider = params.provider;
-  let modelId = params.modelId;
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
-  let beforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
+  const selection = { provider: params.provider, modelId: params.modelId };
+  if (params.modelSelectionLocked === true) {
+    return selection;
+  }
+  let modelResolveOverride: Awaited<ReturnType<HookRunnerLike["runBeforeModelResolve"]>>;
   const hookRunner = params.hookRunner;
 
   // Run before_model_resolve hooks early so plugins can override the
   // provider/model before resolveModel().
-  //
-  // Legacy compatibility: before_agent_start is also checked for override
-  // fields if present. New hook takes precedence when both are set.
   if (hookRunner?.hasHooks("before_model_resolve")) {
+    const assertCurrent = readClaimingHookAdmission(params.hookContext)?.assertCurrent;
+    assertCurrent?.();
     try {
       const event: PluginHookBeforeModelResolveEvent = params.attachments
         ? { prompt: params.prompt, attachments: params.attachments }
         : { prompt: params.prompt };
-      modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
+      const run = () => hookRunner.runBeforeModelResolve(event, params.hookContext);
+      modelResolveOverride = assertCurrent
+        ? await withGuardedFetchRequestAuthority(assertCurrent, run)
+        : await run();
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
     }
-  }
-
-  if (hookRunner?.hasHooks("before_agent_start")) {
-    try {
-      beforeAgentStartResult = await hookRunner.runBeforeAgentStart(
-        { prompt: params.prompt },
-        params.hookContext,
-      );
-      modelResolveOverride = {
-        providerOverride:
-          modelResolveOverride?.providerOverride ?? beforeAgentStartResult?.providerOverride,
-        modelOverride: modelResolveOverride?.modelOverride ?? beforeAgentStartResult?.modelOverride,
-      };
-    } catch (hookErr) {
-      log.warn(
-        `deprecated before_agent_start hook failed during model resolve: ${String(hookErr)}`,
-      );
-    }
+    assertCurrent?.();
   }
 
   if (modelResolveOverride?.providerOverride) {
-    provider = modelResolveOverride.providerOverride;
-    log.info(`[hooks] provider overridden to ${provider}`);
+    selection.provider = modelResolveOverride.providerOverride;
+    log.info(`[hooks] provider overridden to ${selection.provider}`);
   }
   if (modelResolveOverride?.modelOverride) {
-    modelId = modelResolveOverride.modelOverride;
-    log.info(`[hooks] model overridden to ${modelId}`);
+    selection.modelId = modelResolveOverride.modelOverride;
+    log.info(`[hooks] model overridden to ${selection.modelId}`);
   }
 
-  return {
-    provider,
-    modelId,
-    beforeAgentStartResult,
-  };
+  return selection;
 }
 
 /**
@@ -128,42 +141,53 @@ export function buildBeforeModelResolveAttachments(
   }));
 }
 
-/**
- * Resolves context-window policy for the selected runtime model and returns the
- * model shape the session runtime should see. Configured context caps are
- * reflected in `effectiveModel.contextWindow` so auto-compaction uses the same
- * limit as the guard.
- */
-export function resolveEffectiveRuntimeModel(params: {
+/** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
+export function resolveEmbeddedRuntimeModelPolicy(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   contextConfigProvider?: string;
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
+  nativeModelOwned: boolean;
+  contextWindow?: string;
+  contextTokenBudget?: number;
 }): {
-  ctxInfo: ContextWindowInfo;
+  contextWindowInfo?: ContextWindowInfo;
+  contextTokenBudget?: number;
+  contextTokensSource?: "resolved-v1";
   effectiveModel: ProviderRuntimeModel;
 } {
-  const ctxInfo = resolveContextWindowInfo({
+  if (params.nativeModelOwned) {
+    return { effectiveModel: params.runtimeModel };
+  }
+  // The session-selected context-window option caps native runs too; the CLI
+  // backend maps the option id to argv/env separately, but budget and payload
+  // sizing must honor the selection on every runtime path.
+  const contextWindowProfile = resolveModelContextWindowProfile({
+    catalogEntry: params.runtimeModel,
+    selected: params.contextWindow,
+  });
+  const resolvedCtxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.contextConfigProvider ?? params.provider,
     modelId: params.modelId,
-    modelContextTokens: readAgentModelContextTokens(params.runtimeModel),
-    modelContextWindow: params.runtimeModel.contextWindow,
+    modelContextTokens: asFiniteNumber(params.runtimeModel.contextTokens),
+    modelContextWindow: contextWindowProfile.contextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
+  // resolveContextWindowInfo ranks the passed selection below both the
+  // discovered model cap and models.providers.*.models[].contextTokens, so a
+  // 200k session would keep budgeting against the wider window. Only an
+  // effective option caps here; the bare catalog scalar stays subordinate.
+  const ctxInfo =
+    contextWindowProfile.contextWindow &&
+    contextWindowProfile.contextTokens !== undefined &&
+    resolvedCtxInfo.tokens > contextWindowProfile.contextTokens
+      ? { ...resolvedCtxInfo, tokens: contextWindowProfile.contextTokens, source: "model" as const }
+      : resolvedCtxInfo;
 
-  // Apply contextTokens cap to model so session runtime's auto-compaction
-  // threshold uses the effective limit, not the native context window.
-  const effectiveModel =
-    ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
-      ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
-      : params.runtimeModel;
   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
-  const runtimeBaseUrl =
-    typeof (params.runtimeModel as { baseUrl?: unknown }).baseUrl === "string"
-      ? (params.runtimeModel as { baseUrl: string }).baseUrl
-      : undefined;
+  const runtimeBaseUrl = params.runtimeModel.baseUrl;
   if (ctxGuard.shouldWarn) {
     log.warn(
       formatContextWindowWarningMessage({
@@ -189,8 +213,30 @@ export function resolveEffectiveRuntimeModel(params: {
     });
   }
 
+  const contextTokenBudget = Math.min(ctxInfo.tokens, params.contextTokenBudget ?? ctxInfo.tokens);
+  const contextWindowInfo =
+    contextTokenBudget < ctxInfo.tokens
+      ? {
+          ...ctxInfo,
+          tokens: contextTokenBudget,
+          referenceTokens: ctxInfo.referenceTokens ?? ctxInfo.tokens,
+        }
+      : ctxInfo;
+  const effectiveModel =
+    contextTokenBudget < (params.runtimeModel.contextWindow ?? Infinity)
+      ? { ...params.runtimeModel, contextWindow: contextTokenBudget }
+      : params.runtimeModel;
   return {
-    ctxInfo,
+    contextWindowInfo,
+    contextTokenBudget,
+    // Cold readers match only provider/model/harness, so removable caps and
+    // session-selectable windows cannot become persisted model facts.
+    contextTokensSource:
+      contextWindowInfo.source === "model" &&
+      contextWindowInfo.referenceTokens === undefined &&
+      !params.runtimeModel.contextWindows?.length
+        ? "resolved-v1"
+        : undefined,
     effectiveModel,
   };
 }

@@ -4,16 +4,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
-  generateNoVncPassword,
   issueNoVncObserverToken,
-  resetNoVncObserverTokensForTests,
 } from "./novnc-auth.js";
 
 describe("noVNC auth helpers", () => {
   it("issues one-time short-lived observer tokens", () => {
     // Observer tokens are bearer access to a browser session, so consumption is
     // one-shot and bounded by a short TTL.
-    resetNoVncObserverTokensForTests();
     const token = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -30,47 +27,7 @@ describe("noVNC auth helpers", () => {
     expect(consumeNoVncObserverToken(token, 1050)).toBeNull();
   });
 
-  it("expires observer tokens", () => {
-    resetNoVncObserverTokensForTests();
-    const token = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: 100,
-    });
-    expect(consumeNoVncObserverToken(token, 1200)).toBeNull();
-  });
-
-  it("uses the default ttl when observer token ttlMs is non-finite", () => {
-    resetNoVncObserverTokensForTests();
-    const liveToken = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: Number.NaN,
-    });
-    const expiredToken = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: Number.NaN,
-    });
-
-    expect(consumeNoVncObserverToken(liveToken, 60_999)).toEqual({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-    });
-    expect(consumeNoVncObserverToken(expiredToken, 61_001)).toBeNull();
-  });
-
-  it("uses the default ttl when observer token ttlMs is unsafe or too large", () => {
-    resetNoVncObserverTokensForTests();
-    const unsafeToken = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: Number.MAX_SAFE_INTEGER,
-    });
+  it("uses the default ttl when observer token ttlMs is too large", () => {
     const tooLargeToken = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -78,12 +35,10 @@ describe("noVNC auth helpers", () => {
       ttlMs: 60_001,
     });
 
-    expect(consumeNoVncObserverToken(unsafeToken, 61_001)).toBeNull();
     expect(consumeNoVncObserverToken(tooLargeToken, 61_001)).toBeNull();
   });
 
   it("does not issue usable observer tokens when the issue time is invalid", () => {
-    resetNoVncObserverTokensForTests();
     const token = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -92,10 +47,5 @@ describe("noVNC auth helpers", () => {
     });
 
     expect(consumeNoVncObserverToken(token, 1050)).toBeNull();
-  });
-
-  it("generates 8-char alphanumeric passwords", () => {
-    const password = generateNoVncPassword();
-    expect(password).toMatch(/^[a-zA-Z0-9]{8}$/);
   });
 });

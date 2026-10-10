@@ -1,16 +1,17 @@
 // Binding target tests cover channel binding target extraction and validation.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ensureConfiguredBindingTargetReady,
-  ensureConfiguredBindingTargetSession,
   resetConfiguredBindingTargetInPlace,
 } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
-import {
-  registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
-  type StatefulBindingTargetDriver,
-} from "./stateful-target-drivers.js";
+const acp = vi.hoisted(() => ({
+  ensureConfiguredAcpBindingTargetReady: vi.fn(),
+  resolveAcpBindingTargetBySessionKey: vi.fn(),
+  resetConfiguredAcpBindingTargetInPlace: vi.fn(),
+}));
+// mock-isolation: Keep the real ACP backend and Gateway reset singletons outside this dispatch-only fixture.
+vi.mock("./acp-stateful-target-driver.js", () => acp);
 
 function createBindingResolution(driverId: string): ConfiguredBindingResolution {
   return {
@@ -96,76 +97,40 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
   };
 }
 
-afterEach(() => {
-  unregisterStatefulBindingTargetDriver("test-driver");
+beforeEach(() => {
+  vi.resetAllMocks();
 });
 
-describe("binding target drivers", () => {
-  it("delegates ensureReady and ensureSession to the resolved driver", async () => {
-    const ensureReady = vi.fn(async () => ({ ok: true as const }));
-    const ensureSession = vi.fn(async () => ({
-      ok: true as const,
-      sessionKey: "agent:codex:test-driver",
-    }));
-    const driver: StatefulBindingTargetDriver = {
-      id: "test-driver",
-      ensureReady,
-      ensureSession,
-    };
-    registerStatefulBindingTargetDriver(driver);
-
-    const bindingResolution = createBindingResolution("test-driver");
+describe("configured ACP binding targets", () => {
+  it("delegates readiness to the ACP owner", async () => {
+    const ensureReady = acp.ensureConfiguredAcpBindingTargetReady.mockResolvedValue({ ok: true });
+    const bindingResolution = createBindingResolution("acp");
     await expect(
       ensureConfiguredBindingTargetReady({
         cfg: {} as never,
         bindingResolution,
       }),
     ).resolves.toEqual({ ok: true });
-    await expect(
-      ensureConfiguredBindingTargetSession({
-        cfg: {} as never,
-        bindingResolution,
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      sessionKey: "agent:codex:test-driver",
-    });
-
     expect(ensureReady).toHaveBeenCalledTimes(1);
     expect(ensureReady).toHaveBeenCalledWith({
       cfg: {} as never,
       bindingResolution,
     });
-    expect(ensureSession).toHaveBeenCalledTimes(1);
-    expect(ensureSession).toHaveBeenCalledWith({
-      cfg: {} as never,
-      bindingResolution,
-    });
   });
 
-  it("resolves resetInPlace through the driver session-key lookup", async () => {
-    const resetInPlace = vi.fn(async () => ({ ok: true as const }));
-    const driver: StatefulBindingTargetDriver = {
-      id: "test-driver",
-      ensureReady: async () => ({ ok: true }),
-      ensureSession: async () => ({
-        ok: true,
-        sessionKey: "agent:codex:test-driver",
-      }),
-      resolveTargetBySessionKey: ({ sessionKey }) => ({
-        kind: "stateful",
-        driverId: "test-driver",
-        sessionKey,
-        agentId: "codex",
-      }),
-      resetInPlace,
-    };
-    registerStatefulBindingTargetDriver(driver);
+  it("resolves resets through the ACP session-key lookup", async () => {
+    const resetInPlace = acp.resetConfiguredAcpBindingTargetInPlace.mockResolvedValue({ ok: true });
+    acp.resolveAcpBindingTargetBySessionKey.mockResolvedValue({
+      kind: "stateful",
+      driverId: "acp",
+      sessionKey: "agent:codex:acp",
+      agentId: "codex",
+    });
 
     await expect(
       resetConfiguredBindingTargetInPlace({
         cfg: {} as never,
-        sessionKey: "agent:codex:test-driver",
+        sessionKey: "agent:codex:acp",
         reason: "reset",
         commandSource: "discord:native",
       }),
@@ -174,19 +139,19 @@ describe("binding target drivers", () => {
     expect(resetInPlace).toHaveBeenCalledTimes(1);
     expect(resetInPlace).toHaveBeenCalledWith({
       cfg: {} as never,
-      sessionKey: "agent:codex:test-driver",
+      sessionKey: "agent:codex:acp",
       reason: "reset",
       commandSource: "discord:native",
       bindingTarget: {
         kind: "stateful",
-        driverId: "test-driver",
-        sessionKey: "agent:codex:test-driver",
+        driverId: "acp",
+        sessionKey: "agent:codex:acp",
         agentId: "codex",
       },
     });
   });
 
-  it("returns a typed error when no driver is registered", async () => {
+  it("returns a typed error for an unsupported target driver", async () => {
     const bindingResolution = createBindingResolution("missing-driver");
 
     await expect(
@@ -198,15 +163,30 @@ describe("binding target drivers", () => {
       ok: false,
       error: "Configured binding target driver unavailable: missing-driver",
     });
+  });
+
+  it("does not enter the ACP owner after readiness authority is revoked", async () => {
     await expect(
-      ensureConfiguredBindingTargetSession({
-        cfg: {} as never,
-        bindingResolution,
+      ensureConfiguredBindingTargetReady({
+        cfg: {},
+        bindingResolution: createBindingResolution("acp"),
+        assertActive: () => {
+          throw new Error("admission retired");
+        },
       }),
-    ).resolves.toEqual({
-      ok: false,
-      sessionKey: "agent:codex:missing-driver",
-      error: "Configured binding target driver unavailable: missing-driver",
-    });
+    ).resolves.toEqual({ ok: false, error: "admission retired" });
+    expect(acp.ensureConfiguredAcpBindingTargetReady).not.toHaveBeenCalled();
+  });
+
+  it("skips reset when the ACP owner finds no target", async () => {
+    acp.resolveAcpBindingTargetBySessionKey.mockResolvedValue(null);
+    await expect(
+      resetConfiguredBindingTargetInPlace({
+        cfg: {},
+        sessionKey: "agent:main:main",
+        reason: "new",
+      }),
+    ).resolves.toEqual({ ok: false, skipped: true });
+    expect(acp.resetConfiguredAcpBindingTargetInPlace).not.toHaveBeenCalled();
   });
 });

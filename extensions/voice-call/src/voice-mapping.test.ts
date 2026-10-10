@@ -1,10 +1,6 @@
 // Voice Call tests cover voice mapping plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_POLLY_VOICE,
-  escapeXml,
-  mapVoiceToPolly,
-} from "./voice-mapping.js";
+import { escapeXml, mapVoiceToPolly } from "./voice-mapping.js";
 
 describe("voice mapping", () => {
   it("escapes xml-special characters", () => {
@@ -13,12 +9,20 @@ describe("voice mapping", () => {
     );
   });
 
-  it("maps openai voices, passes through provider voices, and falls back to default", () => {
-    expect(mapVoiceToPolly("alloy")).toBe("Polly.Joanna");
-    expect(mapVoiceToPolly("ECHO")).toBe("Polly.Matthew");
-    expect(mapVoiceToPolly("Polly.Brian")).toBe("Polly.Brian");
-    expect(mapVoiceToPolly("Google.en-US-Standard-C")).toBe("Google.en-US-Standard-C");
-    expect(mapVoiceToPolly("unknown")).toBe(DEFAULT_POLLY_VOICE);
-    expect(mapVoiceToPolly(undefined)).toBe(DEFAULT_POLLY_VOICE);
+  it.each([
+    { voice: "ECHO", expected: "Polly.Matthew" },
+    { voice: "Polly.Brian", expected: "Polly.Brian" },
+    { voice: "Google.en-US-Standard-C", expected: "Google.en-US-Standard-C" },
+    { voice: "unknown", expected: "Polly.Joanna" },
+    { voice: undefined, expected: "Polly.Joanna" },
+  ])("maps $voice to $expected", ({ voice, expected }) => {
+    expect(mapVoiceToPolly(voice)).toBe(expected);
   });
+
+  it.each(["constructor", "__proto__"])(
+    "falls back to the default Polly voice for prototype key %s",
+    (voice) => {
+      expect(mapVoiceToPolly(voice)).toBe("Polly.Joanna");
+    },
+  );
 });

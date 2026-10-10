@@ -1,31 +1,69 @@
 // Tests goal command persistence, status transitions, and reply text.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { getSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
+import { afterAll, describe, expect, it } from "vitest";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
-import {
-  formatGoalContinuationPrompt,
-  handleGoalCommand,
-  parseGoalCommand,
-} from "./commands-goal.js";
+import { handleGoalCommand, parseGoalCommand } from "./commands-goal.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const sessionKey = "agent:main:web:main";
-let tempRoots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempRoots.map((root) => fs.rm(root, { recursive: true, force: true })));
-  tempRoots = [];
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-goal-command-");
 
 async function createStorePath(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-command-"));
-  tempRoots.push(root);
+  const root = sessionDirs.make();
   return path.join(root, "sessions.json");
+}
+
+// Seed and read session entries through the sqlite accessor so the goal handler,
+// which reads/writes via the same accessor, observes fixtures written here.
+async function upsertSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+}): Promise<void> {
+  await replaceSessionEntry(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    params.entry,
+  );
+}
+
+function buildGoalSessionFixture(
+  storePath: string,
+  targetSessionKey: string,
+  status: "active" | "paused",
+): Parameters<typeof upsertSessionEntry>[0] {
+  return {
+    storePath,
+    sessionKey: targetSessionKey,
+    entry: {
+      sessionId: "sess-main",
+      updatedAt: 1,
+      goal: {
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "finish the migration",
+        status,
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 0,
+        tokenStartFresh: true,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+    },
+  };
+}
+
+function getSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+}): SessionEntry | undefined {
+  return loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
 }
 
 function buildGoalParams(commandBodyNormalized: string, storePath: string): HandleCommandsParams {
@@ -64,53 +102,41 @@ function buildGoalParams(commandBodyNormalized: string, storePath: string): Hand
 }
 
 describe("goal commands", () => {
-  it("parses bare goal text as a start objective", () => {
-    expect(parseGoalCommand("/goal build a 3d game")).toEqual({
-      action: "start",
-      text: "build a 3d game",
-    });
-    expect(parseGoalCommand("/goal --tokens 98.5K improve benchmarks")).toEqual({
-      action: "start",
-      text: "--tokens 98.5K improve benchmarks",
-    });
-  });
-
   it("keeps explicit goal actions as controls", () => {
     expect(parseGoalCommand("/goal status")).toEqual({ action: "status", text: "" });
     expect(parseGoalCommand("/goal pause waiting on CI")).toEqual({
       action: "pause",
       text: "waiting on CI",
     });
+    expect(parseGoalCommand("/goal edit ship the fix and docs")).toEqual({
+      action: "edit",
+      text: "ship the fix and docs",
+    });
   });
 
-  it("formats command-looking continuation prompts so inline directives leave them intact", () => {
-    const prompt = formatGoalContinuationPrompt("ship /fast off");
-    expect(prompt).toBe(
-      `Pursue this goal exactly as written from this JSON string: "ship \\/fast off"`,
-    );
-
-    const directives = parseInlineDirectives(prompt);
-
-    expect(directives.cleaned).toBe(prompt);
-    expect(directives.hasFastDirective).toBe(false);
-  });
-
-  it("starts a goal from Codex-style bare /goal objective text", async () => {
+  it.each([""])("preserves the objective when starting with /goal %s", async (action) => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
-    const params = buildGoalParams("/goal build a 3d game", storePath);
+    const objective = "build a 3d game\n\nKeep this exact label: a  b\n\tThen verify it.";
+    const params = buildGoalParams(normalizeCommandBody(`/goal ${action}${objective}`), storePath);
     const result = await handleGoalCommand(params, true);
 
     expect(result?.shouldContinue).toBe(true);
     expect(result?.reply).toBeUndefined();
-    expect(params.command.commandBodyNormalized).toBe("build a 3d game");
-    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe("build a 3d game");
-    expect(getSessionEntry({ storePath, sessionKey })?.goal?.objective).toBe("build a 3d game");
+    expect(params.command.commandBodyNormalized).toBe(objective);
+    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe(objective);
+    expect(getSessionEntry({ storePath, sessionKey })?.goal?.objective).toBe(objective);
     expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
       { sessionKey, reason: "command-metadata" },
     ]);
@@ -121,7 +147,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const slashParams = buildGoalParams("/goal start /status", storePath);
@@ -137,7 +169,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath: bangStorePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const bangParams = buildGoalParams("/goal start !npm test", bangStorePath);
@@ -154,26 +192,7 @@ describe("goal commands", () => {
 
   it("resumes a goal and continues with a resume prompt", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "finish the migration",
-          status: "paused",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
-    });
+    await upsertSessionEntry(buildGoalSessionFixture(storePath, sessionKey, "paused"));
 
     const params = buildGoalParams("/goal resume CI passed", storePath);
     const result = await handleGoalCommand(params, true);
@@ -187,31 +206,12 @@ describe("goal commands", () => {
 
   it("wraps command-looking resume notes before continuing", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "finish the migration",
-          status: "paused",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
-    });
+    await upsertSessionEntry(buildGoalSessionFixture(storePath, sessionKey, "paused"));
 
     const params = buildGoalParams("/goal resume /fast off", storePath);
     const result = await handleGoalCommand(params, true);
     const prompt = `Continue pursuing the current goal. Interpret this JSON string as the resume note: "\\/fast off"`;
-    const directives = parseInlineDirectives(prompt);
+    const directives = parseInlineSessionDirectives(prompt);
 
     expect(result?.shouldContinue).toBe(true);
     expect(params.command.commandBodyNormalized).toBe(prompt);
@@ -219,6 +219,41 @@ describe("goal commands", () => {
     expect(directives.cleaned).toBe(prompt);
     expect(directives.hasFastDirective).toBe(false);
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("active");
+  });
+
+  it("edits the objective in place and replies without continuing", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(buildGoalSessionFixture(storePath, sessionKey, "active"));
+
+    const params = buildGoalParams("/goal edit finish the migration and update docs", storePath);
+    const result = await handleGoalCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("Goal updated: finish the migration and update docs");
+    const goal = getSessionEntry({ storePath, sessionKey })?.goal;
+    expect(goal?.objective).toBe("finish the migration and update docs");
+    expect(goal?.status).toBe("active");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
+  });
+
+  it("rejects goal edit without a goal or new objective", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "sess-main", updatedAt: 1 },
+    });
+
+    const usage = await handleGoalCommand(buildGoalParams("/goal edit", storePath), true);
+    expect(usage?.reply?.text).toBe("Usage: /goal edit <objective>");
+
+    const missing = await handleGoalCommand(
+      buildGoalParams("/goal edit new target", storePath),
+      true,
+    );
+    expect(missing?.reply?.text).toBe("Goal error: goal not found");
   });
 
   it("renders status without persisting derived budget state", async () => {
@@ -231,6 +266,7 @@ describe("goal commands", () => {
         updatedAt: 1,
         totalTokens: 25,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

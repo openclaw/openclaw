@@ -1,4 +1,3 @@
-// Matrix plugin module implements crypto node behavior.
 import { createRequire } from "node:module";
 
 // Load via createRequire so the CJS package gets __dirname (its index.js
@@ -6,10 +5,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 type MatrixCryptoNodePackage = typeof import("@matrix-org/matrix-sdk-crypto-nodejs");
 
-export type MatrixCryptoNodeBindings = Pick<
-  MatrixCryptoNodePackage,
-  "Attachment" | "EncryptedAttachment"
->;
+type MatrixCryptoNodeBindings = Pick<MatrixCryptoNodePackage, "Attachment" | "EncryptedAttachment">;
 
 export function loadMatrixCryptoNodeBindings(): MatrixCryptoNodeBindings {
   const { Attachment, EncryptedAttachment } =

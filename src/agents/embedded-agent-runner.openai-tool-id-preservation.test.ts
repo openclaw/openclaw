@@ -1,4 +1,3 @@
-// Covers OpenAI replay tool-call id preservation and downgrade rules.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +10,8 @@ import {
   type SanitizeSessionHistoryHarness,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => await createSanitizeSessionHistoryHelpersMock());
 
@@ -23,14 +24,11 @@ vi.mock(
   async () =>
     await createSanitizeSessionHistoryProviderHookRuntimeMock({
       resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
-        provider === "openai"
+        provider === "openai" || provider === "openrouter"
           ? {
-              buildReplayPolicy: (context?: { modelApi?: string }) => ({
-                // Completions APIs need strict ids; Responses can preserve richer
-                // call_id|fc_id pairs when reasoning metadata is replayable.
+              buildReplayPolicy: () => ({
                 sanitizeMode: "images-only",
-                sanitizeToolCallIds: context?.modelApi === "openai-completions",
-                ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
+                sanitizeToolCallIds: false,
                 applyAssistantFirstOrderingFix: false,
                 validateGeminiTurns: false,
                 validateAnthropicTurns: false,
@@ -50,7 +48,6 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
   });
 
   const makeSessionManager = () =>
-    // Snapshot entry supplies model API context used by replay-policy lookup.
     makeInMemorySessionManager([
       makeModelSnapshotEntry({
         provider: "openai",
@@ -59,139 +56,93 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       }),
     ]);
 
-  const makeMessages = (withReasoning: boolean): AgentMessage[] => [
+  const callId = (message: AgentMessage | undefined) => {
+    if (message?.role !== "assistant") {
+      throw new Error("Expected an assistant tool call");
+    }
+    return extractToolCallsFromAssistant(message)[0]?.id;
+  };
+  const call = (id: string) =>
     castAgentMessage({
       role: "assistant",
-      content: [
-        ...(withReasoning
-          ? [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-              },
-            ]
-          : []),
-        { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
+      content: [{ type: "toolCall", id, name: "noop", arguments: {} }],
+    });
+  const output = (id: string, text: string) =>
+    castAgentMessage(textToolResult(id, "noop", text, { isError: false }));
+  const user = (content: string) => castAgentMessage({ role: "user", content });
+  const sanitize = (
+    messages: AgentMessage[],
+    overrides: Partial<Parameters<typeof sanitizeSessionHistory>[0]> = {},
+  ) =>
+    sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      sessionManager: makeSessionManager(),
+      sessionId: "test-session",
+      ...overrides,
+    });
+
+  it("keeps repeated Kimi calls distinct while repairing the incomplete later turn", async () => {
+    const first = "functions.gateway:0|fc_tmp_first";
+    const second = "functions.gateway:0|fc_tmp_second";
+    const result = await sanitize(
+      [
+        call(first),
+        output(first, "first result"),
+        user("check again"),
+        call(second),
+        user("continue"),
       ],
-    }),
-    castAgentMessage({
+      { provider: "openrouter", modelId: "moonshotai/kimi-k2.5" },
+    );
+    const firstId = callId(result[0]);
+    const secondId = callId(result[3]);
+    expect(firstId).toMatch(/^call_[A-Za-z0-9_-]+$/);
+    expect(secondId).toMatch(/^call_[A-Za-z0-9_-]+$/);
+    expect(secondId).not.toBe(firstId);
+    expect(result[1]).toMatchObject({
       role: "toolResult",
-      toolCallId: "call_123|fc_123",
-      toolName: "noop",
-      content: [{ type: "text", text: "ok" }],
+      toolCallId: firstId,
       isError: false,
-    }),
-  ];
-
-  it.each([
-    {
-      name: "strips fc ids when replayable reasoning metadata is missing",
-      withReasoning: false,
-      expectedToolId: "call_123",
-    },
-    {
-      name: "keeps canonical call_id|fc_id pairings when replayable reasoning is present",
-      withReasoning: true,
-      expectedToolId: "call_123|fc_123",
-    },
-  ])("$name", async ({ withReasoning, expectedToolId }) => {
-    // Reasoning metadata proves the item id half is replayable; without it we
-    // downgrade to the canonical call id.
-    const result = await sanitizeSessionHistory({
-      messages: makeMessages(withReasoning),
-      modelApi: "openai-responses",
-      provider: "openai",
-      modelId: "gpt-5.4",
-      sessionManager: makeSessionManager(),
-      sessionId: "test-session",
+      content: [{ type: "text", text: "first result" }],
     });
-
-    const assistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
-    const toolCall = assistant.content?.find((block) => block.type === "toolCall");
-    expect(toolCall?.id).toBe(expectedToolId);
-
-    const toolResult = result[1] as { toolCallId?: string };
-    expect(toolResult.toolCallId).toBe(expectedToolId);
+    expect(result[4]).toMatchObject({
+      role: "toolResult",
+      toolCallId: secondId,
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+    const roles = result.map(({ role }) => role);
+    expect(roles).toEqual(["assistant", "toolResult", "user", "assistant", "toolResult", "user"]);
   });
 
-  it("repairs displaced tool results before downgrading openai pairing ids", async () => {
-    // Pairing repair must run before id downgrade so toolResult follows the
-    // correct assistant call after normalization.
-    const result = await sanitizeSessionHistory({
-      messages: [
+  it("preserves paired tool IDs for an unowned Azure Responses provider", async () => {
+    const id = "call_gateway_0|fc_gateway_0";
+    const result = await sanitize(
+      [
         castAgentMessage({
           role: "assistant",
-          content: [{ type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} }],
+          content: [
+            {
+              type: "thinking",
+              thinking: "reasoning",
+              thinkingSignature: { id: "rs_1", type: "reasoning" },
+            },
+            { type: "toolCall", id, name: "noop", arguments: {} },
+          ],
         }),
-        castAgentMessage({
-          role: "user",
-          content: [{ type: "text", text: "still waiting" }],
-        }),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_123|fc_123",
-          toolName: "noop",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        }),
+        output(id, ""),
       ],
-      modelApi: "openai-responses",
-      provider: "openai",
-      modelId: "gpt-5.4",
-      sessionManager: makeSessionManager(),
-      sessionId: "test-session",
-    });
-
-    const toolResult = result[1] as {
-      role?: string;
-      toolCallId?: string;
-      content?: Array<{ type?: string; text?: string }>;
-      isError?: boolean;
-    };
-    expect(toolResult.role).toBe("toolResult");
-    expect(toolResult.toolCallId).toBe("call_123");
-    expect(toolResult.content?.[0]?.text).toBe("ok");
-    expect(toolResult.isError).toBe(false);
-
-    const userMessage = result[2] as { role?: string };
-    expect(userMessage.role).toBe("user");
-  });
-
-  it("normalizes overlong responses call ids and malformed item ids for replay", async () => {
-    const longCallId = `call_${"x".repeat(120)}`;
-    const longItemId = `notfc_${"y".repeat(120)}`;
-    const rawToolCallId = `${longCallId}|${longItemId}`;
-
-    const result = await sanitizeSessionHistory({
-      messages: [
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "toolCall", id: rawToolCallId, name: "noop", arguments: {} }],
-        }),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: rawToolCallId,
-          toolName: "noop",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        }),
-      ],
-      modelApi: "openai-responses",
-      provider: "openai",
-      modelId: "gpt-5.4",
-      sessionManager: makeSessionManager(),
-      sessionId: "test-session",
-    });
-
-    const assistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
-    const toolCall = assistant.content?.find((block) => block.type === "toolCall");
-    expect(toolCall?.id).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
-    expect(toolCall?.id).not.toBe(rawToolCallId);
-    expect(toolCall?.id).not.toContain("|");
-    expect(toolCall?.id?.length).toBeLessThanOrEqual(64);
-
-    const toolResult = result[1] as { toolCallId?: string };
-    expect(toolResult.toolCallId).toBe(toolCall?.id);
+      {
+        modelApi: "azure-openai-responses",
+        provider: "custom-compatible",
+        modelId: undefined,
+        sessionManager: makeInMemorySessionManager([]),
+      },
+    );
+    expect(callId(result[0])).toBe(id);
+    expect(result[1]).toMatchObject({ toolCallId: id });
   });
 });

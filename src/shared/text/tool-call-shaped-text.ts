@@ -1,4 +1,3 @@
-// Tool-call shaped text helpers detect malformed text that resembles tool calls.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
 
@@ -44,13 +43,7 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
 
   const toolCalls = record.tool_calls ?? record.toolCalls;
   if (Array.isArray(toolCalls)) {
-    for (const toolCall of toolCalls) {
-      const detection = classifyJsonValue(toolCall);
-      if (detection) {
-        return detection;
-      }
-    }
-    return { kind: "json_tool_call" };
+    return classifyJsonValue(toolCalls) ?? { kind: "json_tool_call" };
   }
 
   const functionRecord = asOptionalRecord(record.function);
@@ -82,26 +75,8 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
   return null;
 }
 
-function collectFencedJsonCandidates(text: string): string[] {
-  const candidates: string[] = [];
-  const fenceRe = /```(?:json|tool|tool_call|function_call)?[^\n\r]*[\r\n]([\s\S]*?)```/gi;
-  for (const match of text.matchAll(fenceRe)) {
-    const candidate = match[1]?.trim();
-    if (candidate && candidate.length <= MAX_JSON_CANDIDATE_CHARS) {
-      candidates.push(candidate);
-    }
-  }
-  return candidates;
-}
-
 function findBalancedJsonEnd(text: string, start: number): number | null {
-  const opening = text[start];
-  const closing = opening === "{" ? "}" : opening === "[" ? "]" : "";
-  if (!closing) {
-    return null;
-  }
-
-  const stack = [closing];
+  const stack = [text[start] === "{" ? "}" : "]"];
   let inString = false;
   let escaped = false;
   for (let index = start + 1; index < text.length; index += 1) {
@@ -142,9 +117,18 @@ function findBalancedJsonEnd(text: string, start: number): number | null {
   return null;
 }
 
-function collectBalancedJsonCandidates(text: string): string[] {
-  const candidates: string[] = [];
-  for (let index = 0; index < text.length && candidates.length < MAX_JSON_CANDIDATES; index += 1) {
+function* iterateJsonCandidates(text: string): Generator<string> {
+  // Fenced candidates take precedence even when balanced JSON appears earlier.
+  const fenceRe = /```(?:json|tool|tool_call|function_call)?[^\n\r]*[\r\n]([\s\S]*?)```/gi;
+  for (const match of text.matchAll(fenceRe)) {
+    const candidate = match[1]?.trim();
+    if (candidate && candidate.length <= MAX_JSON_CANDIDATE_CHARS) {
+      yield candidate;
+    }
+  }
+
+  let count = 0;
+  for (let index = 0; index < text.length && count < MAX_JSON_CANDIDATES; index += 1) {
     const ch = text[index];
     if (ch !== "{" && ch !== "[") {
       continue;
@@ -155,16 +139,15 @@ function collectBalancedJsonCandidates(text: string): string[] {
     }
     const candidate = text.slice(index, end).trim();
     if (candidate.length > 1) {
-      candidates.push(candidate);
+      count += 1;
+      yield candidate;
     }
     index = end - 1;
   }
-  return candidates;
 }
 
 function detectJsonToolCall(text: string): ToolCallShapedTextDetection | null {
-  const candidates = [...collectFencedJsonCandidates(text), ...collectBalancedJsonCandidates(text)];
-  for (const candidate of candidates) {
+  for (const candidate of iterateJsonCandidates(text)) {
     try {
       const detection = classifyJsonValue(JSON.parse(candidate));
       if (detection) {

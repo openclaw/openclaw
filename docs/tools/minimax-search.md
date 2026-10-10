@@ -30,9 +30,10 @@ snippets, and related queries.
 </Steps>
 
 OpenClaw also accepts `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, and
-`MINIMAX_API_KEY` as env aliases. `MINIMAX_API_KEY` should point at a
-search-enabled Token Plan credential; ordinary MiniMax model API keys may not
-be accepted by the Token Plan search endpoint.
+`MINIMAX_API_KEY` as env aliases, checked in that order after
+`MINIMAX_CODE_PLAN_KEY`. `MINIMAX_API_KEY` should point at a search-enabled
+Token Plan credential; ordinary MiniMax model API keys may not be accepted by
+the Token Plan search endpoint.
 
 ## Config
 
@@ -71,13 +72,13 @@ MiniMax Search uses these endpoints:
 - Global: `https://api.minimax.io/v1/coding_plan/search`
 - CN: `https://api.minimaxi.com/v1/coding_plan/search`
 
-If `plugins.entries.minimax.config.webSearch.region` is unset, OpenClaw resolves
-the region in this order:
+OpenClaw resolves the region in this order:
 
-1. `tools.web.search.minimax.region` / plugin-owned `webSearch.region`
-2. `MINIMAX_API_HOST`
-3. `models.providers.minimax.baseUrl`
-4. `models.providers.minimax-portal.baseUrl`
+1. Plugin-owned `plugins.entries.minimax.config.webSearch.region`, when set.
+2. `MINIMAX_API_HOST`, when it points at a `minimaxi.com` host.
+3. `models.providers.minimax.baseUrl` or `models.providers.minimax-portal.baseUrl`, when either points at a `minimaxi.com` host.
+
+Steps 2 and 3 only detect the CN host; anything else resolves to `global`.
 
 That means CN onboarding or `MINIMAX_API_HOST=https://api.minimaxi.com/...`
 automatically keeps MiniMax Search on the CN host too.
@@ -89,10 +90,10 @@ can satisfy the MiniMax Search bearer credential.
 
 ## Supported parameters
 
-| Parameter | Type    | Constraints | Description                                                                 |
-| --------- | ------- | ----------- | --------------------------------------------------------------------------- |
-| `query`   | string  | required    | Search query string.                                                        |
-| `count`   | integer | 1-10        | Number of results to return. OpenClaw trims the returned list to this size. |
+| Parameter | Type    | Constraints     | Description                                                                 |
+| --------- | ------- | --------------- | --------------------------------------------------------------------------- |
+| `query`   | string  | required        | Search query string.                                                        |
+| `count`   | integer | 1-10, default 5 | Number of results to return. OpenClaw trims the returned list to this size. |
 
 Provider-specific filters are not currently supported.
 

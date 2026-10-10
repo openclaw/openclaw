@@ -1,56 +1,46 @@
-/**
- * Regression coverage for process send-keys cursor-mode handling.
- * Cursor-sensitive keys must wait until PTY startup output establishes mode.
- */
+import { Writable } from "node:stream";
 import { expect, test } from "vitest";
+import { createManagedChildStdin } from "../process/supervisor/adapters/child-stdin.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
+import { handleProcessSendKeys } from "./bash-tools.process-send-keys.js";
 
-function createWritableStdinStub(): WritableStdin {
-  return {
-    write(dataValue: string, cb?: (err?: Error | null) => void) {
-      cb?.();
+test.each([
+  { name: "raw hex", input: { hex: ["80", "ff", "00", "0x0a"] }, expected: "80ff000a" },
+  {
+    name: "mixed input with unknown cursor mode",
+    input: { literal: "é", hex: ["c3", "a9", "zz"], keys: ["C-c", "Enter"] },
+    expected: "c3a9c3a9030d",
+  },
+  { name: "invalid hex only", input: { hex: ["zz"] }, expected: "" },
+])("send-keys preserves $name bytes", async ({ input, expected }) => {
+  const received: Buffer[] = [];
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      received.push(chunk);
+      callback();
     },
-    end() {},
-    destroyed: false,
-  };
-}
-
-function expectTextContent(content: unknown, text: string) {
-  const part = content as { type?: string; text?: string } | undefined;
-  expect(part?.type).toBe("text");
-  expect(part?.text).toContain(text);
-}
-
-test("process send-keys fails loud for unknown cursor mode when arrows depend on it", async () => {
-  const result = await handleProcessSendKeys({
-    sessionId: "sess-unknown-mode",
-    session: createProcessSessionFixture({
-      id: "sess-unknown-mode",
-      command: "vim",
-      backgrounded: true,
-      cursorKeyMode: "unknown",
-    }),
-    stdin: createWritableStdinStub(),
-    keys: ["up"],
   });
-
-  expect((result.details as { status?: string }).status).toBe("failed");
-  expectTextContent(result.content[0], "cursor key mode is not known yet");
-});
-
-test("process send-keys still sends non-cursor keys while mode is unknown", async () => {
-  const result = await handleProcessSendKeys({
-    sessionId: "sess-unknown-enter",
-    session: createProcessSessionFixture({
-      id: "sess-unknown-enter",
-      command: "vim",
-      backgrounded: true,
-      cursorKeyMode: "unknown",
-    }),
-    stdin: createWritableStdinStub(),
-    keys: ["Enter"],
-  });
-
-  expect((result.details as { status?: string }).status).toBe("running");
+  const stdin = createManagedChildStdin(stream)!;
+  try {
+    const result = await handleProcessSendKeys({
+      sessionId: "input-bytes",
+      session: createProcessSessionFixture({
+        id: "input-bytes",
+        command: "cat",
+        cursorKeyMode: "unknown",
+      }),
+      stdin,
+      ...input,
+    });
+    expect(Buffer.concat(received).toString("hex")).toBe(expected);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        expected ? `Sent ${expected.length / 2} bytes` : "No key data provided.",
+      ),
+    });
+    expect(result.details).toMatchObject({ status: expected ? "running" : "failed" });
+  } finally {
+    stream.destroy();
+  }
 });

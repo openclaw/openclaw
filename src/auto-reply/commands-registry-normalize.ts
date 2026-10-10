@@ -1,50 +1,51 @@
-/** Normalizes slash-command text aliases and builds command detection caches. */
+/** Normalizes and detects slash commands through their canonical aliases. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
-import { escapeRegExp } from "../utils.js";
 import { getChatCommands } from "./commands-registry.data.js";
-import type {
-  ChatCommandDefinition,
-  CommandDetection,
-  CommandNormalizeOptions,
-} from "./commands-registry.types.js";
+import type { ChatCommandDefinition, CommandNormalizeOptions } from "./commands-registry.types.js";
 
 type TextAliasSpec = {
-  key: string;
+  command: ChatCommandDefinition;
   canonical: string;
   acceptsArgs: boolean;
 };
 
-let cachedTextAliasMap: Map<string, TextAliasSpec> | null = null;
-let cachedTextAliasCommands: ChatCommandDefinition[] | null = null;
-let cachedDetection: CommandDetection | undefined;
-let cachedDetectionCommands: ChatCommandDefinition[] | null = null;
+let cachedTextAliases: Map<string, TextAliasSpec> | undefined;
+
+// Commands whose free-text argument becomes agent input keep every line and its spacing.
+const ARGUMENT_PRESERVING_COMMAND_KEYS = new Set(["goal", "steer"]);
+
+const TARGETED_COMMAND_BODY_RE =
+  /^\/([^\s@]+)@([A-Za-z0-9_]+)(?=$|\s|[.!?！？…,，。;；:：'"’”)\]}])([\s\S]*)$/u;
 
 function appendMultilineTail(head: string, tail: string | undefined, spec?: TextAliasSpec): string {
   if (!tail) {
     return head;
   }
-  if (!spec || spec.key === "skill") {
-    return `${head}\n${tail}`;
+  if (!spec || spec.command.key === "skill" || spec.command.key === "learn") {
+    // `/skill` consumes the skill name before payload content can begin.
+    const headArgumentCount = head.split(/\s+/, 3).length - 1;
+    const hasPayload = headArgumentCount >= (spec?.command.key === "skill" ? 2 : 1);
+    const normalizedTail = hasPayload && spec?.command.key !== "learn" ? tail : tail.trimStart();
+    return `${head}\n${normalizedTail}`;
   }
-  if (spec.key === "reset") {
+  if (spec.command.key === "reset") {
     const flattened = tail.replace(/\s+/g, " ").trim();
     return flattened ? `${head} ${flattened}` : head;
   }
   return head;
 }
 
-function getTextAliasMap(): Map<string, TextAliasSpec> {
-  const commands = getChatCommands();
-  if (cachedTextAliasMap && cachedTextAliasCommands === commands) {
-    return cachedTextAliasMap;
+function getTextAliases(): Map<string, TextAliasSpec> {
+  if (cachedTextAliases) {
+    return cachedTextAliases;
   }
-  const map = new Map<string, TextAliasSpec>();
-  for (const command of commands) {
+  const aliases = new Map<string, TextAliasSpec>();
+  for (const command of getChatCommands()) {
     // Canonicalize to the primary text alias, not `/${key}`. Some command keys are
     // internal identifiers while the public text command is a dedicated alias.
     const canonical = normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
@@ -54,48 +55,57 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
       if (!normalized) {
         continue;
       }
-      if (!map.has(normalized)) {
-        map.set(normalized, { key: command.key, canonical, acceptsArgs });
+      if (!aliases.has(normalized)) {
+        aliases.set(normalized, { command, canonical, acceptsArgs });
       }
     }
   }
-  cachedTextAliasMap = map;
-  cachedTextAliasCommands = commands;
-  return map;
+  cachedTextAliases = aliases;
+  return aliases;
 }
 
 /** Normalizes command text to canonical aliases, removing bot mentions when appropriate. */
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
-  const trimmed = raw.trim();
+  const trimmed = options?.preserveArguments ? raw.trimStart() : raw.trim();
   if (!trimmed.startsWith("/")) {
     return trimmed;
   }
 
-  const newline = trimmed.indexOf("\n");
+  const commandAlias = trimmed.match(/^\/[^\s@:]+/u)?.[0]?.toLowerCase();
+  const commandSpec = commandAlias ? getTextAliases().get(commandAlias) : undefined;
+  const preserveArguments =
+    options?.preserveArguments ||
+    (commandSpec !== undefined && ARGUMENT_PRESERVING_COMMAND_KEYS.has(commandSpec.command.key));
+  const newline = preserveArguments ? -1 : trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
-  const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1).trimStart();
+  // Indentation and blank lines after this boundary can be interior skill payload.
+  const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1);
 
   // `/cmd: value` is accepted as `/cmd value` because some channels insert colon syntax.
-  const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
-  const normalized = colonMatch
-    ? (() => {
-        const [, command, rest] = colonMatch;
-        const normalizedRest = rest.trimStart();
-        return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
-      })()
-    : singleLine;
+  const normalized = singleLine.replace(
+    /^\/([^\s:]+)\s*:([\s\S]*)$/,
+    (_, command: string, rest: string) => {
+      const normalizedRest = preserveArguments ? rest : rest.trimStart();
+      return normalizedRest
+        ? `/${command}${/^\s/.test(normalizedRest) ? "" : " "}${normalizedRest}`
+        : `/${command}`;
+    },
+  );
 
   const normalizedBotUsername = normalizeOptionalLowercaseString(options?.botUsername);
-  const mentionMatch = normalizedBotUsername
-    ? normalized.match(/^\/([^\s@]+)@([^\s]+)(.*)$/)
-    : null;
+  const mentionMatch = normalized.match(TARGETED_COMMAND_BODY_RE);
+  const targetBotUsername = normalizeOptionalLowercaseString(mentionMatch?.[2]);
+  const targetMatchesBot =
+    normalizedBotUsername !== undefined && targetBotUsername === normalizedBotUsername;
+  const resolveBeforeIdentity =
+    normalizedBotUsername === undefined && options?.targetedCommandMode === "pre-identity";
   const commandBody =
-    mentionMatch && normalizeLowercaseStringOrEmpty(mentionMatch[2]) === normalizedBotUsername
+    mentionMatch && (targetMatchesBot || resolveBeforeIdentity)
       ? `/${mentionMatch[1]}${mentionMatch[3] ?? ""}`
       : normalized;
 
   const lowered = normalizeLowercaseStringOrEmpty(commandBody);
-  const textAliasMap = getTextAliasMap();
+  const textAliasMap = getTextAliases();
   const exact = textAliasMap.get(lowered);
   if (exact) {
     return appendMultilineTail(exact.canonical, multilineTail, exact);
@@ -115,66 +125,33 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return commandBody;
   }
   const normalizedRest = rest?.trimStart();
-  const normalizedHead = normalizedRest
-    ? `${tokenSpec.canonical} ${normalizedRest}`
-    : tokenSpec.canonical;
+  const normalizedHead = preserveArguments
+    ? `${tokenSpec.canonical}${commandBody.slice(tokenKey.length)}`
+    : normalizedRest
+      ? `${tokenSpec.canonical} ${normalizedRest}`
+      : tokenSpec.canonical;
   return appendMultilineTail(normalizedHead, multilineTail, tokenSpec);
 }
 
-/** Returns cached exact and regex detectors for the current command registry instance. */
-export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
-  const commands = getChatCommands();
-  if (cachedDetection && cachedDetectionCommands === commands) {
-    return cachedDetection;
-  }
-  const exact = new Set<string>();
-  const patterns: string[] = [];
-  for (const cmd of commands) {
-    for (const alias of cmd.textAliases) {
-      const normalized = normalizeOptionalLowercaseString(alias);
-      if (!normalized) {
-        continue;
-      }
-      exact.add(normalized);
-      const escaped = escapeRegExp(normalized);
-      if (!escaped) {
-        continue;
-      }
-      if (cmd.acceptsArgs) {
-        patterns.push(`${escaped}(?:\\s+[\\s\\S]+|\\s*:\\s*[\\s\\S]*)?`);
-      } else {
-        patterns.push(`${escaped}(?:\\s*:\\s*)?`);
-      }
-    }
-  }
-  cachedDetection = {
-    exact,
-    regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
-  };
-  cachedDetectionCommands = commands;
-  return cachedDetection;
-}
-
 /** Resolves a raw text command to the matching normalized alias when known. */
-export function maybeResolveTextAlias(raw: string, cfg?: OpenClawConfig) {
+export function maybeResolveTextAlias(raw: string, _cfg?: OpenClawConfig) {
   const trimmed = normalizeCommandBody(raw).trim();
   if (!trimmed.startsWith("/")) {
     return null;
   }
-  const detection = getCommandDetection(cfg);
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (detection.exact.has(normalized)) {
-    return normalized;
-  }
-  if (!detection.regex.test(normalized)) {
-    return null;
-  }
+  const aliases = getTextAliases();
   const tokenMatch = normalized.match(/^\/([^\s:]+)(?:\s|$)/);
   if (!tokenMatch) {
     return null;
   }
   const tokenKey = `/${tokenMatch[1]}`;
-  return getTextAliasMap().has(tokenKey) ? tokenKey : null;
+  const spec = aliases.get(tokenKey);
+  if (!spec) {
+    return null;
+  }
+  const tail = normalized.slice(tokenKey.length);
+  return !tail || spec.acceptsArgs || /^\s*:\s*$/.test(tail) ? tokenKey : null;
 }
 
 /** Resolves a raw text command into its command definition and raw argument tail. */
@@ -190,17 +167,13 @@ export function resolveTextCommand(
   if (!alias) {
     return null;
   }
-  const spec = getTextAliasMap().get(alias);
+  const spec = getTextAliases().get(alias);
   if (!spec) {
     return null;
   }
-  const command = getChatCommands().find((entry) => entry.key === spec.key);
-  if (!command) {
-    return null;
-  }
   if (!spec.acceptsArgs) {
-    return { command };
+    return { command: spec.command };
   }
   const args = trimmed.slice(alias.length).trim();
-  return { command, args: args || undefined };
+  return { command: spec.command, args: args || undefined };
 }

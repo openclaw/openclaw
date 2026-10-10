@@ -1,10 +1,8 @@
-// Telegram type declarations define plugin contracts.
-import type { ChatFullInfo, Message, UserFromGetMe } from "grammy/types";
+import type { Context } from "grammy";
+import type { ChatFullInfo, Message, Update, UserFromGetMe } from "grammy/types";
 
-/** App-specific stream mode for Telegram stream previews. */
-export type TelegramStreamMode = "off" | "partial" | "block" | "progress";
+export type { StreamingMode as TelegramStreamMode } from "openclaw/plugin-sdk/channel-outbound";
 
-type TelegramGetFile = () => Promise<{ file_path?: string }>;
 export type TelegramChatDetails = {
   id?: number | string;
   available_reactions?: ChatFullInfo["available_reactions"] | null;
@@ -19,16 +17,13 @@ export type TelegramGetChat = (chatId: number | string) => Promise<TelegramChatD
  */
 export type TelegramContext = {
   message: Message;
-  update?: unknown;
+  update?: Update;
   me?: UserFromGetMe;
-  getFile: TelegramGetFile;
+  getFile: Context["getFile"];
 };
 
-/** Telegram sticker metadata for context enrichment and caching. */
 export interface StickerMetadata {
-  /** Emoji associated with the sticker. */
   emoji?: string;
-  /** Name of the sticker set the sticker belongs to. */
   setName?: string;
   /** Telegram file_id for sending the sticker back. */
   fileId?: string;

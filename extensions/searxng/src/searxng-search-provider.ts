@@ -1,4 +1,4 @@
-// Searxng provider module implements model/runtime integration.
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
   createWebSearchProviderContractFields,
@@ -7,14 +7,7 @@ import {
 
 const SEARXNG_CREDENTIAL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 
-type SearxngClientModule = typeof import("./searxng-client.js");
-
-let searxngClientModulePromise: Promise<SearxngClientModule> | undefined;
-
-function loadSearxngClientModule(): Promise<SearxngClientModule> {
-  searxngClientModulePromise ??= import("./searxng-client.js");
-  return searxngClientModulePromise;
-}
+const loadSearxngClientModule = createLazyRuntimeModule(() => import("./searxng-client.js"));
 
 const SearxngSearchSchema = {
   type: "object",
@@ -65,7 +58,7 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using a self-hosted SearXNG instance. Returns titles, URLs, and snippets.",
       parameters: SearxngSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
         const { runSearxngSearch } = await loadSearxngClientModule();
         return await runSearxngSearch({
           config: ctx.config,
@@ -76,6 +69,7 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
           }),
           categories: readStringParam(args, "categories"),
           language: readStringParam(args, "language"),
+          signal: context?.signal,
         });
       },
     }),

@@ -1,443 +1,475 @@
 // Stores and broadcasts agent lifecycle and streaming events.
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
-import type { VerboseLevel } from "../auto-reply/thinking.js";
+import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import {
+  getAgentEventExecutionContext,
+  recordAgentEventRouting,
+} from "./agent-event-execution-context.js";
+import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
+import type {
+  AgentAssistantProjection,
+  AgentAssistantSourceReceipt,
+  AgentEventPayload,
+  AgentEventRuntimePayload,
+} from "./agent-events.types.js";
+import { createAgentRunStaleLifecycleError } from "./agent-lifecycle-error.js";
+import {
+  getAgentRunContext,
+  getAgentRunContextOwnership,
+  getAgentRunLifecycleGeneration,
+  recordAgentRunModel,
+  registerAgentRunSequenceResetHandler,
+  resetAgentRunRegistryForTest,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "./agent-run-registry.js";
+import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
+import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
-/** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
-export type AgentEventStream =
-  | "lifecycle"
-  | "tool"
-  | "assistant"
-  | "error"
-  | "item"
-  | "plan"
-  | "approval"
-  | "command_output"
-  | "patch"
-  | "compaction"
-  | "thinking"
-  | (string & {});
+export type {
+  AgentApprovalEventData,
+  AgentAssistantProjection,
+  AgentAssistantSourceReceipt,
+  AgentEventPayload,
+  AgentEventRuntimePayload,
+  AgentEventStream,
+} from "./agent-events.types.js";
 
-/** Lifecycle phase for a visible item in the agent activity feed. */
-export type AgentItemEventPhase = "start" | "update" | "end";
-/** Status rendered for an item-level agent activity event. */
-export type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
-/** Item category used by channels and Control UI to choose progress presentation. */
-export type AgentItemEventKind =
-  | "tool"
-  | "command"
-  | "patch"
-  | "search"
-  | "analysis"
-  | (string & {});
-
-/** Payload for a single item shown in the agent activity stream. */
-export type AgentItemEventData = {
-  itemId: string;
-  phase: AgentItemEventPhase;
-  kind: AgentItemEventKind;
-  title: string;
-  status: AgentItemEventStatus;
-  name?: string;
-  meta?: string;
-  toolCallId?: string;
-  startedAt?: number;
-  endedAt?: number;
-  error?: string;
-  summary?: string;
-  progressText?: string;
-  /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
-  suppressChannelProgress?: boolean;
-  approvalId?: string;
-  approvalSlug?: string;
+type AgentEventListener = (
+  evt: AgentEventRuntimePayload,
+  isDeliveryCurrent?: () => boolean,
+) => void;
+type CaptureAgentEventDelivery = (evt: AgentEventRuntimePayload) => () => boolean;
+type AgentEventRegistration = {
+  readonly listener: AgentEventListener;
+  readonly id: number;
+  readonly captureDelivery?: CaptureAgentEventDelivery;
 };
-
-/** Approval event phase for request/resolution transitions. */
-export type AgentApprovalEventPhase = "requested" | "resolved";
-/** Approval status after routing, user action, or delivery failure. */
-export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
-/** Approval family used by renderers and host hooks. */
-export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
-
-/** Payload for approval requests and their later resolution events. */
-export type AgentApprovalEventData = {
-  phase: AgentApprovalEventPhase;
-  kind: AgentApprovalEventKind;
-  status: AgentApprovalEventStatus;
-  title: string;
-  itemId?: string;
-  toolCallId?: string;
-  approvalId?: string;
-  approvalSlug?: string;
-  command?: string;
-  host?: string;
-  reason?: string;
-  scope?: "turn" | "session";
-  message?: string;
-};
-
-/** Incremental command output payload associated with an item/tool call. */
-export type AgentCommandOutputEventData = {
-  itemId: string;
-  phase: "delta" | "end";
-  title: string;
-  toolCallId: string;
-  name?: string;
-  output?: string;
-  status?: AgentItemEventStatus | "running";
-  exitCode?: number | null;
-  durationMs?: number;
-  cwd?: string;
-};
-
-/** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = {
-  itemId: string;
-  phase: "end";
-  title: string;
-  toolCallId: string;
-  name?: string;
-  added: string[];
-  modified: string[];
-  deleted: string[];
-  summary: string;
-};
-
-/** Enriched event delivered to subscribers after sequencing and context stamping. */
-export type AgentEventPayload = {
-  runId: string;
-  seq: number;
-  stream: AgentEventStream;
-  ts: number;
-  data: Record<string, unknown>;
-  /** Internal, non-enumerable gateway lifecycle generation that owns this run. */
-  lifecycleGeneration?: string;
-  sessionKey?: string;
-  /**
-   * sessionId the run was bound to when it started. Lifecycle persistence uses
-   * this to reject terminal events from a pre-`sessions.reset` run that would
-   * otherwise clobber the rotated session row resolved by the shared sessionKey.
-   */
-  sessionId?: string;
-  agentId?: string;
-};
-
-/** Per-run metadata used to stamp events and gate Control UI visibility. */
-export type AgentRunContext = {
-  sessionKey?: string;
-  /** Owning run's sessionId; stamped onto lifecycle events (see AgentEventPayload.sessionId). */
-  sessionId?: string;
-  /** Gateway lifecycle generation captured when the run was registered. */
-  lifecycleGeneration?: string;
-  verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
-  /** Whether control UI clients should receive chat/agent updates for this run. */
-  isControlUiVisible?: boolean;
-  /** Timestamp when this context was first registered (for TTL-based cleanup). */
-  registeredAt?: number;
-  /** Timestamp of last activity (updated on every emitAgentEvent). */
-  lastActiveAt?: number;
-};
+type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
 
 type AgentEventState = {
-  seqByRun: Map<string, number>;
-  listeners: Set<(evt: AgentEventPayload) => void>;
-  runContextById: Map<string, AgentRunContext>;
-  runContextOwnersById?: Map<
-    string,
-    {
-      lifecycleGeneration: string;
-      ownerTokens: Set<string>;
-      preserveAfterRelease: boolean;
-      clearRequested: boolean;
-    }
-  >;
-  lifecycleGeneration: string;
+  runs: Map<string, AgentRunEventState>;
+  assistantSources?: WeakMap<object, AgentAssistantSourceReceipt>;
+  listeners: AgentEventListeners;
+  runListeners: Map<string, AgentEventListeners>;
+  nextListenerId: number;
+  listenerRevision: number;
+  auditListeners: Set<(evt: AgentEventPayload) => void>;
+  lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
 
-const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
-const AGENT_EVENT_EXECUTION_CONTEXT_KEY = Symbol.for("openclaw.agentEvents.executionContext");
-
-type AgentEventExecutionContext = {
-  lifecycleGeneration: string;
-};
+const AGENT_EVENT_ROUTING_FIELDS = [
+  ["controlUiVisible", "isControlUiVisible"],
+  ["projectSessionLifecycle", "projectSessionLifecycle"],
+  ["projectSessionMessages", "projectSessionMessages"],
+  ["mainSessionRestartRecovery", "mainSessionRestartRecovery"],
+  ["isHeartbeat", "isHeartbeat"],
+  ["verboseLevel", "verboseLevel"],
+  ["registeredAt", "registeredAt"],
+] as const;
 
 function getAgentEventState(): AgentEventState {
-  return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
-    seqByRun: new Map<string, number>(),
-    listeners: new Set<(evt: AgentEventPayload) => void>(),
-    runContextById: new Map<string, AgentRunContext>(),
-    lifecycleGeneration: randomUUID(),
+  // Lifecycle owners can register before an importing runtime chunk finishes initialization.
+  return resolveGlobalSingleton<AgentEventState>(Symbol.for("openclaw.agentEvents.state"), () => ({
+    runs: new Map(),
+    listeners: new Map(),
+    runListeners: new Map(),
+    nextListenerId: 0,
+    listenerRevision: 0,
+    auditListeners: new Set<(evt: AgentEventPayload) => void>(),
   }));
 }
 
-function getAgentEventExecutionContext() {
-  return resolveGlobalSingleton<AsyncLocalStorage<AgentEventExecutionContext>>(
-    AGENT_EVENT_EXECUTION_CONTEXT_KEY,
-    () => new AsyncLocalStorage<AgentEventExecutionContext>(),
-  );
+/** Correlate copied model frames with their occurrence without changing transcript bytes. */
+export function bindAgentAssistantSource(
+  message: object,
+  source: AgentAssistantSourceReceipt,
+): void {
+  (getAgentEventState().assistantSources ??= new WeakMap()).set(message, source);
 }
+
+export function readAgentAssistantSource(
+  message: unknown,
+): AgentAssistantSourceReceipt | undefined {
+  return message && typeof message === "object"
+    ? getAgentEventState().assistantSources?.get(message)
+    : undefined;
+}
+
+registerAgentRunSequenceResetHandler((runId) => {
+  getAgentEventState().runs.delete(runId);
+});
 
 /** Runs one execution with immutable ownership inherited by every emitted stream event. */
 export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, run: () => T): T {
-  return getAgentEventExecutionContext().run({ lifecycleGeneration }, run);
+  const storage = getAgentEventExecutionContext();
+  const parent = storage.getStore();
+  const onceByRun =
+    parent?.lifecycleGeneration === lifecycleGeneration ? parent.onceByRun : new Map();
+  // Same-registration records share compaction updates, while a nested reused
+  // run id replaces only its own binding. Neither scope retains live authority.
+  const routingByRun = new Map(parent?.routingByRun);
+  return storage.run({ lifecycleGeneration, onceByRun, routingByRun }, run);
+}
+
+type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
+
+/** Reserves client terminal publication without advancing execution settlement. */
+export function reserveAgentTerminalEvent(
+  identity: Omit<AgentEventPayload, "seq" | "ts" | "stream" | "data">,
+): (data: AgentTerminalEventData) => void {
+  const { runId } = identity;
+  const context = getAgentRunContext(runId);
+  return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
+    if (context) {
+      recordAgentEventRouting(runId, context);
+    }
+    const resolved = resolveAgentEventRouting(identity);
+    if (!resolved) {
+      return () => {};
+    }
+    const state = getAgentEventState();
+    const runState = resolved.routing?.eventState ?? state.runs.get(runId) ?? { seq: 0 };
+    const publication = Symbol("agent terminal publication");
+    runState.terminalPublication ??= publication;
+    if (!state.runs.has(runId)) {
+      state.runs.set(runId, runState);
+    }
+    const storage = getAgentEventExecutionContext();
+    const scope = storage.getStore()!;
+    let pending = true;
+    return (data: AgentTerminalEventData) => {
+      if (pending) {
+        pending = false;
+        storage.run(scope, () =>
+          dispatchAgentEvent(
+            { ...identity, stream: "lifecycle", data },
+            undefined,
+            undefined,
+            publication,
+          ),
+        );
+      }
+    };
+  });
+}
+
+/** Shares one operation across fallback attempts that belong to the same admitted run. */
+export function runOncePerAgentRun<T>(runId: string, operation: string, run: () => Promise<T>) {
+  const context = getAgentEventExecutionContext().getStore();
+  if (!context) {
+    return run();
+  }
+  const key = `${operation}:${runId}`;
+  const existing = context.onceByRun.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const pending = Promise.resolve().then(run);
+  context.onceByRun.set(key, pending);
+  return pending;
 }
 
 export function getAgentEventLifecycleGeneration(): string {
-  return getAgentEventState().lifecycleGeneration;
+  return getAgentRunLifecycleGeneration();
+}
+
+export function isAgentEventLifecycleGenerationCurrent(lifecycleGeneration: string): boolean {
+  return lifecycleGeneration === getAgentRunLifecycleGeneration();
+}
+
+/** Registers process-local state cleanup at the gateway lifecycle boundary. */
+export function registerAgentEventLifecycleRotationHandler(
+  key: string,
+  handler: (lifecycleGeneration: string) => void,
+): () => void {
+  const state = getAgentEventState();
+  const handlers =
+    state.lifecycleRotationHandlers ??
+    (state.lifecycleRotationHandlers = new Map<string, (lifecycleGeneration: string) => void>());
+  handlers.set(key, handler);
+  return () => {
+    if (handlers.get(key) === handler) {
+      handlers.delete(key);
+    }
+  };
 }
 
 /** Rejects work that no longer belongs to the active gateway lifecycle. */
 export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: string): void {
-  if (lifecycleGeneration === getAgentEventState().lifecycleGeneration) {
+  if (isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
     return;
   }
-  const error = new Error("Agent run belongs to a stale gateway lifecycle");
-  error.name = "AbortError";
-  throw error;
+  throw createAgentRunStaleLifecycleError();
 }
 
 /** Captures immutable lifecycle ownership for one admitted execution. */
 export function captureAgentRunLifecycleGeneration(runId: string): string {
   return (
     getAgentEventExecutionContext().getStore()?.lifecycleGeneration ??
-    getAgentEventState().runContextById.get(runId)?.lifecycleGeneration ??
-    getAgentEventState().lifecycleGeneration
+    getAgentRunContext(runId)?.lifecycleGeneration ??
+    getAgentRunLifecycleGeneration()
   );
 }
 
 /** Starts a new ownership generation before an in-process gateway restart. */
 export function rotateAgentEventLifecycleGeneration(): string {
   const state = getAgentEventState();
-  state.lifecycleGeneration = randomUUID();
-  return state.lifecycleGeneration;
+  const lifecycleGeneration = rotateAgentRunRegistryLifecycleGeneration();
+  // Rotation is the liveness choke point: after it returns, no prior-generation
+  // owner is operationally reachable. Recovery and runtime consumers therefore
+  // agree that only current-generation owners can drive or receive work.
+  const errors: unknown[] = [];
+  notifyListeners(state.lifecycleRotationHandlers?.values() ?? [], lifecycleGeneration, (error) =>
+    errors.push(error),
+  );
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to retire stale agent lifecycle owners");
+  }
+  return lifecycleGeneration;
 }
 
-/** Registers or merges per-run context used by later agent event emissions. */
-export function registerAgentRunContext(runId: string, context: AgentRunContext) {
-  if (!runId) {
-    return;
+// Preserve the former activity window and the native worker identifier bound.
+const MAX_EXECUTION_ACTIVITY_ITEMS = 64;
+const MAX_EXECUTION_ACTIVITY_ID_LENGTH = 256;
+const MAX_EXECUTION_TOOL_NAME_LENGTH = 120;
+
+function activityId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
   }
-  const state = getAgentEventState();
-  const existing = state.runContextById.get(runId);
-  if (!existing) {
-    state.runContextById.set(runId, {
-      ...context,
-      lifecycleGeneration: context.lifecycleGeneration ?? state.lifecycleGeneration,
-      registeredAt: context.registeredAt ?? Date.now(),
-    });
-    return;
-  }
+  const id = value.trim();
+  return id && id.length <= MAX_EXECUTION_ACTIVITY_ID_LENGTH ? id : undefined;
+}
+
+function recordExecutionActivity(
+  context: AgentRunContext,
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+): void {
   if (
-    context.lifecycleGeneration &&
-    existing.lifecycleGeneration &&
-    context.lifecycleGeneration !== existing.lifecycleGeneration
+    (event.sessionKey && context.sessionKey && event.sessionKey !== context.sessionKey) ||
+    (event.sessionId && context.sessionId && event.sessionId !== context.sessionId)
   ) {
     return;
   }
-  if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
-    existing.sessionKey = context.sessionKey;
+  const { stream, data } = event;
+  if (stream === "lifecycle" && (data.phase === "end" || data.phase === "error")) {
+    context.executionActivity = undefined;
+    return;
   }
-  if (context.sessionId && existing.sessionId !== context.sessionId) {
-    existing.sessionId = context.sessionId;
+  const approval = stream === "execution" && isRecord(data.approval) ? data.approval : undefined;
+  const approvalId = activityId(
+    approval?.id ?? (stream === "lifecycle" ? data.approvalId : undefined),
+  );
+  const approvalState =
+    approval?.state ??
+    (data.phase === "waiting-approval"
+      ? "pending"
+      : data.phase === "approval-resolved"
+        ? "resolved"
+        : undefined);
+  if (approvalId && (approvalState === "pending" || approvalState === "resolved")) {
+    const activity = (context.executionActivity ??= { tools: [], pendingApprovalIds: [] });
+    if (approvalState === "pending" && !activity.pendingApprovalIds.includes(approvalId)) {
+      if (activity.pendingApprovalIds.length < MAX_EXECUTION_ACTIVITY_ITEMS) {
+        activity.pendingApprovalIds.push(approvalId);
+      } else {
+        // Unrepresented approvals cannot be mistaken for a fully resumed run.
+        activity.approvalOverflow = true;
+      }
+    } else if (approvalState === "resolved") {
+      activity.pendingApprovalIds = activity.pendingApprovalIds.filter((id) => id !== approvalId);
+    }
+    return;
   }
-  if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
-    existing.verboseLevel = context.verboseLevel;
+  if (
+    stream === "execution" &&
+    (data.state === "running" || data.state === "waiting" || data.state === "unknown")
+  ) {
+    const sourceId = activityId(data.sourceId);
+    const previous = context.executionActivity?.execution;
+    if (data.invalidate === true && (!sourceId || previous?.sourceId !== sourceId)) {
+      return;
+    }
+    const activity = (context.executionActivity ??= { tools: [], pendingApprovalIds: [] });
+    const id = activityId(data.executionId);
+    if (
+      data.state === "unknown" ||
+      (sourceId && previous?.sourceId !== sourceId) ||
+      (id && previous?.id !== id)
+    ) {
+      activity.tools = [];
+    }
+    const kind = isRecord(data.wait) ? data.wait.kind : undefined;
+    const wait =
+      kind === "approval" ||
+      kind === "user_input" ||
+      kind === "agent_messages" ||
+      kind === "children"
+        ? kind
+        : "external";
+    activity.execution = {
+      state: data.state,
+      sourceId: sourceId ?? previous?.sourceId,
+      id: id ?? previous?.id,
+      ...(data.state === "waiting" ? { wait } : {}),
+    };
+    return;
   }
-  if (context.isControlUiVisible !== undefined) {
-    existing.isControlUiVisible = context.isControlUiVisible;
+  if (stream !== "tool") {
+    return;
   }
-  if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
-    existing.isHeartbeat = context.isHeartbeat;
+  const toolCallId = activityId(data.toolCallId);
+  if (!toolCallId) {
+    return;
   }
-  if (context.registeredAt !== undefined) {
-    existing.registeredAt = context.registeredAt;
+  const existing = context.executionActivity;
+  if (data.phase === "result" || data.phase === "end") {
+    if (existing) {
+      existing.tools = existing.tools.filter((tool) => tool.id !== toolCallId);
+    }
+    return;
   }
-  if (context.lastActiveAt !== undefined) {
-    existing.lastActiveAt = context.lastActiveAt;
+  if (data.phase !== "start" || typeof data.name !== "string" || !data.name.trim()) {
+    return;
+  }
+  const activity = (context.executionActivity ??= { tools: [], pendingApprovalIds: [] });
+  const tool = {
+    id: toolCallId,
+    name: truncateUtf16Safe(data.name.trim(), MAX_EXECUTION_TOOL_NAME_LENGTH),
+  };
+  const index = activity.tools.findIndex((current) => current.id === toolCallId);
+  if (index >= 0) {
+    activity.tools[index] = tool;
+  } else if (activity.tools.length < MAX_EXECUTION_ACTIVITY_ITEMS) {
+    activity.tools.push(tool);
   }
 }
 
-function getAgentRunContextOwners(state = getAgentEventState()) {
-  state.runContextOwnersById ??= new Map();
-  return state.runContextOwnersById;
-}
-
-/** Claims a run id for a newly admitted execution, replacing stale ownership. */
-export function claimAgentRunContext(
-  runId: string,
-  context: AgentRunContext,
-  options: { trackOwner?: boolean; ownsContext?: boolean } = {},
-): string | undefined {
-  if (!runId) {
+function resolveAgentEventRouting(
+  event: Pick<AgentEventPayload, "runId" | "lifecycleGeneration">,
+  claimId?: string,
+  expectedContext?: AgentRunContext,
+) {
+  const currentLifecycleGeneration = getAgentRunLifecycleGeneration();
+  const owners = getAgentRunContextOwnership(event.runId);
+  if (claimId !== undefined) {
+    if (
+      owners?.lifecycleGeneration !== currentLifecycleGeneration ||
+      owners.exclusiveClaimId !== claimId ||
+      !owners.claimIds.has(claimId) ||
+      owners.clearRequested
+    ) {
+      return undefined;
+    }
+  } else if (
+    owners?.lifecycleGeneration === currentLifecycleGeneration &&
+    owners.exclusiveClaimId
+  ) {
     return undefined;
   }
-  const state = getAgentEventState();
-  const lifecycleGeneration = context.lifecycleGeneration ?? state.lifecycleGeneration;
-  const existing = state.runContextById.get(runId);
-  const ownersById = getAgentRunContextOwners(state);
-  const existingOwners = ownersById.get(runId);
-  let ownerToken: string | undefined;
-  if (options.trackOwner) {
-    ownerToken = randomUUID();
-    if (existingOwners?.lifecycleGeneration === lifecycleGeneration) {
-      existingOwners.ownerTokens.add(ownerToken);
-      if (options.ownsContext) {
-        existingOwners.preserveAfterRelease = false;
-      }
-    } else {
-      ownersById.set(runId, {
-        lifecycleGeneration,
-        ownerTokens: new Set([ownerToken]),
-        preserveAfterRelease:
-          options.ownsContext !== true && existing?.lifecycleGeneration === lifecycleGeneration,
-        clearRequested: false,
-      });
-    }
-  } else if (existingOwners?.lifecycleGeneration !== lifecycleGeneration) {
-    // Same-generation untracked claims refresh metadata inside the tracked
-    // execution. A new lifecycle replaces that ownership outright.
-    ownersById.delete(runId);
+  const context = getAgentRunContext(event.runId);
+  if (expectedContext && context !== expectedContext) {
+    return undefined;
   }
-  if (existing?.lifecycleGeneration === lifecycleGeneration) {
-    registerAgentRunContext(runId, {
-      ...context,
-      lifecycleGeneration,
-    });
-    return ownerToken;
-  }
-  state.runContextById.set(runId, {
-    ...context,
-    lifecycleGeneration,
-    registeredAt: context.registeredAt ?? Date.now(),
-  });
-  state.seqByRun.delete(runId);
-  return ownerToken;
-}
-
-/** Returns the currently registered context for a run, if it has not been cleared or swept. */
-export function getAgentRunContext(runId: string) {
-  return getAgentEventState().runContextById.get(runId);
-}
-
-/** Lists active runs bound to one current session identity. */
-export function listAgentRunsForSession(params: {
-  sessionKey: string;
-  sessionId?: string;
-}): Array<{ runId: string; lifecycleGeneration: string }> {
-  const currentLifecycleGeneration = getAgentEventState().lifecycleGeneration;
-  const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
-  for (const [runId, context] of getAgentEventState().runContextById) {
-    const matches = context.sessionId
-      ? context.sessionId === params.sessionId
-      : context.sessionKey === params.sessionKey;
-    if (matches && context.lifecycleGeneration === currentLifecycleGeneration) {
-      runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
-    }
-  }
-  return runs.toSorted((a, b) =>
-    a.runId === b.runId
-      ? a.lifecycleGeneration.localeCompare(b.lifecycleGeneration)
-      : a.runId.localeCompare(b.runId),
-  );
-}
-
-/** Clears context and sequence state for a run that has ended or been discarded. */
-export function clearAgentRunContext(runId: string, lifecycleGeneration?: string) {
-  const state = getAgentEventState();
-  const existing = state.runContextById.get(runId);
-  if (lifecycleGeneration && existing && existing.lifecycleGeneration !== lifecycleGeneration) {
-    return;
-  }
-  const owners = getAgentRunContextOwners(state).get(runId);
-  if (owners?.ownerTokens.size) {
-    if (!lifecycleGeneration || owners.lifecycleGeneration === lifecycleGeneration) {
-      owners.clearRequested = true;
-    }
-    return;
-  }
-  state.runContextById.delete(runId);
-  state.seqByRun.delete(runId);
-}
-
-/** Releases one tracked owner and clears its context after the final owner exits. */
-export function releaseAgentRunContext(runId: string, ownerToken: string | undefined) {
-  if (!runId || !ownerToken) {
-    return;
-  }
-  const state = getAgentEventState();
-  const ownersById = getAgentRunContextOwners(state);
-  const owners = ownersById.get(runId);
-  if (!owners?.ownerTokens.delete(ownerToken)) {
-    return;
-  }
-  if (owners.ownerTokens.size > 0) {
-    return;
-  }
-  ownersById.delete(runId);
-  if (owners.clearRequested || !owners.preserveAfterRelease) {
-    clearAgentRunContext(runId, owners.lifecycleGeneration);
-  }
-}
-
-/**
- * Sweep stale run contexts that exceeded the given TTL.
- * Guards against orphaned entries when lifecycle "end"/"error" events are missed.
- */
-export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
-  const state = getAgentEventState();
-  const now = Date.now();
-  let swept = 0;
-  for (const [runId, ctx] of state.runContextById.entries()) {
-    // Use lastActiveAt (refreshed on every event) to avoid sweeping active runs.
-    // Fall back to registeredAt, then treat missing timestamps as infinitely old.
-    const lastSeen = ctx.lastActiveAt ?? ctx.registeredAt;
-    const age = lastSeen ? now - lastSeen : Infinity;
-    if (age > maxAgeMs) {
-      state.runContextById.delete(runId);
-      state.seqByRun.delete(runId);
-      getAgentRunContextOwners(state).delete(runId);
-      swept++;
-    }
-  }
-  return swept;
-}
-
-/** Clears run context state without removing event listeners; test-only helper. */
-export function resetAgentRunContextForTest() {
-  const state = getAgentEventState();
-  state.runContextById.clear();
-  state.seqByRun.clear();
-  getAgentRunContextOwners(state).clear();
-}
-
-/** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
-export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
-  const state = getAgentEventState();
-  const context = state.runContextById.get(event.runId);
-  const executionLifecycleGeneration =
-    event.lifecycleGeneration ?? getAgentEventExecutionContext().getStore()?.lifecycleGeneration;
+  const scope = getAgentEventExecutionContext().getStore();
+  const executionLifecycleGeneration = event.lifecycleGeneration ?? scope?.lifecycleGeneration;
   const ownedLifecycleGeneration = executionLifecycleGeneration ?? context?.lifecycleGeneration;
   if (
     executionLifecycleGeneration &&
     context?.lifecycleGeneration &&
     executionLifecycleGeneration !== context.lifecycleGeneration
   ) {
-    return;
+    return undefined;
   }
-  if (ownedLifecycleGeneration && ownedLifecycleGeneration !== state.lifecycleGeneration) {
-    return;
+  if (ownedLifecycleGeneration && ownedLifecycleGeneration !== currentLifecycleGeneration) {
+    return undefined;
   }
-  const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
-  state.seqByRun.set(event.runId, nextSeq);
+  const record = scope?.routingByRun?.get(event.runId);
+  const captured =
+    record?.routing.lifecycleGeneration === ownedLifecycleGeneration ? record : undefined;
+  const capturedOwner = captured?.owner.deref();
+  if (captured && context && capturedOwner !== context) {
+    return undefined;
+  }
+  const routing = context ?? captured?.routing;
+  return { context, routing, capturedOwner, ownedLifecycleGeneration, currentLifecycleGeneration };
+}
+
+function enrichAgentEvent(
+  state: AgentEventState,
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  claimId?: string,
+  expectedContext?: AgentRunContext,
+  reservedPublication?: symbol,
+  assistantSource?: AgentAssistantSourceReceipt,
+  assistantProjection?: AgentAssistantProjection,
+): AgentEventRuntimePayload | undefined {
+  const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
+  if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
+    return undefined;
+  }
+  const { context, routing, capturedOwner, ownedLifecycleGeneration, currentLifecycleGeneration } =
+    resolved;
+  if (event.stream === "lifecycle" && event.data.phase === "model") {
+    if (!context || (claimId === undefined && (expectedContext ?? capturedOwner) !== context)) {
+      return undefined;
+    }
+    const { provider, model } = event.data;
+    if (provider === null && model === null) {
+      recordAgentRunModel(event.runId, undefined);
+    } else if (
+      typeof provider === "string" &&
+      provider.trim() &&
+      typeof model === "string" &&
+      model.trim()
+    ) {
+      recordAgentRunModel(event.runId, { provider, model });
+    } else {
+      return undefined;
+    }
+  }
+  const runState = routing?.eventState ?? state.runs.get(event.runId) ?? { seq: 0 };
+  let data = event.data;
+  if (routing && event.stream === "lifecycle") {
+    if (routing.completionSource) {
+      data = { ...data, completionSource: routing.completionSource };
+    }
+    if (data.phase === "start") {
+      if (context) {
+        context.lifecycleStartedAt = data.startedAt as number;
+      }
+    } else if (
+      (data.phase === "end" || data.phase === "error") &&
+      data.startedAt === undefined &&
+      routing.lifecycleStartedAt !== undefined
+    ) {
+      // Preserve this run's identity after a newer run takes over its session.
+      data = { ...data, startedAt: routing.lifecycleStartedAt };
+    }
+  }
+  if (context) {
+    recordAgentEventRouting(event.runId, context);
+  }
+  const nextSeq = Math.max(runState.seq, state.runs.get(event.runId)?.seq ?? 0) + 1;
+  runState.seq = nextSeq;
+  state.runs.set(event.runId, runState);
   if (context) {
     context.lastActiveAt = Date.now();
+    recordExecutionActivity(context, event);
   }
-  const isControlUiVisible = context?.isControlUiVisible ?? true;
+  const isControlUiVisible = routing?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
+  // Hidden subscribers retain owner-bound routing without exposing a public session key.
+  const deliverySessionKey =
+    claimId !== undefined
+      ? (eventSessionKey ?? routing?.sessionKey)
+      : !isControlUiVisible && event.stream !== "lifecycle"
+        ? routing?.sessionKey
+        : undefined;
   // Hidden channel-routed runs should not leak live assistant/tool traffic into
   // Control UI, but lifecycle events still need the session key so gateway
   // listeners can persist terminal session state even if run-context lookup is
@@ -445,22 +477,50 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   // emitted on the lifecycle stream with `phase: "error"`; the separate error
   // stream remains redacted for hidden runs because it is observational only.
   const preserveSessionKey = isControlUiVisible || event.stream === "lifecycle";
-  const sessionKey = preserveSessionKey ? (eventSessionKey ?? context?.sessionKey) : undefined;
+  const sessionKey = preserveSessionKey ? (eventSessionKey ?? routing?.sessionKey) : undefined;
   // Stamp lifecycle events with the owning sessionId (see AgentEventPayload) at
   // emit time, since the run context can be cleared before the terminal persists.
   const sessionId =
-    event.stream === "lifecycle" ? (event.sessionId ?? context?.sessionId) : event.sessionId;
+    event.stream === "lifecycle" ? (event.sessionId ?? routing?.sessionId) : event.sessionId;
   const lifecycleGeneration =
     event.stream === "lifecycle"
-      ? (ownedLifecycleGeneration ?? state.lifecycleGeneration)
+      ? (ownedLifecycleGeneration ?? currentLifecycleGeneration)
       : ownedLifecycleGeneration;
-  const enriched: AgentEventPayload = {
+  const agentId = event.agentId ?? routing?.agentId;
+  const enriched: AgentEventRuntimePayload = {
     ...event,
+    data,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
+    ...(agentId ? { agentId } : {}),
     seq: nextSeq,
     ts: Date.now(),
   };
+  if (event.stream === "lifecycle") {
+    // A listener can synchronously emit a terminal before this event reaches the publisher.
+    // Internal settlement observers consume the event without claiming publication.
+    const publication = reservedPublication ?? Symbol("agent lifecycle publication");
+    let consumed = false;
+    Object.defineProperty(enriched, "admitLifecyclePublication", {
+      value: () => {
+        if (
+          consumed ||
+          (runState.terminalPublication && runState.terminalPublication !== publication)
+        ) {
+          return false;
+        }
+        consumed = true;
+        if (isDefinitiveRunLifecycle({ phase: data.phase, data })) {
+          runState.terminalPublication = publication;
+        }
+        return true;
+      },
+    });
+  }
+  Object.defineProperties(enriched, {
+    assistantSource: { value: assistantSource, enumerable: false },
+    assistantProjection: { value: assistantProjection, enumerable: false },
+  });
   if (lifecycleGeneration) {
     // Persistence needs restart ownership, but agent events are also spread into
     // public payloads. Keep the internal generation readable without serializing it.
@@ -469,76 +529,254 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
       enumerable: false,
     });
   }
-  notifyListeners(state.listeners, enriched);
+  for (const [key, source] of AGENT_EVENT_ROUTING_FIELDS) {
+    const value = routing?.[source];
+    if (value !== undefined) {
+      Object.defineProperty(enriched, key, { value, enumerable: false });
+    }
+  }
+  if (claimId !== undefined) {
+    Object.defineProperty(enriched, "contextClaimId", {
+      value: claimId,
+      enumerable: false,
+    });
+  }
+  if (deliverySessionKey) {
+    Object.defineProperty(enriched, "deliverySessionKey", {
+      value: deliverySessionKey,
+      enumerable: false,
+    });
+  }
+  return enriched;
 }
 
-/** Emits an item activity event on the shared agent event bus. */
-export function emitAgentItemEvent(params: {
+function* iterateAgentEventListeners(
+  state: AgentEventState,
+  enriched: AgentEventRuntimePayload,
+  deliveries: ReadonlyMap<AgentEventRegistration, () => boolean>,
+): Generator<AgentEventListener, void> {
+  let lastId = -1;
+  let revision = -1;
+  let runId: string | undefined;
+  let globalRegistrations: MapIterator<AgentEventRegistration> | undefined;
+  let runRegistrations: MapIterator<AgentEventRegistration> | undefined;
+  let global: AgentEventRegistration | undefined;
+  let scoped: AgentEventRegistration | undefined;
+  while (true) {
+    const currentRunId = enriched.runId;
+    // Recheck even after the last yield: the original live Set sees additions,
+    // deletions, and re-additions made by a callback. Each nested emit owns its cursor.
+    if (revision !== state.listenerRevision || runId !== currentRunId) {
+      revision = state.listenerRevision;
+      runId = currentRunId;
+      // Registration IDs follow Map insertion order. Restart both cursors when
+      // a callback mutates registration or selects a different run cohort.
+      globalRegistrations = state.listeners.values();
+      runRegistrations = state.runListeners.get(runId)?.values();
+      global = globalRegistrations.next().value;
+      scoped = runRegistrations?.next().value;
+    }
+    while (global && global.id <= lastId) {
+      global = globalRegistrations?.next().value;
+    }
+    while (scoped && scoped.id <= lastId) {
+      scoped = runRegistrations?.next().value;
+    }
+    const next = global && (!scoped || global.id <= scoped.id) ? global : scoped;
+    if (!next) {
+      return;
+    }
+    lastId = next.id;
+    yield next.captureDelivery
+      ? (event) => {
+          const isDeliveryCurrent = deliveries.get(next);
+          if (isDeliveryCurrent?.()) {
+            next.listener(event, isDeliveryCurrent);
+          }
+        }
+      : next.listener;
+  }
+}
+
+function dispatchAgentEvent(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  claimId?: string,
+  expectedContext?: AgentRunContext,
+  reservedPublication?: symbol,
+  assistantSource?: AgentAssistantSourceReceipt,
+  assistantProjection?: AgentAssistantProjection,
+): boolean {
+  const state = getAgentEventState();
+  const enriched = enrichAgentEvent(
+    state,
+    event,
+    claimId,
+    expectedContext,
+    reservedPublication,
+    assistantSource,
+    assistantProjection,
+  );
+  if (!enriched) {
+    return false;
+  }
+  const deliveries = new Map<AgentEventRegistration, () => boolean>();
+  // Capture registrations before callbacks can replace them. New subscriptions
+  // during this emission have no captured delivery authority until the next event.
+  notifyListeners(
+    Array.from(state.listeners.values(), (registration) => () => {
+      if (registration.captureDelivery) {
+        deliveries.set(registration, registration.captureDelivery(enriched));
+      }
+    }),
+    enriched,
+  );
+  notifyListeners(iterateAgentEventListeners(state, enriched, deliveries), enriched);
+  return true;
+}
+
+/** Emits an event only when its run ownership is still current. */
+export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "ts">): boolean {
+  return dispatchAgentEvent(event);
+}
+
+/** Bind the source occurrence only after ordinary event ownership admission. */
+export function emitAgentEventWithAssistantSourceIfCurrent(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  assistantSource: AgentAssistantSourceReceipt | undefined,
+  assistantProjection?: AgentAssistantProjection,
+): boolean {
+  return dispatchAgentEvent(
+    event,
+    undefined,
+    undefined,
+    undefined,
+    assistantSource,
+    assistantProjection,
+  );
+}
+
+/** Adds one completed model call, returning its accepted run total for local callbacks. */
+export function emitAgentRunOutputTokens(params: {
   runId: string;
-  data: AgentItemEventData;
+  lifecycleGeneration: string;
+  outputTokens: number;
   sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "item",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+}): { outputTokens: number } | undefined {
+  return recordAgentRunOutputTokens({
+    ...params,
+    emit: (data) =>
+      emitAgentEventIfCurrent({
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        sessionKey: params.sessionKey,
+        stream: "usage",
+        data,
+      }),
   });
 }
 
-/** Emits an approval event on the shared agent event bus. */
-export function emitAgentApprovalEvent(params: {
-  runId: string;
-  data: AgentApprovalEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "approval",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
+/** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
+export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
+  emitAgentEventIfCurrent(event);
 }
 
-/** Emits command output for a running or completed item/tool call. */
-export function emitAgentCommandOutputEvent(params: {
-  runId: string;
-  data: AgentCommandOutputEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "command_output",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
+export function emitAgentEventForOwner(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  claimId: string,
+) {
+  dispatchAgentEvent(event, claimId);
 }
 
-/** Emits a patch summary for a completed file-editing item/tool call. */
-export function emitAgentPatchSummaryEvent(params: {
-  runId: string;
-  data: AgentPatchSummaryEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "patch",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
+/** Emits only while the exact run-context record captured by its producer remains current. */
+export function emitAgentEventForRunContext(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  context: AgentRunContext,
+) {
+  dispatchAgentEvent(event, undefined, context);
+}
+
+/** Emits run metadata only to the Gateway-owned durable audit projection. */
+export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
+  const state = getAgentEventState();
+  const enriched = enrichAgentEvent(state, event);
+  if (enriched) {
+    notifyListeners(state.auditListeners, enriched);
+    const phase = event.stream === "lifecycle" ? event.data.phase : undefined;
+    if ((phase === "end" || phase === "error") && !getAgentRunContext(event.runId)) {
+      // Private synthetic runs bypass public terminal cleanup. Release sequence state only
+      // after synchronous audit listeners consume the terminal event and its final ordering.
+      state.runs.delete(event.runId);
+    }
+  }
 }
 
 /** Subscribes to sequenced agent events; returns an unsubscribe callback. */
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
-  const state = getAgentEventState();
-  return registerListener(state.listeners, listener);
+  return registerAgentEventListener(listener);
 }
 
-/** Clears all agent event state, including listeners; test-only helper. */
-export function resetAgentEventsForTest() {
+/** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
+export function onAgentRuntimeEvent(
+  listener: AgentEventListener,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
+  return registerAgentEventListener(listener, undefined, captureDelivery);
+}
+
+/**
+ * Subscribes to one run's sequenced agent events; returns an unsubscribe callback.
+ * Prefer this over `onAgentEvent` for a listener that discards other runs: those
+ * listeners otherwise run on every concurrent run's events.
+ */
+export function onAgentEventForRun(runId: string, listener: (evt: AgentEventPayload) => void) {
+  return registerAgentEventListener(listener, runId);
+}
+
+function registerAgentEventListener(
+  listener: AgentEventListener,
+  runId?: string,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
   const state = getAgentEventState();
-  state.seqByRun.clear();
-  state.listeners.clear();
-  state.runContextById.clear();
-  getAgentRunContextOwners(state).clear();
+  const bucket: AgentEventListeners =
+    runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
+  if (!bucket.has(listener)) {
+    bucket.set(listener, { listener, id: state.nextListenerId++, captureDelivery });
+    if (runId !== undefined) {
+      state.runListeners.set(runId, bucket);
+    }
+    state.listenerRevision++;
+  }
+  return () => {
+    if (bucket.delete(listener)) {
+      state.listenerRevision++;
+    }
+    // Only reclaim the bucket this handle registered into; a later subscriber
+    // for the same run may already have installed a replacement.
+    if (runId !== undefined && bucket.size === 0 && state.runListeners.get(runId) === bucket) {
+      state.runListeners.delete(runId);
+    }
+  };
+}
+
+/** Subscribes to private audit-only agent events; returns an unsubscribe callback. */
+export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
+  return registerListener(getAgentEventState().auditListeners, listener);
+}
+
+/** Clears agent event state; test suites with a live Gateway can preserve its listeners. */
+export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
+  const state = getAgentEventState();
+  state.runs.clear();
+  resetAgentRunRegistryForTest();
+  if (!options?.preserveListeners) {
+    state.listeners.clear();
+    for (const bucket of state.runListeners.values()) {
+      bucket.clear();
+    }
+    state.runListeners.clear();
+    state.auditListeners.clear();
+    // Do not reuse IDs: an active dispatch resumes strictly after its last yield.
+    state.listenerRevision++;
+  }
 }

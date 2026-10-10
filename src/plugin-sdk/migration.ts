@@ -1,23 +1,15 @@
 // Shared migration-provider helpers for plan/apply item bookkeeping.
 
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
-  MigrationDetection,
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
-  MigrationProviderPlugin,
   MigrationSummary,
-} from "../plugins/types.js";
+} from "./plugin-entry.js";
 
-export type {
-  MigrationDetection,
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-  MigrationSummary,
-};
+export type { MigrationItem, MigrationPlan, MigrationProviderContext, MigrationSummary };
 
 /** Shared migration failure reason when an item lacks required paths. */
 export const MIGRATION_REASON_MISSING_SOURCE_OR_TARGET = "missing source or target";
@@ -115,11 +107,40 @@ class MigrationConfigPatchConflictError extends Error {
   }
 }
 
+const MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH = "unsafe config patch path";
+
+function isSafeMigrationConfigPath(path: readonly string[]): boolean {
+  return (
+    path.length > 0 && path.every((segment) => segment.length > 0 && !isBlockedObjectKey(segment))
+  );
+}
+
+function cloneMigrationConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneMigrationConfigValue(entry));
+  }
+  if (!isRecord(value)) {
+    return structuredClone(value);
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    // Migration patches come from external tools. Drop prototype-bearing keys
+    // recursively before any value reaches a live config object.
+    if (!isBlockedObjectKey(key)) {
+      next[key] = cloneMigrationConfigValue(entry);
+    }
+  }
+  return next;
+}
+
 /** Reads a nested config value, returning undefined when a parent is not an object. */
 export function readMigrationConfigPath(
   root: Record<string, unknown>,
   path: readonly string[],
 ): unknown {
+  if (!isSafeMigrationConfigPath(path)) {
+    return undefined;
+  }
   let current: unknown = root;
   for (const segment of path) {
     if (!isRecord(current)) {
@@ -133,10 +154,13 @@ export function readMigrationConfigPath(
 /** Deep-merges object patches and replaces scalar/array values with a cloned target value. */
 export function mergeMigrationConfigValue(left: unknown, right: unknown): unknown {
   if (!isRecord(left) || !isRecord(right)) {
-    return structuredClone(right);
+    return cloneMigrationConfigValue(right);
   }
   const next: Record<string, unknown> = { ...left };
   for (const [key, value] of Object.entries(right)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     next[key] = mergeMigrationConfigValue(next[key], value);
   }
   return next;
@@ -148,6 +172,9 @@ export function writeMigrationConfigPath(
   path: readonly string[],
   value: unknown,
 ): void {
+  if (!isSafeMigrationConfigPath(path)) {
+    throw new Error(MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
+  }
   let current = root;
   for (const segment of path.slice(0, -1)) {
     const existing = current[segment];
@@ -158,7 +185,7 @@ export function writeMigrationConfigPath(
   }
   const leaf = path.at(-1);
   if (!leaf) {
-    return;
+    throw new Error(MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
   }
   current[leaf] = mergeMigrationConfigValue(current[leaf], value);
 }
@@ -177,7 +204,10 @@ export function hasMigrationConfigPatchConflict(
   if (!isRecord(existing)) {
     return false;
   }
-  return Object.keys(value).some((key) => existing[key] !== undefined);
+  return Object.keys(value).some(
+    (key) =>
+      !isBlockedObjectKey(key) && Object.hasOwn(existing, key) && existing[key] !== undefined,
+  );
 }
 
 /** Builds a planned or conflicting config-merge migration item. */
@@ -190,6 +220,7 @@ export function createMigrationConfigPatchItem(params: {
   conflict?: boolean;
   reason?: string;
   source?: string;
+  sensitive?: boolean;
   details?: Record<string, unknown>;
 }): MigrationItem {
   return createMigrationItem({
@@ -201,6 +232,7 @@ export function createMigrationConfigPatchItem(params: {
     status: params.conflict ? "conflict" : "planned",
     reason: params.conflict ? (params.reason ?? MIGRATION_REASON_TARGET_EXISTS) : undefined,
     message: params.message,
+    sensitive: params.sensitive,
     details: { ...params.details, path: params.path, value: params.value },
   });
 }
@@ -237,6 +269,11 @@ export function readMigrationConfigPatchDetails(
   return { path, value: item.details?.value };
 }
 
+/** Resolves the host-owned config mutation target for migration apply. */
+export function resolveMigrationConfigRuntime(ctx: MigrationProviderContext) {
+  return ctx.configRuntime ?? ctx.runtime?.config;
+}
+
 /** Applies one planned config patch through the runtime config writer and returns its final status. */
 export async function applyMigrationConfigPatchItem(
   ctx: MigrationProviderContext,
@@ -249,7 +286,10 @@ export async function applyMigrationConfigPatchItem(
   if (!details) {
     return markMigrationItemError(item, "missing config patch");
   }
-  const configApi = ctx.runtime?.config;
+  if (!isSafeMigrationConfigPath(details.path)) {
+    return markMigrationItemError(item, MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
+  }
+  const configApi = resolveMigrationConfigRuntime(ctx);
   if (!configApi?.current || !configApi.mutateConfigFile) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
@@ -308,9 +348,6 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
   if (typeof value === "string") {
     return redactString(value);
   }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactMigrationValueInternal(entry, seen));
-  }
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -318,8 +355,26 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
     return REDACTED_MIGRATION_VALUE;
   }
   seen.add(value);
+  if (Array.isArray(value)) {
+    try {
+      return value.map((entry) => redactMigrationValueInternal(entry, seen));
+    } finally {
+      // Repeated arrays remain independently rendered; only active cycles are redacted.
+      seen.delete(value);
+    }
+  }
+  const record = value as Record<string, unknown>;
   const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
+  const redactSensitiveDetailsValue =
+    record.sensitive === true && isRecord(record.details) && Object.hasOwn(record.details, "value");
+  for (const [key, entry] of Object.entries(record)) {
+    if (key === "details" && redactSensitiveDetailsValue && isRecord(entry)) {
+      const details = redactMigrationValueInternal(entry, seen);
+      next[key] = isRecord(details)
+        ? { ...details, value: REDACTED_MIGRATION_VALUE }
+        : REDACTED_MIGRATION_VALUE;
+      continue;
+    }
     if (isSecretKey(key) && !isSecretReferenceLike(entry)) {
       next[key] = REDACTED_MIGRATION_VALUE;
       continue;
@@ -332,11 +387,6 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
 /** Redacts likely secret values while preserving SecretRef-like objects for operator context. */
 export function redactMigrationValue(value: unknown): unknown {
   return redactMigrationValueInternal(value, new WeakSet<object>());
-}
-
-/** Redacts sensitive fields from one migration item before report/output serialization. */
-export function redactMigrationItem(item: MigrationItem): MigrationItem {
-  return redactMigrationValue(item) as MigrationItem;
 }
 
 /** Redacts sensitive fields from a full migration plan before report/output serialization. */

@@ -1,4 +1,14 @@
 /**
  * Public SDK type barrel for plugin hook contracts.
  */
-export type * from "../plugins/hook-types.js";
+export type {
+  PluginHookAgentTrigger,
+  PluginHookBeforeToolCallEvent,
+  PluginHookBeforeToolCallResult,
+  PluginHookSkillArtifact,
+  PluginHookSkillChangedEvent,
+  PluginHookSkillContext,
+  PluginHookToolContext,
+  PluginHookToolResultPersistEvent,
+  PluginHookToolResultPersistResult,
+} from "../plugins/hook-types.js";

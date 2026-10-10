@@ -1,0 +1,259 @@
+import { readFileSync, statSync } from "node:fs";
+import { win32 } from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { z } from "zod";
+
+type SandboxPolicyLoaderOptions = {
+  policyPaths?: readonly string[];
+};
+
+type SandboxPolicyPathField =
+  | "filesystem.additionalReadonlyPaths"
+  | "filesystem.additionalReadwritePaths";
+
+export type SandboxConfiguredPathEntry = {
+  path: string;
+  sources: readonly string[];
+};
+
+type SandboxConfiguredPaths = {
+  readonlyPaths: readonly SandboxConfiguredPathEntry[];
+  readwritePaths: readonly SandboxConfiguredPathEntry[];
+};
+
+type SandboxPolicyLayer = {
+  process?: { timeoutSeconds?: number };
+  configuredPaths: SandboxConfiguredPaths;
+};
+
+export type LoadedSandboxBaselinePolicy = {
+  process: { timeoutSeconds: number };
+  configuredPaths: SandboxConfiguredPaths;
+};
+
+const stringArraySchema = z.array(z.string());
+const hardeningBooleanSchema = z.literal(true);
+const filesystemPolicySchema = z
+  .object({
+    restrictToProjectDir: hardeningBooleanSchema.optional(),
+    additionalReadonlyPaths: stringArraySchema.optional(),
+    additionalReadwritePaths: stringArraySchema.optional(),
+  })
+  .strict();
+const processPolicySchema = z
+  .object({
+    timeoutSeconds: z.number().finite().min(1).optional(),
+  })
+  .strict();
+
+const SandboxPolicyLayerSchema = z
+  .object({
+    filesystem: filesystemPolicySchema.optional(),
+    process: processPolicySchema.optional(),
+  })
+  .strict();
+
+export function loadSandboxBaselinePolicy(
+  options: SandboxPolicyLoaderOptions = {},
+): LoadedSandboxBaselinePolicy {
+  const layers = (options.policyPaths ?? []).map(readSandboxPolicyFile);
+  return mergeSandboxPolicyLayers(layers);
+}
+
+function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(policyPath, "utf-8"));
+    return parseSandboxPolicyLayer(parsed, policyPath);
+  } catch (err) {
+    throw policyFileError(policyPath, err);
+  }
+}
+
+function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPolicyLayer {
+  const parsed = SandboxPolicyLayerSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new TypeError(formatSandboxPolicyIssue(sourceLabel, parsed.error.issues[0]));
+  }
+
+  const filesystem = parsed.data.filesystem;
+  const readonlyPaths = normalizeConfiguredPaths(
+    filesystem?.additionalReadonlyPaths,
+    sourceLabel,
+    "filesystem.additionalReadonlyPaths",
+  );
+  const readwritePaths = normalizeConfiguredPaths(
+    filesystem?.additionalReadwritePaths,
+    sourceLabel,
+    "filesystem.additionalReadwritePaths",
+  );
+
+  return {
+    process: parsed.data.process,
+    configuredPaths: {
+      readonlyPaths,
+      readwritePaths,
+    },
+  };
+}
+
+function mergeSandboxPolicyLayers(
+  layers: readonly SandboxPolicyLayer[],
+): LoadedSandboxBaselinePolicy {
+  const timeoutCandidates = [300];
+  const configuredPathMaps = {
+    readonlyPaths: new Map<string, SandboxConfiguredPathEntry>(),
+    readwritePaths: new Map<string, SandboxConfiguredPathEntry>(),
+  };
+
+  for (const policy of layers) {
+    mergeConfiguredPathEntries(
+      configuredPathMaps.readonlyPaths,
+      policy.configuredPaths.readonlyPaths,
+    );
+    mergeConfiguredPathEntries(
+      configuredPathMaps.readwritePaths,
+      policy.configuredPaths.readwritePaths,
+    );
+    const timeoutSeconds = policy.process?.timeoutSeconds;
+    if (timeoutSeconds !== undefined) {
+      timeoutCandidates.push(timeoutSeconds);
+    }
+  }
+
+  return {
+    process: {
+      timeoutSeconds: Math.min(...timeoutCandidates),
+    },
+    configuredPaths: {
+      readonlyPaths: [...configuredPathMaps.readonlyPaths.values()],
+      readwritePaths: [...configuredPathMaps.readwritePaths.values()],
+    },
+  };
+}
+
+function mergeConfiguredPathEntries(
+  target: Map<string, SandboxConfiguredPathEntry>,
+  entries: readonly SandboxConfiguredPathEntry[],
+): void {
+  for (const entry of entries) {
+    const existing = target.get(entry.path);
+    if (!existing) {
+      target.set(entry.path, entry);
+      continue;
+    }
+    target.set(entry.path, {
+      path: entry.path,
+      sources: [...new Set([...existing.sources, ...entry.sources])],
+    });
+  }
+}
+
+function normalizeConfiguredPaths(
+  values: readonly string[] | undefined,
+  sourceLabel: string,
+  field: SandboxPolicyPathField,
+): SandboxConfiguredPathEntry[] {
+  if (!values || values.length === 0) {
+    return [];
+  }
+
+  const deduped = new Map<string, SandboxConfiguredPathEntry>();
+  for (const [index, value] of values.entries()) {
+    const source = `${sourceLabel}.${field}[${index}]`;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      throw new TypeError(`Sandbox policy field ${source} must not be blank.`);
+    }
+    if (!win32.isAbsolute(trimmed)) {
+      throw new TypeError(`Sandbox policy field ${source} must be an absolute Windows path.`);
+    }
+
+    const normalized = win32.normalize(trimmed);
+    assertConfiguredPathExists(normalized, source);
+
+    const existing = deduped.get(normalized);
+    if (!existing) {
+      deduped.set(normalized, { path: normalized, sources: [source] });
+      continue;
+    }
+    deduped.set(normalized, {
+      path: normalized,
+      sources: [...new Set([...existing.sources, source])],
+    });
+  }
+
+  return [...deduped.values()];
+}
+
+function assertConfiguredPathExists(pathValue: string, source: string): void {
+  try {
+    statSync(pathValue);
+  } catch (err) {
+    if (isNodeError(err)) {
+      if (err.code === "ENOENT") {
+        throw new Error(
+          `Sandbox policy path ${pathValue} configured by ${source} does not exist on the host. ` +
+            `Create the path or update the policy file.`,
+          { cause: err },
+        );
+      }
+      throw new Error(
+        `Sandbox policy path ${pathValue} configured by ${source} is not accessible on the host: ${formatErrorMessage(err)}`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+}
+
+function policyFileError(policyPath: string, err: unknown): Error {
+  if (isNodeError(err) && err.code === "ENOENT") {
+    return new Error(
+      `Configured sandbox policy file ${policyPath} does not exist. Remove it from mxcPolicyPaths or create the file.`,
+      { cause: err },
+    );
+  }
+  return new Error(
+    `Failed to load sandbox policy file at ${policyPath}: ${formatErrorMessage(err)}`,
+    {
+      cause: err instanceof Error ? err : undefined,
+    },
+  );
+}
+
+function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undefined): string {
+  if (!issue) {
+    return `Sandbox policy at ${sourceLabel} is invalid.`;
+  }
+  if (issue.path.length === 0 && issue.code === "invalid_type") {
+    return `Sandbox policy at ${sourceLabel} must be a JSON object.`;
+  }
+
+  const fieldLabel = `${sourceLabel}${formatIssuePath(issue.path)}`;
+  if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
+    return `Sandbox policy field ${fieldLabel}.${issue.keys[0]} is not supported.`;
+  }
+  if (issue.code === "invalid_type" && issue.path.length === 1) {
+    return `Sandbox policy section ${fieldLabel} must be a JSON object.`;
+  }
+  if (issue.code === "too_small") {
+    return `Sandbox policy field ${fieldLabel} must be a positive number.`;
+  }
+  return `Sandbox policy field ${fieldLabel} ${issue.message}.`;
+}
+
+function formatIssuePath(pathSegments: readonly PropertyKey[]): string {
+  let label = "";
+  for (const segment of pathSegments) {
+    if (typeof segment === "number") {
+      label += `[${segment}]`;
+      continue;
+    }
+    label += `.${String(segment)}`;
+  }
+  return label;
+}
+
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err;
+}

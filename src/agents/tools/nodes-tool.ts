@@ -1,16 +1,11 @@
-/**
- * nodes built-in tool.
- *
- * Manages node pairing, notifications, device state, media capture, and approved command invocation.
- */
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
@@ -20,12 +15,13 @@ import {
   optionalStringEnum,
   stringEnum,
 } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
-import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
-import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
+import { executeNodeCommandAction } from "./nodes-tool-commands.js";
+import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
+import { executeNodeMediaAction } from "./nodes-tool-media.js";
+import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -37,6 +33,7 @@ const NODES_TOOL_ACTIONS = [
   "camera_snap",
   "camera_list",
   "camera_clip",
+  "camera_ptz",
   "photos_latest",
   "screen_record",
   "screen_snapshot",
@@ -47,6 +44,7 @@ const NODES_TOOL_ACTIONS = [
   "device_info",
   "device_permissions",
   "device_health",
+  "which",
   "invoke",
 ] as const;
 
@@ -54,12 +52,8 @@ const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
+const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
-type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
-
-function resolveApproveScopes(commands: unknown): OperatorScope[] {
-  return resolveNodePairApprovalScopes(commands) as OperatorScope[];
-}
 
 async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
@@ -83,46 +77,73 @@ async function resolveNodePairApproveScopes(
       return scopes;
     }
   }
-  return resolveApproveScopes(match?.commands);
+  return resolveNodePairApprovalScopes(match?.commands);
 }
 
 // Flattened schema: runtime validates per-action requirements.
 const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
-  node: Type.Optional(Type.String()),
+  node: Type.Optional(
+    Type.String({
+      description:
+        "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    }),
+  ),
   requestId: Type.Optional(Type.String()),
-  // notify
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
   maxWidth: optionalPositiveIntegerSchema(),
   quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
   delayMs: optionalNonNegativeIntegerSchema(),
-  deviceId: Type.Optional(Type.String()),
+  deviceId: Type.Optional(
+    Type.String({
+      description:
+        "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
+    }),
+  ),
+  ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
+    description:
+      "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+  }),
+  panDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  tiltDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  zoomPercent: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+  }),
   limit: optionalPositiveIntegerSchema({ maximum: 20 }),
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
-  // screen_record
   fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
   screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
-  // location_get
   maxAgeMs: optionalNonNegativeIntegerSchema(),
   locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
-  // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
-  // invoke
+  bins: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 64,
+      description: "which: executable names to resolve on the selected node.",
+    }),
+  ),
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
   invokeTimeoutMs: optionalPositiveIntegerSchema(),
@@ -130,10 +151,7 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string | number;
+  agentId?: string;
   config?: OpenClawConfig;
   modelHasVision?: boolean;
   allowMediaInvokeCommands?: boolean;
@@ -141,17 +159,18 @@ export function createNodesTool(options?: {
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
+    agentId: options?.agentId,
   });
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover/control paired nodes: status, describe, pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
 
       try {
@@ -159,52 +178,49 @@ export function createNodesTool(options?: {
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const node = readToolStringParam(params, "node");
+            if (!node) {
+              throw new Error(
+                'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+              );
+            }
+            const nodeId = await resolveAgentNodeId(gatewayOpts, node);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }
           case "pending":
             return jsonResult(await callGatewayTool("node.pair.list", gatewayOpts, {}));
-          case "approve": {
-            const requestId = readStringParam(params, "requestId", {
+          case "approve":
+          case "reject": {
+            const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
-            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
+            const approvalOptions =
+              action === "approve"
+                ? { scopes: await resolveNodePairApproveScopes(gatewayOpts, requestId) }
+                : undefined;
             return jsonResult(
               await callGatewayTool(
-                "node.pair.approve",
+                `node.pair.${action}`,
                 gatewayOpts,
-                {
-                  requestId,
-                },
-                { scopes },
+                { requestId },
+                approvalOptions,
               ),
             );
           }
-          case "reject": {
-            const requestId = readStringParam(params, "requestId", {
-              required: true,
-            });
-            return jsonResult(
-              await callGatewayTool("node.pair.reject", gatewayOpts, {
-                requestId,
-              }),
-            );
-          }
           case "notify": {
-            const node = readStringParam(params, "node", { required: true });
+            const node = readToolStringParam(params, "node", { required: true });
             const title = typeof params.title === "string" ? params.title : "";
             const body = typeof params.body === "string" ? params.body : "";
             if (!title.trim() && !body.trim()) {
               throw new Error("title or body required");
             }
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            await callGatewayTool("node.invoke", gatewayOpts, {
+            const nodeId = await resolveAgentNodeId(gatewayOpts, node);
+            await callNodesToolNodeInvoke(gatewayOpts, {
               nodeId,
               command: "system.notify",
               params: {
-                title: title.trim() || undefined,
-                body: body.trim() || undefined,
+                title: title.trim(),
+                body: body.trim(),
                 sound: typeof params.sound === "string" ? params.sound : undefined,
                 priority: typeof params.priority === "string" ? params.priority : undefined,
                 delivery: typeof params.delivery === "string" ? params.delivery : undefined,
@@ -213,65 +229,10 @@ export function createNodesTool(options?: {
             });
             return jsonResult({ ok: true });
           }
-          case "camera_snap": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
-          case "photos_latest": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
-          case "camera_list":
-          case "notifications_list":
-          case "device_status":
-          case "device_info":
-          case "device_permissions":
-          case "device_health": {
-            return await executeNodeCommandAction({
-              action: action as NodeCommandAction,
-              input: params,
-              gatewayOpts,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
-            });
-          }
-          case "notifications_action": {
-            return await executeNodeCommandAction({
-              action,
-              input: params,
-              gatewayOpts,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
-            });
-          }
-          case "camera_clip": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
-          case "screen_record": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
+          case "camera_snap":
+          case "photos_latest":
+          case "camera_clip":
+          case "screen_record":
           case "screen_snapshot": {
             return await executeNodeMediaAction({
               action,
@@ -281,37 +242,37 @@ export function createNodesTool(options?: {
               imageSanitization,
             });
           }
-          case "location_get": {
-            return await executeNodeCommandAction({
-              action,
-              input: params,
-              gatewayOpts,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
-            });
-          }
+          case "camera_list":
+          case "camera_ptz":
+          case "notifications_list":
+          case "device_status":
+          case "device_info":
+          case "device_permissions":
+          case "device_health":
+          case "notifications_action":
+          case "location_get":
+          case "which":
           case "invoke": {
             return await executeNodeCommandAction({
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
           }
           default:
             throw new Error(`Unknown action: ${action}`);
         }
       } catch (err) {
-        const nodeLabel =
-          typeof params.node === "string" && params.node.trim() ? params.node.trim() : "auto";
-        const gatewayLabel =
-          gatewayOpts.gatewayUrl && gatewayOpts.gatewayUrl.trim()
-            ? gatewayOpts.gatewayUrl.trim()
-            : "default";
+        const nodeLabel = normalizeOptionalString(params.node) ?? "auto";
+        const gatewayLabel = normalizeOptionalString(gatewayOpts.gatewayUrl) ?? "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
-        const pairing = action === "invoke" ? readConnectPairingRequiredMessage(message) : null;
+        const pairing =
+          action === "invoke" || action === "which"
+            ? readConnectPairingRequiredMessage(message)
+            : null;
         if (pairing) {
           const requestId = pairing.requestId ?? null;
           const approveHint = requestId

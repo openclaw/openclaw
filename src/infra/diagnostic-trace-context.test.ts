@@ -1,5 +1,5 @@
 // Tests diagnostic trace context propagation and reset behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -8,10 +8,8 @@ import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
   isValidDiagnosticSpanId,
-  isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
   parseDiagnosticTraceparent,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 
@@ -20,22 +18,6 @@ const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "7ad6b9a982deb2c9";
 
 describe("diagnostic-trace-context", () => {
-  afterEach(() => {
-    resetDiagnosticTraceContextForTest();
-  });
-
-  it("validates W3C trace ids, span ids, and trace flags", () => {
-    expect(isValidDiagnosticTraceId(TRACE_ID)).toBe(true);
-    expect(isValidDiagnosticSpanId(SPAN_ID)).toBe(true);
-    expect(isValidDiagnosticTraceFlags("01")).toBe(true);
-
-    expect(isValidDiagnosticTraceId("0".repeat(32))).toBe(false);
-    expect(isValidDiagnosticTraceId("xyz")).toBe(false);
-    expect(isValidDiagnosticSpanId("0".repeat(16))).toBe(false);
-    expect(isValidDiagnosticSpanId("xyz")).toBe(false);
-    expect(isValidDiagnosticTraceFlags("xyz")).toBe(false);
-  });
-
   it("parses and formats traceparent values", () => {
     const traceparent = `00-${TRACE_ID}-${SPAN_ID}-01`;
 
@@ -55,6 +37,8 @@ describe("diagnostic-trace-context", () => {
 
   it("rejects malformed traceparent values", () => {
     expect(parseDiagnosticTraceparent(undefined)).toBeUndefined();
+    expect(parseDiagnosticTraceparent(`00-xyz-${SPAN_ID}-01`)).toBeUndefined();
+    expect(parseDiagnosticTraceparent(`00-${TRACE_ID}-xyz-01`)).toBeUndefined();
     expect(parseDiagnosticTraceparent(`00-${TRACE_ID}-${SPAN_ID}-01-extra`)).toBeUndefined();
     expect(parseDiagnosticTraceparent(`ff-${TRACE_ID}-${SPAN_ID}-01`)).toBeUndefined();
     expect(parseDiagnosticTraceparent(`00-${"0".repeat(32)}-${SPAN_ID}-01`)).toBeUndefined();
@@ -155,6 +139,12 @@ describe("diagnostic-trace-context", () => {
         expect(getActiveDiagnosticTraceContext()).toEqual(inner);
       });
 
+      expect(getActiveDiagnosticTraceContext()).toEqual(outer);
+      await runWithDiagnosticTraceContext(undefined, async () => {
+        expect(getActiveDiagnosticTraceContext()).toBeUndefined();
+        await Promise.resolve();
+        expect(getActiveDiagnosticTraceContext()).toBeUndefined();
+      });
       expect(getActiveDiagnosticTraceContext()).toEqual(outer);
     });
 

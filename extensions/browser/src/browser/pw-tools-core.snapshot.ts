@@ -1,29 +1,28 @@
-/**
- * Snapshot, navigation, viewport, close, and PDF helpers for Playwright-backed
- * browser tools.
- */
-import { parseFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Page } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
+import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
+import type { BrowserDownloadResult } from "./download-types.js";
+import { BrowserTabNotFoundError } from "./errors.js";
+import type { RelayOperationReference } from "./extension-relay/owner-client.js";
+import { closeRelayOperationConnection } from "./extension-relay/owner-playwright.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import {
-  buildRoleSnapshotFromAiSnapshot,
-  buildRoleSnapshotFromAriaSnapshot,
-  getRoleSnapshotStats,
-  type RoleSnapshotOptions,
-  type RoleRefMap,
-} from "./pw-role-snapshot.js";
+import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import type { RoleRefMap } from "./pw-role-snapshot.js";
+import { closeResolvedPageViaPlaywright } from "./pw-session-actions.js";
+import { connectBrowser, pageTargetInfo } from "./pw-session-connection.js";
+import type { RoleRefs } from "./pw-session-contracts.js";
+import { isConnectionScopedPage } from "./pw-session-page-target.js";
 import {
   assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget,
@@ -31,29 +30,28 @@ import {
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  isDownloadStartingNavigationError,
   isPolicyDenyNavigationError,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
-import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
-import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
+import {
+  markBackendDomRefsOnPage,
+  readDocumentIdentitiesForPage,
+  withPageScopedCdpClient,
+} from "./pw-session.page-cdp.js";
+import {
+  prepareSnapshotPageViaPlaywright,
+  resolveSnapshotTimeoutMs,
+  withSnapshotFrameGuard,
+} from "./pw-snapshot-page.js";
+import {
+  assertInteractionCurrent,
+  type InteractionTargetOptions,
+} from "./pw-tools-core.interactions.navigation.js";
+import { runPageEmulationTransition, setViewportSizeOnPage } from "./pw-tools-core.state.js";
+export { snapshotRoleViaPlaywright } from "./pw-role-snapshot-capture.js";
 
-function resolveBoundedTimeoutMs(
-  timeoutMs: number | undefined,
-  fallbackMs: number,
-  minMs: number,
-  maxMs: number,
-): number {
-  const parsed = parseFiniteNumber(timeoutMs);
-  return Math.max(minMs, Math.min(maxMs, Math.floor(parsed ?? fallbackMs)));
-}
-
-function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveBoundedTimeoutMs(timeoutMs, 5_000, 500, 60_000);
-}
-
-function resolveNavigationTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveBoundedTimeoutMs(timeoutMs, 20_000, 1000, 120_000);
-}
+type StoredSnapshotRef = RoleRefs[string] & { backendDOMNodeId?: number };
 
 function resolveViewportDimension(value: unknown, label: "width" | "height"): number {
   const dimension = resolveIntegerOption(value, 1, { min: 1 });
@@ -63,87 +61,55 @@ function resolveViewportDimension(value: unknown, label: "width" | "height"): nu
   return dimension;
 }
 
-async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
-  const urls = await page
-    .evaluate(() => {
-      const seen = new Set<string>();
-      const out: SnapshotUrlEntry[] = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
-        const href = anchor instanceof HTMLAnchorElement ? anchor.href : "";
-        if (!href || seen.has(href)) {
-          continue;
-        }
-        const text =
-          (anchor.textContent || anchor.getAttribute("aria-label") || "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 121) || href;
-        seen.add(href);
-        out.push({ text, url: href });
-        if (out.length >= 100) {
-          break;
-        }
-      }
-      return out;
-    })
-    .catch(() => []);
-  return Array.isArray(urls)
-    ? urls.map((entry) => {
-        entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
-        return entry;
-      })
-    : [];
-}
-
-function buildStoredAriaRefs(
-  nodes: AriaSnapshotNode[],
-  markedRefs: Set<string>,
-): Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> {
-  const refs: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> =
-    {};
-  const counts = new Map<string, number>();
-  const refsByKey = new Map<string, string[]>();
+function buildStoredAriaRefs(nodes: AriaSnapshotNode[]): Record<string, StoredSnapshotRef> {
+  const refs: Record<string, StoredSnapshotRef> = {};
+  const groups = new Map<string, { count: number; firstRef: string }>();
 
   for (const node of nodes) {
     const role = normalizeLowercaseStringOrEmpty(node.role) || "unknown";
-    const name = node.name.trim() || undefined;
-    const key = `${role}:${name ?? ""}`;
-    const nth = counts.get(key) ?? 0;
-    counts.set(key, nth + 1);
-    const refsForKey = refsByKey.get(key);
-    if (refsForKey) {
-      refsForKey.push(node.ref);
+    const name = node.name.trim();
+    const key = `${role}:${name}`;
+    const group = groups.get(key);
+    const nth = group?.count ?? 0;
+    if (group) {
+      group.count += 1;
     } else {
-      refsByKey.set(key, [node.ref]);
+      groups.set(key, { count: 1, firstRef: node.ref });
     }
     refs[node.ref] = {
       role,
-      ...(name ? { name } : {}),
-      ...(nth > 0 ? { nth } : {}),
-      ...(markedRefs.has(node.ref) ? { domMarker: true } : {}),
+      name,
+      // Keep index zero for duplicates; only singleton groups can omit nth.
+      nth,
+      ...(typeof node.backendDOMNodeId === "number"
+        ? { backendDOMNodeId: node.backendDOMNodeId }
+        : {}),
     };
   }
 
-  for (const refsForKey of refsByKey.values()) {
-    if (refsForKey.length > 1) {
-      continue;
-    }
-    const ref = refsForKey[0];
-    if (ref) {
-      delete refs[ref]?.nth;
+  // Resolve by ref after grouping: later input nodes can overwrite the same ref.
+  for (const { count, firstRef } of groups.values()) {
+    if (count === 1 && firstRef) {
+      delete refs[firstRef]?.nth;
     }
   }
 
   return refs;
 }
 
-/** Stores aria snapshot refs so later tool calls can resolve stable element refs. */
-export async function storeAriaSnapshotRefsViaPlaywright(opts: {
+/** Publish raw or finalized snapshot refs into the Playwright action cache. */
+export async function storeSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  nodes: AriaSnapshotNode[];
   page?: Page;
+  nodes?: AriaSnapshotNode[];
+  refs?: Record<string, StoredSnapshotRef>;
+  expectedDocumentIdentity?: string;
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  assertCurrent?: () => void;
 }): Promise<void> {
+  const sourceRefs = opts.refs ?? buildStoredAriaRefs(opts.nodes ?? []);
   const page =
     opts.page ??
     (await getPageForTargetId({
@@ -151,43 +117,48 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
       targetId: opts.targetId,
     }));
   ensurePageState(page);
-  const markedRefs = await markBackendDomRefsOnPage({
-    page,
-    refs: opts.nodes.flatMap((node) =>
-      typeof node.backendDOMNodeId === "number"
-        ? [{ ref: node.ref, backendDOMNodeId: node.backendDOMNodeId }]
-        : [],
-    ),
-  });
-  storeRoleRefsForTarget({
-    page,
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    refs: buildStoredAriaRefs(opts.nodes, markedRefs),
-    mode: "role",
-  });
-}
-
-async function prepareSnapshotPageViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<Page> {
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-  });
-  ensurePageState(page);
-  if (opts.ssrfPolicy) {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response: null,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: opts.targetId,
-    });
+  const backendRefs: { ref: string; backendDOMNodeId: number }[] = [];
+  for (const [ref, info] of Object.entries(sourceRefs)) {
+    if (typeof info.backendDOMNodeId === "number") {
+      backendRefs.push({ ref, backendDOMNodeId: info.backendDOMNodeId });
+    }
   }
-  return page;
+  await withSnapshotFrameGuard({
+    page,
+    frame: page.mainFrame(),
+    signal: opts.signal,
+    deadlineMs: opts.deadlineMs,
+    assertCurrent: opts.assertCurrent,
+    run: async (assertCurrent) => {
+      if (
+        opts.expectedDocumentIdentity &&
+        (await readDocumentIdentitiesForPage(page)).mainFrame !== opts.expectedDocumentIdentity
+      ) {
+        throw new Error(
+          "Frame changed while its browser snapshot refs were being published; retry.",
+        );
+      }
+      await markBackendDomRefsOnPage({ page, refs: backendRefs, assertCurrent });
+      assertCurrent();
+      const refs: RoleRefMap = Object.fromEntries(
+        Object.entries(sourceRefs).map(([ref, info]) => {
+          const { backendDOMNodeId, ...storedInfo } = info;
+          // A lost DOM binding must not retarget the ref by role/name order.
+          if (typeof backendDOMNodeId === "number") {
+            storedInfo.domMarker = true;
+          }
+          return [ref, storedInfo];
+        }),
+      );
+      storeRoleRefsForTarget({
+        page,
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        refs,
+        mode: "role",
+      });
+    },
+  });
 }
 
 /** Captures a raw accessibility tree snapshot and stores matching role refs. */
@@ -196,6 +167,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   targetId?: string;
   limit?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
@@ -204,188 +176,34 @@ export async function snapshotAriaViaPlaywright(opts: {
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
-  const ariaTimeoutMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
-      ? Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs)))
-      : undefined;
-  const collectAxTree = withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
+  const ariaTimeoutMs = resolveSnapshotTimeoutMs(opts.timeoutMs);
+  return await withSnapshotFrameGuard({
     page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      await send("Accessibility.enable").catch(() => {});
-      return (await send("Accessibility.getFullAXTree")) as {
-        nodes?: RawAXNode[];
-      };
+    frame: page.mainFrame(),
+    signal: opts.signal,
+    deadlineMs: performance.now() + ariaTimeoutMs,
+    run: async (assertCurrent) => {
+      const res = await withPageScopedCdpClient({
+        page,
+        timeoutMs: ariaTimeoutMs,
+        fn: async (send) => {
+          await send("Accessibility.enable").catch(() => {});
+          return (await send("Accessibility.getFullAXTree")) as { nodes?: RawAXNode[] };
+        },
+      });
+      assertCurrent();
+      const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+      const formatted = formatAriaSnapshot(nodes, limit);
+      await storeSnapshotRefsViaPlaywright({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        nodes: formatted,
+        page,
+        signal: opts.signal,
+        assertCurrent,
+      });
+      return { nodes: formatted };
     },
-  });
-  const res = (await (ariaTimeoutMs === undefined
-    ? collectAxTree
-    : (() => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error(`Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`));
-          }, ariaTimeoutMs);
-          timer.unref?.();
-        });
-        return Promise.race([collectAxTree, timeout]).finally(() => {
-          if (timer) {
-            clearTimeout(timer);
-          }
-        });
-      })())) as {
-    nodes?: RawAXNode[];
-  };
-  const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-  const formatted = formatAriaSnapshot(nodes, limit);
-  await storeAriaSnapshotRefsViaPlaywright({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    nodes: formatted,
-    page,
-  });
-  return { nodes: formatted };
-}
-
-/** Captures Playwright's AI aria snapshot with optional URL appendix and truncation. */
-export async function snapshotAiViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  timeoutMs?: number;
-  maxChars?: number;
-  urls?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
-  const page = await prepareSnapshotPageViaPlaywright({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    ssrfPolicy: opts.ssrfPolicy,
-  });
-
-  let snapshot = await page.ariaSnapshot({
-    mode: "ai",
-    timeout: resolveSnapshotTimeoutMs(opts.timeoutMs),
-  });
-  if (opts.urls) {
-    snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page));
-  }
-  const maxChars = opts.maxChars;
-  const limit =
-    typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
-      ? Math.floor(maxChars)
-      : undefined;
-  let truncated = false;
-  if (limit && snapshot.length > limit) {
-    snapshot = `${snapshot.slice(0, limit)}\n\n[...TRUNCATED - page too large]`;
-    truncated = true;
-  }
-
-  const built = buildRoleSnapshotFromAiSnapshot(snapshot);
-  storeRoleRefsForTarget({
-    page,
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    refs: built.refs,
-    mode: "aria",
-  });
-  return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
-}
-
-async function finalizeRoleSnapshotViaPlaywright(params: {
-  page: Page;
-  cdpUrl: string;
-  targetId?: string;
-  frameSelector?: string;
-  mode: "aria" | "role";
-  built: { snapshot: string; refs: RoleRefMap };
-  urls?: boolean;
-}): Promise<{
-  snapshot: string;
-  refs: RoleRefMap;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-}> {
-  const snapshot = params.urls
-    ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
-    : params.built.snapshot;
-  storeRoleRefsForTarget({
-    page: params.page,
-    cdpUrl: params.cdpUrl,
-    targetId: params.targetId,
-    refs: params.built.refs,
-    ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
-    mode: params.mode,
-  });
-  return {
-    snapshot,
-    refs: params.built.refs,
-    stats: getRoleSnapshotStats(snapshot, params.built.refs),
-  };
-}
-
-/** Captures a role-ref snapshot used by model-facing browser interaction tools. */
-export async function snapshotRoleViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  selector?: string;
-  frameSelector?: string;
-  refsMode?: "role" | "aria";
-  options?: RoleSnapshotOptions;
-  urls?: boolean;
-  timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<{
-  snapshot: string;
-  refs: Record<string, { role: string; name?: string; nth?: number }>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-}> {
-  const page = await prepareSnapshotPageViaPlaywright({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    ssrfPolicy: opts.ssrfPolicy,
-  });
-
-  const ariaSnapshotTimeout = resolveSnapshotTimeoutMs(opts.timeoutMs);
-
-  if (opts.refsMode === "aria") {
-    if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
-      throw new Error("refs=aria does not support selector/frame snapshots yet.");
-    }
-    const snapshot = await page.ariaSnapshot({
-      mode: "ai",
-      timeout: ariaSnapshotTimeout,
-    });
-    const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
-    return await finalizeRoleSnapshotViaPlaywright({
-      page,
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      built,
-      mode: "aria",
-      urls: opts.urls,
-    });
-  }
-
-  const frameSelector = normalizeOptionalString(opts.frameSelector) ?? "";
-  const selector = normalizeOptionalString(opts.selector) ?? "";
-  const locator = frameSelector
-    ? selector
-      ? page.frameLocator(frameSelector).locator(selector)
-      : page.frameLocator(frameSelector).locator(":root")
-    : selector
-      ? page.locator(selector)
-      : page.locator(":root");
-
-  const ariaSnapshot = await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
-  const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
-  return await finalizeRoleSnapshotViaPlaywright({
-    page,
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    frameSelector: frameSelector || undefined,
-    built,
-    mode: "role",
-    urls: opts.urls,
   });
 }
 
@@ -393,11 +211,14 @@ export async function snapshotRoleViaPlaywright(opts: {
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  assertCurrent?: InteractionTargetOptions["assertCurrent"];
+  resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
+  relayReference?: RelayOperationReference;
   url: string;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string }> {
+}): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -415,15 +236,17 @@ export async function navigateViaPlaywright(opts: {
   if (!url) {
     throw new Error("url is required");
   }
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   await assertBrowserNavigationAllowed({
     url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
-      browserProxyMode: opts.browserProxyMode,
-    }),
+    ...navigationPolicy,
   });
-  const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
+  const timeout = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
+  let currentTargetId = opts.targetId;
   let page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  let pageState = ensurePageState(page);
   const navigate = async () =>
     await gotoPageWithNavigationGuard({
       cdpUrl: opts.cdpUrl,
@@ -432,82 +255,176 @@ export async function navigateViaPlaywright(opts: {
       timeoutMs: timeout,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
-      targetId: opts.targetId,
+      targetId: currentTargetId,
+      ...(opts.resolveOperationTarget
+        ? {
+            assertPageCurrent: async () => {
+              if ((await opts.resolveOperationTarget?.()) !== currentTargetId) {
+                throw new BrowserTabNotFoundError({ input: currentTargetId });
+              }
+              if (opts.assertCurrent) {
+                await opts.assertCurrent();
+              }
+            },
+          }
+        : opts.assertCurrent
+          ? { assertPageCurrent: opts.assertCurrent }
+          : {}),
     });
-  let response;
+  const navigateWithDownloadCapture = async (): Promise<{
+    response: Awaited<ReturnType<typeof navigate>> | null;
+    download?: BrowserDownloadResult;
+  }> => {
+    const downloadCapture = createDownloadCaptureForPage(page, pageState, timeout, {
+      mode: "passive",
+      timeoutMessage: "Timeout waiting for navigation download",
+      beforeSave: async (download) => {
+        await assertBrowserNavigationResultAllowed({
+          url: download.url || url,
+          ...navigationPolicy,
+        });
+      },
+    });
+    void downloadCapture.promise.catch(() => {});
+    try {
+      const response = await navigate();
+      downloadCapture.cancel();
+      return { response };
+    } catch (err) {
+      if (!isDownloadStartingNavigationError(err, url) || !downloadCapture.armed) {
+        downloadCapture.cancel();
+        throw err;
+      }
+      try {
+        return { response: null, download: await downloadCapture.promise };
+      } catch (downloadErr) {
+        if (
+          downloadErr instanceof Error &&
+          downloadErr.message === "Timeout waiting for navigation download"
+        ) {
+          throw err;
+        }
+        if (isPolicyDenyNavigationError(downloadErr)) {
+          await closeBlockedNavigationTarget({
+            cdpUrl: opts.cdpUrl,
+            page,
+            targetId: currentTargetId,
+          });
+        }
+        throw downloadErr;
+      }
+    }
+  };
+
+  let navigationResult: Awaited<ReturnType<typeof navigateWithDownloadCapture>>;
   try {
-    response = await navigate();
+    navigationResult = await navigateWithDownloadCapture();
   } catch (err) {
-    if (!isRetryableNavigateError(err)) {
+    if (isConnectionScopedPage(page) || !isRetryableNavigateError(err)) {
       throw err;
     }
     // Extension relays can briefly drop CDP during renderer swaps/navigation.
     // Force a clean reconnect, then retry once on the refreshed page handle.
-    await forceDisconnectPlaywrightForTarget({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      ssrfPolicy: opts.ssrfPolicy,
-      reason: "retry navigate after detached frame",
-    }).catch(() => {});
-    page = await getPageForTargetId(opts);
-    ensurePageState(page);
-    response = await navigate();
+    if (opts.relayReference) {
+      await closeRelayOperationConnection(opts.relayReference);
+    } else {
+      await forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        page,
+        targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
+      }).catch(() => {});
+    }
+    if (opts.resolveOperationTarget) {
+      // Auto-attach completes during reconnect; only then can the same tab owner prove its new ID.
+      await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+      const replacementTargetId = await opts.resolveOperationTarget();
+      if (!replacementTargetId) {
+        throw new BrowserTabNotFoundError({ input: currentTargetId });
+      }
+      page = await getPageForTargetId({ ...opts, targetId: replacementTargetId });
+      if ((await opts.resolveOperationTarget()) !== replacementTargetId) {
+        throw new BrowserTabNotFoundError({ input: currentTargetId });
+      }
+      currentTargetId = replacementTargetId;
+    } else {
+      page = await getPageForTargetId(opts);
+    }
+    pageState = ensurePageState(page);
+    navigationResult = await navigateWithDownloadCapture();
   }
   try {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response,
-      ssrfPolicy: opts.ssrfPolicy,
-      browserProxyMode: opts.browserProxyMode,
-      targetId: opts.targetId,
-    });
+    if (!navigationResult.download) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response: navigationResult.response,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        targetId: currentTargetId,
+      });
+    }
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
       await closeBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,
         page,
-        targetId: opts.targetId,
+        targetId: currentTargetId,
       });
     }
     throw err;
   }
-  const finalUrl = page.url();
-  return { url: finalUrl };
+  const finalUrl = navigationResult.download?.url || page.url();
+  const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
+  return {
+    url: finalUrl,
+    ...(targetId ? { targetId } : {}),
+    ...(navigationResult.download ? { download: navigationResult.download } : {}),
+  };
 }
 
-/** Resizes the target page viewport within the browser action policy bounds. */
-export async function resizeViewportViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  width: number;
-  height: number;
-}): Promise<void> {
+export async function resizeViewportViaPlaywright(
+  opts: InteractionTargetOptions & {
+    width: number;
+    height: number;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.setViewportSize({
+  const state = ensurePageState(page);
+  const viewport = {
     width: resolveViewportDimension(opts.width, "width"),
     height: resolveViewportDimension(opts.height, "height"),
+  };
+  await runPageEmulationTransition({
+    state,
+    signal: opts.signal,
+    run: opts.assertCurrent
+      ? async () => {
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
+          opts.signal?.throwIfAborted();
+          await setViewportSizeOnPage(page, state, viewport, opts.assertCurrent);
+        }
+      : () => setViewportSizeOnPage(page, state, viewport),
   });
 }
 
-/** Closes the target Playwright page. */
-export async function closePageViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-}): Promise<void> {
+export async function closePageViaPlaywright(opts: InteractionTargetOptions): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.close();
+  await closeResolvedPageViaPlaywright(page, {
+    cdpUrl: opts.cdpUrl,
+    assertCurrent: opts.assertCurrent ? () => assertInteractionCurrent(opts) : undefined,
+  });
 }
 
-/** Renders the target page to a PDF buffer. */
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   const buffer = await page.pdf({ printBackground: true });
   return { buffer };
 }

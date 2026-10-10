@@ -1,0 +1,182 @@
+import fs from "node:fs/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+// Whatsapp connection-owner lease serializes auth-backed Baileys sockets across processes.
+import {
+  acquireFileLock,
+  FILE_LOCK_STALE_ERROR_CODE,
+  FILE_LOCK_TIMEOUT_ERROR_CODE,
+  type FileLockHandle,
+} from "openclaw/plugin-sdk/file-lock";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+
+const WHATSAPP_CONNECTION_OWNER_BUSY_CODE = "whatsapp_connection_owner_busy";
+
+export class WhatsAppConnectionOwnerBusyError extends Error {
+  readonly code = WHATSAPP_CONNECTION_OWNER_BUSY_CODE;
+
+  constructor(
+    public readonly authDir: string,
+    options?: ErrorOptions,
+  ) {
+    super("Another process owns this WhatsApp connection.", options);
+    this.name = "WhatsAppConnectionOwnerBusyError";
+  }
+}
+
+export type WhatsAppConnectionOwnerLease = Pick<FileLockHandle, "release">;
+
+const OWNER_LOCK_STALE_MS = 5 * 60_000;
+const GATEWAY_LOCAL_OWNER_WAIT_MS = 150_000;
+
+type ProcessOwner = {
+  released: Promise<void>;
+  resolveReleased: () => void;
+};
+
+const processOwners = new Map<string, ProcessOwner>();
+
+function ownershipCancelledError(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error
+    ? reason
+    : new Error(
+        "WhatsApp connection ownership cancelled",
+        reason === undefined ? {} : { cause: reason },
+      );
+}
+
+async function reserveProcessOwner(params: {
+  authDir: string;
+  ownerPath: string;
+  signal?: AbortSignal;
+  waitForLocalOwner: boolean;
+}): Promise<ProcessOwner> {
+  while (true) {
+    if (params.signal?.aborted) {
+      throw ownershipCancelledError(params.signal);
+    }
+    const current = processOwners.get(params.ownerPath);
+    if (!current) {
+      const released = createDeferred<void>();
+      const owner: ProcessOwner = {
+        released: released.promise,
+        resolveReleased: released.resolve,
+      };
+      processOwners.set(params.ownerPath, owner);
+      return owner;
+    }
+    if (!params.waitForLocalOwner) {
+      throw new WhatsAppConnectionOwnerBusyError(params.authDir);
+    }
+    const outcome = await raceWithTimeout(
+      current.released.then(() => "released" as const),
+      GATEWAY_LOCAL_OWNER_WAIT_MS,
+      (): "timed_out" | "aborted" => "timed_out",
+      { ref: false, signal: params.signal, onAbort: () => "aborted" },
+    );
+    if (outcome === "aborted") {
+      throw ownershipCancelledError(params.signal);
+    }
+    if (outcome === "timed_out") {
+      throw new WhatsAppConnectionOwnerBusyError(params.authDir);
+    }
+  }
+}
+
+function abandonProcessOwner(ownerPath: string, owner: ProcessOwner): void {
+  if (processOwners.get(ownerPath) !== owner) {
+    return;
+  }
+  processOwners.delete(ownerPath);
+  owner.resolveReleased();
+}
+
+async function acquireOwnerLease(params: {
+  authDir: string;
+  retries: number;
+  signal?: AbortSignal;
+  waitForLocalOwner: boolean;
+}): Promise<WhatsAppConnectionOwnerLease> {
+  const resolvedOwnerPath = resolveUserPath(params.authDir);
+  await fs.mkdir(resolvedOwnerPath, { recursive: true });
+  const ownerPath = await fs.realpath(resolvedOwnerPath);
+  // Reserve before awaiting the filesystem so concurrent callers cannot use the
+  // underlying file lock's intentionally re-entrant mode for two sockets.
+  const processOwner = await reserveProcessOwner({
+    authDir: params.authDir,
+    ownerPath,
+    signal: params.signal,
+    waitForLocalOwner: params.waitForLocalOwner,
+  });
+  let fileLock: FileLockHandle;
+  let attempt = 0;
+  try {
+    while (true) {
+      if (params.signal?.aborted) {
+        throw ownershipCancelledError(params.signal);
+      }
+      try {
+        fileLock = await acquireFileLock(ownerPath, {
+          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+          stale: OWNER_LOCK_STALE_MS,
+          // The shared lock wrapper reclaims only a definitely dead PID and removes
+          // the exact unchanged sidecar. Live or ambiguous owners remain fail-closed.
+          staleRecovery: "remove-if-unchanged",
+        });
+        break;
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        if (code !== FILE_LOCK_TIMEOUT_ERROR_CODE || attempt >= params.retries) {
+          if (code === FILE_LOCK_TIMEOUT_ERROR_CODE || code === FILE_LOCK_STALE_ERROR_CODE) {
+            throw new WhatsAppConnectionOwnerBusyError(params.authDir, { cause: error });
+          }
+          throw error;
+        }
+        const delayMs = Math.min(100 * 1.5 ** attempt, 1_000);
+        attempt += 1;
+        await sleepWithAbort(delayMs, params.signal).catch(() => {
+          throw ownershipCancelledError(params.signal);
+        });
+      }
+    }
+  } catch (error) {
+    abandonProcessOwner(ownerPath, processOwner);
+    throw error;
+  }
+  let releasePromise: Promise<void> | null = null;
+  return {
+    release: async () => {
+      if (!releasePromise) {
+        releasePromise = fileLock
+          .release()
+          .then(() => {
+            abandonProcessOwner(ownerPath, processOwner);
+          })
+          .catch((releaseError: unknown) => {
+            releasePromise = null;
+            throw releaseError;
+          });
+      }
+      await releasePromise;
+    },
+  };
+}
+
+/** Gateway owner waits for a bounded standalone lookup to finish before startup. */
+export async function acquireWhatsAppGatewayConnectionOwner(
+  authDir: string,
+  signal?: AbortSignal,
+): Promise<WhatsAppConnectionOwnerLease> {
+  // Gateway lifecycle stops an account before restarting it. A timed-out incumbent
+  // must keep same-auth restarts blocked; handoff would permit concurrent sockets.
+  return await acquireOwnerLease({ authDir, retries: 150, signal, waitForLocalOwner: true });
+}
+
+/** Standalone lookup fails quickly when a gateway already owns the account. */
+export async function acquireWhatsAppStandaloneConnectionOwner(
+  authDir: string,
+): Promise<WhatsAppConnectionOwnerLease> {
+  return await acquireOwnerLease({ authDir, retries: 3, waitForLocalOwner: false });
+}

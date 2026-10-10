@@ -1,22 +1,26 @@
 /**
  * Tests web.start gateway method behavior and backend launch responses.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
-  resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
+  normalizeChannelId: vi.fn(),
+  resolveMissingOfficialExternalChannelPluginRepairHints: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
+  normalizeChannelId: mocks.normalizeChannelId,
 }));
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
-  resolveMissingOfficialExternalChannelPluginRepairHint:
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints:
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints,
 }));
 
 import { webHandlers } from "./web.js";
@@ -75,34 +79,54 @@ function createRunningWhatsappContext() {
   };
 }
 
-describe("webHandlers web.login.start", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
-  });
+async function invokeWeb(
+  method: "web.login.start" | "web.login.wait",
+  params: Record<string, unknown>,
+  overrides?: Partial<GatewayRequestHandlerOptions>,
+) {
+  await expectDefined(
+    webHandlers[method],
+    `${method} handler`,
+  )(
+    createOptions(params, {
+      ...overrides,
+      req: { type: "req", id: "request", method, params },
+    }),
+  );
+}
 
+function missingPluginHint(channelId: string, label: string) {
+  const installSpec = `clawhub:@openclaw/${channelId}`;
+  const installCommand = `openclaw plugins install ${installSpec}`;
+  const doctorFixCommand = "openclaw doctor --fix";
+  return {
+    pluginId: channelId,
+    channelId,
+    label,
+    installSpec,
+    installCommand,
+    doctorFixCommand,
+    repairHint: `Install the official external plugin with: ${installCommand}, or run: ${doctorFixCommand}.`,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.normalizeChannelId.mockImplementation((channelId: string) =>
+    channelId === "wechat" || channelId === "weixin" ? "openclaw-weixin" : channelId,
+  );
+  mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
+});
+
+describe("webHandlers web.login.start", () => {
   it("surfaces the missing official external plugin hint when no web-login provider is loaded", async () => {
     mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
-      pluginId: "whatsapp",
-      channelId: "whatsapp",
-      label: "WhatsApp",
-      installSpec: "clawhub:@openclaw/whatsapp",
-      installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
-      doctorFixCommand: "openclaw doctor --fix",
-      repairHint:
-        "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
-    });
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([
+      missingPluginHint("whatsapp", "WhatsApp"),
+    ]);
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
-      createOptions(
-        { accountId: "default" },
-        {
-          respond,
-        },
-      ),
-    );
+    await invokeWeb("web.login.start", { accountId: "default" }, { respond });
 
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -113,59 +137,43 @@ describe("webHandlers web.login.start", () => {
           "web login provider is not available. Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
       }),
     );
-    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHint).toHaveBeenCalledWith({
+    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHints).toHaveBeenCalledWith({
       config: { channels: { whatsapp: { enabled: true } } },
-      channelId: "whatsapp",
+      channelIds: ["whatsapp"],
     });
   });
 
   it("joins multiple missing official external plugin hints when more than one configured channel is missing", async () => {
     mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockImplementation(({ channelId }) =>
-      channelId === "whatsapp"
-        ? {
-            pluginId: "whatsapp",
-            channelId: "whatsapp",
-            label: "WhatsApp",
-            installSpec: "clawhub:@openclaw/whatsapp",
-            installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
-            doctorFixCommand: "openclaw doctor --fix",
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
-          }
-        : channelId === "signal"
-          ? {
-              pluginId: "signal",
-              channelId: "signal",
-              label: "Signal",
-              installSpec: "clawhub:@openclaw/signal",
-              installCommand: "openclaw plugins install clawhub:@openclaw/signal",
-              doctorFixCommand: "openclaw doctor --fix",
-              repairHint:
-                "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/signal, or run: openclaw doctor --fix.",
-            }
-          : null,
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockImplementation(
+      ({ channelIds }) =>
+        channelIds.flatMap((channelId: string) =>
+          channelId === "whatsapp"
+            ? [missingPluginHint("whatsapp", "WhatsApp")]
+            : channelId === "signal"
+              ? [missingPluginHint("signal", "Signal")]
+              : [],
+        ),
     );
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
-      createOptions(
-        { accountId: "default" },
-        {
-          respond,
-          context: {
-            stopChannel: vi.fn(),
-            startChannel: vi.fn(),
-            getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
-            getRuntimeConfig: vi.fn(() => ({
-              channels: {
-                whatsapp: { enabled: true },
-                signal: { enabled: true },
-              },
-            })),
-          } as unknown as GatewayRequestHandlerOptions["context"],
-        },
-      ),
+    await invokeWeb(
+      "web.login.start",
+      { accountId: "default" },
+      {
+        respond,
+        context: {
+          stopChannel: vi.fn(),
+          startChannel: vi.fn(),
+          getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
+          getRuntimeConfig: vi.fn(() => ({
+            channels: {
+              whatsapp: { enabled: true },
+              signal: { enabled: true },
+            },
+          })),
+        } as unknown as GatewayRequestHandlerOptions["context"],
+      },
     );
 
     expect(respond).toHaveBeenCalledWith(
@@ -213,15 +221,7 @@ describe("webHandlers web.login.start", () => {
     const { context, startChannel, stopChannel } = createRunningWhatsappContext();
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
-      createOptions(
-        { accountId: "default", ...params },
-        {
-          respond,
-          context,
-        },
-      ),
-    );
+    await invokeWeb("web.login.start", { accountId: "default", ...params }, { respond, context });
 
     if (stopsChannel) {
       expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default");
@@ -256,14 +256,7 @@ describe("webHandlers web.login.start", () => {
     ]);
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
-      createOptions(
-        { accountId: "default" },
-        {
-          respond,
-        },
-      ),
-    );
+    await invokeWeb("web.login.start", { accountId: "default" }, { respond });
 
     expect(loginWithQrStart).toHaveBeenCalledWith({
       accountId: "default",
@@ -280,14 +273,90 @@ describe("webHandlers web.login.start", () => {
       undefined,
     );
   });
+
+  it("routes the explicit WeChat alias to its QR-login provider", async () => {
+    const whatsappLogin = vi.fn();
+    const weixinLogin = vi.fn().mockResolvedValue({
+      message: "scan in WeChat",
+      qrDataUrl: "data:image/png;base64,weixin-qr",
+      sessionKey: "weixin-session",
+    });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start", "web.login.wait"],
+        gateway: { loginWithQrStart: whatsappLogin, loginWithQrWait: vi.fn() },
+      },
+      {
+        id: "openclaw-weixin",
+        gatewayMethods: ["web.login.start", "web.login.wait"],
+        gateway: { loginWithQrStart: weixinLogin, loginWithQrWait: vi.fn() },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await invokeWeb("web.login.start", { channel: "wechat", accountId: "work" }, { respond });
+
+    expect(whatsappLogin).not.toHaveBeenCalled();
+    expect(weixinLogin).toHaveBeenCalledWith({
+      accountId: "work",
+      force: false,
+      timeoutMs: undefined,
+      verbose: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: "weixin-session" }),
+      undefined,
+    );
+  });
+
+  it("does not fall back to the first provider for an unknown channel", async () => {
+    const whatsappLogin = vi.fn();
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start"],
+        gateway: { loginWithQrStart: whatsappLogin },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await invokeWeb("web.login.start", { channel: "missing-channel" }, { respond });
+
+    expect(whatsappLogin).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
+  it("keeps the legacy first-provider fallback when channel is omitted", async () => {
+    const whatsappLogin = vi.fn().mockResolvedValue({ message: "whatsapp" });
+    const weixinLogin = vi.fn();
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start"],
+        gateway: { loginWithQrStart: whatsappLogin },
+      },
+      {
+        id: "openclaw-weixin",
+        gatewayMethods: ["web.login.start"],
+        gateway: { loginWithQrStart: weixinLogin },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await invokeWeb("web.login.start", {}, { respond });
+
+    expect(whatsappLogin).toHaveBeenCalled();
+    expect(weixinLogin).not.toHaveBeenCalled();
+  });
 });
 
 describe("webHandlers web.login.wait", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
-  });
-
   it("passes refreshed QR payloads back to the client while login is still pending", async () => {
     const loginWithQrWait = vi.fn().mockResolvedValue({
       connected: false,
@@ -303,33 +372,21 @@ describe("webHandlers web.login.wait", () => {
     ]);
     const respond = vi.fn();
 
-    await webHandlers["web.login.wait"](
-      createOptions(
-        {
-          accountId: "default",
-          timeoutMs: 5000,
-          currentQrDataUrl: "data:image/png;base64,current-qr",
-        },
-        {
-          req: {
-            type: "req",
-            id: "req-2",
-            method: "web.login.wait",
-            params: {
-              accountId: "default",
-              timeoutMs: 5000,
-              currentQrDataUrl: "data:image/png;base64,current-qr",
-            },
-          } as GatewayRequestHandlerOptions["req"],
-          respond,
-        },
-      ),
+    await invokeWeb(
+      "web.login.wait",
+      {
+        accountId: "default",
+        timeoutMs: 5000,
+        currentQrDataUrl: "data:image/png;base64,current-qr",
+      },
+      { respond },
     );
 
     expect(loginWithQrWait).toHaveBeenCalledWith({
       accountId: "default",
       timeoutMs: 5000,
       currentQrDataUrl: "data:image/png;base64,current-qr",
+      sessionKey: undefined,
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -340,5 +397,41 @@ describe("webHandlers web.login.wait", () => {
       },
       undefined,
     );
+  });
+
+  it("routes and correlates the explicit Weixin alias login session", async () => {
+    const whatsappWait = vi.fn();
+    const weixinWait = vi.fn().mockResolvedValue({ connected: true, message: "connected" });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start", "web.login.wait"],
+        gateway: { loginWithQrStart: vi.fn(), loginWithQrWait: whatsappWait },
+      },
+      {
+        id: "openclaw-weixin",
+        gatewayMethods: ["web.login.start", "web.login.wait"],
+        gateway: { loginWithQrStart: vi.fn(), loginWithQrWait: weixinWait },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await invokeWeb(
+      "web.login.wait",
+      {
+        channel: "weixin",
+        accountId: "work",
+        sessionKey: "weixin-session",
+      },
+      { respond },
+    );
+
+    expect(whatsappWait).not.toHaveBeenCalled();
+    expect(weixinWait).toHaveBeenCalledWith({
+      accountId: "work",
+      timeoutMs: undefined,
+      currentQrDataUrl: undefined,
+      sessionKey: "weixin-session",
+    });
   });
 });

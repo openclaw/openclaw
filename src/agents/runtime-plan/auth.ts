@@ -1,10 +1,4 @@
-/**
- * Builds auth forwarding decisions for prepared runtime plans. Provider aliases
- * and harness auth owners are resolved before session auth profiles can be
- * safely forwarded.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -29,15 +23,21 @@ function resolveHarnessAuthProvider(params: {
   return harnessId === "codex" || runtime === "codex" ? CODEX_HARNESS_AUTH_PROVIDER : undefined;
 }
 
-/** Builds the auth forwarding plan for one resolved agent runtime. */
 export function buildAgentRuntimeAuthPlan(params: {
   provider: string;
+  modelId?: string;
   authProfileProvider?: string;
   authProfileMode?: string;
+  authProfileFlow?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileSource?: "auto" | "user" | "user-link";
   sessionAuthProfileCandidateIds?: string[];
+  modelRoute?: AgentRuntimeAuthPlan["modelRoute"];
+  deferredRouteSupport?: AgentRuntimeAuthPlan["deferredRouteSupport"];
+  credentialSource?: AgentRuntimeAuthPlan["credentialSource"];
   config?: OpenClawConfig;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   providerAuthAliasesEnabled?: boolean;
   harnessId?: string;
@@ -45,21 +45,24 @@ export function buildAgentRuntimeAuthPlan(params: {
   allowHarnessAuthProfileForwarding?: boolean;
 }): AgentRuntimeAuthPlan {
   const providerAuthAliasesEnabled =
-    params.providerAuthAliasesEnabled ??
-    (params.config ? normalizePluginsConfig(params.config.plugins).enabled : true);
+    params.providerAuthAliasesEnabled ?? params.config?.plugins?.enabled !== false;
   const metadataSnapshot =
     params.metadataSnapshot ??
     (providerAuthAliasesEnabled ? undefined : EMPTY_PROVIDER_AUTH_ALIAS_METADATA);
   const aliasLookupParams = {
     config: params.config,
     workspaceDir: params.workspaceDir,
+    env: params.env,
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
-  const authProfileProviderForAuth = resolveProviderIdForAuth(
-    params.authProfileProvider ?? params.provider,
-    aliasLookupParams,
-  );
+  const authProfileProviderForAuth =
+    params.authProfileProvider !== undefined
+      ? resolveProviderIdForAuth(params.authProfileProvider, {
+          ...aliasLookupParams,
+          storedCredential: true,
+        })
+      : providerForAuth;
   const harnessAuthProvider = resolveHarnessAuthProvider(params);
   const harnessProviderForAuth = harnessAuthProvider
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)
@@ -71,16 +74,34 @@ export function buildAgentRuntimeAuthPlan(params: {
   const providerCanForwardProfile =
     !harnessProviderForAuth && providerForAuth === authProfileProviderForAuth;
   const canForwardProfile = providerCanForwardProfile || harnessCanForwardProfile;
+  const forwardedAuthProfileId = canForwardProfile ? params.sessionAuthProfileId : undefined;
 
   // Forward only when the selected provider/harness resolves to the same auth
   // owner as the stored session profile; otherwise the runtime must choose auth.
   return {
     providerForAuth,
+    ...(params.modelId ? { modelId: params.modelId } : {}),
     authProfileProviderForAuth,
     ...(harnessProviderForAuth ? { harnessAuthProvider: harnessProviderForAuth } : {}),
-    ...(canForwardProfile ? { forwardedAuthProfileId: params.sessionAuthProfileId } : {}),
+    ...(canForwardProfile ? { forwardedAuthProfileId } : {}),
+    ...(canForwardProfile && params.sessionAuthProfileId && params.sessionAuthProfileSource
+      ? {
+          // Person-linked pins forward at user-pin strength; the wire plan
+          // keeps the closed auto/user contract.
+          forwardedAuthProfileSource: params.sessionAuthProfileSource === "auto" ? "auto" : "user",
+        }
+      : {}),
     ...(canForwardProfile && params.sessionAuthProfileCandidateIds?.length
       ? { forwardedAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds }
       : {}),
-  };
+    ...(canForwardProfile && params.authProfileMode
+      ? { selectedAuthMode: params.authProfileMode }
+      : {}),
+    ...(canForwardProfile && params.authProfileFlow
+      ? { selectedAuthFlow: params.authProfileFlow }
+      : {}),
+    ...(params.modelRoute ? { modelRoute: params.modelRoute } : {}),
+    ...(params.deferredRouteSupport ? { deferredRouteSupport: params.deferredRouteSupport } : {}),
+    ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
+  } satisfies AgentRuntimeAuthPlan;
 }

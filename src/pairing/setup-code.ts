@@ -1,4 +1,3 @@
-// Generates setup codes used to pair external channels with OpenClaw.
 import os from "node:os";
 import {
   isCarrierGradeNatIpv4Address,
@@ -8,60 +7,97 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
-import { resolveAdvertisedLanHost } from "../infra/advertised-lan-host.js";
-import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
+import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
 } from "../infra/network-interfaces.js";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  deviceBootstrapProfilesEqual,
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  resolvePairingSetupAccess,
+  type DeviceBootstrapProfileInput,
+  type PairingSetupAccess,
+} from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
-export type PairingSetupPayload = {
+type PairingSetupPayload = {
   url: string;
+  urls?: string[];
   bootstrapToken: string;
+  expiresAtMs?: number;
+  tlsFingerprint?: string;
 };
 
-export type PairingSetupCommandResult = {
+const PAIRING_SETUP_MAX_URLS = 8;
+
+export const PAIRING_GATEWAY_LOOPBACK_ERROR =
+  "Gateway is only bound to loopback. Set gateway.publicOrigin to your public HTTPS origin, configure plugins.entries.device-pair.config.publicUrl, enable tailscale serve, or set gateway.bind=lan.";
+
+type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;
   stderr?: string;
 };
 
-export type PairingSetupCommandRunner = (
+type PairingSetupCommandRunner = (
   argv: string[],
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<PairingSetupCommandResult>;
 
-export type ResolvePairingSetupOptions = {
+type PairingPublicOriginPreference = "fallback" | "prefer";
+type PairingUrlPathMode = "preserve" | "origin-only";
+
+type ResolvePairingSetupOptions = {
   env?: NodeJS.ProcessEnv;
   publicUrl?: string;
+  publicOriginPreference?: PairingPublicOriginPreference;
   preferRemoteUrl?: boolean;
+  useLocalGateway?: boolean;
   forceSecure?: boolean;
+  bootstrapProfile?: DeviceBootstrapProfileInput;
+  issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
   pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
+  localTlsFingerprint?: string;
+  loadLocalTlsFingerprint?: () => Promise<string | undefined>;
 };
 
-export type PairingSetupResolution =
+export function resolveConfiguredPairingPublicUrl(config: OpenClawConfig): string | undefined {
+  const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+type PairingSetupResolution =
   | {
       ok: true;
       payload: PairingSetupPayload;
-      authLabel: "token" | "password";
+      authLabel: "token" | "password" | "trusted-proxy";
       urlSource: string;
+      access: PairingSetupAccess;
+      accessDowngraded: boolean;
+      setupId: string;
+      expiresAtMs: number;
     }
   | {
       ok: false;
@@ -137,6 +173,19 @@ function isMobilePairingCleartextAllowedHost(host: string): boolean {
   );
 }
 
+function isFullAccessMobilePairingUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "wss:") {
+      return true;
+    }
+    const host = normalizeMobilePairingHost(parsed.hostname);
+    return parsed.protocol === "ws:" && (host === "localhost" || isLoopbackIpAddress(host));
+  } catch {
+    return false;
+  }
+}
+
 function validateMobilePairingUrl(url: string, source?: string): string | null {
   let parsed: URL;
   try {
@@ -144,8 +193,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   } catch {
     return "Resolved mobile pairing URL is invalid.";
   }
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
   if (protocol === "wss:") {
     return null;
   }
@@ -155,15 +203,16 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
-type ResolveAuthLabelResult = {
-  label?: "token" | "password";
-  error?: string;
-};
+type ResolveAuthLabelResult = { label: "token" | "password" | "trusted-proxy" } | { error: string };
 
 const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
 const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
 
-function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
+function normalizeUrl(
+  raw: string,
+  schemeFallback: "ws" | "wss",
+  pathMode: PairingUrlPathMode = "preserve",
+): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -171,7 +220,7 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
   if (GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE.test(trimmed)) {
     return null;
   }
-  const parsedUrl = parseNormalizedGatewayUrl(trimmed);
+  const parsedUrl = parseNormalizedGatewayUrl(trimmed, pathMode);
   if (parsedUrl) {
     return parsedUrl;
   }
@@ -179,20 +228,22 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
     return null;
   }
   const withoutPath = normalizeOptionalString(trimmed.split("/", 1)[0]) ?? "";
-  return withoutPath ? parseNormalizedGatewayUrl(`${schemeFallback}://${withoutPath}`) : null;
+  return withoutPath
+    ? parseNormalizedGatewayUrl(`${schemeFallback}://${withoutPath}`, pathMode)
+    : null;
 }
 
-function parseNormalizedGatewayUrl(raw: string): string | null {
+function parseNormalizedGatewayUrl(raw: string, pathMode: PairingUrlPathMode): string | null {
   try {
     const parsed = new URL(raw);
     if (parsed.username || parsed.password) {
       return null;
     }
-    const scheme = parsed.protocol.replace(":", "");
-    if (!scheme) {
+    const protocol = normalizeWebSocketProtocol(parsed.protocol);
+    if (!protocol) {
       return null;
     }
-    const resolvedScheme = scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
+    const resolvedScheme = protocol.replace(":", "");
     if (resolvedScheme !== "ws" && resolvedScheme !== "wss") {
       return null;
     }
@@ -201,44 +252,12 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
       return null;
     }
     const port = parsed.port ? `:${parsed.port}` : "";
-    return `${resolvedScheme}://${host}${port}`;
+    const contextPath =
+      pathMode === "origin-only" || parsed.pathname === "/" ? "" : parsed.pathname;
+    return `${resolvedScheme}://${host}${port}${contextPath}`;
   } catch {
     return null;
   }
-}
-
-function resolveScheme(
-  cfg: OpenClawConfig,
-  opts?: {
-    forceSecure?: boolean;
-  },
-): "ws" | "wss" {
-  if (opts?.forceSecure) {
-    return "wss";
-  }
-  return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-}
-
-function isTailnetIPv4(address: string): boolean {
-  return isCarrierGradeNatIpv4Address(address);
-}
-
-function pickIPv4Matching(
-  networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
-  matches: (address: string) => boolean,
-): string | null {
-  return (
-    pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(networkInterfaces), {
-      family: "IPv4",
-      matches,
-    }) ?? null
-  );
-}
-
-function pickTailnetIPv4(
-  networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
-): string | null {
-  return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
 function resolvePairingSetupAuthLabel(
@@ -263,17 +282,11 @@ function resolvePairingSetupAuthLabel(
     envPassword ||
     (passwordRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.password));
 
-  if (mode === "password") {
-    if (!password) {
-      return { error: "Gateway auth is set to password, but no password is configured." };
+  if (mode === "password" || mode === "token") {
+    if (!(mode === "password" ? password : token)) {
+      return { error: `Gateway auth is set to ${mode}, but no ${mode} is configured.` };
     }
-    return { label: "password" };
-  }
-  if (mode === "token") {
-    if (!token) {
-      return { error: "Gateway auth is set to token, but no token is configured." };
-    }
-    return { label: "token" };
+    return { label: mode };
   }
   if (token) {
     return { label: "token" };
@@ -281,34 +294,60 @@ function resolvePairingSetupAuthLabel(
   if (password) {
     return { label: "password" };
   }
+  // Setup codes carry their own bounded bootstrap credential. Proxy-only
+  // ingress does not need an unrelated shared secret to issue that handoff.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
+  }
+  if (mode === "none") {
+    return {
+      error: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
+    };
+  }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-async function resolveGatewayUrl(
+export async function resolvePairingGatewayUrl(
   cfg: OpenClawConfig,
   opts: {
     env: NodeJS.ProcessEnv;
     publicUrl?: string;
+    publicOriginPreference?: PairingPublicOriginPreference;
+    urlPathMode?: PairingUrlPathMode;
     preferRemoteUrl?: boolean;
+    useLocalGateway?: boolean;
     forceSecure?: boolean;
     runCommandWithTimeout?: PairingSetupCommandRunner;
     networkInterfaces: () => ReturnType<typeof os.networkInterfaces>;
   },
 ): Promise<ResolveUrlResult> {
-  const scheme = resolveScheme(cfg, { forceSecure: opts.forceSecure });
+  const scheme = opts.forceSecure || cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   const port = resolveGatewayPort(cfg, opts.env);
 
   if (typeof opts.publicUrl === "string" && opts.publicUrl.trim()) {
-    const url = normalizeUrl(opts.publicUrl, scheme);
+    const url = normalizeUrl(opts.publicUrl, scheme, opts.urlPathMode);
     if (url) {
       return { url, source: "plugins.entries.device-pair.config.publicUrl" };
     }
     return { error: "Configured publicUrl is invalid." };
   }
 
-  const remoteUrlRaw = cfg.gateway?.remote?.url;
+  const publicOrigin = cfg.gateway?.publicOrigin?.trim();
+  const publicOriginUrl = publicOrigin
+    ? normalizeUrl(publicOrigin, scheme, opts.urlPathMode)
+    : null;
+  const publicOriginResult = publicOrigin
+    ? publicOriginUrl
+      ? { url: publicOriginUrl, source: "gateway.publicOrigin" }
+      : { error: "Configured gateway.publicOrigin is invalid." }
+    : undefined;
+  if (opts.publicOriginPreference === "prefer" && publicOriginResult) {
+    return publicOriginResult;
+  }
+
+  const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
   const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
-  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
+  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme, opts.urlPathMode) : null;
   if (hasRemoteUrl && !remoteUrl) {
     return { error: "Configured gateway.remote.url is invalid." };
   }
@@ -325,14 +364,7 @@ async function resolveGatewayUrl(
     const publishedHost = resolveTailscalePublishedHost({
       tailscaleMode,
       tailnetHost: host,
-      serviceName: cfg.gateway?.tailscale?.serviceName,
     });
-    if (!publishedHost) {
-      return {
-        error:
-          "Tailscale Serve serviceName is configured, but Service MagicDNS could not be derived.",
-      };
-    }
     return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
@@ -342,7 +374,7 @@ async function resolveGatewayUrl(
 
   const advertisedLanHost =
     cfg.gateway?.bind === "lan"
-      ? await resolveAdvertisedLanHost({
+      ? await resolveAdvertisedLanHostCore({
           networkInterfaces: opts.networkInterfaces,
           runCommandWithTimeout: opts.runCommandWithTimeout,
         })
@@ -352,23 +384,98 @@ async function resolveGatewayUrl(
     customBindHost: cfg.gateway?.customBindHost,
     scheme,
     port,
-    pickTailnetHost: () => pickTailnetIPv4(opts.networkInterfaces),
+    pickTailnetHost: () =>
+      pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(opts.networkInterfaces), {
+        family: "IPv4",
+        matches: isCarrierGradeNatIpv4Address,
+      }) ?? null,
     pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
     return bindResult;
   }
 
-  return {
-    error:
-      "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
-  };
+  return publicOriginResult ?? { error: PAIRING_GATEWAY_LOOPBACK_ERROR };
 }
 
 export function encodePairingSetupCode(payload: PairingSetupPayload): string {
-  const json = JSON.stringify(payload);
-  const base64 = Buffer.from(json, "utf8").toString("base64");
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+const PAIRING_SETUP_URL_PREFIX = "oc-pair://";
+const PAIRING_SETUP_CODE_RE = /^[A-Za-z0-9_-]+$/u;
+
+/** Decode the current setup payload plus additive fields emitted by older pairing surfaces. */
+export function decodePairingSetupCode(
+  input: string,
+  options: { nowMs?: number; allowExpired?: boolean } = {},
+): PairingSetupPayload {
+  const trimmed = input.trim();
+  const setupCode = trimmed.toLowerCase().startsWith(PAIRING_SETUP_URL_PREFIX)
+    ? trimmed.slice(PAIRING_SETUP_URL_PREFIX.length)
+    : trimmed;
+  if (!setupCode || !PAIRING_SETUP_CODE_RE.test(setupCode)) {
+    throw new Error("Invalid pairing setup code or URL.");
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(setupCode, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Invalid pairing setup code or URL.");
+  }
+  if (!isRecord(decoded)) {
+    throw new Error("Invalid pairing setup payload.");
+  }
+
+  const url = normalizeOptionalString(decoded.url);
+  const bootstrapToken = normalizeOptionalString(decoded.bootstrapToken);
+  if (!url || !bootstrapToken || normalizeUrl(url, "ws") !== url) {
+    throw new Error("Invalid pairing setup payload.");
+  }
+
+  let urls: string[] | undefined;
+  if (decoded.urls !== undefined) {
+    if (
+      !Array.isArray(decoded.urls) ||
+      decoded.urls.length === 0 ||
+      decoded.urls.length > PAIRING_SETUP_MAX_URLS ||
+      decoded.urls.some(
+        (candidate) => typeof candidate !== "string" || normalizeUrl(candidate, "ws") !== candidate,
+      )
+    ) {
+      throw new Error("Invalid pairing setup payload.");
+    }
+    urls = decoded.urls;
+  }
+
+  let expiresAtMs: number | undefined;
+  if (decoded.expiresAtMs !== undefined) {
+    const candidate = decoded.expiresAtMs;
+    if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0) {
+      throw new Error("Invalid pairing setup payload.");
+    }
+    expiresAtMs = candidate;
+    if (!options.allowExpired && candidate <= (options.nowMs ?? Date.now())) {
+      throw new Error("Pairing setup code has expired.");
+    }
+  }
+
+  const tlsFingerprint =
+    typeof decoded.tlsFingerprint === "string"
+      ? normalizeTlsFingerprint(decoded.tlsFingerprint)
+      : undefined;
+  if (decoded.tlsFingerprint !== undefined && !tlsFingerprint) {
+    throw new Error("Invalid pairing setup payload.");
+  }
+
+  return {
+    url,
+    ...(urls ? { urls } : {}),
+    bootstrapToken,
+    ...(expiresAtMs !== undefined ? { expiresAtMs } : {}),
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
+  };
 }
 
 export async function resolvePairingSetupFromConfig(
@@ -381,17 +488,24 @@ export async function resolvePairingSetupFromConfig(
     cfg,
     env,
     mode: cfg.gateway?.auth?.mode,
-    hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
-    hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
+    hasTokenOverride: false,
+    hasPasswordOverride: false,
+    hasTokenFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
-  if (authLabel.error) {
+  if ("error" in authLabel) {
     return { ok: false, error: authLabel.error };
   }
-  const urlResult = await resolveGatewayUrl(cfgForAuth, {
+  const explicitPublicUrl = normalizeOptionalString(options.publicUrl);
+  const urlResult = await resolvePairingGatewayUrl(cfgForAuth, {
     env,
-    publicUrl: options.publicUrl,
+    publicUrl:
+      explicitPublicUrl ??
+      (options.preferRemoteUrl ? undefined : resolveConfiguredPairingPublicUrl(cfgForAuth)),
+    publicOriginPreference: options.publicOriginPreference,
     preferRemoteUrl: options.preferRemoteUrl,
+    useLocalGateway: options.useLocalGateway,
     forceSecure: options.forceSecure,
     runCommandWithTimeout: options.runCommandWithTimeout,
     networkInterfaces: options.networkInterfaces ?? os.networkInterfaces,
@@ -400,27 +514,65 @@ export async function resolvePairingSetupFromConfig(
   if (!urlResult.url) {
     return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
   }
+  // Mobile dashboards use the paired endpoint path as their Control UI mount.
+  // Explicit overrides, remote endpoints, and configured proxy paths stay authoritative.
+  const basePath = normalizeControlUiBasePath(cfgForAuth.gateway?.controlUi?.basePath);
+  if (basePath && !explicitPublicUrl && urlResult.source !== "gateway.remote.url") {
+    const url = new URL(urlResult.url);
+    if (url.pathname === "/") {
+      url.pathname = basePath;
+      urlResult.url = url.toString();
+    }
+  }
   const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
   if (mobilePairingUrlError) {
     return { ok: false, error: mobilePairingUrlError };
   }
 
-  if (!authLabel.label) {
-    return { ok: false, error: "Gateway auth is not configured (no token or password)." };
+  const requestedBootstrapProfile =
+    options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
+  const accessDowngraded =
+    deviceBootstrapProfilesEqual(
+      requestedBootstrapProfile,
+      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    ) && !isFullAccessMobilePairingUrl(urlResult.url);
+  // Keep plaintext LAN routes useful for node/chat access, but reserve admin
+  // handoff for TLS or same-host loopback, where no LAN observer exists.
+  const issuedBootstrapProfile = accessDowngraded
+    ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+    : requestedBootstrapProfile;
+  const directGatewayTlsFingerprintRaw =
+    urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")
+      ? (options.localTlsFingerprint ?? (await options.loadLocalTlsFingerprint?.()))
+      : urlResult.url.startsWith("wss://") && urlResult.source === "gateway.remote.url"
+        ? cfgForAuth.gateway?.remote?.tlsFingerprint
+        : undefined;
+  const directGatewayTlsFingerprint = directGatewayTlsFingerprintRaw
+    ? normalizeTlsFingerprint(directGatewayTlsFingerprintRaw)
+    : undefined;
+  if (directGatewayTlsFingerprintRaw !== undefined && !directGatewayTlsFingerprint) {
+    return { ok: false, error: "Gateway TLS fingerprint is invalid." };
   }
+  const issued =
+    options.issuedBootstrap ??
+    (await issueDevicePairSetupBootstrapToken({
+      baseDir: options.pairingBaseDir,
+      profile: issuedBootstrapProfile,
+    }));
 
   return {
     ok: true,
     payload: {
       url: urlResult.url,
-      bootstrapToken: (
-        await issueDeviceBootstrapToken({
-          baseDir: options.pairingBaseDir,
-          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        })
-      ).token,
+      bootstrapToken: issued.token,
+      expiresAtMs: issued.expiresAtMs,
+      ...(directGatewayTlsFingerprint ? { tlsFingerprint: directGatewayTlsFingerprint } : {}),
     },
     authLabel: authLabel.label,
     urlSource: urlResult.source ?? "unknown",
+    access: resolvePairingSetupAccess(issuedBootstrapProfile),
+    accessDowngraded,
+    setupId: issued.setupId,
+    expiresAtMs: issued.expiresAtMs,
   };
 }

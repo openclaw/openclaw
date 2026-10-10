@@ -1,86 +1,108 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeApprovalActionState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.R
+import ai.openclaw.app.NodeApp
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
+import ai.openclaw.app.hasPermission
+import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.resolveNativeTextResource
+import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
+import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDesignTheme
-import ai.openclaw.app.ui.design.ClawErrorState
-import ai.openclaw.app.ui.design.ClawListItem
+import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
-import ai.openclaw.app.ui.design.ClawStatus
-import ai.openclaw.app.ui.design.ClawStatusPill
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.MascotMood
+import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.os.Build
-import android.os.SystemClock
-import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.core.UseCase
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCode2
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.WifiTethering
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -90,42 +112,241 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.google.mlkit.vision.barcode.BarcodeScanner
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.common.InputImage
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
-private enum class OnboardingStep {
+internal enum class OnboardingStep(
+  val mascotMood: MascotMood = MascotMood.Idle,
+) {
   Welcome,
   Gateway,
-  Recovery,
-  Permissions,
+  SetupCode,
+  EnterSetupCode,
+  Manual,
+  Recovery(MascotMood.Working),
+  NodeApproval(MascotMood.Thinking),
+  Permissions(MascotMood.Curious),
 }
 
-private const val GATEWAY_CONNECT_SETTLING_MS = 2_500L
+internal enum class OnboardingNodeApprovalSuccess {
+  ShowPermissions,
+  CompleteOnboarding,
+}
+
+/** Keeps post-pairing navigation in one closed mode so approval and permissions cannot form a cycle. */
+internal enum class OnboardingAccessStage(
+  val nodeApprovalBackStep: OnboardingStep,
+  val permissionsBackStep: OnboardingStep,
+  val nodeApprovalSuccess: OnboardingNodeApprovalSuccess,
+) {
+  DirectPermissions(
+    nodeApprovalBackStep = OnboardingStep.Recovery,
+    permissionsBackStep = OnboardingStep.Recovery,
+    nodeApprovalSuccess = OnboardingNodeApprovalSuccess.ShowPermissions,
+  ),
+  InitialApproval(
+    nodeApprovalBackStep = OnboardingStep.Recovery,
+    permissionsBackStep = OnboardingStep.NodeApproval,
+    nodeApprovalSuccess = OnboardingNodeApprovalSuccess.ShowPermissions,
+  ),
+  PermissionReapproval(
+    nodeApprovalBackStep = OnboardingStep.Permissions,
+    permissionsBackStep = OnboardingStep.Recovery,
+    nodeApprovalSuccess = OnboardingNodeApprovalSuccess.CompleteOnboarding,
+  ),
+}
+
+internal enum class OnboardingGatewayInputSource(
+  val recoveryBackState: OnboardingBackState = OnboardingBackState(OnboardingStep.SetupCode),
+) {
+  SetupScanner(OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = true)),
+  SetupGallery,
+  SetupEntry,
+  Manual(OnboardingBackState(OnboardingStep.Manual)),
+}
+
+internal enum class OnboardingErrorCode(
+  val endpointError: GatewayEndpointValidationError? = null,
+  val endpointInputSource: GatewayEndpointInputSource? = null,
+  val message: NativeText? = null,
+) {
+  None,
+  SetupCodeMissing(message = nativeText("Enter the setup code from openclaw qr.")),
+  SetupCodeRejected(message = nativeText("Setup code was not accepted. Generate a fresh code with openclaw qr.")),
+  SetupCodeInsecureRemote(
+    GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+    GatewayEndpointInputSource.SETUP_CODE,
+  ),
+  SetupCodeIpv6ZoneId(
+    GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
+    GatewayEndpointInputSource.SETUP_CODE,
+  ),
+  SetupCodeInvalidUrl(
+    GatewayEndpointValidationError.INVALID_URL,
+    GatewayEndpointInputSource.SETUP_CODE,
+  ),
+  InvalidSetupQr(message = nativeText("That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again.")),
+  QrInsecureRemote(
+    GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+    GatewayEndpointInputSource.QR_SCAN,
+  ),
+  QrIpv6ZoneId(
+    GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
+    GatewayEndpointInputSource.QR_SCAN,
+  ),
+  QrInvalidUrl(
+    GatewayEndpointValidationError.INVALID_URL,
+    GatewayEndpointInputSource.QR_SCAN,
+  ),
+  ManualTokenLooksLikeSetupCode(message = nativeText("That looks like a setup code. Go back and choose Setup Gateway, then Use setup code.")),
+  ManualInsecureRemote(
+    GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+    GatewayEndpointInputSource.MANUAL,
+  ),
+  ManualIpv6ZoneId(
+    GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
+    GatewayEndpointInputSource.MANUAL,
+  ),
+  ManualInvalidUrl(
+    GatewayEndpointValidationError.INVALID_URL,
+    GatewayEndpointInputSource.MANUAL,
+  ),
+  ImageReadFailed(message = nativeText("Could not read that image. Choose a clear screenshot or image of the QR from openclaw qr.")),
+  ImageMissingQr(message = nativeText("No setup QR code was found in that image. Choose the QR generated by openclaw qr, or enter the setup code manually.")),
+  ImageQrReadFailed(message = nativeText("Could not read a QR code from that image. Choose a clearer image or enter the setup code manually.")),
+  CameraStartFailed(message = nativeText("Could not start the camera. Choose a QR image from gallery or enter the setup code manually.")),
+}
+
+internal val OnboardingErrorCodeSaver =
+  Saver<OnboardingErrorCode, String>(
+    save = { code -> code.name },
+    restore = { saved -> OnboardingErrorCode.entries.firstOrNull { it.name == saved } ?: OnboardingErrorCode.None },
+  )
+
+internal fun onboardingErrorCode(
+  error: GatewayEndpointValidationError,
+  source: GatewayEndpointInputSource,
+): OnboardingErrorCode =
+  OnboardingErrorCode.entries.firstOrNull {
+    it.endpointError == error && it.endpointInputSource == source
+  } ?: OnboardingErrorCode.None
+
+internal fun OnboardingErrorCode.nativeTextOrNull(): NativeText? {
+  val error = endpointError
+  val source = endpointInputSource
+  return if (error != null && source != null) gatewayEndpointValidationText(error, source) else message
+}
+
+/** Visible errors outrank step defaults; connected recovery is the only pre-handoff success surface. */
+internal fun onboardingMascotMood(
+  step: OnboardingStep,
+  recoveryState: GatewayRecoveryUiState? = null,
+  setupErrorCode: OnboardingErrorCode = OnboardingErrorCode.None,
+  setupScanErrorCode: OnboardingErrorCode = OnboardingErrorCode.None,
+): MascotMood {
+  if (
+    setupErrorCode != OnboardingErrorCode.None ||
+    setupScanErrorCode != OnboardingErrorCode.None ||
+    recoveryState == GatewayRecoveryUiState.Failed
+  ) {
+    return MascotMood.Sad
+  }
+  return if (step == OnboardingStep.Recovery && recoveryState == GatewayRecoveryUiState.Connected) MascotMood.Celebrating else step.mascotMood
+}
+
+private const val NODE_APPROVAL_REFRESH_OBSERVE_TIMEOUT_MS = 750L
+private const val NODE_APPROVAL_AUTO_REFRESH_MS = 2_000L
+private const val ANDROID_SETUP_GUIDE_URL = "https://docs.openclaw.ai/platforms/android"
+private val OnboardingHorizontalPadding = 24.dp
+private val OnboardingTopPadding = 12.dp
+private val OnboardingBottomPadding = 20.dp
+private val OnboardingHeroTopOffset = 70.dp
+private val OnboardingHeroTopOffsetAfterHeader = 0.dp
+private val OnboardingHeroMarkSize = 78.dp
+private val OnboardingButtonHeight = 56.dp
+private val OnboardingActionGap = 10.dp
+private val OnboardingBottomInset = 16.dp
+private val OnboardingScannerMaxWidth = 360.dp
+private const val OnboardingFormStackBreakpointDp = 340f
+private const val OnboardingLargeFontScale = 1.3f
+
+private fun onboardingContentPadding() =
+  PaddingValues(
+    start = OnboardingHorizontalPadding,
+    top = OnboardingTopPadding,
+    end = OnboardingHorizontalPadding,
+    bottom = OnboardingBottomPadding,
+  )
+
+private fun Modifier.onboardingActionButton() = fillMaxWidth().height(OnboardingButtonHeight)
+
+internal fun onboardingFormUsesStackedLayout(
+  availableWidthDp: Float,
+  fontScale: Float,
+): Boolean = availableWidthDp < OnboardingFormStackBreakpointDp || fontScale >= OnboardingLargeFontScale
+
+internal data class OnboardingBackState(
+  val step: OnboardingStep,
+  val inlineQrScannerActive: Boolean = false,
+)
+
+internal fun onboardingBackStateAfterBack(
+  step: OnboardingStep,
+  lastGatewayInputSource: OnboardingGatewayInputSource = OnboardingGatewayInputSource.SetupScanner,
+  setupCodeEntryOpenedFromScanner: Boolean = false,
+  accessStage: OnboardingAccessStage = OnboardingAccessStage.InitialApproval,
+): OnboardingBackState? =
+  when (step) {
+    OnboardingStep.Welcome -> null
+
+    OnboardingStep.Gateway -> OnboardingBackState(OnboardingStep.Welcome)
+
+    OnboardingStep.SetupCode,
+    OnboardingStep.Manual,
+    -> OnboardingBackState(OnboardingStep.Gateway)
+
+    OnboardingStep.EnterSetupCode -> OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = setupCodeEntryOpenedFromScanner)
+
+    OnboardingStep.Recovery -> lastGatewayInputSource.recoveryBackState
+
+    OnboardingStep.NodeApproval -> OnboardingBackState(accessStage.nodeApprovalBackStep)
+
+    OnboardingStep.Permissions -> OnboardingBackState(accessStage.permissionsBackStep)
+  }
 
 /** First-run Android onboarding flow for gateway pairing and permission setup. */
 @Composable
@@ -134,84 +355,98 @@ fun OnboardingFlow(
   modifier: Modifier = Modifier,
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val appearanceThemeFamily by viewModel.appearanceThemeFamily.collectAsState()
+  val appearanceAccentArgb by viewModel.appearanceAccentArgb.collectAsState()
+  val gatewayAccentArgb by viewModel.gatewayAccentArgb.collectAsState()
   val onboardingDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
-  ClawDesignTheme(dark = onboardingDark) {
+  ClawDesignTheme(dark = onboardingDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
     val context = LocalContext.current
-    val statusText by viewModel.statusText.collectAsState()
-    val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
-    val isConnected by viewModel.isConnected.collectAsState()
+    val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+    val statusText = gatewayConnectionDisplay.statusText
+    val gatewayConnectionProblem = gatewayConnectionDisplay.problem
+    val isConnected = gatewayConnectionDisplay.isConnected
     val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-    val nodeCapabilityApprovalState by viewModel.nodeCapabilityApprovalState.collectAsState()
-    val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
+    val nodeCapabilityApproval by viewModel.nodeCapabilityApproval.collectAsState()
+    val nodeApprovalAction by viewModel.nodeApprovalAction.collectAsState()
+    val nodesDevicesRefreshing by viewModel.nodesDevicesRefreshing.collectAsState()
     val serverName by viewModel.serverName.collectAsState()
-    val remoteAddress by viewModel.remoteAddress.collectAsState()
     val gateways by viewModel.gateways.collectAsState()
-    val discoveryStatusText by viewModel.discoveryStatusText.collectAsState()
-    val savedToken by viewModel.gatewayToken.collectAsState()
+    val savedManualHost by viewModel.manualHost.collectAsState()
+    val savedManualPort by viewModel.manualPort.collectAsState()
+    val savedManualTls by viewModel.manualTls.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
+    var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
+    var setupCode by rememberSaveable { mutableStateOf("") }
+    var manualHost by rememberSaveable { mutableStateOf("") }
+    var manualPort by rememberSaveable { mutableStateOf("18789") }
+    var manualTls by rememberSaveable { mutableStateOf(false) }
+    var token by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var setupErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
+    var setupScanErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
+    var attemptedGatewayName by rememberSaveable { mutableStateOf<String?>(null) }
+    var lastGatewayInputSource by rememberSaveable { mutableStateOf(OnboardingGatewayInputSource.SetupScanner) }
+    var inlineQrScannerActive by rememberSaveable { mutableStateOf(false) }
+    var setupCodeEntryOpenedFromScanner by rememberSaveable { mutableStateOf(false) }
+    var accessStage by rememberSaveable { mutableStateOf(OnboardingAccessStage.InitialApproval) }
+    var nodeApprovalCheckRequested by rememberSaveable { mutableStateOf(false) }
+    var nodeApprovalCheckRefreshStarted by rememberSaveable { mutableStateOf(false) }
+    var nodeApprovalAutoContinueEnabled by rememberSaveable { mutableStateOf(false) }
+    var nativeNodeApprovalRequested by rememberSaveable { mutableStateOf(false) }
     val ready =
       canFinishOnboarding(
         isConnected = isConnected,
         isNodeConnected = isNodeConnected,
-        nodeCapabilityApprovalState = nodeCapabilityApprovalState,
-      )
+        nodeCapabilityApproval = nodeCapabilityApproval,
+      ) &&
+        (
+          accessStage != OnboardingAccessStage.PermissionReapproval ||
+            nodeCapabilityApproval == GatewayNodeCapabilityApproval.Unsupported ||
+            nodeApprovalAction.verified
+        )
 
-    var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
-    var setupCode by rememberSaveable { mutableStateOf("") }
-    var manualHost by rememberSaveable { mutableStateOf("127.0.0.1") }
-    var manualPort by rememberSaveable { mutableStateOf("18789") }
-    var manualTls by rememberSaveable { mutableStateOf(false) }
-    var token by rememberSaveable { mutableStateOf(savedToken) }
-    var password by rememberSaveable { mutableStateOf("") }
-    var setupError by rememberSaveable { mutableStateOf<String?>(null) }
-    var attemptedConnect by rememberSaveable { mutableStateOf(false) }
-    var attemptedGatewayName by rememberSaveable { mutableStateOf<String?>(null) }
-    var connectAttemptStartedAtMs by rememberSaveable { mutableLongStateOf(0L) }
-    var recoveryNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    OpenClawSystemBarAppearance(lightAppearance = !onboardingDark)
 
-    OpenClawSystemBarAppearance(lightAppearance = !onboardingDark && step != OnboardingStep.Welcome)
-
-    val qrScannerOptions =
-      remember {
-        GmsBarcodeScannerOptions
-          .Builder()
-          .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-          .build()
+    var cameraPermissionGranted by rememberSaveable {
+      mutableStateOf(context.hasPermission(Manifest.permission.CAMERA))
+    }
+    val setupBarcodeScanner = remember { createSetupBarcodeScanner() }
+    val cameraPermissionLauncher =
+      rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        cameraPermissionGranted = granted
       }
-    val qrScanner = remember(context, qrScannerOptions) { GmsBarcodeScanning.getClient(context, qrScannerOptions) }
 
     val permissionState = rememberPermissionState(context = context, viewModel = viewModel)
 
-    fun connectToGatewayConfig(
-      config: GatewayConnectConfig,
-      resetSetupAuth: Boolean,
-    ) {
-      setupError = null
-      attemptedGatewayName = null
-      attemptedConnect = true
-      connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-      viewModel.saveGatewayConfigAndConnect(
-        host = config.host,
-        port = config.port,
-        tls = config.tls,
-        token = config.token,
-        bootstrapToken = config.bootstrapToken,
-        password = config.password,
-        resetSetupAuth = resetSetupAuth,
-      )
-      step = OnboardingStep.Recovery
+    DisposableEffect(setupBarcodeScanner) {
+      onDispose { setupBarcodeScanner.close() }
     }
 
-    fun resolveCurrentGatewayConfig(setupCodeValue: String = setupCode): GatewayConnectConfig? =
-      resolveOnboardingGatewayConnectConfig(
-        setupCode = setupCodeValue,
-        manualHost = manualHost,
-        manualPort = manualPort,
-        manualTls = manualTls,
-        token = token,
-        password = password,
-      )
+    fun goBack() {
+      val next =
+        onboardingBackStateAfterBack(
+          step = step,
+          lastGatewayInputSource = lastGatewayInputSource,
+          setupCodeEntryOpenedFromScanner = setupCodeEntryOpenedFromScanner,
+          accessStage = accessStage,
+        ) ?: return
+      permissionState.cancelRequest()
+      inlineQrScannerActive = next.inlineQrScannerActive
+      setupCodeEntryOpenedFromScanner = false
+      step = next.step
+    }
+
+    BackHandler(
+      enabled =
+        onboardingBackStateAfterBack(
+          step = step,
+          lastGatewayInputSource = lastGatewayInputSource,
+          accessStage = accessStage,
+        ) != null,
+    ) {
+      goBack()
+    }
 
     LaunchedEffect(startAtGatewaySetup) {
       if (startAtGatewaySetup) {
@@ -221,414 +456,1344 @@ fun OnboardingFlow(
     }
 
     LaunchedEffect(step) {
-      if (step == OnboardingStep.Gateway) {
+      if (step == OnboardingStep.Gateway || step == OnboardingStep.Manual) {
         viewModel.startGatewayDiscovery()
       }
     }
 
-    LaunchedEffect(ready, attemptedConnect) {
-      if (attemptedConnect && ready) {
-        step = OnboardingStep.Permissions
+    fun resetNodeApprovalCheck(autoContinue: Boolean = false) {
+      nativeNodeApprovalRequested = false
+      nodeApprovalCheckRequested = false
+      nodeApprovalCheckRefreshStarted = false
+      nodeApprovalAutoContinueEnabled = autoContinue
+    }
+
+    fun advanceAfterNodeApproval() {
+      resetNodeApprovalCheck()
+      when (accessStage.nodeApprovalSuccess) {
+        OnboardingNodeApprovalSuccess.ShowPermissions -> {
+          accessStage = OnboardingAccessStage.InitialApproval
+          step = OnboardingStep.Permissions
+        }
+
+        OnboardingNodeApprovalSuccess.CompleteOnboarding -> {
+          viewModel.setOnboardingCompleted(true)
+        }
       }
     }
 
-    LaunchedEffect(step, connectAttemptStartedAtMs) {
-      if (step != OnboardingStep.Recovery || connectAttemptStartedAtMs <= 0L) return@LaunchedEffect
-      recoveryNowMs = SystemClock.elapsedRealtime()
-      delay(GATEWAY_CONNECT_SETTLING_MS)
-      recoveryNowMs = SystemClock.elapsedRealtime()
+    LaunchedEffect(step, ready, nodeApprovalAction.verified, nativeNodeApprovalRequested) {
+      if (step == OnboardingStep.NodeApproval && nativeNodeApprovalRequested && nodeApprovalAction.verified && ready) {
+        advanceAfterNodeApproval()
+      }
     }
 
-    pendingTrust?.let { prompt ->
-      AlertDialog(
-        onDismissRequest = viewModel::declineGatewayTrustPrompt,
-        containerColor = ClawTheme.colors.surfaceRaised,
-        title = {
-          Text(
-            stringResource(R.string.trust_this_gateway),
-            style = ClawTheme.type.section,
-            color = ClawTheme.colors.text,
-          )
-        },
-        text = {
-          val message =
-            if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-              stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-            } else {
-              stringResource(
-                R.string.gateway_trust_changed,
-                prompt.previousFingerprintSha256,
-                prompt.fingerprintSha256,
-              )
+    LaunchedEffect(nodeApprovalCheckRequested, nodesDevicesRefreshing) {
+      if (nodeApprovalCheckRequested && nodesDevicesRefreshing) {
+        nodeApprovalCheckRefreshStarted = true
+      }
+    }
+
+    LaunchedEffect(step, nodeApprovalCheckRequested, nodeApprovalCheckRefreshStarted, nodesDevicesRefreshing) {
+      if (
+        !nodeApprovalCheckShouldClearUnobservedRefresh(
+          step = step,
+          checkRequested = nodeApprovalCheckRequested,
+          refreshStarted = nodeApprovalCheckRefreshStarted,
+          nodesDevicesRefreshing = nodesDevicesRefreshing,
+        )
+      ) {
+        return@LaunchedEffect
+      }
+      delay(NODE_APPROVAL_REFRESH_OBSERVE_TIMEOUT_MS)
+      if (
+        nodeApprovalCheckShouldClearUnobservedRefresh(
+          step = step,
+          checkRequested = nodeApprovalCheckRequested,
+          refreshStarted = nodeApprovalCheckRefreshStarted,
+          nodesDevicesRefreshing = nodesDevicesRefreshing,
+        )
+      ) {
+        nodeApprovalCheckRequested = false
+      }
+    }
+
+    LaunchedEffect(step, ready, nodeApprovalCheckRequested, nodeApprovalCheckRefreshStarted, nodesDevicesRefreshing) {
+      if (
+        step == OnboardingStep.NodeApproval &&
+        nodeApprovalCheckCanContinue(
+          checkRequested = nodeApprovalCheckRequested,
+          refreshStarted = nodeApprovalCheckRefreshStarted,
+          nodesDevicesRefreshing = nodesDevicesRefreshing,
+          ready = ready,
+        )
+      ) {
+        advanceAfterNodeApproval()
+      }
+    }
+
+    LaunchedEffect(step, ready, nodeCapabilityApproval, nodeApprovalAutoContinueEnabled, nativeNodeApprovalRequested) {
+      if (
+        nodeApprovalShouldAutoContinue(
+          step = step,
+          ready = ready,
+          nodeCapabilityApproval = nodeCapabilityApproval,
+          autoContinueEnabled = nodeApprovalAutoContinueEnabled && !nativeNodeApprovalRequested,
+        )
+      ) {
+        advanceAfterNodeApproval()
+      }
+    }
+
+    LaunchedEffect(step, nodeCapabilityApproval, nodesDevicesRefreshing) {
+      if (
+        step != OnboardingStep.NodeApproval ||
+        !nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval) ||
+        nodesDevicesRefreshing
+      ) {
+        return@LaunchedEffect
+      }
+      while (true) {
+        delay(NODE_APPROVAL_AUTO_REFRESH_MS)
+        viewModel.refreshNodesDevices()
+      }
+    }
+
+    fun connectGateway(
+      plan: GatewayConnectPlan,
+      inputSource: OnboardingGatewayInputSource,
+      attemptedName: String? = null,
+    ) {
+      setupErrorCode = OnboardingErrorCode.None
+      setupScanErrorCode = OnboardingErrorCode.None
+      attemptedGatewayName = attemptedName
+      lastGatewayInputSource = inputSource
+      viewModel.saveGatewayConfigAndConnect(plan)
+      step = OnboardingStep.Recovery
+    }
+
+    fun continueFromGatewayPairing() {
+      when (
+        gatewayPairingContinueDestination(
+          ready = ready,
+          nodeCapabilityApproval = nodeCapabilityApproval,
+        )
+      ) {
+        OnboardingStep.Permissions -> {
+          accessStage = OnboardingAccessStage.DirectPermissions
+          step = OnboardingStep.Permissions
+        }
+
+        OnboardingStep.NodeApproval -> {
+          resetNodeApprovalCheck(autoContinue = true)
+          accessStage = OnboardingAccessStage.InitialApproval
+          step = OnboardingStep.NodeApproval
+        }
+
+        else -> {
+          viewModel.refreshNodesDevices()
+          viewModel.refreshGatewayConnection()
+        }
+      }
+    }
+
+    fun checkNodeApproval() {
+      nodeApprovalCheckRequested = true
+      nodeApprovalCheckRefreshStarted = false
+      viewModel.refreshNodesDevices()
+      viewModel.refreshGatewayConnection()
+    }
+
+    fun showSetupScanError(errorCode: OnboardingErrorCode) {
+      setupErrorCode = OnboardingErrorCode.None
+      setupScanErrorCode = errorCode
+      inlineQrScannerActive = false
+    }
+
+    fun pairFromSetupCode(
+      code: String,
+      inputSource: OnboardingGatewayInputSource,
+    ) {
+      val trimmed = code.trim()
+      if (trimmed.isEmpty()) {
+        setupErrorCode = OnboardingErrorCode.SetupCodeMissing
+        return
+      }
+      val plan =
+        resolveGatewayConnectPlan(
+          useSetupCode = true,
+          setupCode = trimmed,
+          savedManualHost = manualHost,
+          savedManualPort = manualPort,
+          savedManualTls = manualTls,
+          manualHostInput = manualHost,
+          manualPortInput = manualPort,
+          manualTlsInput = manualTls,
+          bootstrapTokenInput = "",
+          tokenInput = token,
+          passwordInput = password,
+        )
+      if (plan == null) {
+        val endpointError =
+          decodeGatewaySetupCode(trimmed)
+            ?.let { parseGatewayEndpointResult(it.url).error }
+        setupErrorCode =
+          endpointError?.let {
+            onboardingErrorCode(it, GatewayEndpointInputSource.SETUP_CODE)
+          } ?: OnboardingErrorCode.SetupCodeRejected
+        return
+      }
+      connectGateway(plan = plan, inputSource = inputSource)
+    }
+
+    fun handleScannedSetupCode(
+      rawValue: String,
+      inputSource: OnboardingGatewayInputSource,
+    ) {
+      val scanned = resolveScannedSetupCodeResult(rawValue)
+      if (scanned.setupCode == null) {
+        val errorCode =
+          when (scanned.error) {
+            GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+            GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
+            -> {
+              onboardingErrorCode(scanned.error, GatewayEndpointInputSource.QR_SCAN)
             }
-          Text(
-            message,
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-          )
-        },
-        confirmButton = {
-          TextButton(onClick = viewModel::acceptGatewayTrustPrompt) {
-            Text(stringResource(R.string.trust_and_continue))
+
+            else -> {
+              OnboardingErrorCode.InvalidSetupQr
+            }
           }
-        },
-        dismissButton = {
-          TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
-            Text(stringResource(R.string.cancel))
+        showSetupScanError(errorCode)
+        return
+      }
+      setupCode = scanned.setupCode
+      setupScanErrorCode = OnboardingErrorCode.None
+      pairFromSetupCode(scanned.setupCode, inputSource = inputSource)
+    }
+
+    fun pairFromManualFields() {
+      if (manualTokenLooksLikeSetupCode(token)) {
+        setupErrorCode = OnboardingErrorCode.ManualTokenLooksLikeSetupCode
+        return
+      }
+      val transport =
+        gatewayManualTransportPresentation(
+          hostInput = manualHost,
+          requestedTls = manualTls,
+        )
+      val plan =
+        resolveGatewayConnectPlan(
+          useSetupCode = false,
+          setupCode = "",
+          savedManualHost = savedManualHost,
+          savedManualPort = savedManualPort.toString(),
+          savedManualTls = savedManualTls,
+          manualHostInput = manualHost,
+          manualPortInput = manualPort,
+          manualTlsInput = transport.effectiveTls,
+          bootstrapTokenInput = "",
+          tokenInput = token,
+          passwordInput = password,
+        )
+      if (plan == null) {
+        val endpointError =
+          composeGatewayManualUrl(manualHost, manualPort, transport.effectiveTls)
+            ?.let(::parseGatewayEndpointResult)
+            ?.error
+            ?: GatewayEndpointValidationError.INVALID_URL
+        setupErrorCode = onboardingErrorCode(endpointError, GatewayEndpointInputSource.MANUAL)
+        return
+      }
+      connectGateway(plan = plan, inputSource = OnboardingGatewayInputSource.Manual)
+    }
+
+    val galleryPicker =
+      rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        setupErrorCode = OnboardingErrorCode.None
+        val image =
+          try {
+            InputImage.fromFilePath(context, uri)
+          } catch (_: Exception) {
+            showSetupScanError(OnboardingErrorCode.ImageReadFailed)
+            return@rememberLauncherForActivityResult
           }
+        setupBarcodeScanner
+          .process(image)
+          .addOnSuccessListener { barcodes ->
+            val rawValue = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
+            if (rawValue == null) {
+              showSetupScanError(OnboardingErrorCode.ImageMissingQr)
+              return@addOnSuccessListener
+            }
+            handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupGallery)
+          }.addOnFailureListener {
+            showSetupScanError(OnboardingErrorCode.ImageQrReadFailed)
+          }
+      }
+
+    setupScanErrorCode.nativeTextOrNull()?.let { message ->
+      SetupScanErrorDialog(
+        message = message.resolveNativeTextResource(),
+        mascotMood =
+          onboardingMascotMood(
+            step = step,
+            setupScanErrorCode = setupScanErrorCode,
+          ),
+        onDismiss = { setupScanErrorCode = OnboardingErrorCode.None },
+        onChooseAnotherImage = {
+          setupScanErrorCode = OnboardingErrorCode.None
+          galleryPicker.launch("image/*")
+        },
+        onEnterSetupCode = {
+          setupScanErrorCode = OnboardingErrorCode.None
+          setupErrorCode = OnboardingErrorCode.None
+          inlineQrScannerActive = false
+          setupCodeEntryOpenedFromScanner = false
+          step = OnboardingStep.EnterSetupCode
         },
       )
     }
 
+    pendingTrust?.let { prompt ->
+      GatewayTrustDialog(
+        prompt = prompt,
+        confirmLabel = nativeString("Trust"),
+        cancelLabel = nativeString("Cancel"),
+        onAccept = { viewModel.acceptGatewayTrustPrompt(prompt, it) },
+        onUseSystemTrust = { viewModel.useSystemGatewayTrustPrompt(prompt) },
+        onDecline = { viewModel.declineGatewayTrustPrompt(prompt) },
+      )
+    }
+
     when (step) {
-      OnboardingStep.Welcome ->
-        ClawDesignTheme(dark = true) {
-          WelcomeScreen(
-            modifier = modifier,
-            onConnect = { step = OnboardingStep.Gateway },
-          )
-        }
-      OnboardingStep.Gateway ->
+      OnboardingStep.Welcome -> {
+        WelcomeScreen(
+          modifier = modifier,
+          mascotMood = onboardingMascotMood(step = step),
+          onConnect = { step = OnboardingStep.Gateway },
+        )
+      }
+
+      OnboardingStep.Gateway -> {
         GatewaySetupScreen(
           modifier = modifier,
+          onBack = ::goBack,
+          onSetupCode = {
+            setupErrorCode = OnboardingErrorCode.None
+            setupScanErrorCode = OnboardingErrorCode.None
+            inlineQrScannerActive = false
+            step = OnboardingStep.SetupCode
+          },
+          onManualSetup = {
+            setupErrorCode = OnboardingErrorCode.None
+            setupScanErrorCode = OnboardingErrorCode.None
+            val nearbyGateway = gateways.firstOrNull()
+            if (nearbyGateway == null) {
+              attemptedGatewayName = null
+            } else {
+              manualHost = nearbyGateway.host
+              manualPort = nearbyGatewayManualPort(nearbyGateway)
+              manualTls = nearbyGatewayManualTls(nearbyGateway)
+              attemptedGatewayName = nearbyGateway.name
+            }
+            step = OnboardingStep.Manual
+          },
+        )
+      }
+
+      OnboardingStep.SetupCode -> {
+        SetupCodeInstructionsScreen(
+          modifier = modifier,
+          scannerActive = inlineQrScannerActive,
+          cameraPermissionGranted = cameraPermissionGranted,
+          scanner = setupBarcodeScanner,
+          onBack = ::goBack,
+          onScan = {
+            setupErrorCode = OnboardingErrorCode.None
+            setupScanErrorCode = OnboardingErrorCode.None
+            inlineQrScannerActive = true
+            if (!cameraPermissionGranted) {
+              cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+          },
+          onRequestCameraPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+          onCodeScanned = { rawValue -> handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupScanner) },
+          onCameraError = {
+            showSetupScanError(OnboardingErrorCode.CameraStartFailed)
+          },
+          onCloseScanner = { inlineQrScannerActive = false },
+          onChooseFromGallery = {
+            inlineQrScannerActive = false
+            galleryPicker.launch("image/*")
+          },
+          onEnterSetupCode = {
+            setupErrorCode = OnboardingErrorCode.None
+            setupScanErrorCode = OnboardingErrorCode.None
+            setupCodeEntryOpenedFromScanner = inlineQrScannerActive
+            inlineQrScannerActive = false
+            step = OnboardingStep.EnterSetupCode
+          },
+        )
+      }
+
+      OnboardingStep.EnterSetupCode -> {
+        SetupCodeEntryScreen(
+          modifier = modifier,
           setupCode = setupCode,
+          error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
+          mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
+          onBack = ::goBack,
+          onSetupCodeChange = {
+            setupCode = it
+            setupErrorCode = OnboardingErrorCode.None
+          },
+          onUseSetupCode = { pairFromSetupCode(setupCode, inputSource = OnboardingGatewayInputSource.SetupEntry) },
+        )
+      }
+
+      OnboardingStep.Manual -> {
+        ManualGatewaySetupScreen(
+          modifier = modifier,
           manualHost = manualHost,
           manualPort = manualPort,
           manualTls = manualTls,
           token = token,
           password = password,
-          nearbyGatewayName = gateways.firstOrNull()?.name,
-          discoveryStatusText = discoveryStatusText,
-          discoveryStarted = runtimeInitialized,
-          error = setupError,
-          onBack = { step = OnboardingStep.Welcome },
-          onScan = {
-            setupError = null
-            qrScanner
-              .startScan()
-              .addOnSuccessListener { barcode ->
-                val scanned = resolveScannedSetupCodeResult(barcode.rawValue.orEmpty())
-                val scannedSetupCode = scanned.setupCode
-                if (scannedSetupCode == null) {
-                  setupError =
-                    gatewayEndpointValidationMessage(
-                      scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
-                      GatewayEndpointInputSource.QR_SCAN,
-                    )
-                  return@addOnSuccessListener
-                }
-                val config = resolveCurrentGatewayConfig(setupCodeValue = scannedSetupCode)
-                if (config == null) {
-                  setupError =
-                    gatewayEndpointValidationMessage(
-                      GatewayEndpointValidationError.INVALID_URL,
-                      GatewayEndpointInputSource.QR_SCAN,
-                    )
-                  return@addOnSuccessListener
-                }
-                setupCode = scannedSetupCode
-                connectToGatewayConfig(config, resetSetupAuth = true)
-              }.addOnFailureListener { setupError = "Could not open the scanner." }
-          },
-          onSetupCodeChange = {
-            setupCode = it
-            setupError = null
-          },
+          error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
+          mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
+          onBack = ::goBack,
           onManualHostChange = {
             manualHost = it
-            setupError = null
+            setupErrorCode = OnboardingErrorCode.None
           },
           onManualPortChange = {
             manualPort = it
-            setupError = null
+            setupErrorCode = OnboardingErrorCode.None
           },
           onManualTlsChange = { manualTls = it },
-          onTokenChange = { token = it },
-          onPasswordChange = { password = it },
-          onUseNearby = {
-            val endpoint = gateways.firstOrNull() ?: return@GatewaySetupScreen
-            attemptedGatewayName = endpoint.name
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            viewModel.connectInBackground(endpoint)
-            step = OnboardingStep.Recovery
+          onTokenChange = {
+            token = it
+            setupErrorCode = OnboardingErrorCode.None
           },
-          onPair = {
-            val config = resolveCurrentGatewayConfig()
-            if (config == null) {
-              setupError = "Enter a setup code or a valid gateway URL."
-              return@GatewaySetupScreen
-            }
-            connectToGatewayConfig(config, resetSetupAuth = true)
+          onPasswordChange = {
+            password = it
+            setupErrorCode = OnboardingErrorCode.None
           },
+          onPair = ::pairFromManualFields,
         )
-      OnboardingStep.Recovery ->
+      }
+
+      OnboardingStep.Recovery -> {
         GatewayRecoveryScreen(
           modifier = modifier,
           statusText = statusText,
           serverName = serverName,
           attemptedGatewayName = attemptedGatewayName,
-          remoteAddress = remoteAddress,
-          ready = ready,
-          nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+          gatewayPaired = isConnected,
+          gatewayPairingCanContinue =
+            isConnected &&
+              gatewayPairingContinueDestination(
+                ready = ready,
+                nodeCapabilityApproval = nodeCapabilityApproval,
+              ) != null,
           gatewayConnectionProblem = gatewayConnectionProblem,
-          connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
-          onBack = { step = OnboardingStep.Gateway },
-          onRetry = {
-            val config = resolveCurrentGatewayConfig() ?: return@GatewayRecoveryScreen
-            connectToGatewayConfig(config, resetSetupAuth = false)
-          },
-          onEdit = { step = OnboardingStep.Gateway },
-          onContinue = { step = OnboardingStep.Permissions },
+          onBack = ::goBack,
+          onRetry = viewModel::refreshGatewayConnection,
+          onContinue = ::continueFromGatewayPairing,
         )
-      OnboardingStep.Permissions ->
+      }
+
+      OnboardingStep.NodeApproval -> {
+        NodeApprovalScreen(
+          modifier = modifier,
+          approval = nodeCapabilityApproval,
+          action = nodeApprovalAction,
+          checkingApproval =
+            nodeApprovalCheckingInProgress(
+              checkRequested = nodeApprovalCheckRequested,
+              refreshStarted = nodeApprovalCheckRefreshStarted,
+              nodesDevicesRefreshing = nodesDevicesRefreshing,
+            ),
+          checkRequested = nodeApprovalCheckRequested,
+          ready = ready,
+          onBack = ::goBack,
+          onCopyCommand = { command -> context.copyTextWithConfirmation("OpenClaw pairing approval command", command, nativeText("Approval command copied").resolveNativeText()) },
+          onCheckApproval = ::checkNodeApproval,
+          onApprove = { requestId ->
+            nodeApprovalCheckRequested = false
+            nodeApprovalCheckRefreshStarted = false
+            nativeNodeApprovalRequested = true
+            viewModel.approveNodeCapabilities(requestId)
+          },
+        )
+      }
+
+      OnboardingStep.Permissions -> {
         PermissionSetupScreen(
           modifier = modifier,
           permissionState = permissionState,
-          onBack = { step = OnboardingStep.Gateway },
+          onBack = ::goBack,
           onContinue = {
+            val requiresNodeSurfaceRefresh = permissionState.requiresNodeApprovalAfterApply
             permissionState.applyToViewModel()
-            viewModel.setOnboardingCompleted(true)
+            if (
+              permissionContinueNeedsNodeApproval(
+                ready = ready,
+                requiresNodeApprovalAfterApply = requiresNodeSurfaceRefresh,
+                nodeCapabilityApproval = nodeCapabilityApproval,
+              )
+            ) {
+              accessStage = OnboardingAccessStage.PermissionReapproval
+              resetNodeApprovalCheck()
+              viewModel.refreshNodesDevices()
+              viewModel.refreshGatewayConnection()
+              step = OnboardingStep.NodeApproval
+            } else {
+              if (requiresNodeSurfaceRefresh) {
+                viewModel.refreshGatewayConnection()
+              }
+              viewModel.setOnboardingCompleted(true)
+            }
           },
         )
+      }
     }
   }
 }
 
 @Composable
-private fun WelcomeScreen(
+internal fun WelcomeScreen(
+  mascotMood: MascotMood,
   onConnect: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val welcomeBackground =
-    Brush.verticalGradient(
-      colors =
-        listOf(
-          Color(0xFFFF4D4D),
-          Color(0xFFD73332),
-          Color(0xFF991B1B),
-          Color(0xFF260707),
-        ),
-    )
-
-  Box(
-    modifier =
-      modifier
-        .fillMaxSize()
-        .background(welcomeBackground)
-        .windowInsetsPadding(WindowInsets.safeDrawing)
-        .padding(horizontal = 24.dp, vertical = 18.dp),
+  OnboardingIntroScreen(
+    title = nativeString("Welcome to OpenClaw"),
+    subtitle = nativeString("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools."),
+    mark = { WelcomeLogo(mood = mascotMood, announceLogo = true) },
+    modifier = modifier,
+    actions = {
+      ClawPrimaryButton(text = nativeString("Continue"), onClick = onConnect, modifier = Modifier.onboardingActionButton())
+    },
   ) {
-    Column(
-      modifier = Modifier.fillMaxSize(),
-      horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-      Spacer(modifier = Modifier.height(96.dp))
-      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        WelcomeLogo()
+    WelcomeChecklist()
+    Spacer(modifier = Modifier.height(16.dp))
+    SecurityNotice()
+  }
+}
+
+@Composable
+private fun WelcomeLogo(
+  mood: MascotMood,
+  // Only the welcome hero announces the logo; status/error reuses are
+  // decorative and must stay silent for TalkBack.
+  announceLogo: Boolean = false,
+) {
+  Surface(
+    modifier = Modifier.size(OnboardingHeroMarkSize),
+    shape = CircleShape,
+    color = ClawTheme.colors.surfaceRaised,
+    contentColor = Color.Unspecified,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.Center) {
+      OpenClawMascot(
+        contentDescription = if (announceLogo) nativeString("OpenClaw logo") else null,
+        modifier = Modifier.fillMaxSize(),
+        mood = mood,
+      )
+    }
+  }
+}
+
+@Composable
+private fun OnboardingIntroScreen(
+  title: String,
+  subtitle: String,
+  mark: @Composable () -> Unit,
+  modifier: Modifier,
+  onBack: (() -> Unit)? = null,
+  actions: @Composable ColumnScope.() -> Unit,
+  content: @Composable ColumnScope.() -> Unit,
+) {
+  ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+      if (onBack != null) OnboardingHeader(title = nativeText(""), onBack = onBack)
+      // Keep actions outside the scroller so font scaling cannot push them out of reach.
+      Column(
+        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        Spacer(modifier = Modifier.height(if (onBack == null) OnboardingHeroTopOffset else OnboardingHeroTopOffsetAfterHeader))
+        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+          mark()
+          Spacer(modifier = Modifier.height(26.dp))
+          Text(
+            text = title,
+            style = ClawTheme.type.display.copy(fontSize = 31.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold),
+            color = ClawTheme.colors.text,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Spacer(modifier = Modifier.height(10.dp))
+          Text(
+            text = subtitle,
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+          )
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        content()
+        Spacer(modifier = Modifier.height(24.dp))
+      }
+      OnboardingActions(content = actions)
+    }
+  }
+}
+
+@Composable
+private fun WelcomeChecklist() {
+  ClawPanel(contentPadding = PaddingValues(18.dp), color = ClawTheme.colors.surfaceRaised) {
+    Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
+      WelcomeChecklistRow(icon = Icons.Default.Link, text = nativeString("Connect to your Gateway"))
+      WelcomeChecklistRow(icon = Icons.Default.Security, text = nativeString("Choose device permissions"))
+      WelcomeChecklistRow(icon = Icons.Default.CheckCircle, text = nativeString("Use OpenClaw from your phone"))
+    }
+  }
+}
+
+@Composable
+private fun WelcomeChecklistRow(
+  icon: ImageVector,
+  text: String,
+) {
+  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
+    Text(text = text, style = ClawTheme.type.section, color = ClawTheme.colors.text)
+  }
+}
+
+@Composable
+private fun SecurityNotice() {
+  ClawPanel(contentPadding = PaddingValues(18.dp), color = ClawTheme.colors.surfaceRaised) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+      Icon(imageVector = Icons.Default.ErrorOutline, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.warning)
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(text = nativeString("Security notice"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(
-          text = "OPENCLAW",
-          style = ClawTheme.type.display.copy(fontSize = 34.sp, lineHeight = 38.sp, fontWeight = FontWeight.Black),
-          color = ClawTheme.colors.text,
+          text = nativeString("The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to."),
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
         )
+      }
+    }
+  }
+}
+
+@Composable
+internal fun GatewaySetupScreen(
+  onBack: () -> Unit,
+  onSetupCode: () -> Unit,
+  onManualSetup: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val context = LocalContext.current
+  val uriHandler = LocalUriHandler.current
+  OnboardingIntroScreen(
+    title = nativeString("Connect Gateway"),
+    subtitle = nativeString("Scan a QR code or use the setup code from your OpenClaw Gateway."),
+    mark = { ClawIconBadge(Icons.Default.QrCode2, size = OnboardingHeroMarkSize, iconSize = 40.dp, color = ClawTheme.colors.surfaceRaised) },
+    modifier = modifier,
+    onBack = onBack,
+    actions = {
+      ClawPrimaryButton(
+        text = nativeString("Scan QR or setup code"),
+        icon = Icons.Default.QrCode2,
+        onClick = onSetupCode,
+        modifier = Modifier.onboardingActionButton(),
+      )
+      ClawSecondaryButton(
+        text = nativeString("Set up manually"),
+        icon = Icons.Default.Link,
+        onClick = onManualSetup,
+        modifier = Modifier.onboardingActionButton(),
+      )
+    },
+  ) {
+    GatewayPrerequisites(
+      onOpenSetupGuide = {
+        runCatching {
+          uriHandler.openUri(ANDROID_SETUP_GUIDE_URL)
+        }.onFailure {
+          Toast.makeText(context, nativeString("Could not open setup guide."), Toast.LENGTH_SHORT).show()
+        }
+      },
+    )
+  }
+}
+
+@Composable
+private fun OnboardingActions(content: @Composable ColumnScope.() -> Unit) {
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(OnboardingActionGap), content = content)
+    Spacer(modifier = Modifier.height(OnboardingBottomInset))
+  }
+}
+
+@Composable
+private fun GatewayPrerequisites(onOpenSetupGuide: () -> Unit) {
+  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Text(
+      text = nativeString("Before you start"),
+      style = ClawTheme.type.label,
+      color = ClawTheme.colors.text,
+      modifier = Modifier.fillMaxWidth(),
+    )
+    GatewayPrerequisiteRow(
+      title = nativeString("Access to the Gateway device"),
+      body = nativeString("Have a terminal open on the device running OpenClaw."),
+    )
+    GatewayPrerequisiteRow(
+      title = nativeString("Phone can reach the Gateway"),
+      body = nativeString("Use the same network, or a secure remote Gateway URL."),
+    )
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+      TextButton(onClick = onOpenSetupGuide) {
+        Icon(imageVector = Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(7.dp))
+        Text(text = nativeString("Android setup guide"), style = ClawTheme.type.label)
+      }
+    }
+  }
+}
+
+@Composable
+private fun GatewayPrerequisiteRow(
+  title: String,
+  body: String,
+) {
+  Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(modifier = Modifier.size(10.dp).background(ClawTheme.colors.primary, CircleShape))
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+      Text(text = title, style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold), color = ClawTheme.colors.text)
+      Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    }
+  }
+}
+
+@Composable
+private fun SetupCodeInstructionsScreen(
+  scannerActive: Boolean,
+  cameraPermissionGranted: Boolean,
+  scanner: BarcodeScanner,
+  onBack: () -> Unit,
+  onScan: () -> Unit,
+  onRequestCameraPermission: () -> Unit,
+  onCodeScanned: (String) -> Unit,
+  onCameraError: () -> Unit,
+  onCloseScanner: () -> Unit,
+  onChooseFromGallery: () -> Unit,
+  onEnterSetupCode: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
+    Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
+      LazyColumn(
+        modifier = Modifier.weight(1f),
+        contentPadding = PaddingValues(bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+      ) {
+        item {
+          OnboardingHeader(title = nativeText("Setup Gateway"), onBack = onBack)
+        }
+        item {
+          Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            SetupInstruction(
+              step = nativeString("Step 1"),
+              title = nativeString("Start your Gateway."),
+              body = "openclaw gateway",
+            )
+            SetupInstruction(
+              step = nativeString("Step 2"),
+              title = nativeString("Generate a QR code."),
+              body = "openclaw qr",
+            )
+          }
+        }
+        item {
+          Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            SetupQrScanner(
+              scannerActive = scannerActive,
+              cameraPermissionGranted = cameraPermissionGranted,
+              scanner = scanner,
+              onClick = onScan,
+              onClose = onCloseScanner,
+              onRequestCameraPermission = onRequestCameraPermission,
+              onCodeScanned = onCodeScanned,
+              onCameraError = onCameraError,
+              modifier = Modifier.widthIn(max = OnboardingScannerMaxWidth),
+            )
+          }
+        }
+      }
+      OnboardingActions {
+        ClawSecondaryButton(
+          text = nativeString("Choose from gallery"),
+          icon = Icons.Default.Image,
+          onClick = onChooseFromGallery,
+          modifier = Modifier.onboardingActionButton(),
+        )
+        ClawSecondaryButton(
+          text = nativeString("Enter setup code"),
+          icon = Icons.Default.QrCode2,
+          onClick = onEnterSetupCode,
+          modifier = Modifier.onboardingActionButton(),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun SetupScanErrorDialog(
+  message: String,
+  mascotMood: MascotMood,
+  onDismiss: () -> Unit,
+  onChooseAnotherImage: () -> Unit,
+  onEnterSetupCode: () -> Unit,
+) {
+  FoldAwareDialog(
+    onDismissRequest = onDismiss,
+    title = nativeString("QR code not accepted"),
+  ) {
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(ClawTheme.radii.sheet),
+      color = ClawTheme.colors.surfaceRaised,
+      contentColor = ClawTheme.colors.text,
+      border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+    ) {
+      Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Surface(
+            modifier = Modifier.size(38.dp),
+            shape = CircleShape,
+            color = ClawTheme.colors.warningSoft,
+            contentColor = ClawTheme.colors.warning,
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(imageVector = Icons.Default.ErrorOutline, contentDescription = null, modifier = Modifier.size(22.dp))
+            }
+          }
+          Text(
+            text = nativeString("QR code not accepted"),
+            style = ClawTheme.type.title,
+            color = ClawTheme.colors.text,
+            modifier = Modifier.weight(1f),
+          )
+        }
+
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+          WelcomeLogo(mood = mascotMood)
+        }
+
         Text(
-          text = "Your personal AI assistant.\nExfoliate! Exfoliate!",
-          style = ClawTheme.type.section,
-          color = ClawTheme.colors.text,
+          text = message,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(OnboardingActionGap), modifier = Modifier.fillMaxWidth()) {
+          ClawPrimaryButton(
+            text = nativeString("Choose another image"),
+            icon = Icons.Default.Image,
+            onClick = onChooseAnotherImage,
+            modifier = Modifier.fillMaxWidth().heightIn(min = OnboardingButtonHeight),
+          )
+          ClawSecondaryButton(
+            text = nativeString("Enter setup code"),
+            icon = Icons.Default.QrCode2,
+            onClick = onEnterSetupCode,
+            modifier = Modifier.fillMaxWidth().heightIn(min = OnboardingButtonHeight),
+          )
+        }
+      }
+    }
+  }
+}
+
+internal fun createSetupBarcodeScanner(): BarcodeScanner =
+  BarcodeScanning.getClient(
+    BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
+  )
+
+@Composable
+internal fun SetupQrScanner(
+  scannerActive: Boolean,
+  cameraPermissionGranted: Boolean,
+  scanner: BarcodeScanner,
+  onClick: () -> Unit,
+  onClose: () -> Unit,
+  onRequestCameraPermission: () -> Unit,
+  onCodeScanned: (String) -> Unit,
+  onCameraError: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val tileShape = RoundedCornerShape(12.dp)
+
+  if (!scannerActive) {
+    Surface(
+      onClick = onClick,
+      modifier = modifier.fillMaxWidth().aspectRatio(1f),
+      shape = tileShape,
+      color = ClawTheme.colors.surfaceRaised,
+      contentColor = ClawTheme.colors.text,
+      border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+    ) {
+      Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          Surface(
+            modifier = Modifier.size(56.dp),
+            shape = CircleShape,
+            color = ClawTheme.colors.surfacePressed,
+            contentColor = ClawTheme.colors.text,
+            border = BorderStroke(1.dp, ClawTheme.colors.border),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(imageVector = Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(28.dp))
+            }
+          }
+          Text(text = nativeString("Scan QR code"), style = ClawTheme.type.title.copy(lineHeight = 25.sp), color = ClawTheme.colors.text, textAlign = TextAlign.Center)
+          Text(
+            text = nativeString("Open the camera and frame the code from openclaw qr."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            textAlign = TextAlign.Center,
+          )
+        }
+      }
+    }
+    return
+  }
+
+  Surface(
+    modifier = modifier.fillMaxWidth().aspectRatio(1f),
+    shape = tileShape,
+    color = ClawTheme.colors.surfaceRaised,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+  ) {
+    if (cameraPermissionGranted) {
+      Box(modifier = Modifier.fillMaxSize()) {
+        QrCameraPreview(scanner = scanner, onCodeScanned = onCodeScanned, onCameraError = onCameraError)
+        ScannerCloseButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
+        Box(
+          modifier = Modifier.fillMaxSize().padding(42.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Box(
+            modifier =
+              Modifier
+                .fillMaxSize()
+                .border(2.dp, ClawTheme.colors.primary, RoundedCornerShape(24.dp)),
+          )
+        }
+        Text(
+          text = nativeString("Align the QR code inside the square."),
+          style = ClawTheme.type.caption,
+          color = Color.White,
+          modifier =
+            Modifier
+              .align(Alignment.BottomCenter)
+              .fillMaxWidth()
+              .background(Color.Black.copy(alpha = 0.62f))
+              .padding(horizontal = 14.dp, vertical = 12.dp),
           textAlign = TextAlign.Center,
         )
       }
-      Spacer(modifier = Modifier.weight(1f))
-      WelcomeHorizon()
-      Spacer(modifier = Modifier.height(30.dp))
-      Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        HeroPrimaryAction(title = "Connect Gateway", onClick = onConnect)
+    } else {
+      Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        ScannerCloseButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd))
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Icon(imageVector = Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(36.dp), tint = ClawTheme.colors.text)
+          Text(
+            text = nativeString("Camera access is needed to scan the setup QR."),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+            textAlign = TextAlign.Center,
+          )
+          ClawPrimaryButton(text = nativeString("Allow camera"), icon = Icons.Default.CameraAlt, onClick = onRequestCameraPermission, modifier = Modifier.onboardingActionButton())
+        }
       }
-      Spacer(modifier = Modifier.height(104.dp))
     }
   }
 }
 
 @Composable
-private fun WelcomeLogo() {
+private fun ScannerCloseButton(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
   Surface(
-    modifier = Modifier.size(82.dp),
+    onClick = onClick,
+    modifier = modifier.size(40.dp),
     shape = CircleShape,
-    color = Color.White.copy(alpha = 0.92f),
-    contentColor = Color.Unspecified,
+    color = Color.Black.copy(alpha = 0.68f),
+    contentColor = Color.White,
+    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.26f)),
   ) {
-    Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.Center) {
-      Image(painter = painterResource(id = R.drawable.openclaw_logo), contentDescription = "OpenClaw logo", modifier = Modifier.fillMaxSize())
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Close scanner"), modifier = Modifier.size(20.dp))
     }
   }
 }
 
 @Composable
-private fun WelcomeHorizon() {
-  Canvas(modifier = Modifier.fillMaxWidth().height(120.dp)) {
-    val arcWidth = size.width * 1.24f
-    val arcHeight = size.height * 1.18f
-    val left = (size.width - arcWidth) / 2f
-    val top = size.height * 0.28f
-    drawArc(
-      color = Color.White.copy(alpha = 0.7f),
-      startAngle = 202f,
-      sweepAngle = 136f,
-      useCenter = false,
-      topLeft =
-        androidx.compose.ui.geometry
-          .Offset(left, top),
-      size =
-        androidx.compose.ui.geometry
-          .Size(arcWidth, arcHeight),
-      style = Stroke(width = 2.2f),
-    )
-    drawArc(
-      color = Color.White.copy(alpha = 0.16f),
-      startAngle = 200f,
-      sweepAngle = 140f,
-      useCenter = false,
-      topLeft =
-        androidx.compose.ui.geometry
-          .Offset(left, top + 8f),
-      size =
-        androidx.compose.ui.geometry
-          .Size(arcWidth, arcHeight),
-      style = Stroke(width = 10f),
-    )
+private fun QrCameraPreview(
+  scanner: BarcodeScanner,
+  onCodeScanned: (String) -> Unit,
+  onCameraError: () -> Unit,
+) {
+  val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val previewView =
+    remember {
+      PreviewView(context).apply {
+        scaleType = PreviewView.ScaleType.FILL_CENTER
+      }
+    }
+  val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+  val processingFrame = remember { AtomicBoolean(false) }
+  val handledScan = remember { AtomicBoolean(false) }
+  val scanActive = remember { AtomicBoolean(true) }
+
+  DisposableEffect(context, lifecycleOwner, scanner, previewView) {
+    scanActive.set(true)
+    val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+    var cameraProvider: ProcessCameraProvider? = null
+    var preview: Preview? = null
+    var analysis: ImageAnalysis? = null
+    var disposed = false
+    val listener =
+      Runnable {
+        val provider =
+          try {
+            cameraProviderFuture.get()
+          } catch (_: Exception) {
+            if (!disposed) onCameraError()
+            return@Runnable
+          }
+        if (disposed) return@Runnable
+        val previewUseCase =
+          Preview
+            .Builder()
+            .build()
+            .also { it.surfaceProvider = previewView.surfaceProvider }
+        val analysisUseCase =
+          ImageAnalysis
+            .Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+
+        analysisUseCase.setAnalyzer(analysisExecutor) { imageProxy ->
+          analyzeSetupQrFrame(
+            imageProxy = imageProxy,
+            scanner = scanner,
+            processingFrame = processingFrame,
+            handledScan = handledScan,
+            scanActive = scanActive,
+            onCodeScanned = onCodeScanned,
+          )
+        }
+
+        try {
+          val selector =
+            setupQrCameraSelector(provider) ?: run {
+              analysisUseCase.clearAnalyzer()
+              if (!disposed) onCameraError()
+              return@Runnable
+            }
+          if (disposed) {
+            analysisUseCase.clearAnalyzer()
+            return@Runnable
+          }
+          provider.bindToLifecycle(lifecycleOwner, selector, previewUseCase, analysisUseCase)
+          if (disposed) {
+            analysisUseCase.clearAnalyzer()
+            provider.unbind(previewUseCase, analysisUseCase)
+            return@Runnable
+          }
+          cameraProvider = provider
+          preview = previewUseCase
+          analysis = analysisUseCase
+        } catch (_: Exception) {
+          analysisUseCase.clearAnalyzer()
+          if (!disposed) onCameraError()
+        }
+      }
+    cameraProviderFuture.addListener(listener, ContextCompat.getMainExecutor(context))
+
+    onDispose {
+      disposed = true
+      scanActive.set(false)
+      analysis?.clearAnalyzer()
+      val boundUseCases = listOfNotNull<UseCase>(preview, analysis)
+      if (boundUseCases.isNotEmpty()) {
+        cameraProvider?.unbind(*boundUseCases.toTypedArray())
+      }
+    }
+  }
+
+  DisposableEffect(Unit) {
+    onDispose { analysisExecutor.shutdown() }
+  }
+
+  AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+}
+
+private fun setupQrCameraSelector(provider: ProcessCameraProvider): CameraSelector? =
+  when {
+    provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+    provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+    else -> null
+  }
+
+@androidx.annotation.OptIn(ExperimentalGetImage::class)
+private fun analyzeSetupQrFrame(
+  imageProxy: ImageProxy,
+  scanner: BarcodeScanner,
+  processingFrame: AtomicBoolean,
+  handledScan: AtomicBoolean,
+  scanActive: AtomicBoolean,
+  onCodeScanned: (String) -> Unit,
+) {
+  if (!scanActive.get() || handledScan.get() || !processingFrame.compareAndSet(false, true)) {
+    imageProxy.close()
+    return
+  }
+  val mediaImage = imageProxy.image
+  if (mediaImage == null) {
+    processingFrame.set(false)
+    imageProxy.close()
+    return
+  }
+
+  val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+  scanner
+    .process(inputImage)
+    .addOnSuccessListener { barcodes ->
+      val rawValue = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
+      if (rawValue != null && scanActive.get() && handledScan.compareAndSet(false, true)) {
+        onCodeScanned(rawValue)
+      }
+    }.addOnCompleteListener {
+      processingFrame.set(false)
+      imageProxy.close()
+    }
+}
+
+@Composable
+private fun SetupCodeEntryScreen(
+  setupCode: String,
+  error: String?,
+  mascotMood: MascotMood,
+  onBack: () -> Unit,
+  onSetupCodeChange: (String) -> Unit,
+  onUseSetupCode: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
+    Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
+      Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        OnboardingHeader(title = nativeText("Enter setup code"), onBack = onBack)
+        if (error != null) {
+          Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            WelcomeLogo(mood = mascotMood)
+          }
+        }
+        LabeledField(label = nativeString("Setup code")) {
+          ClawTextField(
+            value = setupCode,
+            onValueChange = onSetupCodeChange,
+            placeholder = nativeString("Paste setup code"),
+            secret = true,
+          )
+        }
+        error?.let { message ->
+          InlineError(title = nativeString("Setup code was not accepted"), body = message)
+        }
+      }
+      OnboardingActions {
+        ClawPrimaryButton(text = nativeString("Use setup code"), icon = Icons.Default.QrCode2, onClick = onUseSetupCode, modifier = Modifier.onboardingActionButton())
+      }
+    }
   }
 }
 
 @Composable
-private fun GatewaySetupScreen(
-  setupCode: String,
+private fun ManualGatewaySetupScreen(
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
   token: String,
   password: String,
-  nearbyGatewayName: String?,
-  discoveryStatusText: String,
-  discoveryStarted: Boolean,
   error: String?,
+  mascotMood: MascotMood,
   onBack: () -> Unit,
-  onScan: () -> Unit,
-  onSetupCodeChange: (String) -> Unit,
   onManualHostChange: (String) -> Unit,
   onManualPortChange: (String) -> Unit,
   onManualTlsChange: (Boolean) -> Unit,
   onTokenChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
-  onUseNearby: () -> Unit,
   onPair: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  var advancedOpen by rememberSaveable { mutableStateOf(false) }
-  var nearbySearchTimedOut by remember { mutableStateOf(false) }
-
-  LaunchedEffect(nearbyGatewayName, discoveryStatusText, discoveryStarted) {
-    if (!nearbyGatewayName.isNullOrBlank()) {
-      nearbySearchTimedOut = false
-      return@LaunchedEffect
+  val transport =
+    remember(manualHost, manualTls) {
+      gatewayManualTransportPresentation(
+        hostInput = manualHost,
+        requestedTls = manualTls,
+      )
     }
-    if (!discoveryStarted) {
-      nearbySearchTimedOut = false
-      return@LaunchedEffect
-    }
-    nearbySearchTimedOut = false
-    delay(5_000)
-    nearbySearchTimedOut = true
-  }
-
-  val nearbyGateway =
-    nearbyGatewayUiState(
-      nearbyGatewayName = nearbyGatewayName,
-      discoveryStatusText = discoveryStatusText,
-      discoveryStarted = discoveryStarted,
-      searchTimedOut = nearbySearchTimedOut,
-    )
-
-  ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
+  val fontScale = LocalDensity.current.fontScale
+  ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+      LazyColumn(
+        modifier = Modifier.weight(1f),
+        contentPadding = PaddingValues(bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+      ) {
         item {
-          OnboardingHeader(
-            title = stringResource(R.string.gateway_setup),
-            subtitle = stringResource(R.string.connect_to_gateway),
-            onBack = onBack,
-          )
+          OnboardingHeader(title = nativeText("Manual setup"), onBack = onBack)
         }
         item {
-          GatewayOption(
-            icon = Icons.Default.QrCode2,
-            title = stringResource(R.string.scan_setup_code),
-            subtitle = stringResource(R.string.use_gateway_qr),
-            onClick = onScan,
-          )
-        }
-        item {
-          GatewayOption(
-            icon = Icons.Default.WifiTethering,
-            title = stringResource(R.string.nearby_gateway),
-            subtitle = nearbyGateway.subtitle,
-            status = nearbyGateway.status,
-            onClick = onUseNearby.takeIf { nearbyGateway.canConnect },
-          )
-        }
-        item {
-          GatewayOption(
-            icon = Icons.Default.Link,
-            title = stringResource(R.string.enter_gateway_url),
-            subtitle = stringResource(R.string.connect_manual_url),
-            onClick = { advancedOpen = true },
-          )
-        }
-        error?.let { message ->
-          item {
-            ClawErrorState(
-              title = "Setup code issue",
-              body = message,
+          LabeledField(label = nativeString("Gateway URL")) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              if (onboardingFormUsesStackedLayout(maxWidth.value, fontScale)) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.fillMaxWidth())
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.fillMaxWidth())
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
+                }
+              }
+            }
+            Text(
+              text = nativeString("Use the Gateway computer's LAN address or secure remote hostname."),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
             )
           }
         }
         item {
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(
-              onClick = { advancedOpen = !advancedOpen },
-              color = Color.Transparent,
-              contentColor = ClawTheme.colors.text,
-            ) {
-              Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-              ) {
-                Text(text = "Advanced", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-                Icon(
-                  imageVector = if (advancedOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                  contentDescription = null,
-                  modifier = Modifier.size(25.dp),
-                )
+          LabeledField(label = nativeString("Token")) {
+            ClawTextField(value = token, onValueChange = onTokenChange, placeholder = nativeString("Paste token"), secret = true)
+            Text(
+              text = nativeString("Paste a shared Gateway token or operator-issued token."),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+        }
+        item {
+          LabeledField(label = nativeString("Password")) {
+            ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = nativeString("Password optional"), secret = true)
+          }
+        }
+        item {
+          LabeledField(label = nativeString("Connection security")) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
+              if (stacked) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                  GatewayTransportChoices(transport, onManualTlsChange, Modifier.fillMaxWidth())
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                  GatewayTransportChoices(transport, onManualTlsChange)
+                }
               }
             }
-            if (advancedOpen) {
-              ClawTextField(value = setupCode, onValueChange = onSetupCodeChange, placeholder = "Setup code")
-              Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = "Host", modifier = Modifier.weight(1f))
-                ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = "Port", modifier = Modifier.width(104.dp))
-              }
-              Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                TogglePill(text = if (manualTls) "TLS on" else "TLS off", selected = manualTls, onClick = { onManualTlsChange(!manualTls) })
-                TogglePill(text = "Local", selected = !manualTls, onClick = { onManualTlsChange(false) })
-              }
-              ClawTextField(value = token, onValueChange = onTokenChange, placeholder = "Token optional")
-              ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = "Password optional")
+            transport.helperText?.let { helperText ->
+              Text(
+                text = helperText,
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
             }
           }
         }
+        error?.let { message ->
+          item {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+              WelcomeLogo(mood = mascotMood)
+            }
+          }
+          item {
+            InlineError(title = nativeString("Could not test connection"), body = message)
+          }
+        }
       }
-      ClawPrimaryButton(text = "Pair with Gateway", icon = Icons.Default.Security, onClick = onPair, modifier = Modifier.fillMaxWidth())
+      OnboardingActions {
+        ClawPrimaryButton(text = nativeString("Test connection"), icon = Icons.Default.Security, onClick = onPair, modifier = Modifier.onboardingActionButton())
+      }
     }
+  }
+}
+
+@Composable
+private fun SetupInstruction(
+  step: String,
+  title: String,
+  body: String,
+) {
+  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text(text = step, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+    Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
+    Surface(
+      modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
+      shape = RoundedCornerShape(ClawTheme.radii.control),
+      color = ClawTheme.colors.surfaceRaised,
+      border = BorderStroke(1.dp, ClawTheme.colors.border),
+    ) {
+      Text(text = body, modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp), style = ClawTheme.type.mono, color = ClawTheme.colors.text)
+    }
+  }
+}
+
+@Composable
+private fun LabeledField(
+  label: String,
+  content: @Composable ColumnScope.() -> Unit,
+) {
+  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    content()
+  }
+}
+
+@Composable
+private fun InlineError(
+  title: String,
+  body: String,
+) {
+  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.warning)
+    Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
   }
 }
 
@@ -637,116 +1802,434 @@ private fun GatewayRecoveryScreen(
   statusText: String,
   serverName: String?,
   attemptedGatewayName: String?,
-  remoteAddress: String?,
-  ready: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  gatewayPaired: Boolean,
+  gatewayPairingCanContinue: Boolean,
   gatewayConnectionProblem: GatewayConnectionProblem?,
-  connectSettling: Boolean,
   onBack: () -> Unit,
   onRetry: () -> Unit,
-  onEdit: () -> Unit,
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val recoveryState =
-    gatewayRecoveryUiState(
-      ready = ready,
+    gatewayPairingUiState(
+      gatewayPairingCanContinue = gatewayPairingCanContinue,
       statusText = statusText,
-      connectSettling = connectSettling,
-      nodeCapabilityApprovalState = nodeCapabilityApprovalState,
       gatewayConnectionProblem = gatewayConnectionProblem,
     )
   val context = LocalContext.current
+  val uriHandler = LocalUriHandler.current
+  val approvalCommand = recoveryGatewayApprovalCommand(gatewayConnectionProblem)
+  val protocolUpdateCommand = recoveryGatewayProtocolMismatchCommand(gatewayConnectionProblem)
+  val recoveryTitle: NativeText =
+    when {
+      recoveryState == GatewayRecoveryUiState.Connected -> {
+        nativeText("Gateway paired")
+      }
 
-  ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-      OnboardingHeader(title = stringResource(R.string.gateway_recovery), onBack = onBack)
-      Spacer(modifier = Modifier.height(12.dp))
-      Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(
-          imageVector =
-            when (recoveryState) {
-              GatewayRecoveryUiState.Connected -> Icons.Default.CheckCircle
-              GatewayRecoveryUiState.NodeCapabilityApprovalPending -> Icons.Default.WifiTethering
-              GatewayRecoveryUiState.ApprovalRequired -> Icons.Default.WifiTethering
-              GatewayRecoveryUiState.Pairing -> Icons.Default.WifiTethering
-              GatewayRecoveryUiState.Finishing -> Icons.Default.WifiTethering
-              GatewayRecoveryUiState.Failed -> Icons.Default.ErrorOutline
-            },
-          contentDescription = null,
-          modifier = Modifier.size(64.dp),
-          tint =
-            when (recoveryState) {
-              GatewayRecoveryUiState.Connected -> ClawTheme.colors.success
-              GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawTheme.colors.warning
-              GatewayRecoveryUiState.ApprovalRequired -> ClawTheme.colors.warning
-              GatewayRecoveryUiState.Pairing -> ClawTheme.colors.text
-              GatewayRecoveryUiState.Finishing -> ClawTheme.colors.text
-              GatewayRecoveryUiState.Failed -> ClawTheme.colors.warning
-            },
-        )
-        Text(text = recoveryState.title, style = ClawTheme.type.display, color = ClawTheme.colors.text)
-        Text(
-          text = recoveryState.message,
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.textMuted,
-          textAlign = TextAlign.Center,
+      gatewayConnectionProblem?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" -> {
+        nativeText("Setup code was not accepted")
+      }
+
+      else -> {
+        recoveryState.title
+      }
+    }
+  val recoveryMessage: NativeText =
+    when {
+      recoveryState == GatewayRecoveryUiState.Connected -> {
+        nativeText(
+          "Your phone is paired with \${recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName)}. Continue to finish node access.",
+          recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName),
         )
       }
 
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-          Text(text = "Last gateway", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-          Text(text = recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(
-            text =
-              recoveryGatewayDetail(
-                ready = ready,
-                remoteAddress = remoteAddress,
-                statusText = statusText,
-                nodeCapabilityApprovalState = nodeCapabilityApprovalState,
-                gatewayConnectionProblem = gatewayConnectionProblem,
-              ),
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-          )
-          recoveryGatewayApprovalCommand(gatewayConnectionProblem)?.let { command ->
-            ApprovalCommandBlock(command = command, onCopy = { copyApprovalCommand(context, command) })
-          }
-          ClawStatusPill(
-            text =
-              when (recoveryState) {
-                GatewayRecoveryUiState.Connected -> "Healthy"
-                GatewayRecoveryUiState.NodeCapabilityApprovalPending -> "Node approval"
-                GatewayRecoveryUiState.ApprovalRequired -> "Needs approval"
-                GatewayRecoveryUiState.Pairing -> "Pairing"
-                GatewayRecoveryUiState.Finishing -> "Connecting"
-                GatewayRecoveryUiState.Failed -> "Needs attention"
+      gatewayConnectionProblem != null && recoveryState == GatewayRecoveryUiState.Failed -> {
+        verbatimText(recoveryGatewayAuthDetail(gatewayConnectionProblem))
+      }
+
+      else -> {
+        recoveryState.message
+      }
+    }
+  val recoveryProgressItems =
+    gatewayRecoveryProgressItems(
+      state = recoveryState,
+      statusText = statusText,
+    )
+  val primaryAction = gatewayRecoveryPrimaryAction(recoveryState, gatewayConnectionProblem)
+  val showDiagnosticAction =
+    gatewayRecoveryShowsDiagnosticAction(
+      state = recoveryState,
+      gatewayConnectionProblem = gatewayConnectionProblem,
+    )
+  val diagnosticText =
+    remember(
+      statusText,
+      serverName,
+      attemptedGatewayName,
+      gatewayPaired,
+      gatewayPairingCanContinue,
+      gatewayConnectionProblem,
+    ) {
+      gatewayRecoveryDiagnosticText(
+        statusText = statusText,
+        gatewayName = recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName),
+        gatewayPaired = gatewayPaired,
+        gatewayPairingCanContinue = gatewayPairingCanContinue,
+        gatewayConnectionProblem = gatewayConnectionProblem,
+      )
+    }
+  var diagnosticDialogVisible by rememberSaveable { mutableStateOf(false) }
+
+  if (diagnosticDialogVisible) {
+    GatewayRecoveryDiagnosticDialog(
+      diagnosticText = diagnosticText,
+      onDismiss = { diagnosticDialogVisible = false },
+      onCopy = { context.copyTextWithConfirmation("OpenClaw gateway diagnostic", diagnosticText, nativeText("Details copied").resolveNativeText()) },
+    )
+  }
+
+  OnboardingStatusScreen(
+    modifier = modifier,
+    title = if (recoveryState == GatewayRecoveryUiState.Connected) nativeText("Gateway paired") else nativeText("Pair Gateway"),
+    onBack = onBack,
+    mood = onboardingMascotMood(step = OnboardingStep.Recovery, recoveryState = recoveryState),
+    headline = recoveryTitle.resolveNativeTextResource(),
+    message = recoveryMessage.resolveNativeTextResource(),
+    actions = {
+      primaryAction?.let { action ->
+        OnboardingActions {
+          ClawPrimaryButton(
+            text = action.text.resolveNativeTextResource(),
+            icon = action.icon,
+            onClick =
+              when (action) {
+                GatewayRecoveryPrimaryAction.Finish -> onContinue
+                GatewayRecoveryPrimaryAction.Retry -> onRetry
+                GatewayRecoveryPrimaryAction.Back -> onBack
               },
-            status =
-              when (recoveryState) {
-                GatewayRecoveryUiState.Connected -> ClawStatus.Success
-                GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawStatus.Warning
-                GatewayRecoveryUiState.ApprovalRequired -> ClawStatus.Warning
-                GatewayRecoveryUiState.Pairing -> ClawStatus.Neutral
-                GatewayRecoveryUiState.Finishing -> ClawStatus.Neutral
-                GatewayRecoveryUiState.Failed -> ClawStatus.Warning
-              },
+            modifier = Modifier.onboardingActionButton(),
           )
         }
       }
-
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        ClawPrimaryButton(
-          text = if (ready) "Continue" else "Retry connection",
-          icon = if (ready) Icons.Default.CheckCircle else Icons.Default.Refresh,
-          onClick = if (ready) onContinue else onRetry,
-          modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedAction(title = "Edit connection", icon = Icons.Default.Edit, onClick = onEdit)
-        OutlinedAction(title = "Copy diagnostic", icon = Icons.Default.ContentCopy, onClick = { copyGatewayDiagnostic(context, statusText, serverName, remoteAddress, ready, gatewayConnectionProblem) })
+    },
+  ) {
+    approvalCommand?.let { command ->
+      Spacer(modifier = Modifier.height(18.dp))
+      ApprovalCommandBlock(command = command, onCopy = { context.copyTextWithConfirmation("OpenClaw pairing approval command", command, nativeText("Approval command copied").resolveNativeText()) })
+    }
+    protocolUpdateCommand?.let { command ->
+      Spacer(modifier = Modifier.height(18.dp))
+      Text(
+        text = nativeString("On the Gateway computer, run:"),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+      ApprovalCommandBlock(command = command, onCopy = { context.copyTextWithConfirmation("OpenClaw gateway command", command, nativeText("Command copied").resolveNativeText()) })
+    }
+    if (recoveryProgressItems.isNotEmpty()) {
+      Spacer(modifier = Modifier.height(20.dp))
+      GatewayRecoveryProgress(items = recoveryProgressItems)
+    }
+    if (showDiagnosticAction) {
+      Spacer(modifier = Modifier.height(14.dp))
+      TextButton(onClick = { diagnosticDialogVisible = true }) {
+        Text(nativeString("View details"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
       }
     }
+    gatewayNetworkRecoveryHelpUrl(gatewayConnectionProblem)?.let { url ->
+      TextButton(onClick = { uriHandler.openUri(url) }) {
+        Text(nativeString("Set up Tailscale"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
+      }
+    }
+  }
+}
+
+@Composable
+private fun OnboardingStatusScreen(
+  modifier: Modifier,
+  title: NativeText,
+  onBack: () -> Unit,
+  mood: MascotMood,
+  headline: String,
+  message: String,
+  actions: @Composable () -> Unit,
+  content: @Composable ColumnScope.() -> Unit,
+) {
+  ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+      OnboardingHeader(title = title, onBack = onBack)
+      Column(
+        modifier =
+          Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+      ) {
+        WelcomeLogo(mood = mood)
+        Spacer(modifier = Modifier.height(13.dp))
+        Text(text = headline, style = ClawTheme.type.display, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text = message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, textAlign = TextAlign.Center)
+        content()
+      }
+      actions()
+    }
+  }
+}
+
+@Composable
+private fun GatewayRecoveryDiagnosticDialog(
+  diagnosticText: String,
+  onDismiss: () -> Unit,
+  onCopy: () -> Unit,
+) {
+  AppAlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = ClawTheme.colors.surfaceRaised,
+    title = { Text(nativeString("Connection details"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+    text = {
+      SelectionContainer {
+        Text(
+          text = diagnosticText,
+          style = ClawTheme.type.mono,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onCopy) {
+        Text(nativeString("Copy"))
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text(nativeString("Close"))
+      }
+    },
+  )
+}
+
+@Composable
+private fun NodeApprovalScreen(
+  approval: GatewayNodeCapabilityApproval,
+  action: GatewayNodeApprovalActionState,
+  checkingApproval: Boolean,
+  checkRequested: Boolean,
+  ready: Boolean,
+  onBack: () -> Unit,
+  onCopyCommand: (String) -> Unit,
+  onCheckApproval: () -> Unit,
+  onApprove: (String) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val approveCommand = recoveryNodeApprovalCommand(approvalRequestId(approval))
+  val pending = action.pending
+  val canApproveHere = pending != null || action.approving
+  var waitingDialogDismissed by rememberSaveable { mutableStateOf(false) }
+  val showWaitingDialog =
+    !canApproveHere &&
+      checkRequested &&
+      !checkingApproval &&
+      !ready &&
+      nodeCapabilityApprovalNeedsUserAction(approval) &&
+      !waitingDialogDismissed
+
+  OnboardingStatusScreen(
+    modifier = modifier,
+    title = nativeText("Approve node access"),
+    onBack = onBack,
+    mood = onboardingMascotMood(step = OnboardingStep.NodeApproval),
+    headline = nativeString("Approve node access"),
+    message = nativeString("Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable."),
+    actions = {
+      OnboardingActions {
+        val loading = action.approving || checkingApproval
+        ClawPrimaryButton(
+          text =
+            when {
+              canApproveHere && loading -> nativeText("Approving access…")
+              canApproveHere -> nativeText("Approve access and continue")
+              loading -> nativeText("Checking approval…")
+              else -> nativeText("I have approved")
+            }.resolveNativeTextResource(),
+          loading = loading,
+          enabled = !loading,
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+          disabledContentColor = ClawTheme.colors.textMuted,
+          modifier = Modifier.onboardingActionButton(),
+          onClick = {
+            // Only an explicit check may reopen feedback dismissed during background polling.
+            waitingDialogDismissed = false
+            if (pending != null) onApprove(pending.requestId) else onCheckApproval()
+          },
+        )
+      }
+    },
+  ) {
+    Spacer(modifier = Modifier.height(18.dp))
+    if (canApproveHere) {
+      Text(
+        text = nativeString("Allow your Gateway to use these capabilities on this phone. Android permissions and your settings still apply."),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+        textAlign = TextAlign.Center,
+      )
+      if (pending != null) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text =
+            (pending.capabilities + pending.commands.map { if (it.startsWith("mobile.ui.")) "mobileUI" else it.substringBefore('.') })
+              .distinct()
+              .sorted()
+              .map { nodeApprovalCapabilityLabel(it).resolveNativeTextResource() }
+              .joinToString(", "),
+          style = ClawTheme.type.label,
+          color = ClawTheme.colors.text,
+          textAlign = TextAlign.Center,
+        )
+      }
+    }
+    if (!canApproveHere || action.errorText != null) {
+      Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+          text = nativeString("On the Gateway computer, run:"),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          textAlign = TextAlign.Center,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        ApprovalCommandBlock(command = "openclaw nodes pending", onCopy = { onCopyCommand("openclaw nodes pending") })
+        ApprovalCommandBlock(command = approveCommand, onCopy = { onCopyCommand(approveCommand) })
+        Text(
+          text = nativeString("Use the requestId from the pending command in the approve command."),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textSubtle,
+          textAlign = TextAlign.Center,
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
+    }
+    action.errorText?.let { error ->
+      Spacer(modifier = Modifier.height(12.dp))
+      Text(
+        text = error.resolveNativeTextResource(),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.danger,
+        textAlign = TextAlign.Center,
+      )
+    }
+  }
+
+  if (showWaitingDialog) {
+    AppAlertDialog(
+      onDismissRequest = { waitingDialogDismissed = true },
+      title = { Text(text = nativeString("Still waiting for approval")) },
+      text = {
+        Text(
+          text = nativeString("Run the approve command on the Gateway computer, then check again."),
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
+      },
+      confirmButton = {
+        TextButton(onClick = { waitingDialogDismissed = true }) {
+          Text(text = nativeString("OK"))
+        }
+      },
+    )
+  }
+}
+
+private fun nodeApprovalCapabilityLabel(capability: String): NativeText =
+  when (capability) {
+    "calendar" -> nativeText("Calendar")
+    "camera" -> nativeText("Camera")
+    "callLog" -> nativeText("Call Log")
+    "contacts" -> nativeText("Contacts")
+    "device" -> nativeText("Device information")
+    "debug" -> nativeText("Debug tools")
+    "location" -> nativeText("Location")
+    "mobileUI" -> nativeText("Screen control")
+    "motion" -> nativeText("Motion")
+    "notifications" -> nativeText("Notifications")
+    "photos" -> nativeText("Photos")
+    "sms" -> nativeText("SMS")
+    "system" -> nativeText("System tools")
+    "talk" -> nativeText("Talk")
+    "voiceWake" -> nativeText("Voice wake")
+    else -> verbatimText(capability)
+  }
+
+@Composable
+private fun GatewayRecoveryProgress(items: List<GatewayRecoveryProgressItem>) {
+  val transition = rememberInfiniteTransition(label = "gateway-progress")
+  val currentAlpha by
+    transition.animateFloat(
+      initialValue = 0.36f,
+      targetValue = 1f,
+      animationSpec =
+        infiniteRepeatable(
+          animation = tween(durationMillis = 680),
+          repeatMode = RepeatMode.Reverse,
+        ),
+      label = "current-step-alpha",
+    )
+  Column(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    items.forEach { item ->
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        GatewayRecoveryProgressDot(status = item.status, currentAlpha = currentAlpha)
+        Text(
+          text = item.label.resolveNativeTextResource(),
+          style = ClawTheme.type.caption,
+          color =
+            when (item.status) {
+              GatewayRecoveryProgressStatus.Complete -> ClawTheme.colors.success
+              GatewayRecoveryProgressStatus.Current -> ClawTheme.colors.text
+              GatewayRecoveryProgressStatus.Pending -> ClawTheme.colors.textMuted
+            },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun GatewayRecoveryProgressDot(
+  status: GatewayRecoveryProgressStatus,
+  currentAlpha: Float,
+) {
+  Box(modifier = Modifier.width(18.dp), contentAlignment = Alignment.Center) {
+    if (status == GatewayRecoveryProgressStatus.Current) {
+      Surface(
+        modifier = Modifier.size(18.dp).alpha(currentAlpha),
+        shape = CircleShape,
+        color = ClawTheme.colors.warningSoft,
+        contentColor = Color.Transparent,
+      ) {}
+    }
+    Surface(
+      modifier = Modifier.size(if (status == GatewayRecoveryProgressStatus.Pending) 8.dp else 9.dp),
+      shape = CircleShape,
+      color =
+        when (status) {
+          GatewayRecoveryProgressStatus.Complete -> ClawTheme.colors.success
+          GatewayRecoveryProgressStatus.Current -> ClawTheme.colors.warning
+          GatewayRecoveryProgressStatus.Pending -> ClawTheme.colors.border
+        },
+      contentColor = Color.Transparent,
+    ) {}
   }
 }
 
@@ -778,7 +2261,7 @@ private fun ApprovalCommandBlock(
         border = BorderStroke(1.dp, ClawTheme.colors.border),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy approval command", modifier = Modifier.size(18.dp))
+          Icon(imageVector = Icons.Default.ContentCopy, contentDescription = nativeString("Copy approval command"), modifier = Modifier.size(18.dp))
         }
       }
     }
@@ -792,7 +2275,12 @@ private fun PermissionSetupScreen(
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
+  var showAdditional by rememberSaveable { mutableStateOf(false) }
+  val primaryIds = listOf(PermissionRowId.Notifications, PermissionRowId.Voice, PermissionRowId.Camera, PermissionRowId.Location)
+  val primaryRows = primaryIds.map { id -> permissionState.rows.first { it.id == id } }
+  val additionalRows = permissionState.rows.filterNot { it.id in primaryIds || it.id == PermissionRowId.NotificationListener }
+  val additionalPermissionNames = additionalRows.map { it.id.title.resolveNativeTextResource() }.joinToString(", ")
+  ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(
         modifier = Modifier.weight(1f),
@@ -800,124 +2288,126 @@ private fun PermissionSetupScreen(
         verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         item {
-          PermissionTopBar(onBack = onBack)
+          OnboardingHeader(title = nativeText("Permissions"), onBack = onBack)
         }
         item {
-          Column(modifier = Modifier.padding(top = 10.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Box(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+            WelcomeLogo(mood = onboardingMascotMood(step = OnboardingStep.Permissions))
+          }
+        }
+        item {
+          Text(
+            text = nativeString("All permissions are optional. Choose what this phone can share, or continue without allowing access."),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 12.dp),
+          )
+        }
+        item {
+          ClawSecondaryButton(
+            text = if (permissionState.requesting) nativeString("Requesting permissions…") else nativeString("Request all"),
+            enabled = permissionState.canRequestAll && !permissionState.requesting,
+            onClick = permissionState.requestAll,
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Text(
+            text =
+              nativeString(
+                "Includes additional permissions: \${additionalPermissionNames}. Review Android's permission prompts. Camera and location features are enabled separately.",
+                additionalPermissionNames,
+              ),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.padding(vertical = ClawTheme.spacing.xxs),
+          )
+          permissionState.requestError?.let { error ->
+            Text(text = error.resolveNativeTextResource(), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+          }
+        }
+        items(primaryRows, key = { it.id.name }) { row ->
+          PermissionRow(row = row, requestPermission = permissionState.requestPermission, enabled = !permissionState.requesting)
+        }
+        item {
+          TextButton(onClick = { showAdditional = !showAdditional }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (showAdditional) nativeString("Hide additional features") else nativeString("Additional features"))
+          }
+        }
+        if (showAdditional) {
+          items(additionalRows, key = { it.id.name }) { row ->
+            PermissionRow(row = row, requestPermission = permissionState.requestPermission, enabled = !permissionState.requesting)
+          }
+          item {
+            Text(text = nativeString("Special access"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
             Text(
-              text = "Allow permissions",
-              style = ClawTheme.type.title.copy(fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Bold),
-              color = ClawTheme.colors.text,
-            )
-            Text(
-              text = "These permissions keep OpenClaw secure\nand useful.",
-              style = ClawTheme.type.body,
+              text = nativeString("Not included in Request all. Open Android Settings to choose notification access."),
+              style = ClawTheme.type.caption,
               color = ClawTheme.colors.textMuted,
+              modifier = Modifier.padding(vertical = ClawTheme.spacing.xxs),
+            )
+            PermissionRow(
+              row = permissionState.rows.first { it.id == PermissionRowId.NotificationListener },
+              requestPermission = permissionState.requestPermission,
+              enabled = !permissionState.requesting,
             )
           }
         }
-        items(permissionState.rows, key = { it.title }) { row ->
-          PermissionRow(row = row)
-        }
       }
-      PermissionContinueButton(onClick = onContinue)
-    }
-  }
-}
-
-@Composable
-private fun HeroPrimaryAction(
-  title: String,
-  onClick: () -> Unit,
-) {
-  Surface(
-    onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(46.dp),
-    shape = RoundedCornerShape(23.dp),
-    color = ClawTheme.colors.primary,
-    contentColor = ClawTheme.colors.primaryText,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 22.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-      Icon(imageVector = Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
-      Text(text = title, style = ClawTheme.type.title.copy(fontSize = 14.5.sp, lineHeight = 18.sp), modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-      Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(21.dp))
+      OnboardingActions {
+        ClawPrimaryButton(text = nativeString("Continue"), onClick = onContinue, modifier = Modifier.onboardingActionButton())
+      }
     }
   }
 }
 
 @Composable
 private fun OnboardingHeader(
-  title: String,
-  modifier: Modifier = Modifier,
-  subtitle: String? = null,
-  onBack: (() -> Unit)? = null,
+  title: NativeText,
+  onBack: () -> Unit,
 ) {
-  Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-    onBack?.let {
-      Surface(onClick = it, modifier = Modifier.size(34.dp), color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(23.dp))
+  Surface(modifier = Modifier.fillMaxWidth(), color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
+    Box(modifier = Modifier.fillMaxWidth().height(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
+      Surface(
+        onClick = onBack,
+        modifier =
+          Modifier
+            .align(Alignment.CenterStart)
+            .size(ClawTheme.spacing.touchTarget),
+        color = Color.Transparent,
+        contentColor = ClawTheme.colors.text,
+      ) {
+        Box(contentAlignment = Alignment.CenterStart) {
+          Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), modifier = Modifier.size(23.dp))
+        }
+      }
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 56.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        val resolvedTitle = title.resolveNativeTextResource()
+        if (resolvedTitle.isNotBlank()) {
+          Text(text = resolvedTitle, style = ClawTheme.type.title, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
         }
       }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = title, style = ClawTheme.type.display, color = ClawTheme.colors.text)
-      subtitle?.let { Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) }
-    }
   }
 }
 
 @Composable
-private fun GatewayOption(
-  icon: ImageVector,
-  title: String,
-  subtitle: String,
-  onClick: (() -> Unit)?,
-  status: String? = null,
+private fun GatewayTransportChoices(
+  transport: GatewayManualTransportPresentation,
+  onTlsChange: (Boolean) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-    ClawListItem(
-      title = title,
-      subtitle = subtitle,
-      metadata = status,
-      leading = { Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(22.dp), tint = ClawTheme.colors.text) },
-      trailing =
-        onClick?.let {
-          {
-            Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Open $title", modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
-          }
-        },
-      onClick = onClick,
+  listOf(false, true).forEach { tls ->
+    TogglePill(
+      text = if (tls) nativeString("Secure (TLS)") else nativeString("Unencrypted"),
+      selected = transport.effectiveTls == tls,
+      enabled = tls || !transport.requiresTls,
+      onClick = { onTlsChange(tls) },
+      modifier = modifier,
     )
-  }
-}
-
-@Composable
-private fun OutlinedAction(
-  title: String,
-  icon: ImageVector,
-  onClick: () -> Unit,
-) {
-  Surface(
-    onClick = onClick,
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(ClawTheme.radii.control),
-    color = Color.Transparent,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 15.dp, vertical = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
-      Text(text = title, style = ClawTheme.type.section, modifier = Modifier.weight(1f))
-    }
   }
 }
 
@@ -925,79 +2415,35 @@ private fun OutlinedAction(
 private fun TogglePill(
   text: String,
   selected: Boolean,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
   Surface(
+    selected = selected,
     onClick = onClick,
+    enabled = enabled,
+    modifier = modifier.heightIn(min = 34.dp).semantics { role = Role.Button },
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
     contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
     border = BorderStroke(1.dp, if (selected) ClawTheme.colors.primary else ClawTheme.colors.border),
   ) {
-    Text(text = text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp), style = ClawTheme.type.label)
-  }
-}
-
-@Composable
-private fun PermissionTopBar(onBack: () -> Unit) {
-  var showHelp by remember { mutableStateOf(false) }
-  if (showHelp) {
-    AlertDialog(
-      onDismissRequest = { showHelp = false },
-      containerColor = ClawTheme.colors.surfaceRaised,
-      title = {
-        Text(stringResource(R.string.permissions), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      },
-      text = {
-        Text(
-          "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.textMuted,
-        )
-      },
-      confirmButton = {
-        TextButton(onClick = { showHelp = false }) {
-          Text(stringResource(R.string.done))
-        }
-      },
-    )
-  }
-  Box(modifier = Modifier.fillMaxWidth().height(38.dp), contentAlignment = Alignment.Center) {
-    Surface(
-      onClick = onBack,
-      modifier = Modifier.align(Alignment.CenterStart).size(34.dp),
-      color = Color.Transparent,
-      contentColor = ClawTheme.colors.text,
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(22.dp))
-      }
-    }
-    Text(
-      text = "Permission Setup",
-      style = ClawTheme.type.title.copy(fontSize = 15.2.sp, lineHeight = 19.sp),
-      color = ClawTheme.colors.text,
-      maxLines = 1,
-    )
-    Surface(
-      onClick = { showHelp = true },
-      modifier = Modifier.align(Alignment.CenterEnd).size(28.dp),
-      shape = CircleShape,
-      color = Color.Transparent,
-      contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, ClawTheme.colors.text),
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Text(text = "?", style = ClawTheme.type.label.copy(fontSize = 13.sp, lineHeight = 16.sp), color = ClawTheme.colors.text)
-      }
+    Box(modifier = Modifier.fillMaxHeight().padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+      Text(text = text, style = ClawTheme.type.label)
     }
   }
 }
 
 @Composable
-private fun PermissionRow(row: PermissionRowModel) {
+private fun PermissionRow(
+  row: PermissionRowModel,
+  requestPermission: (List<String>) -> Unit,
+  enabled: Boolean = true,
+) {
   Surface(
-    onClick = row.onClick,
+    onClick = row.onClick ?: { requestPermission(row.id.runtimePermissions) },
+    enabled = enabled,
     modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
     shape = RoundedCornerShape(ClawTheme.radii.control),
     color = ClawTheme.colors.surfaceRaised,
@@ -1009,30 +2455,23 @@ private fun PermissionRow(row: PermissionRowModel) {
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(17.dp), tint = ClawTheme.colors.text)
-        }
-      }
+      ClawIconBadge(row.id.icon, size = 30.dp, iconSize = 17.dp)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
-          text = row.title,
-          style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+          text = row.id.title.resolveNativeTextResource(),
+          style = ClawTheme.type.title.copy(fontSize = ClawTheme.type.section.fontSize, lineHeight = 23.sp),
           color = ClawTheme.colors.text,
-          maxLines = 1,
         )
         Text(
-          text = row.subtitle,
-          style = ClawTheme.type.body,
+          text = row.subtitle.resolveNativeTextResource(),
+          style = ClawTheme.type.body.copy(fontSize = ClawTheme.type.caption.fontSize),
           color = ClawTheme.colors.textMuted,
-          maxLines = 1,
         )
       }
       Text(
-        text = if (row.granted) "Granted" else "Not granted",
-        style = ClawTheme.type.body,
-        color = if (row.granted) ClawTheme.colors.success else ClawTheme.colors.textMuted,
-        maxLines = 1,
+        text = row.statusText.resolveNativeTextResource(),
+        style = ClawTheme.type.label,
+        color = if (row.granted) ClawTheme.colors.success else ClawTheme.colors.primary,
       )
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1044,123 +2483,182 @@ private fun PermissionRow(row: PermissionRowModel) {
   }
 }
 
-@Composable
-private fun PermissionContinueButton(onClick: () -> Unit) {
-  Surface(
-    onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(44.dp),
-    shape = RoundedCornerShape(22.dp),
-    color = ClawTheme.colors.primary,
-    contentColor = ClawTheme.colors.primaryText,
-  ) {
-    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-      Text(text = "Continue", style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp), color = ClawTheme.colors.primaryText)
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = null,
-        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp).size(19.dp),
-        tint = ClawTheme.colors.primaryText,
-      )
-    }
-  }
-}
-
 internal enum class GatewayRecoveryUiState(
-  val title: String,
-  val message: String,
+  val title: NativeText,
+  val message: NativeText,
 ) {
   Connected(
-    title = "Connected",
-    message = "Your Gateway is ready.",
+    title = nativeText("Connected"),
+    message = nativeText("Your Gateway is ready."),
   ),
   ApprovalRequired(
-    title = "Pairing Gateway",
-    message = "Approve this phone on the gateway.\nThen retry the connection.",
-  ),
-  NodeCapabilityApprovalPending(
-    title = "Node Approval Pending",
-    message = "Gateway pairing worked.\nApprove this phone's node capabilities from an operator UI.",
+    title = nativeText("Pairing Gateway"),
+    message = nativeText("Approve this phone on the gateway.\nThen retry the connection."),
   ),
   Pairing(
-    title = "Pairing Gateway",
-    message = "Approval is in progress.\nOpenClaw will reconnect automatically.",
+    title = nativeText("Pairing Gateway"),
+    message = nativeText("Approval is in progress.\nOpenClaw will reconnect automatically."),
   ),
   Finishing(
-    title = "Connecting Gateway",
-    message = "OpenClaw is checking gateway and node access.",
+    title = nativeText("Connecting Gateway"),
+    message = nativeText("OpenClaw is checking gateway and node access."),
   ),
   Failed(
-    title = "Connection issue",
-    message = "We could not reach your Gateway.\nLet's fix this.",
+    title = nativeText("Connection issue"),
+    message = nativeText("We could not reach your Gateway.\nLet's fix this."),
   ),
 }
 
-internal data class NearbyGatewayUiState(
-  val subtitle: String,
-  val status: String?,
-  val canConnect: Boolean,
-)
-
-/** Maps best-effort discovery into row copy and clickability for onboarding. */
-internal fun nearbyGatewayUiState(
-  nearbyGatewayName: String?,
-  discoveryStatusText: String,
-  discoveryStarted: Boolean = true,
-  searchTimedOut: Boolean = false,
-): NearbyGatewayUiState {
-  val name = nearbyGatewayName?.trim().takeUnless { it.isNullOrEmpty() }
-  if (name != null) {
-    return NearbyGatewayUiState(subtitle = name, status = "Found", canConnect = true)
-  }
-  if (!discoveryStarted) {
-    return NearbyGatewayUiState(subtitle = "Starting discovery...", status = "Starting", canConnect = false)
-  }
-
-  val status = discoveryStatusText.trim()
-  val searching =
-    status.isEmpty() ||
-      status.equals("Searching…", ignoreCase = true) ||
-      status.contains("Searching", ignoreCase = true) ||
-      status.endsWith("?", ignoreCase = true)
-  return if (searching) {
-    if (searchTimedOut) {
-      NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false)
-    } else {
-      NearbyGatewayUiState(subtitle = "Searching for gateways...", status = "Searching", canConnect = false)
-    }
-  } else {
-    NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false)
-  }
+internal enum class GatewayRecoveryPrimaryAction(
+  val text: NativeText,
+  val icon: ImageVector? = null,
+) {
+  Finish(text = nativeText("Continue")),
+  Retry(text = nativeText("Retry connection"), icon = Icons.Default.WifiTethering),
+  Back(text = nativeText("Go back"), icon = Icons.AutoMirrored.Filled.ArrowBack),
 }
 
-/** Derives recovery screen state from gateway/node readiness and transient status text. */
-internal fun gatewayRecoveryUiState(
-  ready: Boolean,
+internal enum class GatewayRecoveryProgressStatus {
+  Complete,
+  Current,
+  Pending,
+}
+
+internal data class GatewayRecoveryProgressItem(
+  val label: NativeText,
+  val status: GatewayRecoveryProgressStatus,
+)
+
+internal fun gatewayRecoveryPrimaryAction(
+  state: GatewayRecoveryUiState,
+  problem: GatewayConnectionProblem? = null,
+): GatewayRecoveryPrimaryAction? =
+  when (state) {
+    GatewayRecoveryUiState.Connected -> GatewayRecoveryPrimaryAction.Finish
+
+    GatewayRecoveryUiState.Failed -> if (problem?.isNetworkFailure == true) GatewayRecoveryPrimaryAction.Retry else GatewayRecoveryPrimaryAction.Back
+
+    GatewayRecoveryUiState.ApprovalRequired -> GatewayRecoveryPrimaryAction.Retry
+
+    GatewayRecoveryUiState.Pairing,
+    GatewayRecoveryUiState.Finishing,
+    -> null
+  }
+
+internal fun gatewayRecoveryShowsDiagnosticAction(
+  state: GatewayRecoveryUiState,
+  gatewayConnectionProblem: GatewayConnectionProblem?,
+): Boolean =
+  state == GatewayRecoveryUiState.Failed ||
+    gatewayConnectionProblem != null
+
+internal fun gatewayRecoveryDiagnosticText(
   statusText: String,
-  connectSettling: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  gatewayName: String,
+  gatewayPaired: Boolean,
+  gatewayPairingCanContinue: Boolean,
+  gatewayConnectionProblem: GatewayConnectionProblem?,
+  localizeLabel: (String) -> String = { label -> nativeString(label) },
+): String =
+  // Diagnostic labels are UI copy; values stay verbatim so copied evidence matches gateway state.
+  listOf(
+    localizeLabel("OpenClaw Android gateway diagnostic"),
+    "${localizeLabel("Gateway")}: $gatewayName",
+    "${localizeLabel("Status")}: $statusText",
+    "${localizeLabel("Gateway paired")}: $gatewayPaired",
+    "${localizeLabel("Ready to continue")}: $gatewayPairingCanContinue",
+    "${localizeLabel("Error code")}: ${gatewayConnectionProblem?.code ?: "n/a"}",
+    "${localizeLabel("Reason")}: ${gatewayConnectionProblem?.reason ?: "n/a"}",
+    "${localizeLabel("Request ID")}: ${gatewayConnectionProblem?.requestId ?: "n/a"}",
+    "${localizeLabel("Next step")}: ${gatewayConnectionProblem?.recommendedNextStep ?: "n/a"}",
+    "${localizeLabel("Retryable")}: ${gatewayConnectionProblem?.retryable ?: false}",
+  ).joinToString("\n")
+
+internal fun gatewayPairingUiState(
+  gatewayPairingCanContinue: Boolean,
+  statusText: String,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryUiState =
   when {
-    ready -> GatewayRecoveryUiState.Connected
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved -> GatewayRecoveryUiState.NodeCapabilityApprovalPending
+    gatewayPairingCanContinue -> GatewayRecoveryUiState.Connected
+
     gatewayConnectionProblem?.isPairingRequired == true &&
       !gatewayConnectionProblem.canAutoRetry -> GatewayRecoveryUiState.ApprovalRequired
+
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
+
+    gatewayConnectionProblem?.isNetworkFailure == true -> GatewayRecoveryUiState.Failed
+
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading -> GatewayRecoveryUiState.Finishing
-    connectSettling -> GatewayRecoveryUiState.Finishing
+
     gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
-    gatewayStatusLooksLikePartialConnect(statusText) -> GatewayRecoveryUiState.Finishing
-    else -> GatewayRecoveryUiState.Failed
+
+    gatewayStatusLooksLikeFailure(statusText) -> GatewayRecoveryUiState.Failed
+
+    else -> GatewayRecoveryUiState.Finishing
   }
+
+internal fun gatewayRecoveryProgressItems(
+  state: GatewayRecoveryUiState,
+  statusText: String = "",
+): List<GatewayRecoveryProgressItem> =
+  when (state) {
+    GatewayRecoveryUiState.Finishing -> {
+      finishingGatewayProgressItems(
+        statusText = statusText,
+      )
+    }
+
+    GatewayRecoveryUiState.Pairing -> {
+      listOf(
+        GatewayRecoveryProgressItem(nativeText("Gateway received this phone"), GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem(nativeText("Waiting for device approval"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Retrying automatically"), GatewayRecoveryProgressStatus.Pending),
+      )
+    }
+
+    GatewayRecoveryUiState.ApprovalRequired -> {
+      listOf(
+        GatewayRecoveryProgressItem(nativeText("Gateway needs device approval"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Run the approval command on the Gateway"), GatewayRecoveryProgressStatus.Pending),
+      )
+    }
+
+    GatewayRecoveryUiState.Connected,
+    GatewayRecoveryUiState.Failed,
+    -> {
+      emptyList()
+    }
+  }
+
+private fun finishingGatewayProgressItems(statusText: String): List<GatewayRecoveryProgressItem> {
+  val gatewayAccessComplete = gatewayStatusLooksLikePartialConnect(statusText)
+  return listOf(
+    GatewayRecoveryProgressItem(
+      label = nativeText("Opening Gateway connection"),
+      status = if (gatewayAccessComplete) GatewayRecoveryProgressStatus.Complete else GatewayRecoveryProgressStatus.Current,
+    ),
+    GatewayRecoveryProgressItem(
+      label = nativeText("Checking pairing access"),
+      status = if (gatewayAccessComplete) GatewayRecoveryProgressStatus.Complete else GatewayRecoveryProgressStatus.Pending,
+    ),
+    GatewayRecoveryProgressItem(
+      label = nativeText("Checking node access"),
+      status = if (gatewayAccessComplete) GatewayRecoveryProgressStatus.Current else GatewayRecoveryProgressStatus.Pending,
+    ),
+  )
+}
 
 /** Detects gateway-approved states where the Android node is still coming online. */
 internal fun gatewayStatusLooksLikePartialConnect(statusText: String): Boolean {
-  val lower = gatewayStatusForDisplay(statusText).lowercase()
+  val lower = statusText.trim().lowercase()
   return lower.contains("operator offline") || lower.contains("node offline")
+}
+
+/** Detects explicit endpoint/auth failures surfaced as status text without structured details. */
+internal fun gatewayStatusLooksLikeFailure(statusText: String): Boolean {
+  val lower = statusText.trim().lowercase()
+  return lower.startsWith("failed:") || lower.startsWith("error:") || lower.startsWith("gateway error:")
 }
 
 internal fun recoveryGatewayName(
@@ -1175,83 +2673,61 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-/** Resolves onboarding setup-code or manual fields into the gateway config used for connect. */
-internal fun resolveOnboardingGatewayConnectConfig(
-  setupCode: String,
-  manualHost: String,
-  manualPort: String,
-  manualTls: Boolean,
-  token: String,
-  password: String,
-): GatewayConnectConfig? =
-  resolveGatewayConnectConfig(
-    useSetupCode = setupCode.isNotBlank(),
-    setupCode = setupCode,
-    savedManualHost = manualHost,
-    savedManualPort = manualPort,
-    savedManualTls = manualTls,
-    manualHostInput = manualHost,
-    manualPortInput = manualPort,
-    manualTlsInput = manualTls,
-    fallbackBootstrapToken = "",
-    fallbackToken = token,
-    fallbackPassword = password,
-  )
-
-/** Selects the recovery detail line from endpoint metadata and transient gateway status. */
-internal fun recoveryGatewayDetail(
-  ready: Boolean,
-  remoteAddress: String?,
-  statusText: String,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
-  gatewayConnectionProblem: GatewayConnectionProblem?,
-): String =
-  if (ready) {
-    remoteAddress?.takeIf { it.isNotBlank() } ?: "Ready for chat and voice"
-  } else if (
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
-  ) {
-    "Gateway paired. Waiting for node capability approval."
-  } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
-    recoveryGatewayApprovalCommand(gatewayConnectionProblem)
-      ?.let { "Gateway approval is pending. Run this on the gateway host:" }
-      ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
-  } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
-    "Gateway approval is in progress. OpenClaw will retry automatically."
-  } else if (gatewayConnectionProblem != null) {
-    recoveryGatewayAuthDetail(gatewayConnectionProblem)
-  } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
-    "Gateway paired. Checking node capability approval."
-  } else if (statusText.contains("operator offline", ignoreCase = true)) {
-    "Gateway paired. Waiting for operator access."
-  } else if (gatewayStatusLooksLikePairing(statusText)) {
-    "Gateway approval is in progress. OpenClaw will retry automatically."
-  } else {
-    remoteAddress?.takeIf { it.isNotBlank() } ?: "Gateway unreachable"
-  }
-
 internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
   when (gatewayConnectionProblem.code) {
-    "PROTOCOL_MISMATCH" -> recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
-    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "Setup code expired. Scan a fresh setup QR."
+    "NETWORK_UNREACHABLE" -> {
+      if (gatewayConnectionProblem.isTailscaleRoute && gatewayConnectionProblem.reason != "transport-cleanup") {
+        nativeString("This address may use Tailscale. Open Tailscale and connect to the Gateway's tailnet, then retry. Check that the Gateway computer is online and OpenClaw is running.")
+      } else {
+        gatewayConnectionStatusForDisplay(gatewayConnectionProblem.message)
+      }
+    }
+
+    "PROTOCOL_MISMATCH" -> {
+      recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
+    }
+
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> {
+      nativeString("The code may have expired or been generated for another Gateway.")
+    }
+
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
-    -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
-    "AUTH_PASSWORD_MISSING" -> "Gateway password is required. Enter it again or edit this connection."
-    "AUTH_PASSWORD_MISMATCH" -> "Gateway password is invalid. Re-enter it or reset this gateway connection."
-    "AUTH_TOKEN_MISSING" -> "Gateway token is required. Enter it again or edit this connection."
+    -> {
+      nativeString("Saved authentication is invalid. Re-authenticate or reset this gateway connection.")
+    }
+
+    "AUTH_PASSWORD_MISSING" -> {
+      nativeString("Gateway password is required. Enter it again or edit this connection.")
+    }
+
+    "AUTH_PASSWORD_MISMATCH" -> {
+      nativeString("Gateway password is invalid. Re-enter it or reset this gateway connection.")
+    }
+
+    "AUTH_TOKEN_MISSING" -> {
+      nativeString("Gateway token is required. Enter it again or edit this connection.")
+    }
+
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
-    -> "Gateway requires this device identity. Re-authenticate or reset this gateway connection."
-    else ->
+    -> {
+      nativeString("Gateway requires this device identity. Re-authenticate or reset this gateway connection.")
+    }
+
+    else -> {
       when (gatewayConnectionProblem.recommendedNextStep) {
-        "update_auth_credentials" -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
-        "update_auth_configuration" -> "Gateway authentication is not configured. Edit this connection and try again."
-        "review_auth_configuration" -> "Gateway authentication needs review. Check gateway settings, then retry."
-        else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: "Gateway authentication needs attention."
+        "update_auth_credentials" -> nativeString("Saved authentication is invalid. Re-authenticate or reset this gateway connection.")
+        "update_auth_configuration" -> nativeString("Gateway authentication is not configured. Edit this connection and try again.")
+        "review_auth_configuration" -> nativeString("Gateway authentication needs review. Check gateway settings, then retry.")
+        else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: nativeString("Gateway authentication needs attention.")
       }
+    }
+  }
+
+internal fun gatewayNetworkRecoveryHelpUrl(problem: GatewayConnectionProblem?): String? =
+  "https://tailscale.com/docs/install/android".takeIf {
+    problem?.isNetworkFailure == true && problem.isTailscaleRoute && problem.reason != "transport-cleanup"
   }
 
 private fun recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem: GatewayConnectionProblem): String {
@@ -1260,13 +2736,20 @@ private fun recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem: Gate
   val expected = gatewayConnectionProblem.expectedProtocol
   val summary =
     when {
-      clientMax != null && expected != null && clientMax < expected ->
-        "This app is older than the gateway. Update OpenClaw on this device, then retry."
-      clientMin != null && expected != null && clientMin > expected ->
-        "The gateway is older than this app. Update OpenClaw on the gateway host, then retry."
-      else -> "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry."
+      clientMax != null && expected != null && clientMax < expected -> nativeString("This app is older than the Gateway. Update OpenClaw on this device, then retry.")
+      clientMin != null && expected != null && clientMin > expected -> nativeString("The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry.")
+      else -> nativeString("The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry.")
     }
-  return protocolMismatchVersions(clientMin, clientMax, expected)?.let { "$summary $it" } ?: summary
+  return protocolMismatchVersions(clientMin, clientMax, expected)?.let { nativeString("\$summary \$details", summary, it) } ?: summary
+}
+
+internal fun recoveryGatewayProtocolMismatchCommand(
+  gatewayConnectionProblem: GatewayConnectionProblem?,
+): String? {
+  if (gatewayConnectionProblem?.code != "PROTOCOL_MISMATCH") return null
+  val clientMin = gatewayConnectionProblem.clientMinProtocol ?: return null
+  val expected = gatewayConnectionProblem.expectedProtocol ?: return null
+  return "openclaw update".takeIf { clientMin > expected }
 }
 
 private fun protocolMismatchVersions(
@@ -1298,53 +2781,133 @@ private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConn
   }
 }
 
-private fun copyApprovalCommand(
-  context: Context,
-  command: String,
-) {
-  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw pairing approval command", command))
-  Toast.makeText(context, "Approval command copied", Toast.LENGTH_SHORT).show()
+internal fun recoveryNodeApprovalCommand(pendingRequestId: String?): String {
+  val requestId = pendingRequestId?.trim()?.takeIf { it.isNotEmpty() }
+  return if (requestId != null) "openclaw nodes approve $requestId" else "openclaw nodes approve REQUEST_ID"
 }
 
-/** Copies the onboarding recovery snapshot for support without including credentials. */
-private fun copyGatewayDiagnostic(
-  context: Context,
-  statusText: String,
-  serverName: String?,
-  remoteAddress: String?,
+internal fun approvalRequestId(approval: GatewayNodeCapabilityApproval): String? =
+  when (approval) {
+    is GatewayNodeCapabilityApproval.PendingApproval -> approval.requestId
+    is GatewayNodeCapabilityApproval.PendingReapproval -> approval.requestId
+    else -> null
+  }
+
+internal fun nodeCapabilityApprovalNeedsUserAction(approval: GatewayNodeCapabilityApproval): Boolean =
+  approval is GatewayNodeCapabilityApproval.PendingApproval ||
+    approval is GatewayNodeCapabilityApproval.PendingReapproval ||
+    approval == GatewayNodeCapabilityApproval.Unapproved
+
+internal fun gatewayPairingContinueDestination(
   ready: Boolean,
-  gatewayConnectionProblem: GatewayConnectionProblem?,
-) {
-  val approvalCommand = recoveryGatewayApprovalCommand(gatewayConnectionProblem)
-  val diagnostic =
-    listOfNotNull(
-      "OpenClaw Android gateway diagnostic",
-      "Status: $statusText",
-      gatewayConnectionProblem?.message?.let { "Gateway problem: $it" },
-      gatewayConnectionProblem?.requestId?.let { "Pairing request: $it" },
-      approvalCommand?.let { "Approval command: $it" },
-      "Gateway: ${serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"}",
-      "Address: ${remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"}",
-      "Ready: ${if (ready) "yes" else "no"}",
-    ).joinToString("\n")
-  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostic", diagnostic))
-  Toast.makeText(context, "Diagnostic copied", Toast.LENGTH_SHORT).show()
-}
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
+): OnboardingStep? =
+  when {
+    ready -> OnboardingStep.Permissions
+    nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval) -> OnboardingStep.NodeApproval
+    else -> null
+  }
+
+internal fun nodeApprovalCheckingInProgress(
+  checkRequested: Boolean,
+  refreshStarted: Boolean,
+  nodesDevicesRefreshing: Boolean,
+): Boolean = checkRequested && (!refreshStarted || nodesDevicesRefreshing)
+
+internal fun nodeApprovalCheckShouldClearUnobservedRefresh(
+  step: OnboardingStep,
+  checkRequested: Boolean,
+  refreshStarted: Boolean,
+  nodesDevicesRefreshing: Boolean,
+): Boolean =
+  step == OnboardingStep.NodeApproval &&
+    checkRequested &&
+    !refreshStarted &&
+    !nodesDevicesRefreshing
+
+internal fun nodeApprovalCheckCanContinue(
+  checkRequested: Boolean,
+  refreshStarted: Boolean,
+  nodesDevicesRefreshing: Boolean,
+  ready: Boolean,
+): Boolean =
+  checkRequested &&
+    refreshStarted &&
+    !nodesDevicesRefreshing &&
+    ready
+
+internal fun nodeApprovalShouldAutoContinue(
+  step: OnboardingStep,
+  ready: Boolean,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
+  autoContinueEnabled: Boolean,
+): Boolean =
+  step == OnboardingStep.NodeApproval &&
+    autoContinueEnabled &&
+    ready &&
+    !nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)
+
+internal fun permissionContinueNeedsNodeApproval(
+  ready: Boolean,
+  requiresNodeApprovalAfterApply: Boolean,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
+): Boolean =
+  (
+    requiresNodeApprovalAfterApply &&
+      nodeCapabilityApproval != GatewayNodeCapabilityApproval.Unsupported
+  ) ||
+    (
+      !ready &&
+        nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)
+    )
 
 /** One permission row plus launcher callback for onboarding's final setup step. */
-private data class PermissionRowModel(
-  val title: String,
-  val subtitle: String,
+private enum class PermissionRowId(
+  val title: NativeText,
+  val subtitle: NativeText,
   val icon: ImageVector,
+  private val permissions: List<String> = emptyList(),
+) {
+  Voice(nativeText("Microphone"), nativeText("Transcribe voice prompts"), Icons.Default.Mic, listOf(Manifest.permission.RECORD_AUDIO)),
+  Camera(nativeText("Camera"), nativeText("Capture photos and clips from this phone"), Icons.Default.CameraAlt, listOf(Manifest.permission.CAMERA)),
+  Location(nativeText("Location"), nativeText("Read this phone's location"), Icons.Default.LocationOn, listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)),
+  Photos(nativeText("Photos"), nativeText("Read recent photos and media"), Icons.Default.Image),
+  Contacts(nativeText("Contacts"), nativeText("Find people and contact details"), Icons.Default.Person, requiredContactPermissions),
+  Calendar(nativeText("Calendar"), nativeText("Read and update events"), Icons.Default.CalendarMonth, requiredCalendarPermissions),
+  Notifications(nativeText("Notifications"), nativeText("Show OpenClaw alerts"), Icons.Default.Notifications),
+  NotificationListener(nativeText("Notification listener"), nativeText("Read selected app notifications"), Icons.Default.Sensors),
+  Motion(nativeText("Motion"), nativeText("Share steps and activity"), Icons.Default.Sensors, listOf(Manifest.permission.ACTIVITY_RECOGNITION)),
+  Sms(nativeText("SMS"), nativeText("Device access; Gateway opt-in still required"), Icons.Default.Notifications, listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)),
+  CallLog(nativeText("Call Log"), nativeText("Show recent call history"), Icons.Default.Person, listOf(Manifest.permission.READ_CALL_LOG)),
+  ;
+
+  val runtimePermissions: List<String>
+    get() =
+      when (this) {
+        Photos -> photoReadPermissionsForRequest()
+        Notifications -> if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
+        else -> permissions
+      }
+}
+
+private data class PermissionRowModel(
+  val id: PermissionRowId,
   val granted: Boolean,
-  val onClick: () -> Unit,
+  val statusText: NativeText = permissionRowStatusText(granted),
+  val subtitle: NativeText = id.subtitle,
+  val onClick: (() -> Unit)? = null,
 )
 
 /** Permission screen model plus a commit hook that persists granted feature toggles. */
 private class PermissionState(
   val rows: List<PermissionRowModel>,
+  val requiresNodeApprovalAfterApply: Boolean,
+  val requesting: Boolean,
+  val canRequestAll: Boolean,
+  val requestAll: () -> Unit,
+  val requestPermission: (List<String>) -> Unit,
+  val cancelRequest: () -> Unit,
+  val requestError: NativeText?,
   val applyToViewModel: () -> Unit,
 )
 
@@ -1352,20 +2915,58 @@ private class PermissionState(
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
 ): Boolean =
   isConnected &&
     isNodeConnected &&
-    when (nodeCapabilityApprovalState) {
-      GatewayNodeApprovalState.PendingApproval,
-      GatewayNodeApprovalState.PendingReapproval,
-      GatewayNodeApprovalState.Unapproved,
-      GatewayNodeApprovalState.Loading,
+    when (nodeCapabilityApproval) {
+      is GatewayNodeCapabilityApproval.PendingApproval,
+      is GatewayNodeCapabilityApproval.PendingReapproval,
+      GatewayNodeCapabilityApproval.Unapproved,
+      GatewayNodeCapabilityApproval.Loading,
       -> false
-      GatewayNodeApprovalState.Approved,
-      GatewayNodeApprovalState.Unsupported,
+
+      GatewayNodeCapabilityApproval.Approved,
+      GatewayNodeCapabilityApproval.Unsupported,
       -> true
     }
+
+private val requiredContactPermissions = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
+private val requiredCalendarPermissions = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+
+internal fun initialDeviceCapabilityEnabled(
+  savedCapabilityEnabled: Boolean,
+  androidPermissionGranted: Boolean,
+): Boolean = savedCapabilityEnabled && androidPermissionGranted
+
+internal fun deviceCapabilityRowStatusText(
+  capabilityEnabled: Boolean,
+  androidPermissionGranted: Boolean,
+): NativeText =
+  when {
+    capabilityEnabled -> nativeText("Enabled")
+    androidPermissionGranted -> nativeText("Off")
+    else -> nativeText("Allow")
+  }
+
+internal fun deviceCapabilityAfterRowTap(
+  currentCapabilityEnabled: Boolean,
+  androidPermissionGranted: Boolean,
+): Boolean? = if (androidPermissionGranted) !currentCapabilityEnabled else null
+
+private fun permissionRowStatusText(granted: Boolean): NativeText = if (granted) nativeText("Allowed") else nativeText("Allow")
+
+internal fun permissionChangesRequireNodeApproval(
+  currentCameraEnabled: Boolean,
+  requestedCameraEnabled: Boolean,
+  currentLocationMode: LocationMode,
+  requestedLocationMode: LocationMode,
+  currentSmsGranted: Boolean,
+  requestedSmsGranted: Boolean,
+): Boolean =
+  currentCameraEnabled != requestedCameraEnabled ||
+    currentLocationMode != requestedLocationMode ||
+    currentSmsGranted != requestedSmsGranted
 
 /** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable
@@ -1373,17 +2974,26 @@ private fun rememberPermissionState(
   context: Context,
   viewModel: MainViewModel,
 ): PermissionState {
-  var microphoneGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.RECORD_AUDIO)) }
-  var cameraGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.CAMERA)) }
+  val currentCameraEnabled by viewModel.cameraEnabled.collectAsState()
+  val currentLocationMode by viewModel.locationMode.collectAsState()
+  var microphoneGranted by rememberSaveable { mutableStateOf(context.hasPermission(Manifest.permission.RECORD_AUDIO)) }
+  var cameraPermissionGranted by remember { mutableStateOf(context.hasPermission(Manifest.permission.CAMERA)) }
+  var cameraGranted by rememberSaveable { mutableStateOf(initialDeviceCapabilityEnabled(currentCameraEnabled, cameraPermissionGranted)) }
+
+  var locationPermissionGranted by remember { mutableStateOf(hasLocationPermission(context)) }
   var locationGranted by rememberSaveable {
-    mutableStateOf(hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) || hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION))
+    mutableStateOf(initialDeviceCapabilityEnabled(currentLocationMode != LocationMode.Off, locationPermissionGranted))
   }
-  val photosPermission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-  var photosGranted by rememberSaveable { mutableStateOf(hasPermission(context, photosPermission)) }
-  var contactsGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_CONTACTS)) }
-  var calendarGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_CALENDAR)) }
+  val photosPermissions = photoReadPermissionsForRequest()
+  var photosGranted by rememberSaveable { mutableStateOf(hasPhotoReadPermission(context)) }
+  var contactsGranted by rememberSaveable {
+    mutableStateOf(requiredContactPermissions.all { permission -> context.hasPermission(permission) })
+  }
+  var calendarGranted by rememberSaveable {
+    mutableStateOf(requiredCalendarPermissions.all { permission -> context.hasPermission(permission) })
+  }
   var notificationsGranted by rememberSaveable {
-    mutableStateOf(Build.VERSION.SDK_INT < 33 || hasPermission(context, Manifest.permission.POST_NOTIFICATIONS))
+    mutableStateOf(Build.VERSION.SDK_INT < 33 || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS))
   }
   var notificationListenerGranted by rememberSaveable { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
   val photosAvailable = SensitiveFeatureConfig.photosEnabled
@@ -1393,126 +3003,228 @@ private fun rememberPermissionState(
       SensitiveFeatureConfig.smsEnabled &&
         context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
+  val currentSmsGranted =
+    !smsAvailable ||
+      (
+        context.hasPermission(Manifest.permission.SEND_SMS) &&
+          context.hasPermission(Manifest.permission.READ_SMS)
+      )
   val callLogAvailable = SensitiveFeatureConfig.callLogEnabled
-  var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)) }
-  var smsGranted by rememberSaveable {
-    mutableStateOf(
-      !smsAvailable ||
-        (
-          hasPermission(context, Manifest.permission.SEND_SMS) &&
-            hasPermission(context, Manifest.permission.READ_SMS)
-        ),
-    )
-  }
-  var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)) }
+  var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)) }
+  var smsReadGranted by rememberSaveable { mutableStateOf(context.hasPermission(Manifest.permission.READ_SMS)) }
+  var smsSendGranted by rememberSaveable { mutableStateOf(context.hasPermission(Manifest.permission.SEND_SMS)) }
+  val smsGranted = !smsAvailable || (smsReadGranted && smsSendGranted)
+  var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || context.hasPermission(Manifest.permission.READ_CALL_LOG)) }
   val lifecycleOwner = LocalLifecycleOwner.current
+  val requestScope = rememberCoroutineScope()
+  val requester = (context.applicationContext as NodeApp).permissionRequester
+  var requestJob by remember { mutableStateOf<Job?>(null) }
+  var requestError by remember { mutableStateOf<NativeText?>(null) }
 
-  DisposableEffect(lifecycleOwner, context) {
-    val observer =
-      LifecycleEventObserver { _, event ->
-        if (event == Lifecycle.Event.ON_RESUME) {
-          notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
-        }
-      }
-    lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  RefreshOnResume(lifecycleOwner, context) {
+    microphoneGranted = context.hasPermission(Manifest.permission.RECORD_AUDIO)
+    cameraPermissionGranted = context.hasPermission(Manifest.permission.CAMERA)
+    locationPermissionGranted = hasLocationPermission(context)
+    cameraGranted = cameraGranted && cameraPermissionGranted
+    locationGranted = locationGranted && locationPermissionGranted
+    photosGranted = hasPhotoReadPermission(context)
+    contactsGranted = requiredContactPermissions.all { context.hasPermission(it) }
+    calendarGranted = requiredCalendarPermissions.all { context.hasPermission(it) }
+    notificationsGranted = Build.VERSION.SDK_INT < 33 || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)
+    notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
+    motionGranted = !motionAvailable || context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+    smsReadGranted = context.hasPermission(Manifest.permission.READ_SMS)
+    smsSendGranted = context.hasPermission(Manifest.permission.SEND_SMS)
+    callLogGranted = !callLogAvailable || context.hasPermission(Manifest.permission.READ_CALL_LOG)
   }
 
-  val permissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-      microphoneGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: microphoneGranted
+  fun applyPermissionResult(
+    permissions: Map<String, Boolean>,
+    isBatch: Boolean,
+  ) {
+    cameraPermissionGranted = context.hasPermission(Manifest.permission.CAMERA)
+    locationPermissionGranted = hasLocationPermission(context)
+    microphoneGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: microphoneGranted
+    if (!isBatch) {
       cameraGranted = permissions[Manifest.permission.CAMERA] ?: cameraGranted
       locationGranted =
         permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
         permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
         locationGranted
-      photosGranted = permissions[photosPermission] ?: photosGranted
-      contactsGranted = permissions[Manifest.permission.READ_CONTACTS] ?: contactsGranted
-      calendarGranted = permissions[Manifest.permission.READ_CALENDAR] ?: calendarGranted
-      notificationsGranted =
-        if (Build.VERSION.SDK_INT >= 33) {
-          permissions[Manifest.permission.POST_NOTIFICATIONS] ?: notificationsGranted
-        } else {
-          true
-        }
-      motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
-      smsGranted =
-        (permissions[Manifest.permission.SEND_SMS] ?: smsGranted) &&
-        (permissions[Manifest.permission.READ_SMS] ?: smsGranted)
-      callLogGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: callLogGranted
     }
+    cameraGranted = cameraGranted && cameraPermissionGranted
+    locationGranted = locationGranted && locationPermissionGranted
+    photosGranted = hasPhotoReadPermission(context) || photosPermissions.any { permissions[it] == true }
+    contactsGranted =
+      mergedRequiredPermissionGrantState(
+        permissions = permissions,
+        requiredPermissions = requiredContactPermissions,
+        currentlyGranted = { permission -> context.hasPermission(permission) },
+      )
+    calendarGranted =
+      mergedRequiredPermissionGrantState(
+        permissions = permissions,
+        requiredPermissions = requiredCalendarPermissions,
+        currentlyGranted = { permission -> context.hasPermission(permission) },
+      )
+    notificationsGranted =
+      if (Build.VERSION.SDK_INT >= 33) {
+        permissions[Manifest.permission.POST_NOTIFICATIONS] ?: notificationsGranted
+      } else {
+        true
+      }
+    motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
+    smsReadGranted = permissions[Manifest.permission.READ_SMS] ?: context.hasPermission(Manifest.permission.READ_SMS)
+    smsSendGranted = permissions[Manifest.permission.SEND_SMS] ?: context.hasPermission(Manifest.permission.SEND_SMS)
+    callLogGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: callLogGranted
+  }
 
-  fun request(vararg permissions: String) {
-    permissionLauncher.launch(permissions.filterNot { hasPermission(context, it) }.toTypedArray())
+  fun request(
+    permissions: List<String>,
+    isBatch: Boolean = false,
+  ) {
+    if (requestJob?.isActive == true) return
+    requestError = null
+    requestJob =
+      requestScope.launch {
+        try {
+          val result =
+            requester.requestIfMissing(
+              permissions,
+              // User-driven setup keeps prompts serialized until a result or leaving setup.
+              timeoutMs = Long.MAX_VALUE,
+              showSettingsOnDenial = !isBatch,
+            )
+          applyPermissionResult(result, isBatch)
+        } catch (error: CancellationException) {
+          throw error
+        } catch (_: Exception) {
+          requestError = nativeText("Could not request permissions. Try again or continue without access.")
+        } finally {
+          if (requestJob === coroutineContext[Job]) requestJob = null
+        }
+      }
   }
 
   val rows =
     listOfNotNull(
-      PermissionRowModel("Voice", "Record and transcribe audio", Icons.Default.Mic, microphoneGranted) {
-        request(Manifest.permission.RECORD_AUDIO)
-      },
-      PermissionRowModel("Camera", "Capture photos and video", Icons.Default.CameraAlt, cameraGranted) {
-        request(Manifest.permission.CAMERA)
-      },
-      PermissionRowModel("Location", "Use location when needed", Icons.Default.LocationOn, locationGranted) {
-        request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-      },
-      if (photosAvailable) {
-        PermissionRowModel("Photos", "Attach photos and media", Icons.Default.Image, photosGranted) {
-          request(photosPermission)
+      PermissionRowModel(PermissionRowId.Voice, microphoneGranted),
+      PermissionRowModel(
+        PermissionRowId.Camera,
+        cameraGranted,
+        deviceCapabilityRowStatusText(
+          capabilityEnabled = cameraGranted,
+          androidPermissionGranted = cameraPermissionGranted,
+        ),
+      ) {
+        val nextCapabilityEnabled =
+          deviceCapabilityAfterRowTap(
+            currentCapabilityEnabled = cameraGranted,
+            androidPermissionGranted = context.hasPermission(Manifest.permission.CAMERA),
+          )
+        if (nextCapabilityEnabled != null) {
+          cameraGranted = nextCapabilityEnabled
+        } else {
+          request(PermissionRowId.Camera.runtimePermissions)
         }
-      } else {
-        null
       },
-      PermissionRowModel("Contacts", "Read contacts securely", Icons.Default.Person, contactsGranted) {
-        request(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
-      },
-      PermissionRowModel("Calendar", "Read events and schedules", Icons.Default.CalendarMonth, calendarGranted) {
-        request(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
-      },
-      PermissionRowModel("Notifications", "Send important alerts", Icons.Default.Notifications, notificationsGranted) {
-        if (Build.VERSION.SDK_INT >= 33) request(Manifest.permission.POST_NOTIFICATIONS)
-      },
-      PermissionRowModel("Notification listener", "Forward selected app alerts", Icons.Default.Sensors, notificationListenerGranted) {
-        context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-      },
-      if (motionAvailable) {
-        PermissionRowModel("Motion", "Read activity and step context", Icons.Default.Sensors, motionGranted) {
-          request(Manifest.permission.ACTIVITY_RECOGNITION)
+      PermissionRowModel(
+        PermissionRowId.Location,
+        locationGranted,
+        deviceCapabilityRowStatusText(locationGranted, locationPermissionGranted),
+      ) {
+        val nextCapabilityEnabled = deviceCapabilityAfterRowTap(locationGranted, hasLocationPermission(context))
+        if (nextCapabilityEnabled != null) {
+          locationGranted = nextCapabilityEnabled
+        } else {
+          request(PermissionRowId.Location.runtimePermissions)
         }
-      } else {
-        null
       },
+      if (photosAvailable) PermissionRowModel(PermissionRowId.Photos, photosGranted) else null,
+      PermissionRowModel(PermissionRowId.Contacts, contactsGranted),
+      PermissionRowModel(PermissionRowId.Calendar, calendarGranted),
+      PermissionRowModel(PermissionRowId.Notifications, notificationsGranted),
+      PermissionRowModel(PermissionRowId.NotificationListener, notificationListenerGranted) {
+        openNotificationListenerSettings(context)
+      },
+      if (motionAvailable) PermissionRowModel(PermissionRowId.Motion, motionGranted) else null,
       if (smsAvailable) {
-        PermissionRowModel("SMS", "Send and read messages when approved", Icons.Default.Notifications, smsGranted) {
-          request(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
-        }
+        PermissionRowModel(
+          PermissionRowId.Sms,
+          granted = smsGranted,
+          statusText = if (smsReadGranted != smsSendGranted) nativeText("Partial") else permissionRowStatusText(smsGranted),
+          subtitle =
+            when {
+              smsReadGranted && !smsSendGranted -> nativeText("Read allowed; send not granted. Gateway opt-in still required.")
+              smsSendGranted && !smsReadGranted -> nativeText("Send allowed; read not granted. Gateway opt-in still required.")
+              else -> PermissionRowId.Sms.subtitle
+            },
+        )
       } else {
         null
       },
-      if (callLogAvailable) {
-        PermissionRowModel("Call Log", "Read recent call context", Icons.Default.Person, callLogGranted) {
-          request(Manifest.permission.READ_CALL_LOG)
-        }
-      } else {
-        null
-      },
+      if (callLogAvailable) PermissionRowModel(PermissionRowId.CallLog, callLogGranted) else null,
     )
+
+  val requestedLocationMode =
+    locationModeAfterBackgroundSettings(
+      previousMode = currentLocationMode.takeUnless { it == LocationMode.Off } ?: LocationMode.WhileUsing,
+      foregroundGranted = locationGranted,
+      backgroundGranted =
+        currentLocationMode == LocationMode.Always &&
+          SensitiveFeatureConfig.backgroundLocationEnabled &&
+          context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+    )
+
+  val batchPermissions =
+    rows
+      .filterNot { row ->
+        when (row.id) {
+          PermissionRowId.Camera -> cameraPermissionGranted
+          PermissionRowId.Location -> locationPermissionGranted
+          else -> row.granted
+        }
+      }.flatMap { it.id.runtimePermissions }
 
   return PermissionState(
     rows = rows,
+    requesting = requestJob?.isActive == true,
+    canRequestAll = batchPermissions.isNotEmpty(),
+    requestAll = { request(batchPermissions, isBatch = true) },
+    requestPermission = { request(it) },
+    cancelRequest = { requestJob?.cancel() },
+    requestError = requestError,
+    requiresNodeApprovalAfterApply =
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = currentCameraEnabled,
+        requestedCameraEnabled = cameraGranted,
+        currentLocationMode = currentLocationMode,
+        requestedLocationMode = requestedLocationMode,
+        currentSmsGranted = currentSmsGranted,
+        requestedSmsGranted = smsGranted,
+      ),
     applyToViewModel = {
+      requestJob?.cancel()
       viewModel.setCameraEnabled(cameraGranted)
-      viewModel.setLocationMode(if (locationGranted) LocationMode.WhileUsing else LocationMode.Off)
-      viewModel.setNotificationForwardingEnabled(notificationListenerGranted)
+      viewModel.setLocationMode(requestedLocationMode)
+      viewModel.setNotificationForwardingEnabled(notificationListenerGranted && viewModel.notificationForwardingEnabled.value)
     },
   )
 }
 
-private fun hasPermission(
-  context: Context,
-  permission: String,
-): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+/** Permission results cover only the requested group; other entries use current system state. */
+internal fun mergedRequiredPermissionGrantState(
+  permissions: Map<String, Boolean>,
+  requiredPermissions: List<String>,
+  currentlyGranted: (String) -> Boolean,
+): Boolean = requiredPermissions.all { permission -> permissions[permission] ?: currentlyGranted(permission) }
+
+internal fun nearbyGatewayManualPort(endpoint: GatewayEndpoint): String = endpoint.port.toString()
+
+internal fun nearbyGatewayManualTls(endpoint: GatewayEndpoint): Boolean =
+  endpoint.tlsEnabled ||
+    !endpoint.tlsFingerprintSha256.isNullOrBlank() ||
+    !isLocalCleartextGatewayHost(endpoint.host)
 
 /** Returns true when Android exposes any motion sensor that can back node motion commands. */
 private fun hasMotionCapabilities(context: Context): Boolean {

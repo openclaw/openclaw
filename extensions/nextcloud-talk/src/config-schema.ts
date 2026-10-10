@@ -1,26 +1,20 @@
-// Nextcloud Talk helper module supports config schema behavior.
 import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
-  ToolPolicySchema,
+  ReplyToModeSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
-import { buildSecretInputSchema } from "./secret-input.js";
 
-const NextcloudTalkRoomSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.string()).optional(),
-    systemPrompt: z.string().optional(),
-  })
-  .strict();
+export const NextcloudTalkRoomSchema = buildGroupEntrySchema({
+  allowFrom: z.array(z.string()).optional(),
+}).omit({ toolsBySender: true });
 
 const NextcloudTalkNetworkSchema = z
   .object({
@@ -30,10 +24,12 @@ const NextcloudTalkNetworkSchema = z
   .strict()
   .optional();
 
-const NextcloudTalkAccountSchemaBase = z
+export const NextcloudTalkAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     markdown: MarkdownConfigSchema,
     baseUrl: z.string().optional(),
     botSecret: buildSecretInputSchema().optional(),
@@ -42,8 +38,17 @@ const NextcloudTalkAccountSchemaBase = z
     apiPassword: buildSecretInputSchema().optional(),
     apiPasswordFile: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    webhookPort: z.number().int().positive().optional(),
-    webhookHost: z.string().optional(),
+    legacyWebhook: z
+      .union([
+        z.literal(false),
+        z
+          .object({
+            port: z.number().int().min(1).max(65535),
+            host: z.string().optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
     webhookPath: z.string().optional(),
     webhookPublicUrl: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
@@ -56,25 +61,18 @@ const NextcloudTalkAccountSchemaBase = z
   })
   .strict();
 
-const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "nextcloud-talk",
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    requireOpenAllowFrom,
-  });
-});
-
-export const NextcloudTalkConfigSchema = NextcloudTalkAccountSchemaBase.extend({
-  accounts: z.record(z.string(), NextcloudTalkAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "nextcloud-talk",
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    requireOpenAllowFrom,
-  });
-});
+export const NextcloudTalkConfigSchema = buildMultiAccountChannelSchema(
+  NextcloudTalkAccountSchemaBase,
+  {
+    optionalAccount: true,
+    refine: (value, ctx) => {
+      requireChannelOpenAllowFrom({
+        channel: "nextcloud-talk",
+        policy: value.dmPolicy,
+        allowFrom: value.allowFrom,
+        ctx,
+        requireOpenAllowFrom,
+      });
+    },
+  },
+);

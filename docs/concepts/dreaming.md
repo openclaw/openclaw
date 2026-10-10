@@ -8,139 +8,221 @@ read_when:
   - You want to tune consolidation without polluting MEMORY.md
 ---
 
-Dreaming is the background memory consolidation system in `memory-core`. It helps OpenClaw move strong short-term signals into durable memory while keeping the process explainable and reviewable.
+Dreaming is the background memory consolidation system in `memory-core`. It moves strong short-term signals into durable memory while keeping the process explainable and reviewable.
 
 <Note>
-Dreaming is **opt-in** and disabled by default.
+Dreaming is enabled by default. Set
+`plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
 </Note>
+
+When the cron scheduler is disabled (`cron.enabled: false` or
+`OPENCLAW_SKIP_CRON=1`), dreaming defers automatic job creation and updates while
+preserving existing jobs. Startup cleanup of historical dreaming artifacts waits
+for each agent's pending database preparation before running, including managed
+background cleanup after a restart or upgrade. Database preparation failures are
+reported with repair guidance. If an agent database is still absent after preparation,
+cleanup completes without creating it; concurrent first creation is not a cleanup failure.
+Existing databases remain protected against replacement during cleanup.
+Explicitly disabling dreaming removes jobs carrying
+its canonical declaration key in the active cron store.
 
 ## What dreaming writes
 
-Dreaming keeps two kinds of output:
+- **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).
+- **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
+- **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
-- **Machine state** in `memory/.dreams/` (recall store, phase signals, ingestion checkpoints, locks).
-- **Human-readable output** in `DREAMS.md` (or existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
+The built-in SQLite store reads only the selected workspace's state for lookups
+and cleanup. Corrupt JSON in another workspace does not block these operations;
+corrupt JSON in a live record in the selected workspace still reports a storage error.
 
 Long-term promotion still writes only to `MEMORY.md`.
+Deep reports summarize why ranked candidates were not promoted, using counts by
+rejection category without copying rejected snippets or source identifiers.
+These counts cover candidates that reached promotion; they do not describe
+entries excluded during ranking. A candidate that changes during the final
+apply check keeps a general change reason rather than an inferred cause.
+An empty sweep records completion in plugin state without creating memory or
+dreaming files, so it does not complete a new workspace's first-run setup.
+Existing daily notes can still receive managed phase-block updates.
+Each newly promoted entry carries trailing recall metadata derived from the
+candidate: up to three concept tags in `<!-- trigger: phrase one, phrase two -->`
+and a bounded `<!-- importance: N -->` value from 1 to 10. Consolidation keeps
+existing annotated entries byte-for-byte unless it explicitly merges or
+supersedes them.
 
 ## Phase model
 
-Dreaming uses three cooperative phases:
+Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep. These are internal implementation phases, not separate user-configured modes.
 
 | Phase | Purpose                                   | Durable write     |
 | ----- | ----------------------------------------- | ----------------- |
 | Light | Sort and stage recent short-term material | No                |
-| Deep  | Score and promote durable candidates      | Yes (`MEMORY.md`) |
 | REM   | Reflect on themes and recurring ideas     | No                |
-
-These phases are internal implementation details, not separate user-configured "modes."
+| Deep  | Score and promote durable candidates      | Yes (`MEMORY.md`) |
 
 <AccordionGroup>
   <Accordion title="Light phase">
-    Light phase ingests recent daily memory signals and recall traces, dedupes them, and stages candidate lines.
-
-    - Reads from short-term recall state, recent daily memory files, and redacted session transcripts when available.
+    - Reads recent short-term recall state, daily memory files, and redacted session transcripts when available.
+    - Dedupes signals and stages candidate lines.
     - Writes a managed `## Light Sleep` block when storage includes inline output.
     - Records reinforcement signals for later deep ranking.
     - Never writes to `MEMORY.md`.
 
   </Accordion>
-  <Accordion title="Deep phase">
-    Deep phase decides what becomes long-term memory.
-
-    - Ranks candidates using weighted scoring and threshold gates.
-    - Requires `minScore`, `minRecallCount`, and `minUniqueQueries` to pass.
-    - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
-    - Appends promoted entries to `MEMORY.md`.
-    - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally writes `memory/dreaming/deep/YYYY-MM-DD.md`.
-
-  </Accordion>
   <Accordion title="REM phase">
-    REM phase extracts patterns and reflective signals.
-
     - Builds theme and reflection summaries from recent short-term traces.
     - Writes a managed `## REM Sleep` block when storage includes inline output.
     - Records REM reinforcement signals used by deep ranking.
     - Never writes to `MEMORY.md`.
 
   </Accordion>
+  <Accordion title="Deep phase">
+    - Ranks candidates with weighted scoring and threshold gates (`minScore`, `minRecallCount`, `minUniqueQueries` must all pass).
+    - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
+    - Passes gated owner and agent-derived candidates to a tool-free completion that chooses additions, merges, and supersessions against the current `MEMORY.md`.
+    - Composes `MEMORY.md` from validated source evidence, preserving unrelated entries and candidate source references within the prior-entry loss limit and bootstrap budget.
+    - Falls back to the previous append-only promotion path when the model is unavailable or the rewrite fails validation.
+    - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally `memory/dreaming/deep/YYYY-MM-DD.md`.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Session transcript ingestion
 
-Dreaming can ingest redacted session transcripts into the dreaming corpus. When transcripts are available, they are fed into the light phase alongside daily memory signals and recall traces. Personal and sensitive content is redacted before ingestion.
+Dreaming can ingest redacted session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Personal and sensitive content is redacted before ingestion, and runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
+
+Two operator controls exclude sessions from automatic ingestion, each with a recorded reason: the [memory admission policy](/concepts/memory-provenance#admission-keeping-sources-out-of-memory) matches retained hook-source, channel, or chat-type metadata, and [`memory forget`](/cli/memory#memory-forget) records selected session IDs as `forgotten` for future scans. Policy changes do not erase existing candidates or prevent direct file writes. Manual session backfill applies both controls in preview, REM, and apply modes, and preserves source-session origins when staging candidates.
+
+## Consolidation safety
+
+The deterministic score, recall-count, and query-diversity thresholds remain
+the candidate gate. Consolidation runs only after those gates pass.
+
+Before building the consolidation prompt, `memory-core` removes candidates
+whose indexed provenance is `untrusted` or `system`. This is a structural
+taint gate, not a score penalty. Eligible candidates include their origin,
+session kind, observation time, optional supersession key, and daily-note
+source reference.
+
+The model returns operation decisions, not replacement memory prose. The memory
+writer applies those decisions to the existing file using each candidate's
+bounded, sourced entry. An accepted rewrite or append compaction must:
+
+- preserve prior entries within `phases.deep.maxPriorEntryLossFraction`
+- include every promoted candidate's `Source: path#Lx-Ly` reference
+- stay within the `MEMORY.md` bootstrap-safe file budget
+- parse as the expected structured response
+
+Before the file changes, the previous `MEMORY.md` is stored in SQLite-backed
+plugin state. `DREAMS.md` receives added, merged, and superseded counts plus
+short diff-style highlights. This makes each rewrite reviewable without
+turning the Dream Diary into a promotion source.
+
+Background consolidation is informed by sleep-time compute
+(arXiv:2504.13171). The provenance and reflection boundary follows the durable
+memory framing in the Generative Agents research.
 
 ## Dream Diary
 
-Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured. If the configured model is unavailable, Dream Diary retries once with the session default model.
+Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. Each sweep with useful material combines its Light, REM, and successfully promoted Deep inputs into one short diary entry, including when nothing qualifies for durable promotion. The tool-free background completion uses the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
+
+Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
+
+Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,
+instead of a separate one-minute deadline. It inherits the same 48-hour default and
+timer-safe unlimited setting as agent runs. The selected provider's
+`models.providers.<provider>.timeoutSeconds` still bounds its model requests, so
+keep both budgets long enough for slow local inference.
 
 <Note>
-This diary is for human reading in the Dreams UI, not a promotion source. Dreaming-generated diary/report artifacts are excluded from short-term promotion. Only grounded memory snippets are eligible to promote into `MEMORY.md`.
+The diary is for human reading in the Dreams UI, not a promotion source. Diary/report artifacts are excluded from short-term promotion; only grounded memory snippets are eligible to promote into `MEMORY.md`.
 </Note>
 
 There is also a grounded historical backfill lane for review and recovery work:
 
 <AccordionGroup>
   <Accordion title="Backfill commands">
-    - `memory rem-harness --path ... --grounded` previews grounded diary output from historical `YYYY-MM-DD.md` notes.
-    - `memory rem-backfill --path ...` writes reversible grounded diary entries into `DREAMS.md`.
-    - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase already uses.
-    - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+    - `openclaw memory rem-harness --path <path> --grounded` previews grounded diary output from historical `YYYY-MM-DD.md` notes.
+    - `openclaw memory rem-backfill --path <path>` writes reversible grounded diary entries into `DREAMS.md`.
+    - `openclaw memory rem-backfill --path <path> --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase uses.
+    - `openclaw memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+    - `openclaw memory session-backfill --agent <id>` previews trusted candidates from the agent's retained session history, oldest unprocessed day first.
+    - `openclaw memory session-backfill --agent <id> --apply` stages those candidates through the normal short-term store and writes reversible diary blocks without changing `MEMORY.md` or `USER.md`.
+    - `openclaw memory session-backfill --agent <id> --rem` writes a deterministic grounded preview per day to `DREAMS.md` without staging candidates or calling a model.
+    - `openclaw memory session-backfill --agent <id> --rollback` clears the shared grounded backfill candidates and diary blocks, including artifacts created by `rem-backfill`.
 
   </Accordion>
 </AccordionGroup>
 
-The Control UI exposes the same diary backfill/reset flow so you can inspect results in the Dreams scene before deciding whether the grounded candidates deserve promotion. The Scene also shows a distinct grounded lane so you can see which staged short-term entries came from historical replay, which promoted items were grounded-led, and clear only grounded-only staged entries without touching ordinary live short-term state.
+Session backfill uses canonical retained transcript identities, including
+sessions preserved across rotation. Messages are bucketed in the configured
+dreaming timezone and share live ingestion's tracked message hashes and signal
+caps. Apply drains bounded batches to completion in one command. Rollback
+removes generated artifacts plus the hashes and cursor progress owned by those
+batches, allowing the same candidates to be staged again.
+Foreign files supplied with `--archive-files` are treated conservatively. Their
+embedded ownership fields are caller-controlled and therefore remain untrusted;
+without an authenticated provenance contract, they cannot enter short-term
+staging. Tool output, web content, and non-owner turns are excluded from the
+canonical session path as well.
+
+The Control UI exposes the same diary backfill/reset flow on the agent's Memory tab (Agents page) so you can inspect results in the dream scene before deciding whether grounded candidates deserve promotion. A distinct grounded Scene lane shows which staged short-term entries came from historical replay, which promoted items were grounded-led, and lets you clear only grounded-only staged entries without touching live short-term state.
 
 ## Deep ranking signals
 
 Deep ranking uses six weighted base signals plus phase reinforcement:
 
-| Signal              | Weight | Description                                       |
-| ------------------- | ------ | ------------------------------------------------- |
-| Frequency           | 0.24   | How many short-term signals the entry accumulated |
-| Relevance           | 0.30   | Average retrieval quality for the entry           |
-| Query diversity     | 0.15   | Distinct query/day contexts that surfaced it      |
-| Recency             | 0.15   | Time-decayed freshness score                      |
-| Consolidation       | 0.10   | Multi-day recurrence strength                     |
-| Conceptual richness | 0.06   | Concept-tag density from snippet/path             |
+| Signal              | Weight | Description                                          |
+| ------------------- | ------ | ---------------------------------------------------- |
+| Relevance           | 0.30   | Average retrieval quality for the entry              |
+| Frequency           | 0.24   | How many short-term signals the entry accumulated    |
+| Query diversity     | 0.15   | Distinct interactive recall queries that surfaced it |
+| Recency             | 0.15   | Time-decayed freshness score                         |
+| Consolidation       | 0.10   | Multi-day recurrence strength                        |
+| Conceptual richness | 0.06   | Concept-tag density from snippet/path                |
 
-Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
-
-Shadow-trial results can be layered on top of that base score as a review
-signal before any durable write. A helpful trial gives the candidate a small
-bounded boost, a neutral trial keeps it deferred, and a harmful trial marks it
-as rejected for that scoring pass. This signal is still report-only: it can
-change candidate ordering or review metadata, but it does not write to
-`MEMORY.md` or promote the candidate by itself.
-
-## QA shadow trial report coverage
-
-QA Lab includes a report-only scenario for exploring how a future dreaming
-shadow trial could review a candidate memory before promotion. The scenario asks
-an agent to compare a baseline answer with an answer that can use the candidate
-memory, then write a local report with a verdict, reason, and risk flags.
-
-This coverage is intentionally scoped to QA. It verifies that the report artifact
-stays separate from `MEMORY.md` and that the agent does not claim the candidate
-was promoted. It does not add production shadow-trial behavior or change the
-deep-phase promotion engine.
-
-The `memory-core` shadow-trial runner keeps that same report-only contract for
-code paths that need a stable artifact. It accepts the candidate, trial prompt,
-baseline outcome, candidate outcome, verdict, reason, risk flags, and evidence
-references, then writes a report with `promotion action: report-only`. Helpful
-verdicts map to a `promote` recommendation, neutral verdicts map to `defer`, and
-harmful verdicts map to `reject`; none of those recommendations writes to
-`MEMORY.md` or applies deep-phase promotion.
+Light and REM phase hits recorded in SQLite-backed plugin state add a small recency-decayed boost.
 
 ## Scheduling
 
-When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
+When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
 
-The sweep includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+Plugin reloads preserve the managed schedule. The previous instance stops its
+background callbacks and settles pending diary publication before its replacement
+takes over, so scheduled sweeps can continue without a Gateway restart.
 
-Default cadence behavior:
+Runtime reconciliation owns only jobs declared as
+`memory-core:memory-dreaming-promotion`. It uses Doctor's read-only classifier
+on the active jobs already listed to report historical rows. Recognized legacy
+or phase jobs require Doctor repair before runtime creates or updates the managed
+job. Declared jobs with retired payload formats also require Doctor repair.
+Jobs with historical tags and authored
+payloads remain untouched and produce a manual-review warning; they do not block
+creation or updates of the declared dreaming job. Disabling dreaming still removes
+only explicitly declared jobs and reports any remaining historical work.
+
+Run `openclaw doctor --fix` to adopt
+historical dreaming jobs identified by ownership metadata and known generated
+payloads. A historical tag on a custom prompt produces a manual-review warning.
+Doctor first saves a verified SQLite backup, then adopts one unified
+job in each persisted cron store partition without changing its ID, ordering,
+or runtime state. If only legacy light/REM jobs exist, it promotes the oldest
+valid phase job in place. It removes recognized duplicates only after that
+partition has a valid survivor. When dreaming is disabled, Doctor retires the
+recognized managed rows instead. Jobs with a different declaration key and
+unrelated operator jobs remain unchanged; malformed or ambiguous rows produce
+a repair warning and remain in place.
+
+Dreaming completions share the [background work budget](/concepts/queue#background-work) with Skill Workshop and other plugin completions: at most three runs in total, with up to three available to `memory-core`. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these runs together in the `background` row.
+
+An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
+
+```bash
+openclaw config set agents.defaults.systemAgent.agentId ops
+```
+
+This selects the execution owner; it does not change any agent's workspace or limit the sweep to that agent's memory. A sole-agent installation resolves its owner automatically.
 
 | Setting              | Default       |
 | -------------------- | ------------- |
@@ -150,7 +232,7 @@ Default cadence behavior:
 ## Quick start
 
 <Tabs>
-  <Tab title="Enable dreaming">
+  <Tab title="Disable dreaming">
     ```json
     {
       "plugins": {
@@ -158,7 +240,7 @@ Default cadence behavior:
           "memory-core": {
             "config": {
               "dreaming": {
-                "enabled": true
+                "enabled": false
               }
             }
           }
@@ -190,16 +272,14 @@ Default cadence behavior:
 
 ## Slash command
 
-```
+```text
 /dreaming status
 /dreaming on
 /dreaming off
 /dreaming help
 ```
 
-`/dreaming on` and `/dreaming off` change gateway-wide configuration. Channel
-callers must be owners, and Gateway clients must have `operator.admin`.
-`/dreaming status` and `/dreaming help` remain read-only.
+`/dreaming on` and `/dreaming off` require owner status for channel callers or `operator.admin` for Gateway clients. `/dreaming status` and `/dreaming help` are read-only.
 
 ## CLI workflow
 
@@ -239,21 +319,24 @@ callers must be owners, and Gateway clients must have `operator.admin`.
 
 All settings live under `plugins.entries.memory-core.config.dreaming`.
 
-<ParamField path="enabled" type="boolean" default="false">
+<ParamField path="enabled" type="boolean" default="true">
   Enable or disable the dreaming sweep.
+</ParamField>
+<ParamField path="phases.deep.maxPriorEntryLossFraction" type="number" default="0.25">
+  Reject a consolidation rewrite or append compaction when it removes more than this fraction of prior entries. Append compaction only removes whole machine-generated promotion sections.
 </ParamField>
 <ParamField path="frequency" type="string" default="0 3 * * *">
   Cron cadence for the full dreaming sweep.
 </ParamField>
 <ParamField path="model" type="string">
-  Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
+  Optional Dream Diary completion model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
 </ParamField>
 <ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="160">
   Maximum estimated token count kept from each short-term recall snippet promoted into `MEMORY.md`. Ranking provenance remains visible.
 </ParamField>
 
 <Warning>
-`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. Trust or allowlist failures stay visible instead of falling back silently; the retry only covers model-unavailable errors.
+`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. The automatic retry only covers model-unavailable errors; trust or allowlist failures produce a fallback diary trace and a degraded outcome instead of silently switching models.
 </Warning>
 
 <Note>
@@ -271,13 +354,23 @@ When enabled, the Gateway **Dreams** tab shows:
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
 
-## Dreaming never runs: status shows blocked
+When the bundled [`memory-wiki`](/plugins/memory-wiki) plugin is enabled, the
+Diary view gains two more sub-tabs next to Dreams:
 
-If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron exists but the default agent heartbeat is not firing. Check that heartbeat is enabled for the default agent and that its target is not `none`, then run `openclaw memory status --deep` again after the next heartbeat interval.
+- **Imported Insights**: clustered insights surfaced by external-history
+  imports (for example `openclaw wiki chatgpt import`), for review before any
+  of it graduates into durable memory
+- **Memory Wiki**: the compiled wiki the memory system can search and reason
+  over — synthesis, entity, and concept pages (plus sources and reports that
+  carry claims, open questions, or contradictions) with per-page counts, a
+  full-vault breakdown, and inline page previews
+
+Both sub-tabs show an enable hint instead when `memory-wiki` is off.
 
 ## Related
 
 - [Memory](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Memory CLI](/cli/memory)
 - [Memory configuration reference](/reference/memory-config)
 - [Memory search](/concepts/memory-search)

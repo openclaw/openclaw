@@ -1,30 +1,28 @@
-// Clack prompter adapts wizard prompt requests to Clack terminal prompts.
 import {
   autocomplete,
   autocompleteMultiselect,
+  CANCEL_SYMBOL,
   cancel,
   confirm,
   intro,
-  isCancel,
   multiselect,
   type Option,
   outro,
   password,
   select,
   settings,
-  spinner,
   text,
 } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { note as emitNote } from "../../packages/terminal-core/src/note.js";
+import { noteToStream as emitNote } from "../../packages/terminal-core/src/note.js";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
-  stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
-import { createCliProgress } from "../cli/progress.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { createCliProgress, createProgressSpinner } from "../cli/progress.js";
 import {
   autocompleteMultiselectWithNavigationFooter,
   autocompleteWithNavigationFooter,
@@ -37,17 +35,22 @@ import {
 import type { WizardProgress, WizardPrompter, WizardPromptNavigation } from "./prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 
-// Clack-backed WizardPrompter implementation for interactive CLI setup. It
-// converts the generic wizard prompt contract into styled Clack prompts.
-function guardCancel<T>(value: T | symbol): T {
-  if (isCancel(value)) {
-    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+// Same species as the pixel-mascot banner, compressed into a four-column
+// spinner for long-running wizard steps.
+const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
+function guardCancel<T>(value: T | symbol, output: NodeJS.WriteStream, signal?: AbortSignal): T {
+  if (value === CANCEL_SYMBOL) {
+    if (!signal?.aborted) {
+      cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.", { output });
+    }
     throw new WizardCancelledError();
   }
-  return value;
+  // SAFETY: Clack returns T or CANCEL_SYMBOL, but its declarations widen the sentinel to symbol.
+  return value as T;
 }
 
 type KeypressInfo = {
+  ctrl?: boolean;
   name?: string;
 };
 
@@ -95,284 +98,229 @@ async function withHorizontalCursorActionsDisabled<T>(
 async function runPromptWithNavigation<T>(
   navigation: WizardPromptNavigation | undefined,
   work: (signal: AbortSignal | undefined) => Promise<T | symbol>,
+  output: NodeJS.WriteStream,
+  externalSignal?: AbortSignal,
 ): Promise<T> {
-  const controller =
-    navigation?.canGoBack || navigation?.canGoForward ? new AbortController() : undefined;
-  let rejectNavigation: ((error: Error) => void) | undefined;
-  const onKeypress = (_input: string | undefined, key: KeypressInfo | undefined) => {
-    const nextDirection = resolveNavigationDirection(navigation, key);
-    if (!nextDirection) {
-      return;
-    }
-    rejectNavigation?.(new WizardNavigationError(nextDirection));
-    controller?.abort();
-  };
+  // Restore cursor actions after cancellation handling and stdin cleanup, so
+  // Clack cannot consume navigation keys during prompt finalization.
+  return await withHorizontalCursorActionsDisabled(hasPromptNavigation(navigation), async () => {
+    const controller = new AbortController();
+    const signal = externalSignal
+      ? AbortSignal.any([controller.signal, externalSignal])
+      : controller.signal;
+    let navigationDirection: "back" | "forward" | undefined;
+    let promptSettled = false;
+    let cancellationImmediate: NodeJS.Immediate | undefined;
+    const queueCancellation = () => {
+      if (cancellationImmediate || signal.aborted || navigationDirection) {
+        return;
+      }
+      // Input completion can settle Clack in the same event dispatch. Defer the
+      // fallback abort so Clack owns finalization when it consumed the input.
+      cancellationImmediate = setImmediate(() => {
+        cancellationImmediate = undefined;
+        if (!promptSettled && !signal.aborted && !navigationDirection) {
+          controller.abort();
+        }
+      });
+    };
+    const onKeypress = (input: string | undefined, key: KeypressInfo | undefined) => {
+      if (input === "\x04" || (key?.ctrl === true && key.name === "d")) {
+        queueCancellation();
+        return;
+      }
+      const nextDirection = resolveNavigationDirection(navigation, key);
+      if (!nextDirection) {
+        return;
+      }
+      navigationDirection ??= nextDirection;
+      controller.abort();
+    };
 
-  try {
-    if (!controller) {
-      return guardCancel(await work(undefined));
-    }
-
-    const navigationPromise = new Promise<T | symbol>((_, reject) => {
-      rejectNavigation = reject;
-    });
-    process.stdin.on("keypress", onKeypress);
-    const promptPromise = work(controller.signal);
-    promptPromise.catch(() => {
-      // Navigation may settle first while Clack is still unwinding its prompt.
-    });
-    return guardCancel(await Promise.race([promptPromise, navigationPromise]));
-  } finally {
-    if (controller) {
+    try {
+      process.stdin.once("end", queueCancellation);
+      if (process.stdin.readableEnded) {
+        queueCancellation();
+      }
+      process.stdin.on("keypress", onKeypress);
+      const value = await work(signal).finally(() => {
+        promptSettled = true;
+      });
+      if (navigationDirection) {
+        throw new WizardNavigationError(navigationDirection);
+      }
+      return guardCancel(value, output, externalSignal);
+    } finally {
+      if (cancellationImmediate) {
+        clearImmediate(cancellationImmediate);
+        cancellationImmediate = undefined;
+      }
+      process.stdin.off("end", queueCancellation);
       process.stdin.off("keypress", onKeypress);
     }
-  }
-}
-
-function normalizeSearchTokens(search: string): string[] {
-  return normalizeLowercaseStringOrEmpty(search)
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-}
-
-function buildOptionSearchText<T>(option: Option<T>): string {
-  const label = stripAnsi(option.label ?? "");
-  const hint = stripAnsi(option.hint ?? "");
-  const value = String(option.value ?? "");
-  return normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
+  });
 }
 
 export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
-  const tokens = normalizeSearchTokens(search);
+  const tokens = normalizeLowercaseStringOrEmpty(search)
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
   if (tokens.length === 0) {
     return true;
   }
-  const haystack = buildOptionSearchText(option);
+  const label = stripAnsi(option.label ?? "");
+  const hint = stripAnsi(option.hint ?? "");
+  const value = String(option.value ?? "");
+  const haystack = normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
   return tokens.every((token) => haystack.includes(token));
 }
 
-// Public factory used by setup/onboard commands. Keep side effects inside method
-// calls so tests can import the module without starting prompts.
-export function createClackPrompter(): WizardPrompter {
+export function createClackPrompter(
+  output: NodeJS.WriteStream = process.stdout,
+  signal?: AbortSignal,
+): WizardPrompter {
   return {
     intro: async (title) => {
-      intro(stylePromptTitle(title) ?? title);
+      intro(stylePromptTitle(title) ?? title, { output });
     },
     outro: async (message) => {
-      outro(stylePromptTitle(message) ?? message);
+      outro(stylePromptTitle(message) ?? message, { output });
     },
     note: async (message, title) => {
-      emitNote(message, title);
+      emitNote(message, title, output);
     },
     plain: async (message) => {
-      process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
+      output.write(message.endsWith("\n") ? message : `${message}\n`);
     },
     select: async (params) => {
-      const options = params.options.map((opt) => {
-        const base = { value: opt.value, label: opt.label };
-        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-      }) as Option<(typeof params.options)[number]["value"]>[];
+      const { message, options: styledOptions } = styleSelectParams(params);
+      const options = styledOptions as Option<(typeof params.options)[number]["value"]>[];
 
-      if (params.searchable) {
-        return await withHorizontalCursorActionsDisabled(
-          hasPromptNavigation(params.navigation),
-          async () =>
-            await runPromptWithNavigation(params.navigation, async (signal) =>
-              params.navigation
-                ? await autocompleteWithNavigationFooter({
-                    message: stylePromptMessage(params.message),
-                    options,
-                    initialValue: params.initialValue,
-                    filter: tokenizedOptionFilter,
-                    signal,
-                    navigation: params.navigation,
-                  })
-                : await autocomplete({
-                    message: stylePromptMessage(params.message),
-                    options,
-                    initialValue: params.initialValue,
-                    filter: tokenizedOptionFilter,
-                    signal,
-                  }),
-            ),
-        );
-      }
-
-      return await withHorizontalCursorActionsDisabled(
-        hasPromptNavigation(params.navigation),
-        async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) =>
-            params.navigation
-              ? await selectWithNavigationFooter({
-                  message: stylePromptMessage(params.message),
-                  options,
-                  initialValue: params.initialValue,
-                  signal,
-                  navigation: params.navigation,
-                })
-              : await select({
-                  message: stylePromptMessage(params.message),
-                  options,
-                  initialValue: params.initialValue,
-                  signal,
-                }),
-          ),
+      return await runPromptWithNavigation(
+        params.navigation,
+        async (promptSignal) => {
+          const prompt = params.searchable
+            ? params.navigation
+              ? autocompleteWithNavigationFooter
+              : autocomplete
+            : params.navigation
+              ? selectWithNavigationFooter
+              : select;
+          return await prompt<(typeof params.options)[number]["value"]>({
+            message,
+            options,
+            initialValue: params.initialValue,
+            ...(params.searchable ? { filter: tokenizedOptionFilter } : {}),
+            signal: promptSignal,
+            ...(params.navigation ? { navigation: params.navigation } : {}),
+            output,
+          });
+        },
+        output,
+        signal,
       );
     },
     multiselect: async (params) => {
-      const options = params.options.map((opt) => {
-        const base = { value: opt.value, label: opt.label };
-        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-      }) as Option<(typeof params.options)[number]["value"]>[];
+      const { message, options: styledOptions } = styleSelectParams(params);
+      const options = styledOptions as Option<(typeof params.options)[number]["value"]>[];
 
-      if (params.searchable) {
-        return await withHorizontalCursorActionsDisabled(
-          hasPromptNavigation(params.navigation),
-          async () =>
-            await runPromptWithNavigation(params.navigation, async (signal) =>
-              params.navigation
-                ? await autocompleteMultiselectWithNavigationFooter({
-                    message: stylePromptMessage(params.message),
-                    options,
-                    initialValues: params.initialValues,
-                    filter: tokenizedOptionFilter,
-                    signal,
-                    navigation: params.navigation,
-                  })
-                : await autocompleteMultiselect({
-                    message: stylePromptMessage(params.message),
-                    options,
-                    initialValues: params.initialValues,
-                    filter: tokenizedOptionFilter,
-                    signal,
-                  }),
-            ),
-        );
-      }
-
-      return await withHorizontalCursorActionsDisabled(
-        hasPromptNavigation(params.navigation),
-        async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) =>
-            params.navigation
-              ? await multiselectWithNavigationFooter({
-                  message: stylePromptMessage(params.message),
-                  options,
-                  initialValues: params.initialValues,
-                  signal,
-                  navigation: params.navigation,
-                })
-              : await multiselect({
-                  message: stylePromptMessage(params.message),
-                  options,
-                  initialValues: params.initialValues,
-                  signal,
-                }),
-          ),
+      return await runPromptWithNavigation(
+        params.navigation,
+        async (promptSignal) => {
+          const prompt = params.searchable
+            ? params.navigation
+              ? autocompleteMultiselectWithNavigationFooter
+              : autocompleteMultiselect
+            : params.navigation
+              ? multiselectWithNavigationFooter
+              : multiselect;
+          return await prompt({
+            message,
+            options,
+            initialValues: params.initialValues,
+            ...(params.searchable ? { filter: tokenizedOptionFilter } : {}),
+            signal: promptSignal,
+            ...(params.navigation ? { navigation: params.navigation } : {}),
+            output,
+          });
+        },
+        output,
+        signal,
       );
     },
     text: async (params) => {
-      const validate = params.validate;
-      if (params.sensitive) {
-        return await withHorizontalCursorActionsDisabled(
-          hasPromptNavigation(params.navigation),
-          async () =>
-            await runPromptWithNavigation(params.navigation, async (signal) =>
-              params.navigation
-                ? await passwordWithNavigationFooter({
-                    message: stylePromptMessage(params.message),
-                    validate: validate ? (value) => validate(value ?? "") : undefined,
-                    navigation: params.navigation,
-                    signal,
-                  })
-                : await password({
-                    message: stylePromptMessage(params.message),
-                    validate: validate ? (value) => validate(value ?? "") : undefined,
-                    signal,
-                  }),
-            ),
-        );
-      }
-      return await withHorizontalCursorActionsDisabled(
-        hasPromptNavigation(params.navigation),
-        async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) =>
-            params.navigation
-              ? await textWithNavigationFooter({
-                  message: stylePromptMessage(params.message),
-                  initialValue: params.initialValue,
-                  placeholder: params.placeholder,
-                  validate: validate ? (value) => validate(value ?? "") : undefined,
-                  navigation: params.navigation,
-                  signal,
-                })
-              : await text({
-                  message: stylePromptMessage(params.message),
-                  initialValue: params.initialValue,
-                  placeholder: params.placeholder,
-                  validate: validate ? (value) => validate(value ?? "") : undefined,
-                  signal,
-                }),
-          ),
+      return await runPromptWithNavigation(
+        params.navigation,
+        async (promptSignal) => {
+          const validate = params.validate;
+          const prompt = params.sensitive
+            ? params.navigation
+              ? passwordWithNavigationFooter
+              : password
+            : params.navigation
+              ? textWithNavigationFooter
+              : text;
+          return await prompt({
+            message: stylePromptMessage(params.message),
+            ...(!params.sensitive
+              ? { initialValue: params.initialValue, placeholder: params.placeholder }
+              : {}),
+            validate: validate ? (value: string | undefined) => validate(value ?? "") : undefined,
+            ...(params.navigation ? { navigation: params.navigation } : {}),
+            signal: promptSignal,
+            output,
+          });
+        },
+        output,
+        params.signal && signal
+          ? AbortSignal.any([params.signal, signal])
+          : (params.signal ?? signal),
       );
     },
     confirm: async (params) =>
-      await withHorizontalCursorActionsDisabled(
-        hasPromptNavigation(params.navigation),
-        async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) => {
-            const message = stylePromptMessage(params.message);
-            if (params.navigation) {
-              return await confirmWithNavigationFooter({
-                message,
-                initialValue: params.initialValue,
-                vertical: params.layout === "vertical",
-                navigation: params.navigation,
-                signal,
-              });
-            }
-            if (params.layout === "vertical") {
-              return await select({
-                message,
-                options: [
-                  { value: true, label: "Yes" },
-                  { value: false, label: "No" },
-                ],
-                initialValue: params.initialValue ?? true,
-                signal,
-              });
-            }
-            return await confirm({
-              message,
-              initialValue: params.initialValue,
-              signal,
-            });
-          }),
+      await runPromptWithNavigation(
+        params.navigation,
+        async (promptSignal) => {
+          const message = stylePromptMessage(params.message);
+          const prompt = params.navigation ? confirmWithNavigationFooter : confirm;
+          return await prompt({
+            message,
+            initialValue: params.initialValue,
+            vertical: params.layout === "vertical",
+            ...(params.navigation ? { navigation: params.navigation } : {}),
+            signal: promptSignal,
+            output,
+          });
+        },
+        output,
+        signal,
       ),
     progress: (label: string): WizardProgress => {
-      const spin = spinner();
-      spin.start(theme.accent(label));
+      const useClawSpinner = output.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
+      const spin = createProgressSpinner(
+        useClawSpinner
+          ? { frames: CLAW_SPINNER_FRAMES, delay: 120, styleFrame: theme.accent, output }
+          : { output },
+        10,
+      );
+      spin.start(label);
       const osc = createCliProgress({
         label,
         indeterminate: true,
         enabled: true,
         fallback: "none",
+        stream: output,
       });
       // Drive both Clack spinner UI and OSC progress output for terminals that
       // display command progress outside the prompt line.
       return {
         update: (message) => {
-          spin.message(theme.accent(message));
+          spin.message(message);
           osc.setLabel(message);
         },
         stop: (message) => {
           osc.done();
-          if (message === undefined) {
-            spin.clear();
-          } else {
-            spin.stop(message);
-          }
+          spin.stop(message);
         },
       };
     },

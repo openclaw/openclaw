@@ -1,0 +1,182 @@
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
+import { renderSlackDataTableCompactPlainTextFallback } from "./data-table.js";
+import { renderSlackDataVisualizationFallbackText } from "./data-visualization.js";
+
+export const SLACK_MALFORMED_NATIVE_DATA_FALLBACK =
+  "Slack could not render this chart or table data.";
+const SLACK_RESPONSE_URL_BODY_LIMIT_BYTES = 16 * 1024;
+const SLACK_RESPONSE_URL_BODY_TIMEOUT_MS = 30_000;
+
+function isSlackNativeDataBlock(block: unknown): boolean {
+  const type = asOptionalRecord(block)?.type;
+  return type === "data_table" || type === "data_visualization";
+}
+
+export function hasSlackNativeDataBlock(blocks?: readonly unknown[]): boolean {
+  return blocks?.some(isSlackNativeDataBlock) ?? false;
+}
+
+/** Keep every sibling block while removing Slack's native data blocks. */
+export function stripSlackNativeDataBlocks<T>(blocks?: readonly T[]): T[] {
+  return (blocks ?? []).filter((block) => !isSlackNativeDataBlock(block));
+}
+
+/** Match Slack's Web API and response_url `invalid_blocks` error shapes. */
+export function isSlackInvalidBlocksError(error: unknown): boolean {
+  const record = asOptionalRecord(error);
+  const rawData = record?.data;
+  const data = asOptionalRecord(rawData);
+  const rawResponseData = asOptionalRecord(record?.response)?.data;
+  const responseData = asOptionalRecord(rawResponseData);
+  const code =
+    data?.error ??
+    (typeof rawData === "string" ? rawData : undefined) ??
+    responseData?.error ??
+    (typeof rawResponseData === "string" ? rawResponseData : undefined) ??
+    record?.error;
+  return typeof code === "string" && code.trim().toLowerCase() === "invalid_blocks";
+}
+
+type SlackResponseLike = {
+  status: number;
+};
+
+function isSlackResponseLike(value: unknown): value is SlackResponseLike {
+  const record = asOptionalRecord(value);
+  const body = asOptionalRecord(record?.body);
+  return (
+    typeof record?.status === "number" &&
+    (typeof record.arrayBuffer === "function" || typeof body?.getReader === "function")
+  );
+}
+
+/** Consume Bolt 5's native response_url body under strict time and byte bounds. */
+export async function isSlackInvalidBlocksResponse(response: unknown): Promise<boolean> {
+  if (!isSlackResponseLike(response)) {
+    return isSlackInvalidBlocksError(response);
+  }
+  try {
+    const body = await readResponseTextLimited(
+      response as Response,
+      SLACK_RESPONSE_URL_BODY_LIMIT_BYTES,
+      { timeoutMs: SLACK_RESPONSE_URL_BODY_TIMEOUT_MS },
+    );
+    if (body.trim().toLowerCase() === "invalid_blocks") {
+      return true;
+    }
+    return isSlackInvalidBlocksError(JSON.parse(body));
+  } catch {
+    return false;
+  }
+}
+
+/** Bolt 5 omits the response body from RespondError; 400 is contextual here. */
+export function isSlackNativeResponseUrlRejection(error: unknown): boolean {
+  if (isSlackInvalidBlocksError(error)) {
+    return true;
+  }
+  const record = asOptionalRecord(error);
+  return record?.code === "slack_bolt_respond_error" && record.statusCode === 400;
+}
+
+function comparableText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
+function countComparableOccurrences(value: string, candidate: string): number {
+  if (!candidate) {
+    return 0;
+  }
+  let count = 0;
+  let offset = 0;
+  while ((offset = value.indexOf(candidate, offset)) >= 0) {
+    count += 1;
+    offset += candidate.length;
+  }
+  return count;
+}
+
+/** Consume native fallback occurrences already carried by an explicit outside base. */
+export function createSlackNativeDataBaseTextConsumer(baseText: string): (text: string) => boolean {
+  const comparableBase = comparableText(baseText);
+  const remainingByText = new Map<string, number>();
+  return (text) => {
+    const comparable = comparableText(text);
+    const remaining =
+      remainingByText.get(comparable) ?? countComparableOccurrences(comparableBase, comparable);
+    if (remaining <= 0) {
+      return false;
+    }
+    remainingByText.set(comparable, remaining - 1);
+    return true;
+  };
+}
+
+function appendSlackBlockFallback(
+  text: string,
+  blocks: readonly unknown[] | undefined,
+  render: (value: unknown) => string | undefined,
+): string {
+  const consumeFromBase = createSlackNativeDataBaseTextConsumer(text);
+  const parts = [text];
+  for (const block of blocks ?? []) {
+    const dataText = render(block);
+    if (!dataText) {
+      continue;
+    }
+    if (isSlackNativeDataBlock(block) && consumeFromBase(dataText)) {
+      continue;
+    }
+    parts.push(dataText);
+  }
+  return parts.filter((part) => part.trim()).join("\n\n");
+}
+
+export function renderSlackNativeDataPlainTextBlock(value: unknown): string | undefined {
+  const type = asOptionalRecord(value)?.type;
+  if (type === "data_table") {
+    return renderSlackDataTableCompactPlainTextFallback(value);
+  }
+  if (type === "data_visualization") {
+    return renderSlackDataVisualizationFallbackText(value);
+  }
+  return undefined;
+}
+
+/** Build formatting-disabled accessibility text from actual Slack block order. */
+export function buildSlackNativeDataAccessibilityText(
+  text: string,
+  blocks?: readonly unknown[],
+): string {
+  return appendSlackBlockFallback(
+    text,
+    blocks,
+    (block) =>
+      renderSlackNativeDataPlainTextBlock(block) ??
+      renderSlackBlockFallbackText(block, {
+        nativeDataFormat: "plain",
+        includeSelectOptions: true,
+      }) ??
+      (isSlackNativeDataBlock(block) ? SLACK_MALFORMED_NATIVE_DATA_FALLBACK : undefined),
+  );
+}
+
+/** Preserve every native data block's content once when Slack requires a text-only retry. */
+export function appendSlackNativeDataFallbackText(
+  text: string,
+  blocks?: readonly unknown[],
+): string {
+  return appendSlackBlockFallback(text.trim(), blocks, (block) =>
+    isSlackNativeDataBlock(block) ? renderSlackBlockFallbackText(block) : undefined,
+  );
+}
+
+/** Build a bounded plain-text retry without activating control tokens. */
+export function appendSlackNativeDataPlainTextFallback(
+  text: string,
+  blocks?: readonly unknown[],
+): string {
+  return appendSlackBlockFallback(text.trim(), blocks, renderSlackNativeDataPlainTextBlock);
+}

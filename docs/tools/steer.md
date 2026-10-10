@@ -13,6 +13,9 @@ sidebarTitle: "Steer"
 cannot accept steering, OpenClaw sends the message as a normal prompt instead
 of dropping it.
 
+`/tell` is an alias of `/steer`. The two names are interchangeable everywhere
+on this page.
+
 ## Current session
 
 Use top-level `/steer` to target the active run for the current session:
@@ -40,6 +43,11 @@ supported runtime boundary, regardless of the stored `/queue` setting. When
 that injection is not available, the command prefix is stripped and `<message>`
 continues as a normal prompt.
 
+The explicit `/steer` (and `/tell`) command is Gateway-backed. In
+`openclaw chat` or `openclaw tui --local`, select `/queue steer` and send the
+guidance as a normal message; the embedded runtime applies the same steering
+policy without forwarding a Gateway command.
+
 Use:
 
 - `/steer <message>` when you want to guide the active run right now.
@@ -65,6 +73,10 @@ Use `/acp steer` when the target is an ACP harness session:
 ```text
 /acp steer --session agent:main:acp:codex tighten the repro
 ```
+
+ACP harness sessions cannot accept input mid-turn. `/acp steer` queues the
+instruction and runs it after the active turn finishes; use `/acp cancel` first
+to stop work in progress. See [ACP controls](/tools/acp-agents/controls#acp-controls).
 
 See [ACP agents](/tools/acp-agents) for ACP session selection and runtime
 behavior.

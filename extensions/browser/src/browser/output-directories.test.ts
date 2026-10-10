@@ -5,6 +5,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ensureOutputDirectory } from "./output-directories.js";
 
+const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
+
 async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-output-dir-test-"));
   try {
@@ -26,30 +28,45 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("ensureOutputDirectory", () => {
-  it("creates nested missing output directories", async () => {
+  it("creates nested output directories without changing their names", async () => {
     await withTempDir(async (tempDir) => {
-      const outputDir = path.join(tempDir, "reports", "downloads");
+      const names = process.platform === "win32" ? ["downloads"] : ["downloads", "downloads \n"];
+      for (const name of names) {
+        const outputDir = path.join(tempDir, "reports", name);
 
-      await ensureOutputDirectory(outputDir);
+        await ensureOutputDirectory(outputDir);
 
-      const stat = await fs.stat(outputDir);
-      expect(stat.isDirectory()).toBe(true);
+        const stat = await fs.stat(outputDir);
+        expect(stat.isDirectory()).toBe(true);
+        await ensureOutputDirectory(outputDir);
+      }
+      await expect(ensureOutputDirectory(path.parse(tempDir).root)).resolves.toBeUndefined();
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects symlinked output directory ancestors",
-    async () => {
+  it.for(["nested", "existing", "existing/nested"])(
+    "rejects symlinked output directory ancestors (%s)",
+    async (relativePath, { skip }) => {
       await withTempDir(async (tempDir) => {
         const outsideDir = path.join(tempDir, "outside");
-        await fs.mkdir(outsideDir);
+        await fs.mkdir(path.join(outsideDir, "existing"), { recursive: true });
         const symlinkDir = path.join(tempDir, "downloads");
-        await fs.symlink(outsideDir, symlinkDir);
+        try {
+          await fs.symlink(outsideDir, symlinkDir, directorySymlinkType);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "EACCES" || code === "EPERM" || code === "ENOTSUP") {
+            skip("directory links are unavailable on this host");
+            return;
+          }
+          throw error;
+        }
 
-        await expect(ensureOutputDirectory(path.join(symlinkDir, "nested"))).rejects.toThrow(
+        await expect(ensureOutputDirectory(path.join(symlinkDir, relativePath))).rejects.toThrow(
           /symlink|output directory/i,
         );
         await expectPathMissing(path.join(outsideDir, "nested"));
+        await expectPathMissing(path.join(outsideDir, "existing", "nested"));
       });
     },
   );

@@ -1,15 +1,30 @@
 // Memory Wiki tests cover markdown plugin behavior.
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  extractHumanNotesBlock,
   parseWikiMarkdown,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
   WIKI_RAW_SOURCE_MARKER,
 } from "./markdown.js";
+
+function scanWikiLinkTargets(markdown: string, relativePath: string): string[] {
+  const result = scanWikiPageSummary({
+    absolutePath: path.join("/tmp/wiki", relativePath),
+    relativePath,
+    raw: markdown,
+  });
+  if (result.status !== "valid") {
+    throw new Error(`Expected valid wiki page scan, got ${result.status}`);
+  }
+  return result.page.linkTargets;
+}
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
@@ -52,241 +67,224 @@ describe("slugifyWikiSegment", () => {
   });
 });
 
+describe("human Notes blocks", () => {
+  const startMarker = "<!-- openclaw:human:start -->";
+  const endMarker = "<!-- openclaw:human:end -->";
+  const rendered = ["# Source", "", "## Notes", startMarker, endMarker, ""].join("\n");
+
+  it("extracts and preserves complete human Notes blocks", () => {
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+    expect(extractHumanNotesBlock(rendered)).toBeNull();
+  });
+
+  it("leaves pages without human Notes markers unchanged", () => {
+    const existing = "# Source\n\nGenerated content only.\n";
+
+    expect(extractHumanNotesBlock(existing)).toBeNull();
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    expect(preserveHumanNotesBlock(existing, rendered)).toBe(existing);
+  });
+
+  it.each([
+    {
+      name: "closing",
+      lines: [startMarker, "Durable human annotation"],
+      missingMarker: endMarker,
+    },
+    {
+      name: "opening",
+      lines: ["Durable human annotation", endMarker],
+      missingMarker: startMarker,
+    },
+  ])(
+    "rejects a missing $name marker before extracting or replacing Notes",
+    ({ lines, missingMarker }) => {
+      const malformed = ["# Source", "", "## Notes", ...lines, ""].join("\n");
+      const expectedError = `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`;
+
+      expect(() => extractHumanNotesBlock(malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(rendered, malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(malformed, rendered)).toThrow(expectedError);
+    },
+  );
+
+  it.each([startMarker, endMarker])(
+    "ignores a standalone marker inside fenced source content",
+    (marker) => {
+      const existing = ["# Source", "", "## Content", "```text", marker, "```", ""].join("\n");
+
+      expect(extractHumanNotesBlock(existing)).toBeNull();
+      expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    },
+  );
+
+  it("preserves marker comments embedded in complete human Notes", () => {
+    const notes = [
+      "Before copied markers",
+      startMarker,
+      "Between copied markers",
+      endMarker,
+      "After copied markers",
+    ].join("\n");
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\n${notes}\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+  });
+
+  it("ignores source-body marker pairs when extracting and preserving actual Notes", () => {
+    const sourceWithMarkers = [
+      "# Source",
+      "",
+      "## Content",
+      "```text",
+      startMarker,
+      "Generated source annotation",
+      endMarker,
+      "```",
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    expect(extractHumanNotesBlock(sourceWithMarkers)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, sourceWithMarkers)).toBe(
+      rendered.replace(
+        `${startMarker}\n${endMarker}`,
+        `${startMarker}\nDurable human annotation\n${endMarker}`,
+      ),
+    );
+  });
+});
+
 describe("toWikiPageSummary", () => {
-  it("marks raw and generated source body metadata", () => {
-    const rawSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/raw-alpha.md",
-      relativePath: "sources/raw-alpha.md",
-      raw: `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes.\n`,
-    });
-    const rawSourceWithImportWords = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/raw-import-words.md",
-      relativePath: "sources/raw-import-words.md",
-      raw: "# Raw Source\n\nsourceType: memory-bridge\n\n## Bridge Source\n",
-    });
-    const rawSourceWithIndentedMarker = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/raw-indented-marker.md",
-      relativePath: "sources/raw-indented-marker.md",
-      raw: `# Raw Source\n\n    ${WIKI_RAW_SOURCE_MARKER}\n`,
-    });
-    const rawSourceWithQuotedWrapper = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/raw-quoted-wrapper.md",
-      relativePath: "sources/raw-quoted-wrapper.md",
-      raw: [
-        "# Raw Source",
-        "",
-        "Copied import example:",
-        "",
-        "# Memory Bridge: Alpha",
-        "",
-        "## Bridge Source",
-        "",
-        "## Content",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const rawSourceWithQuotedLocalFileWrapper = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/raw-quoted-local-file-wrapper.md",
-      relativePath: "sources/raw-quoted-local-file-wrapper.md",
-      raw: [
-        "# Raw Source",
-        "",
-        WIKI_RAW_SOURCE_MARKER,
-        "",
-        "Copied local-file import example:",
-        "",
-        "## Source",
-        "- Type: `local-file`",
-        "",
-        "## Content",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const bridgeSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/bridge-alpha.md",
-      relativePath: "sources/bridge-alpha.md",
-      raw: [
-        "# Memory Bridge: Alpha",
-        "",
-        "## Bridge Source",
-        "",
-        "## Content",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const unsafeLocalSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/unsafe-alpha.md",
-      relativePath: "sources/unsafe-alpha.md",
-      raw: [
-        "# Unsafe Local Import: alpha.md",
-        "",
-        "## Unsafe Local Source",
-        "",
-        "## Content",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const localFileSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/local-alpha.md",
-      relativePath: "sources/local-alpha.md",
-      raw: [
-        "# Alpha",
-        "",
-        "## Source",
-        "- Type: `local-file`",
-        "- Path: `/tmp/alpha.md`",
-        "",
-        "## Content",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const markedLocalFileSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/local-marked-alpha.md",
-      relativePath: "sources/local-marked-alpha.md",
-      raw: [
-        "# Alpha",
-        "",
-        WIKI_RAW_SOURCE_MARKER,
-        "",
-        "## Source",
-        "- Type: `local-file`",
-        "- Path: `/tmp/source.md`",
-        "",
-        "## Content",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const leadingMarkedLocalFileSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/local-leading-marked-alpha.md",
-      relativePath: "sources/local-leading-marked-alpha.md",
-      raw: [
-        WIKI_RAW_SOURCE_MARKER,
-        "",
-        "# Alpha",
-        "",
-        "## Source",
-        "- Type: `local-file`",
-        "- Path: `/tmp/source.md`",
-        "",
-        "## Content",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const partialFrontmatterLocalFileSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/local-partial-frontmatter-alpha.md",
-      relativePath: "sources/local-partial-frontmatter-alpha.md",
+  it("can omit link extraction without changing parsed content or other metadata", () => {
+    const params = {
+      absolutePath: "/tmp/wiki/sources/alpha.md",
+      relativePath: "sources/alpha.md",
       raw: renderWikiMarkdown({
         frontmatter: {
-          id: "source.partial",
-          title: "Partial Source",
+          title: "Alpha",
+          sourceType: "memory-bridge",
+          bridgeAgentIds: ["main"],
+          privacyTier: "private",
+          claims: [{ text: "Cobalt lantern", evidence: [{ sourceId: "source.alpha" }] }],
         },
-        body: [
-          WIKI_RAW_SOURCE_MARKER,
-          "",
-          "# Alpha",
-          "",
-          "## Source",
-          "- Type: `local-file`",
-          "- Path: `/tmp/source.md`",
-          "",
-          "## Content",
-          "alpha",
-          "",
-          "## Notes",
-          "<!-- openclaw:human:start -->",
-          "<!-- openclaw:human:end -->",
-          "",
-        ].join("\n"),
+        body: "[[concepts/visible]]\n`[[concepts/inline]]`\n```\n[[concepts/fenced]]\n```\n",
       }),
+    };
+    const full = scanWikiPageSummary(params);
+    expect(full.status).toBe("valid");
+    if (full.status !== "valid") {
+      throw new Error("Expected a valid page");
+    }
+    expect(full.page.linkTargets).toEqual(["concepts/visible"]);
+    expect(scanWikiPageSummary({ ...params, includeLinks: false })).toEqual({
+      ...full,
+      page: { ...full.page, linkTargets: [] },
     });
-    const chatGptSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/chatgpt-alpha.md",
-      relativePath: "sources/chatgpt-alpha.md",
-      raw: [
-        "# ChatGPT Export: Alpha",
-        "",
-        "## Source",
-        "- Conversation id: `abc123`",
-        "- Export file: `/tmp/conversations.json`",
-        "",
-        "## Active Branch Transcript",
-        "### User",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-    });
-    const structuredSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/structured-alpha.md",
-      relativePath: "sources/structured-alpha.md",
-      raw: renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha Source",
-        },
+    expect(toWikiPageSummary(params)).toEqual(full.page);
+  });
+
+  it("marks raw and generated source body metadata", () => {
+    function sourceSummary(fileName: string, raw: string) {
+      return toWikiPageSummary({
+        absolutePath: `/tmp/wiki/sources/${fileName}.md`,
+        relativePath: `sources/${fileName}.md`,
+        raw,
+      });
+    }
+    const emptyNotes = "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->\n";
+    const sourceBody = (title: string, metadata: string) =>
+      `# ${title}\n\n${metadata}\n\n## Content\nalpha\n\n${emptyNotes}`;
+    const bridgeBody = sourceBody("Memory Bridge: Alpha", "## Bridge Source");
+    const localBody = sourceBody(
+      "Alpha",
+      "## Source\n- Type: `local-file`\n- Path: `/tmp/source.md`",
+    );
+    const rawSource = sourceSummary(
+      "raw-alpha",
+      `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes.\n`,
+    );
+    const rawSourceWithImportWords = sourceSummary(
+      "raw-import-words",
+      "# Raw Source\n\nsourceType: memory-bridge\n\n## Bridge Source\n",
+    );
+    const rawSourceWithIndentedMarker = sourceSummary(
+      "raw-indented-marker",
+      `# Raw Source\n\n    ${WIKI_RAW_SOURCE_MARKER}\n`,
+    );
+    const rawSourceWithQuotedWrapper = sourceSummary(
+      "raw-quoted-wrapper",
+      `# Raw Source\n\nCopied import example:\n\n${bridgeBody}`,
+    );
+    const rawSourceWithQuotedLocalFileWrapper = sourceSummary(
+      "raw-quoted-local-file-wrapper",
+      `# Raw Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nCopied local-file import example:\n\n## Source\n- Type: \`local-file\`\n\n## Content\nalpha\n\n${emptyNotes}`,
+    );
+    const bridgeSource = sourceSummary("bridge-alpha", bridgeBody);
+    const unsafeLocalSource = sourceSummary(
+      "unsafe-local-alpha",
+      sourceBody("Unsafe Local Import: alpha.md", "## Unsafe Local Source"),
+    );
+    const localFileSource = sourceSummary("local-alpha", localBody);
+    const markedLocalFileSource = sourceSummary(
+      "local-marked-alpha",
+      localBody.replace("# Alpha\n", `# Alpha\n\n${WIKI_RAW_SOURCE_MARKER}\n`),
+    );
+    const leadingMarkedLocalFileSource = sourceSummary(
+      "local-leading-marked-alpha",
+      `${WIKI_RAW_SOURCE_MARKER}\n\n${localBody}`,
+    );
+    const partialFrontmatterLocalFileSource = sourceSummary(
+      "local-partial-frontmatter-alpha",
+      renderWikiMarkdown({
+        frontmatter: { id: "source.partial", title: "Partial Source" },
+        body: `${WIKI_RAW_SOURCE_MARKER}\n\n${localBody}`,
+      }),
+    );
+    const chatGptSource = sourceSummary(
+      "chatgpt-alpha",
+      `# ChatGPT Export: Alpha\n\n## Source\n- Conversation id: \`abc123\`\n- Export file: \`/tmp/conversations.json\`\n\n## Active Branch Transcript\n### User\nalpha\n\n${emptyNotes}`,
+    );
+    const structuredSource = sourceSummary(
+      "structured-alpha",
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
         body: "# Alpha Source\n",
       }),
-    });
-    const rawSourceWithNativeFrontmatter = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/native-frontmatter.md",
-      relativePath: "sources/native-frontmatter.md",
-      raw: `---\ntags:\n  - alpha\n---\n\n# Native Frontmatter\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw notes.\n`,
-    });
-    const wikiSourceWithRawMarker = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/wiki-frontmatter.md",
-      relativePath: "sources/wiki-frontmatter.md",
-      raw: renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          title: "Damaged Wiki Source",
-        },
+    );
+    const rawSourceWithNativeFrontmatter = sourceSummary(
+      "native-frontmatter",
+      `---\ntags:\n  - alpha\n---\n\n# Native Frontmatter\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw notes.\n`,
+    );
+    const wikiSourceWithRawMarker = sourceSummary(
+      "wiki-frontmatter",
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", title: "Damaged Wiki Source" },
         body: `# Damaged Wiki Source\n\n${WIKI_RAW_SOURCE_MARKER}\n`,
       }),
-    });
-    const crlfStructuredSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/crlf-structured-alpha.md",
-      relativePath: "sources/crlf-structured-alpha.md",
-      raw: "---\r\npageType: source\r\nid: source.crlf\r\ntitle: CRLF Source\r\n---\r\n\r\n# CRLF Source\r\n",
-    });
+    );
+    const crlfStructuredSource = sourceSummary(
+      "crlf-structured-alpha",
+      "---\r\npageType: source\r\nid: source.crlf\r\ntitle: CRLF Source\r\n---\r\n\r\n# CRLF Source\r\n",
+    );
 
     expect(rawSource?.hasFrontmatter).toBe(false);
     expect(rawSource?.importedSourceBody).toBeUndefined();
@@ -502,5 +500,77 @@ describe("toWikiPageSummary", () => {
     expect(summary.id).toBe("synthesis.healthy");
     expect(summary.sourceIds).toEqual(["source.alpha"]);
     expect(summary.pageType).toBe("synthesis");
+  });
+});
+
+describe("scanWikiPageSummary linkTargets", () => {
+  it("accepts a closing fence longer than the opening fence (#97945)", () => {
+    // CommonMark allows the closing fence to be the same or longer than the
+    // opening fence.  A `` ``` `` opener with a `` ```` `` closer must still
+    // strip the block so the Scala generic inside is not extracted.
+    const markdown = [
+      "# Longer Close",
+      "",
+      "```scala",
+      "def handle(req: Request[A]): Future[Option[User]] = ???",
+      "````",
+      "",
+      "Prose: [[RealTarget]]",
+    ].join("\n");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
+    expect(links).toEqual(["RealTarget"]);
+  });
+
+  it("does not leak [[…]] when a shorter fence-like line appears inside a longer fenced block (#97945)", () => {
+    // A 6-backtick block containing a shorter 3-backtick line before the real
+    // 6-backtick close must not cause the scanner to exit early.
+    const markdown = [
+      "# Long Fence With Shorter Inner Line",
+      "",
+      "``````bash",
+      "some code",
+      "```",
+      "[[not-a-link]]",
+      "``````",
+      "",
+      "After fence: [[RealPage]]",
+    ].join("\n");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
+    expect(links).toEqual(["RealPage"]);
+  });
+
+  it.each([
+    {
+      name: "an invalid backtick info string",
+      markdown: "```lang`oops\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "an unmatched backtick run",
+      markdown: "```foo``\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a fenced block inside a blockquote",
+      markdown: "> ```bash\n> [[not-a-link]]\n> ```\n\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a fenced block inside a list",
+      markdown: "- ```bash\n  [[not-a-link]]\n  ```\n\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a multiline code span",
+      markdown: "``\n[[not-a-link]]\n`` and [[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "separate multi-backtick code spans",
+      markdown: "``code`` [[RealPage]] ``more``",
+      expected: ["RealPage"],
+    },
+  ])("handles $name without hiding prose links", ({ markdown, expected }) => {
+    expect(scanWikiLinkTargets(markdown, "entities/test.md")).toEqual(expected);
   });
 });

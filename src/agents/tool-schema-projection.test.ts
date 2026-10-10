@@ -4,69 +4,179 @@ import { describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
-  inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
 } from "./tool-schema-projection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 describe("runtime tool input schema projection", () => {
-  it("accepts JSON object input schemas", () => {
+  it("reports dynamic JSON Schema keywords in traversal order with exact paths", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        $dynamicAnchor: "root",
+        $dynamicRef: "#root",
+        anyOf: [{ $dynamicAnchor: "branch" }, { properties: { "": { $dynamicRef: "#empty" } } }],
+        properties: {
+          target: { $dynamicRef: "#target" },
+          "literal.dot[0]": { $dynamicAnchor: "literal" },
+        },
+      }),
+    ).toEqual({
+      schema: {
+        type: "object",
+        $dynamicAnchor: "root",
+        $dynamicRef: "#root",
+        anyOf: [{ $dynamicAnchor: "branch" }, { properties: { "": { $dynamicRef: "#empty" } } }],
+        properties: {
+          target: { $dynamicRef: "#target" },
+          "literal.dot[0]": { $dynamicAnchor: "literal" },
+        },
+      },
+      violations: [
+        "parameters.$dynamicRef",
+        "parameters.$dynamicAnchor",
+        "parameters.anyOf[0].$dynamicAnchor",
+        "parameters.anyOf[1].properties..$dynamicRef",
+        "parameters.properties.target.$dynamicRef",
+        "parameters.properties.literal.dot[0].$dynamicAnchor",
+      ],
+    });
+  });
+
+  it("rejects raw JSON numeric overflow at the root and inside schemas", ({ skip }) => {
+    if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
+      skip();
+      return;
+    }
+    const overflow: unknown = JSON.rawJSON("1e400");
+    for (const schema of [
+      overflow,
+      { type: "object", properties: { score: { default: overflow } } },
+      { type: "object", anyOf: [{ $dynamicRef: "#value", default: overflow }] },
+    ]) {
+      expect(projectRuntimeToolInputSchema(schema)).toEqual({
+        schema: {},
+        violations: ["parameters is not a JSON value"],
+      });
+    }
+  });
+
+  it("keeps empty property names in non-finite diagnostic paths", () => {
     expect(
       projectRuntimeToolInputSchema({
         type: "object",
         properties: {
-          angle: { type: "number" },
+          "": { type: "number", maximum: Number.POSITIVE_INFINITY },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties..maximum is not JSON-serializable"],
+    });
+  });
+
+  it("tracks repeated descendants through each toJSON replacement without rereading getters", () => {
+    const reads: string[] = [];
+    let count = 0;
+    const shared = {
+      type: "number",
+      get maximum() {
+        reads.push("maximum");
+        return count++ === 0 ? 1 : Number.POSITIVE_INFINITY;
+      },
+    };
+    const replacement = {
+      toJSON(key: string) {
+        reads.push(key);
+        return { type: "array", items: [shared] };
+      },
+    };
+
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: { first: replacement, second: replacement },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.second.items[0].maximum is not JSON-serializable"],
+    });
+    expect(reads).toEqual(["first", "maximum", "second", "maximum"]);
+  });
+
+  it("finishes JSON serialization after an invalid number and preserves later getter failures", () => {
+    let reads = 0;
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          first: { default: Number.NaN },
+          get later() {
+            reads++;
+            throw new Error("unreadable schema");
+          },
+        },
+      }),
+    ).toEqual({ schema: {}, violations: ["parameters is not JSON-serializable"] });
+    expect(reads).toBe(1);
+  });
+
+  it("reports boxed non-finite numeric schema values", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { type: "number", maximum: Object(Number.POSITIVE_INFINITY) },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
+    });
+  });
+
+  it("does not treat a spoofed Number tag as a boxed number", () => {
+    const taggedValue = { [Symbol.toStringTag]: "Number", value: "finite" };
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { default: taggedValue },
         },
       }),
     ).toEqual({
       schema: {
         type: "object",
         properties: {
-          angle: { type: "number" },
+          score: { default: { value: "finite" } },
         },
       },
       violations: [],
     });
   });
 
-  it("reports non-object dynamic tool input schemas", () => {
-    expect(
-      inspectRuntimeToolInputSchemas([
-        {
-          name: "fuzzplugin_move_angles",
-          parameters: { type: "array", items: { type: "number" } },
-        },
-      ] as never),
-    ).toEqual([
-      {
-        toolName: "fuzzplugin_move_angles",
-        toolIndex: 0,
-        violations: ['fuzzplugin_move_angles.parameters.type must be "object"'],
+  it("ignores an unreadable Number tag that JSON serialization does not use", () => {
+    const taggedValue = {
+      get [Symbol.toStringTag](): string {
+        throw new Error("unreadable tag");
       },
-    ]);
-  });
-
-  it("reports dynamic JSON Schema keywords", () => {
+      value: "finite",
+    };
     expect(
       projectRuntimeToolInputSchema({
         type: "object",
-        anyOf: [{ $dynamicAnchor: "root" }],
         properties: {
-          target: { $dynamicRef: "#target" },
+          score: { default: taggedValue },
         },
       }),
     ).toEqual({
       schema: {
         type: "object",
-        anyOf: [{ $dynamicAnchor: "root" }],
         properties: {
-          target: { $dynamicRef: "#target" },
+          score: { default: { value: "finite" } },
         },
       },
-      violations: [
-        "parameters.anyOf[0].$dynamicAnchor",
-        "parameters.properties.target.$dynamicRef",
-      ],
+      violations: [],
     });
   });
 
@@ -164,6 +274,27 @@ describe("runtime tool input schema projection", () => {
         },
       ],
     });
+  });
+
+  it("snapshots tool references before schema getters replace later array entries", () => {
+    const captured = { name: "captured", parameters: { type: "object" } };
+    const replacement = { name: "replacement", parameters: { type: "array" } };
+    const tools = [
+      {
+        name: "first",
+        get parameters() {
+          tools[1] = replacement;
+          return { type: "object" };
+        },
+      },
+      captured,
+    ];
+
+    expect(filterRuntimeCompatibleTools(tools)).toEqual({
+      tools: [tools[0], captured],
+      diagnostics: [],
+    });
+    expect(tools[1]).toBe(replacement);
   });
 
   it("keeps provider-normalizable object schemas for provider-specific cleanup", () => {

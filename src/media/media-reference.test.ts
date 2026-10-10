@@ -1,15 +1,16 @@
 // Media reference tests cover resolving refs to local, remote, and inline media.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
   classifyMediaReferenceSource,
   MediaReferenceError,
-  normalizeMediaReferenceSource,
   parseInboundMediaUri,
   resolveInboundMediaReference,
   resolveMediaReferenceLocalPath,
+  resolveMediaReferenceLocalPathInfo,
   resolveMediaReferenceSandboxPath,
 } from "./media-reference.js";
 
@@ -32,11 +33,6 @@ async function expectMediaReferenceError(
 }
 
 describe("media reference helpers", () => {
-  it("normalizes outbound MEDIA tags without changing canonical media URIs", () => {
-    expect(normalizeMediaReferenceSource("  MEDIA: ./out.png")).toBe("./out.png");
-    expect(normalizeMediaReferenceSource("media://inbound/a.png")).toBe("media://inbound/a.png");
-  });
-
   it("classifies supported and unsupported media reference schemes", () => {
     expect(classifyMediaReferenceSource("media://inbound/a.png")).toStrictEqual({
       hasScheme: true,
@@ -133,7 +129,13 @@ describe("media reference helpers", () => {
       await expect(resolveMediaReferenceLocalPath(`media://inbound/${id}`)).resolves.toBe(
         realFilePath,
       );
+      await expect(
+        resolveMediaReferenceLocalPathInfo(`media://inbound/${id}`),
+      ).resolves.toStrictEqual({ kind: "inbound", path: realFilePath });
       await expect(resolveMediaReferenceLocalPath("  MEDIA: ./out.png")).resolves.toBe("./out.png");
+      await expect(resolveMediaReferenceLocalPathInfo("  MEDIA: ./out.png")).resolves.toStrictEqual(
+        { kind: "local", path: "./out.png" },
+      );
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -165,10 +167,20 @@ describe("media reference helpers", () => {
         });
       }
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "inbound", "nested", ids[0])),
+        resolveInboundMediaReference(
+          path.join(
+            stateDir,
+            "media",
+            "inbound",
+            "nested",
+            expectDefined(ids[0], "ids[0] test invariant"),
+          ),
+        ),
       ).resolves.toBeNull();
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "outbound", ids[0])),
+        resolveInboundMediaReference(
+          path.join(stateDir, "media", "outbound", expectDefined(ids[0], "ids[0] test invariant")),
+        ),
       ).resolves.toBeNull();
     } finally {
       await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true })));
@@ -196,6 +208,13 @@ describe("media reference helpers", () => {
       MediaReferenceError,
     );
     expect(() => parseInboundMediaUri("media://inbound/%00.png")).toThrow(MediaReferenceError);
+    for (const claim of [
+      ["media://user", "password@inbound/claim.png"].join(":"),
+      "media://inbound/claim.png?signature=private-secret",
+      "media://inbound/claim.png#private-fragment",
+    ]) {
+      expect(() => parseInboundMediaUri(claim), claim).toThrow(MediaReferenceError);
+    }
   });
 
   it("rejects symlinked inbound media files", async () => {

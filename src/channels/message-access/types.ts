@@ -1,16 +1,13 @@
-/**
- * Internal channel ingress access graph types.
- *
- * Defines redacted identifiers, allowlist diagnostics, route facts, and decision gates.
- */
+import type { ResolvedChannelImplicitMentions } from "../../config/implicit-mentions.js";
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
+import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../ids.js";
 import type { InboundImplicitMentionKind, InboundMentionFacts } from "../mention-gating.js";
+import type { IdentifierAuthentication } from "./identifier-authentication.js";
 
-/** Channel identifier used in ingress diagnostics and config lookups. */
 export type ChannelIngressChannelId = ChatChannelId;
 
-/** Redacted identifier category used by allowlist normalization and matching. */
 export type ChannelIngressIdentifierKind =
   | "stable-id"
   | "username"
@@ -20,61 +17,67 @@ export type ChannelIngressIdentifierKind =
   | `plugin:${string}`;
 
 /** Public, redacted identifier material that can participate in allowlist matching. */
-export type MatchableIdentifier = {
+type MatchableIdentifier = {
   opaqueId: string;
   kind: ChannelIngressIdentifierKind;
+  authentication?: IdentifierAuthentication;
+  /** @deprecated Use `authentication: "mutable"`. Remove in the next Plugin SDK major. */
   dangerous?: boolean;
   sensitivity?: "normal" | "pii";
 };
 
 /** Internal identifier material with the raw comparable value retained. */
-export type InternalMatchMaterial = MatchableIdentifier & {
+type InternalMatchMaterial = MatchableIdentifier & {
   value: string;
 };
 
-/** Internal subject representation used by the shared ingress kernel. */
 export type InternalChannelIngressSubject = {
   identifiers: InternalMatchMaterial[];
 };
 
+/** SDK inputs remain optional; kernel consumers receive resolved authentication. */
+export type NormalizedIngressSubject = {
+  identifiers: Array<InternalMatchMaterial & { authentication: IdentifierAuthentication }>;
+};
+
 /** Public, redacted form of a normalized allowlist entry. */
-export type ChannelIngressNormalizedEntry = {
+type ChannelIngressNormalizedEntry = Omit<MatchableIdentifier, "opaqueId"> & {
   opaqueEntryId: string;
-  kind: ChannelIngressIdentifierKind;
-  dangerous?: boolean;
-  sensitivity?: "normal" | "pii";
+  wildcard?: boolean;
 };
 
 /** Internal normalized allowlist entry with its raw comparable value retained. */
 export type InternalNormalizedEntry = ChannelIngressNormalizedEntry & {
   value: string;
+  identityFieldKey?: string;
 };
 
-/** Redacted diagnostic for an invalid, disabled, or unsupported allowlist entry. */
+export type NormalizedIngressEntry = InternalNormalizedEntry & {
+  authentication: IdentifierAuthentication;
+};
+
 export type RedactedIngressEntryDiagnostic = {
   opaqueEntryId?: string;
   reasonCode: IngressReasonCode;
 };
 
-/** Redacted allowlist match result exposed to callers and access facts. */
 export type RedactedIngressMatch = {
   matched: boolean;
   matchedEntryIds: string[];
+  /** Exact redacted entry-to-subject edges retained for authentication policy. */
+  matchedPairs?: RedactedIngressMatchedPair[];
 };
 
-/** Public normalization result for a set of allowlist entries. */
-export type ChannelIngressNormalizeResult = {
-  matchable: ChannelIngressNormalizedEntry[];
+type RedactedIngressMatchedPair = {
+  opaqueEntryId: string;
+  opaqueSubjectId: string;
+  subjectAuthentication: IdentifierAuthentication;
+};
+
+type InternalChannelIngressNormalizeResult = {
+  matchable: InternalNormalizedEntry[];
   invalid: RedactedIngressEntryDiagnostic[];
   disabled: RedactedIngressEntryDiagnostic[];
-};
-
-/** Internal normalization result with raw comparable entry values retained. */
-export type InternalChannelIngressNormalizeResult = Omit<
-  ChannelIngressNormalizeResult,
-  "matchable"
-> & {
-  matchable: InternalNormalizedEntry[];
 };
 
 /** Adapter that gives the shared ingress kernel channel-specific identity matching. */
@@ -86,13 +89,12 @@ export type InternalChannelIngressAdapter = {
   }): InternalChannelIngressNormalizeResult | Promise<InternalChannelIngressNormalizeResult>;
 
   matchSubject(params: {
-    subject: InternalChannelIngressSubject;
-    entries: readonly InternalNormalizedEntry[];
+    subject: NormalizedIngressSubject;
+    entries: readonly NormalizedIngressEntry[];
     context: "dm" | "group" | "route" | "command";
   }): RedactedIngressMatch | Promise<RedactedIngressMatch>;
 };
 
-/** Resolved access-group membership fact used by allowlist entries. */
 export type AccessGroupMembershipFact =
   | {
       kind: "matched";
@@ -113,7 +115,6 @@ export type AccessGroupMembershipFact =
       diagnosticId?: string;
     };
 
-/** Fully normalized allowlist facts for one ingress gate. */
 export type ResolvedIngressAllowlist = {
   rawEntryCount: number;
   normalizedEntries: ChannelIngressNormalizedEntry[];
@@ -131,9 +132,27 @@ export type ResolvedIngressAllowlist = {
     failed: string[];
   };
   match: RedactedIngressMatch;
+  authentication?: RedactedIdentifierAuthenticationResult;
 };
 
-/** Redacted allowlist facts safe to expose in the access graph. */
+export type NormalizedIngressAllowlist = Omit<ResolvedIngressAllowlist, "normalizedEntries"> & {
+  normalizedEntries: Array<
+    ChannelIngressNormalizedEntry & { authentication: IdentifierAuthentication }
+  >;
+};
+
+type RedactedIdentifierAuthenticationResult = {
+  evaluated: boolean;
+  threshold: IdentifierAuthentication;
+  affectedMatch: boolean;
+  rejectedEntryIds: string[];
+};
+
+type RedactedIdentifierAuthenticationDecision = {
+  evaluated: boolean;
+  affectedMatch: boolean;
+};
+
 export type RedactedIngressAllowlistFacts = {
   configured: boolean;
   matched: boolean;
@@ -144,21 +163,14 @@ export type RedactedIngressAllowlistFacts = {
   accessGroups: ResolvedIngressAllowlist["accessGroups"];
 };
 
-/** Route lookup state projected into the ingress access graph. */
-export type RouteGateState =
-  | "not-configured"
-  | "matched"
-  | "not-matched"
-  | "disabled"
-  | "lookup-failed";
+type RouteGateState = "not-configured" | "matched" | "not-matched" | "disabled" | "lookup-failed";
 
 /** How a matched route affects sender allowlist evaluation. */
-export type RouteSenderPolicy = "inherit" | "replace" | "deny-when-empty";
+type RouteSenderPolicy = "inherit" | "replace" | "deny-when-empty";
 
 /** Source list used when a route sender policy contributes sender entries. */
-export type RouteSenderAllowlistSource = "effective-dm" | "effective-group";
+type RouteSenderAllowlistSource = "effective-dm" | "effective-group";
 
-/** Raw route gate facts supplied by a channel-specific router. */
 export type RouteGateFacts = {
   id: string;
   kind: "route" | "routeSender" | "membership" | "ownerAllowlist" | "nestedAllowlist";
@@ -171,11 +183,7 @@ export type RouteGateFacts = {
   match?: RedactedIngressMatch;
 };
 
-/** Route gate facts after any route-specific sender allowlist is normalized. */
-export type ResolvedRouteGateFacts = Omit<
-  RouteGateFacts,
-  "senderAllowFrom" | "senderAllowFromSource"
-> & {
+type ResolvedRouteGateFacts = Omit<RouteGateFacts, "senderAllowFrom" | "senderAllowFromSource"> & {
   senderAllowlist?: ResolvedIngressAllowlist;
 };
 
@@ -194,19 +202,18 @@ export type ChannelIngressEventInput = {
   originSubject?: InternalChannelIngressSubject;
 };
 
-/** Redacted event facts exposed in decisions and access facts. */
-export type RedactedChannelIngressEvent = Omit<ChannelIngressEventInput, "originSubject"> & {
+type RedactedChannelIngressEvent = Omit<ChannelIngressEventInput, "originSubject"> & {
   hasOriginSubject: boolean;
   originSubjectMatched: boolean;
+  originSubjectAuthentication?: IdentifierAuthentication;
 };
 
-/** Complete raw input to the shared ingress state resolver. */
 export type ChannelIngressStateInput = {
   channelId: ChannelIngressChannelId;
   accountId: string;
   subject: InternalChannelIngressSubject;
   conversation: {
-    kind: "direct" | "group" | "channel";
+    kind: ChatType;
     id: string;
     parentId?: string;
     threadId?: string;
@@ -227,15 +234,17 @@ export type ChannelIngressStateInput = {
   };
 };
 
-/** Policy knobs that decide how the ingress graph is evaluated. */
 export type ChannelIngressPolicyInput = {
-  dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
-  groupPolicy: "allowlist" | "open" | "disabled";
+  dmPolicy: DmPolicy;
+  groupPolicy: GroupPolicy;
   groupAllowFromFallbackToAllowFrom?: boolean;
+  minIdentifierAuthentication?: IdentifierAuthentication;
+  /** @deprecated `enabled` maps to minimum `mutable`; otherwise minimum `asserted`. Remove in the next Plugin SDK major. */
   mutableIdentifierMatching?: "disabled" | "enabled";
   activation?: {
     requireMention: boolean;
     allowTextCommands: boolean;
+    implicitMentions?: ResolvedChannelImplicitMentions;
     allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
     order?: "before-sender" | "after-command";
   };
@@ -247,11 +256,9 @@ export type ChannelIngressPolicyInput = {
   };
 };
 
-/** Ordered phase for a gate in the ingress graph. */
-export type IngressGatePhase = "route" | "sender" | "command" | "event" | "activation";
+type IngressGatePhase = "route" | "sender" | "command" | "event" | "activation";
 
-/** Gate kind used in the ingress graph and projected access facts. */
-export type IngressGateKind =
+type IngressGateKind =
   | "route"
   | "routeSender"
   | "dmSender"
@@ -263,8 +270,7 @@ export type IngressGateKind =
   | "event"
   | "mention";
 
-/** Effect produced by a gate when computing final ingress admission. */
-export type IngressGateEffect =
+type IngressGateEffect =
   | "allow"
   | "block-dispatch"
   | "block-command"
@@ -272,7 +278,6 @@ export type IngressGateEffect =
   | "observe"
   | "ignore";
 
-/** Stable machine-readable reason code for ingress diagnostics. */
 export type IngressReasonCode =
   | "allowed"
   | "route_blocked"
@@ -301,9 +306,9 @@ export type IngressReasonCode =
   | "access_group_unsupported"
   | "access_group_failed"
   | "mutable_identifier_disabled"
+  | "identifier_authentication_too_weak"
   | "no_policy_match";
 
-/** One evaluated gate in the ordered ingress access graph. */
 export type AccessGraphGate = {
   id: string;
   phase: IngressGatePhase;
@@ -313,6 +318,7 @@ export type AccessGraphGate = {
   reasonCode: IngressReasonCode;
   match?: RedactedIngressMatch;
   allowlist?: RedactedIngressAllowlistFacts;
+  identifierAuthentication?: RedactedIdentifierAuthenticationDecision;
   sender?: {
     policy: ChannelIngressPolicyInput["dmPolicy"] | ChannelIngressPolicyInput["groupPolicy"];
   };
@@ -339,16 +345,11 @@ export type AccessGraphGate = {
   };
 };
 
-/** Ordered graph of all evaluated ingress gates. */
-export type AccessGraph = {
-  gates: AccessGraphGate[];
-};
-
 /** Normalized ingress state before policy gates are reduced into a decision. */
 export type ChannelIngressState = {
   channelId: ChannelIngressChannelId;
   accountId: string;
-  conversationKind: "direct" | "group" | "channel";
+  conversationKind: ChatType;
   event: RedactedChannelIngressEvent;
   mentionFacts?: InboundMentionFacts;
   routeFacts: ResolvedRouteGateFacts[];
@@ -361,14 +362,21 @@ export type ChannelIngressState = {
   };
 };
 
-/** Final runtime admission action for the inbound event. */
-export type ChannelIngressAdmission = "dispatch" | "observe" | "skip" | "drop" | "pairing-required";
+export type NormalizedIngressState = Omit<ChannelIngressState, "allowlists" | "routeFacts"> & {
+  allowlists: {
+    [K in keyof ChannelIngressState["allowlists"]]: NormalizedIngressAllowlist;
+  };
+  routeFacts: Array<
+    Omit<ResolvedRouteGateFacts, "senderAllowlist"> & {
+      senderAllowlist?: NormalizedIngressAllowlist;
+    }
+  >;
+};
 
-/** Final decision and graph for a resolved channel ingress event. */
 export type ChannelIngressDecision = {
-  admission: ChannelIngressAdmission;
+  admission: "dispatch" | "observe" | "skip" | "drop" | "pairing-required";
   decision: "allow" | "block" | "pairing";
   decisiveGateId: string;
   reasonCode: IngressReasonCode;
-  graph: AccessGraph;
+  graph: { gates: AccessGraphGate[] };
 };

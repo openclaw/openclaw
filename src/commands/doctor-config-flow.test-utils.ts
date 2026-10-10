@@ -1,8 +1,14 @@
 // Doctor config-flow test utilities share mock input symbols and config fixtures across repair suites.
+import type { ConfigIncludeOwnership } from "../config/includes.js";
+
 const DOCTOR_CONFIG_TEST_INPUT = Symbol.for("openclaw.doctorConfigFlow.testInput");
 
 type DoctorConfigTestInput = {
   config: Record<string, unknown>;
+  parsed?: Record<string, unknown>;
+  sourceConfigBeforeMigrations?: Record<string, unknown>;
+  agentRosterIncludeOwned?: boolean;
+  includeProvenance?: ConfigIncludeOwnership[];
   exists: boolean;
   path: string;
   preflightMode: "fast" | "issues" | "compat";
@@ -34,23 +40,10 @@ function shouldUseCompatPreflight(path: ReadonlyArray<string>, value: unknown): 
   const joined = path.join(".");
   const last = path[path.length - 1];
   if (
-    joined === "heartbeat" ||
     joined === "memorySearch" ||
     joined === "gateway.bind" ||
     joined === "hooks.internal.handlers"
   ) {
-    return true;
-  }
-  if (
-    joined === "channels.telegram.groupMentionsOnly" ||
-    joined === "agents.defaults.sandbox.perSession"
-  ) {
-    return true;
-  }
-  if (path.length >= 4 && path[0] === "agents" && path[1] === "list" && last === "perSession") {
-    return true;
-  }
-  if (last === "ttlHours" && path[path.length - 2] === "threadBindings") {
     return true;
   }
   if (
@@ -128,6 +121,11 @@ function hasCompatPreflightSignals(config: Record<string, unknown>): boolean {
 
 export async function runDoctorConfigWithInput<T>(params: {
   config: Record<string, unknown>;
+  parsedConfig?: Record<string, unknown>;
+  sourceConfigBeforeMigrations?: Record<string, unknown>;
+  agentRosterIncludeOwned?: boolean;
+  includeProvenance?: ConfigIncludeOwnership[];
+  exists?: boolean;
   repair?: boolean;
   preflightMode?: "fast" | "issues" | "compat";
   run: (args: {
@@ -142,7 +140,17 @@ export async function runDoctorConfigWithInput<T>(params: {
     : "fast";
   setDoctorConfigInputForTest({
     config: structuredClone(params.config),
-    exists: true,
+    ...(params.parsedConfig ? { parsed: structuredClone(params.parsedConfig) } : {}),
+    ...(params.sourceConfigBeforeMigrations
+      ? { sourceConfigBeforeMigrations: structuredClone(params.sourceConfigBeforeMigrations) }
+      : {}),
+    ...(params.agentRosterIncludeOwned !== undefined
+      ? { agentRosterIncludeOwned: params.agentRosterIncludeOwned }
+      : {}),
+    ...(params.includeProvenance
+      ? { includeProvenance: structuredClone(params.includeProvenance) }
+      : {}),
+    exists: params.exists ?? true,
     path: "/virtual/.openclaw/openclaw.json",
     preflightMode: params.preflightMode ?? inferredPreflightMode,
   });

@@ -1,50 +1,17 @@
-/**
- * Static provider discovery entry for Codex, used before the full plugin entry
- * is loaded.
- */
-import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
+/** Native login facts belong to Codex, never to an OpenClaw bearer profile. */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  buildCodexProviderConfig,
-  CODEX_APP_SERVER_AUTH_MARKER,
-  CODEX_PROVIDER_ID,
-  FALLBACK_CODEX_MODELS,
-} from "./provider-catalog.js";
 
-function resolveCodexPluginConfig(ctx: ProviderCatalogContext): unknown {
-  return (ctx.config.plugins?.entries as Record<string, { config?: unknown } | undefined>)?.codex
-    ?.config;
-}
-
-async function runCodexCatalog(ctx: ProviderCatalogContext) {
-  const { buildCodexProviderCatalog } = await import("./provider.js");
-  return await buildCodexProviderCatalog({
-    env: ctx.env,
-    pluginConfig: resolveCodexPluginConfig(ctx),
-  });
-}
-
-/** Provider discovery descriptor with static fallback and synthetic auth. */
-export const codexProviderDiscovery: ProviderPlugin = {
-  id: CODEX_PROVIDER_ID,
+const codexProviderDiscovery: ProviderPlugin = {
+  id: "codex",
   label: "Codex",
-  docsPath: "/providers/models",
   auth: [],
-  catalog: {
-    order: "late",
-    run: runCodexCatalog,
+  prepareSyntheticAuth: async ({ config, provider, env, signal, pluginRoot }) => {
+    if (provider !== "codex") {
+      return undefined;
+    }
+    const { probeCodexNativeAuth } = await import("./src/app-server/native-auth.js");
+    return await probeCodexNativeAuth({ config, env, signal, pluginRoot });
   },
-  staticCatalog: {
-    order: "late",
-    run: async () => ({
-      provider: buildCodexProviderConfig(FALLBACK_CODEX_MODELS),
-    }),
-  },
-  resolveSyntheticAuth: () => ({
-    apiKey: CODEX_APP_SERVER_AUTH_MARKER,
-    source: "codex-app-server",
-    mode: "token",
-  }),
 };
 
 export default codexProviderDiscovery;

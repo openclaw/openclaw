@@ -1,7 +1,3 @@
-/**
- * ClickClack channel plugin definition: target parsing, account config, status,
- * gateway startup, and outbound delivery wiring.
- */
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -12,20 +8,26 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  CLICKCLACK_CHANNEL_ID,
+  clickClackConfigAdapter,
+  clickClackMeta,
   DEFAULT_ACCOUNT_ID,
-  listClickClackAccountIds,
-  resolveClickClackAccount,
-  resolveDefaultClickClackAccountId,
-} from "./accounts.js";
+} from "./channel-config.js";
 import { clickClackConfigSchema } from "./config-schema.js";
 import { startClickClackGatewayAccount } from "./gateway.js";
-import { sendClickClackText } from "./outbound.js";
+import {
+  reconcileClickClackUnknownSend,
+  sendClickClackMedia,
+  sendClickClackText,
+} from "./outbound.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { clickClackSetupContract } from "./setup-core.js";
+import { clickClackSetupWizard } from "./setup-surface.js";
 import {
   buildClickClackTarget,
   looksLikeClickClackTarget,
@@ -34,68 +36,78 @@ import {
 } from "./target.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
-const CHANNEL_ID = "clickclack" as const;
-const meta = { ...getChatChannelMeta(CHANNEL_ID) };
+const CHANNEL_ID = CLICKCLACK_CHANNEL_ID;
 
 const clickClackMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
   durableFinal: {
     capabilities: {
       text: true,
+      media: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
+      reconcileUnknownSend: true,
     },
+    reconcileUnknownSendKinds: { text: true, media: true },
+    reconcileUnknownSend: reconcileClickClackUnknownSend,
   },
   send: {
     text: async (ctx) => {
-      const result = await sendClickClackText({
+      const messageId = await sendClickClackText({
+        ...ctx,
         cfg: ctx.cfg as CoreConfig,
-        accountId: ctx.accountId,
-        to: ctx.to,
-        text: ctx.text,
-        threadId: ctx.threadId,
-        replyToId: ctx.replyToId,
       });
       const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
       const replyToId = ctx.replyToId ?? undefined;
       return {
-        messageId: result.messageId,
+        ...(messageId ? { messageId } : {}),
         receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: CHANNEL_ID, messageId: result.messageId }],
+          results: messageId ? [{ channel: CHANNEL_ID, messageId }] : [],
           threadId,
           replyToId,
           kind: "text",
         }),
       };
     },
+    media: async (ctx) => {
+      const messageId = await sendClickClackMedia({
+        ...ctx,
+        cfg: ctx.cfg as CoreConfig,
+      });
+      const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
+      const replyToId = ctx.replyToId ?? undefined;
+      return {
+        messageId,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: CHANNEL_ID, messageId }],
+          threadId,
+          replyToId,
+          kind: "media",
+        }),
+      };
+    },
   },
 });
 
-/**
- * Channel plugin instance registered by the bundled ClickClack entry.
- */
 export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
-    meta,
+    meta: clickClackMeta,
     capabilities: {
       chatTypes: ["direct", "group"],
       threads: true,
+      media: true,
       blockStreaming: true,
     },
     reload: { configPrefixes: ["channels.clickclack"] },
     configSchema: clickClackConfigSchema,
-    config: {
-      listAccountIds: (cfg) => listClickClackAccountIds(cfg as CoreConfig),
-      resolveAccount: (cfg, accountId) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
-      defaultAccountId: (cfg) => resolveDefaultClickClackAccountId(cfg as CoreConfig),
-      isConfigured: (account) => account.configured,
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).allowFrom,
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).defaultTo,
+    config: clickClackConfigAdapter,
+    setupContract: clickClackSetupContract,
+    setupWizard: clickClackSetupWizard,
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     messaging: {
       targetPrefixes: ["clickclack", "cc"],
@@ -120,6 +132,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           agentId,
           channel: CHANNEL_ID,
           accountId,
+          recipientSessionExact: parsed.kind === "dm",
           peer: {
             kind: parsed.chatType === "direct" ? "direct" : "channel",
             id: buildClickClackTarget(parsed),
@@ -133,6 +146,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           replyToId,
           threadId: threadId ?? (parsed.kind === "thread" ? parsed.id : undefined),
           currentSessionKey,
+          useSuffix: false,
           canRecoverCurrentThread: () => true,
         });
       },
@@ -161,7 +175,11 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
         name: account.name,
         enabled: account.enabled,
         configured: account.configured,
-        baseUrl: account.baseUrl,
+        extra: {
+          baseUrl: account.baseUrl,
+          tokenSource: account.tokenSource,
+          tokenStatus: account.tokenStatus,
+        },
       }),
     }),
     gateway: {
@@ -175,15 +193,30 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     },
     attachedResults: {
       channel: CHANNEL_ID,
-      sendText: async ({ cfg, to, text, accountId, threadId, replyToId }) =>
-        await sendClickClackText({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          threadId,
-          replyToId,
-        }),
+      sendText: async (ctx) => {
+        const messageId = await sendClickClackText({
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+        });
+        // Legacy outbound results use an empty id to report an intentional no-send.
+        return { messageId: messageId ?? "" };
+      },
+      sendMedia: async (ctx) => {
+        const { mediaUrl, onDeliveryResult } = ctx;
+        if (!mediaUrl) {
+          throw new Error("ClickClack media send requires mediaUrl");
+        }
+        const messageId = await sendClickClackMedia({
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+          mediaUrl,
+          onDeliveryResult: onDeliveryResult
+            ? ({ messageId: acceptedMessageId, receipt }) =>
+                onDeliveryResult({ channel: CHANNEL_ID, messageId: acceptedMessageId, receipt })
+            : undefined,
+        });
+        return { messageId };
+      },
     },
   },
 });

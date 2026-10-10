@@ -1,15 +1,16 @@
 // Provider discovery contract helpers define reusable discovery tests for provider plugins.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
+import { runProviderCatalog } from "../../plugins/provider-discovery.js";
 import {
   registerProviderPlugins as registerProviders,
   requireRegisteredProvider as requireProvider,
-  runProviderCatalog,
-} from "../testing.js";
+} from "../../test-utils/plugin-registration.js";
+import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
 
-const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
-const buildVllmProviderMock = vi.hoisted(() => vi.fn());
-const buildSglangProviderMock = vi.hoisted(() => vi.fn());
+const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
+const discoverLocalModelsMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
 
@@ -19,36 +20,10 @@ export type ProviderDiscoveryContractPluginLoader = () => Promise<{
 
 type ProviderHandle = Awaited<ReturnType<typeof registerProviders>>[number];
 
-type DiscoveryState = {
-  runProviderCatalog: typeof runProviderCatalog;
-  githubCopilotProvider?: ProviderHandle;
-  vllmProvider?: ProviderHandle;
-  sglangProvider?: ProviderHandle;
-  minimaxProvider?: ProviderHandle;
-  minimaxPortalProvider?: ProviderHandle;
-  modelStudioProvider?: ProviderHandle;
-  cloudflareAiGatewayProvider?: ProviderHandle;
-};
-
-type BundledProviderUnderTest =
-  | "github-copilot"
-  | "vllm"
-  | "sglang"
-  | "minimax"
-  | "modelstudio"
-  | "cloudflare-ai-gateway";
-
 type DiscoveryContractOptions = {
-  providerIds: readonly BundledProviderUnderTest[];
-  loadGithubCopilot?: ProviderDiscoveryContractPluginLoader;
-  loadVllm?: ProviderDiscoveryContractPluginLoader;
-  loadSglang?: ProviderDiscoveryContractPluginLoader;
-  loadMinimax?: ProviderDiscoveryContractPluginLoader;
-  loadModelStudio?: ProviderDiscoveryContractPluginLoader;
-  loadCloudflareAiGateway?: ProviderDiscoveryContractPluginLoader;
+  load: ProviderDiscoveryContractPluginLoader;
+  providerIds: readonly string[];
   githubCopilotRegisterRuntimeModuleId?: string;
-  vllmApiModuleId?: string;
-  sglangApiModuleId?: string;
 };
 
 function setRuntimeAuthStore(store?: AuthProfileStore) {
@@ -78,26 +53,18 @@ function setGithubCopilotProfileSnapshot() {
   });
 }
 
+type ProviderCatalogParams = Parameters<typeof runProviderCatalog>[0];
+
 function runCatalog(
-  state: DiscoveryState,
-  params: {
-    provider: ProviderHandle;
-    config?: OpenClawConfig;
-    env?: NodeJS.ProcessEnv;
-    resolveProviderApiKey?: () => { apiKey: string | undefined; discoveryApiKey?: string };
-    resolveProviderAuth?: (
-      providerId?: string,
-      options?: { oauthMarker?: string },
-    ) => {
-      apiKey: string | undefined;
-      discoveryApiKey?: string;
-      mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
-      source: "env" | "profile" | "none";
-      profileId?: string;
-    };
-  },
+  params: Pick<ProviderCatalogParams, "provider"> &
+    Partial<
+      Pick<
+        ProviderCatalogParams,
+        "config" | "env" | "resolveProviderApiKey" | "resolveProviderAuth"
+      >
+    >,
 ) {
-  return state.runProviderCatalog({
+  return runProviderCatalog({
     provider: params.provider,
     config: params.config ?? {},
     env: params.env ?? ({} as NodeJS.ProcessEnv),
@@ -133,17 +100,14 @@ function providerModelIds(provider: Record<string, unknown>): Array<unknown> {
   return (models as Array<{ id?: unknown }>).map((model) => model.id);
 }
 
-function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContractOptions) {
+function installDiscoveryHooks(options: DiscoveryContractOptions) {
+  const providers = new Map<string, ProviderHandle>();
   beforeAll(async () => {
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/agent-runtime", () => {
+    vi.doMock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../provider-auth.js")>();
       return {
-        ensureAuthProfileStore: ensureAuthProfileStoreMock,
-        listProfilesForProvider: listProfilesForProviderMock,
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
-      return {
+        ...actual,
         DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
         MINIMAX_OAUTH_MARKER: "minimax-oauth",
         applyAuthProfileConfig: (config: OpenClawConfig) => config,
@@ -162,20 +126,31 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           "Editor-Version": "vscode/1.96.2",
           "User-Agent": "GitHubCopilotChat/0.26.7",
         })),
-        coerceSecretRef: (value: unknown) =>
-          value && typeof value === "object" && !Array.isArray(value)
-            ? (value as Record<string, unknown>)
-            : null,
+        coerceSecretRef: asNullableRecord,
         ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
         listProfilesForProvider: listProfilesForProviderMock,
         normalizeApiKeyInput: (value: unknown) => (typeof value === "string" ? value.trim() : ""),
-        normalizeOptionalSecretInput: (value: unknown) =>
-          typeof value === "string" && value.trim() ? value.trim() : undefined,
+        normalizeGithubCopilotDomain: (raw: unknown) => {
+          const trimmed = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+          return trimmed === "github.com" || /^[a-z0-9-]+\.ghe\.com$/.test(trimmed)
+            ? trimmed
+            : "github.com";
+        },
+        normalizeOptionalSecretInput: normalizeOptionalString,
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
           typeof source === "string" ? source : "",
         upsertAuthProfile: vi.fn(),
         validateApiKeyInput: () => undefined,
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
+      const actual = await vi.importActual<typeof import("../provider-setup.js")>(
+        "openclaw/plugin-sdk/provider-setup",
+      );
+      return {
+        ...actual,
+        discoverOpenAICompatibleLocalModels: discoverLocalModelsMock,
       };
     });
     if (options.githubCopilotRegisterRuntimeModuleId) {
@@ -183,70 +158,14 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         const actual = await vi.importActual<object>(options.githubCopilotRegisterRuntimeModuleId!);
         return {
           ...actual,
-          resolveCopilotApiToken: resolveCopilotApiTokenMock,
+          resolveCopilotRuntimeAuth: resolveCopilotRuntimeAuthMock,
         };
       });
     }
-    if (options.vllmApiModuleId) {
-      vi.doMock(options.vllmApiModuleId, async () => {
-        return {
-          VLLM_DEFAULT_API_KEY_ENV_VAR: "VLLM_API_KEY",
-          VLLM_DEFAULT_BASE_URL: "http://127.0.0.1:8000/v1",
-          VLLM_MODEL_PLACEHOLDER: "meta-llama/Meta-Llama-3-8B-Instruct",
-          VLLM_PROVIDER_LABEL: "vLLM",
-          buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-        };
-      });
-    }
-    if (options.sglangApiModuleId) {
-      vi.doMock(options.sglangApiModuleId, async () => {
-        return {
-          SGLANG_DEFAULT_API_KEY_ENV_VAR: "SGLANG_API_KEY",
-          SGLANG_DEFAULT_BASE_URL: "http://127.0.0.1:30000/v1",
-          SGLANG_MODEL_PLACEHOLDER: "Qwen/Qwen3-8B",
-          SGLANG_PROVIDER_LABEL: "SGLang",
-          buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
-        };
-      });
-    }
-    state.runProviderCatalog = runProviderCatalog;
-
-    if (options.providerIds.includes("github-copilot")) {
-      const { default: githubCopilotPlugin } = await options.loadGithubCopilot!();
-      state.githubCopilotProvider = requireProvider(
-        await registerProviders(githubCopilotPlugin),
-        "github-copilot",
-      );
-    }
-
-    if (options.providerIds.includes("vllm")) {
-      const { default: vllmPlugin } = await options.loadVllm!();
-      state.vllmProvider = requireProvider(await registerProviders(vllmPlugin), "vllm");
-    }
-
-    if (options.providerIds.includes("sglang")) {
-      const { default: sglangPlugin } = await options.loadSglang!();
-      state.sglangProvider = requireProvider(await registerProviders(sglangPlugin), "sglang");
-    }
-
-    if (options.providerIds.includes("minimax")) {
-      const { default: minimaxPlugin } = await options.loadMinimax!();
-      const registeredProviders = await registerProviders(minimaxPlugin);
-      state.minimaxProvider = requireProvider(registeredProviders, "minimax");
-      state.minimaxPortalProvider = requireProvider(registeredProviders, "minimax-portal");
-    }
-
-    if (options.providerIds.includes("modelstudio")) {
-      const { default: qwenPlugin } = await options.loadModelStudio!();
-      state.modelStudioProvider = requireProvider(await registerProviders(qwenPlugin), "qwen");
-    }
-
-    if (options.providerIds.includes("cloudflare-ai-gateway")) {
-      const { default: cloudflareAiGatewayPlugin } = await options.loadCloudflareAiGateway!();
-      state.cloudflareAiGatewayProvider = requireProvider(
-        await registerProviders(cloudflareAiGatewayPlugin),
-        "cloudflare-ai-gateway",
-      );
+    const { default: plugin } = await options.load();
+    const registeredProviders = await registerProviders(plugin);
+    for (const providerId of options.providerIds) {
+      providers.set(providerId, requireProvider(registeredProviders, providerId));
     }
   });
 
@@ -256,61 +175,59 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
 
   afterEach(() => {
     vi.restoreAllMocks();
-    resolveCopilotApiTokenMock.mockReset();
-    buildVllmProviderMock.mockReset();
-    buildSglangProviderMock.mockReset();
+    resolveCopilotRuntimeAuthMock.mockReset();
+    discoverLocalModelsMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
     setRuntimeAuthStore();
   });
+
+  return (providerId: string) => providers.get(providerId)!;
 }
 
 export function describeGithubCopilotProviderDiscoveryContract(params: {
   load: ProviderDiscoveryContractPluginLoader;
   registerRuntimeModuleId: string;
 }) {
-  const state = {} as DiscoveryState;
-
   describe("github-copilot provider discovery contract", () => {
-    installDiscoveryHooks(state, {
+    const getProvider = installDiscoveryHooks({
       providerIds: ["github-copilot"],
-      loadGithubCopilot: params.load,
+      load: params.load,
       githubCopilotRegisterRuntimeModuleId: params.registerRuntimeModuleId,
     });
 
     it("keeps catalog disabled without env tokens or profiles", async () => {
-      await expect(
-        runCatalog(state, { provider: state.githubCopilotProvider! }),
-      ).resolves.toBeNull();
+      await expect(runCatalog({ provider: getProvider("github-copilot") })).resolves.toBeNull();
     });
 
-    it("keeps profile-only catalog fallback provider-owned", async () => {
+    it("reports an unavailable profile catalog without replacing inventory", async () => {
       setGithubCopilotProfileSnapshot();
 
       await expect(
-        runCatalog(state, {
-          provider: state.githubCopilotProvider!,
+        runCatalog({
+          provider: getProvider("github-copilot"),
         }),
       ).resolves.toEqual({
-        provider: {
-          baseUrl: "https://api.individual.githubcopilot.com",
-          models: [],
-        },
+        providers: {},
+        outcomes: [
+          { provider: "github-copilot", profileId: "github-copilot:github", status: "unavailable" },
+        ],
       });
     });
 
     it("keeps env-token base URL resolution provider-owned", async () => {
-      resolveCopilotApiTokenMock.mockResolvedValueOnce({
-        token: "copilot-api-token",
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data: [] }));
+      resolveCopilotRuntimeAuthMock.mockResolvedValueOnce({
+        apiKey: "copilot-api-token",
+        source: "validated:https://api.github.com/copilot_internal/user",
         baseUrl: "https://copilot-proxy.example.com",
-        expiresAt: Date.now() + 60_000,
       });
 
       await expect(
-        runCatalog(state, {
-          provider: state.githubCopilotProvider!,
+        runCatalog({
+          provider: getProvider("github-copilot"),
           env: {
-            GITHUB_TOKEN: "github-env-token",
+            COPILOT_GITHUB_TOKEN: "github-env-token",
           } as NodeJS.ProcessEnv,
           resolveProviderApiKey: () => ({ apiKey: undefined }),
         }),
@@ -319,41 +236,36 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
           baseUrl: "https://copilot-proxy.example.com",
           models: [],
         },
+        outcomes: [{ provider: "github-copilot", status: "ready" }],
       });
       const copilotCall = requireRecord(
-        resolveCopilotApiTokenMock.mock.calls.at(0)?.[0],
+        resolveCopilotRuntimeAuthMock.mock.calls.at(0)?.[0],
         "copilot token params",
       );
       expect(copilotCall.githubToken).toBe("github-env-token");
       const env = requireRecord(copilotCall.env, "copilot token env");
-      expect(env.GITHUB_TOKEN).toBe("github-env-token");
+      expect(env.COPILOT_GITHUB_TOKEN).toBe("github-env-token");
     });
   });
 }
 
 export function describeVllmProviderDiscoveryContract(params: {
   load: ProviderDiscoveryContractPluginLoader;
-  apiModuleId: string;
 }) {
-  const state = {} as DiscoveryState;
-
   describe("vllm provider discovery contract", () => {
-    installDiscoveryHooks(state, {
+    const getProvider = installDiscoveryHooks({
       providerIds: ["vllm"],
-      loadVllm: params.load,
-      vllmApiModuleId: params.apiModuleId,
+      load: params.load,
     });
 
     it("keeps self-hosted discovery provider-owned", async () => {
-      buildVllmProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://127.0.0.1:8000/v1",
-        api: "openai-completions",
-        models: [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([
+        { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" },
+      ]);
 
       await expect(
-        runCatalog(state, {
-          provider: state.vllmProvider!,
+        runCatalog({
+          provider: getProvider("vllm"),
           config: {},
           env: {
             VLLM_API_KEY: "env-vllm-key",
@@ -377,21 +289,20 @@ export function describeVllmProviderDiscoveryContract(params: {
           models: [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
         },
       });
-      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-vllm-key",
+        baseUrl: "http://127.0.0.1:8000/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
       });
     });
 
     it("uses configured transport only for provider wildcard discovery", async () => {
-      buildVllmProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://vllm-router.example/v1",
-        api: "openai-completions",
-        models: [{ id: "router-model", name: "Router Model" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([{ id: "router-model", name: "Router Model" }]);
 
       await expect(
-        runCatalog(state, {
-          provider: state.vllmProvider!,
+        runCatalog({
+          provider: getProvider("vllm"),
           config: {
             agents: {
               defaults: {
@@ -433,22 +344,22 @@ export function describeVllmProviderDiscoveryContract(params: {
           models: [{ id: "router-model", name: "Router Model" }],
         },
       });
-      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-vllm-key",
         baseUrl: "http://vllm-router.example/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
       });
     });
 
     it("uses the provider default transport when wildcard config omits baseUrl", async () => {
-      buildVllmProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://127.0.0.1:8000/v1",
-        api: "openai-completions",
-        models: [{ id: "default-transport-model", name: "Default Transport Model" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([
+        { id: "default-transport-model", name: "Default Transport Model" },
+      ]);
 
       await expect(
-        runCatalog(state, {
-          provider: state.vllmProvider!,
+        runCatalog({
+          provider: getProvider("vllm"),
           config: {
             agents: {
               defaults: {
@@ -489,15 +400,18 @@ export function describeVllmProviderDiscoveryContract(params: {
           models: [{ id: "default-transport-model", name: "Default Transport Model" }],
         },
       });
-      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-vllm-key",
+        baseUrl: "http://127.0.0.1:8000/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
       });
     });
 
     it("keeps explicit self-hosted provider config manual without wildcard visibility", async () => {
       await expect(
-        runCatalog(state, {
-          provider: state.vllmProvider!,
+        runCatalog({
+          provider: getProvider("vllm"),
           config: {
             agents: {
               defaults: {
@@ -532,34 +446,26 @@ export function describeVllmProviderDiscoveryContract(params: {
           }),
         }),
       ).resolves.toBeNull();
-      expect(buildVllmProviderMock).not.toHaveBeenCalled();
+      expect(discoverLocalModelsMock).not.toHaveBeenCalled();
     });
   });
 }
 
 export function describeSglangProviderDiscoveryContract(params: {
   load: ProviderDiscoveryContractPluginLoader;
-  apiModuleId: string;
 }) {
-  const state = {} as DiscoveryState;
-
   describe("sglang provider discovery contract", () => {
-    installDiscoveryHooks(state, {
+    const getProvider = installDiscoveryHooks({
       providerIds: ["sglang"],
-      loadSglang: params.load,
-      sglangApiModuleId: params.apiModuleId,
+      load: params.load,
     });
 
     it("keeps self-hosted discovery provider-owned", async () => {
-      buildSglangProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://127.0.0.1:30000/v1",
-        api: "openai-completions",
-        models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }]);
 
       await expect(
-        runCatalog(state, {
-          provider: state.sglangProvider!,
+        runCatalog({
+          provider: getProvider("sglang"),
           config: {},
           env: {
             SGLANG_API_KEY: "env-sglang-key",
@@ -583,21 +489,20 @@ export function describeSglangProviderDiscoveryContract(params: {
           models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
         },
       });
-      expect(buildSglangProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-sglang-key",
+        baseUrl: "http://127.0.0.1:30000/v1",
+        label: "SGLang",
+        discoverRuntimeContext: false,
       });
     });
 
     it("uses configured transport only for provider wildcard discovery", async () => {
-      buildSglangProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://sglang-router.example/v1",
-        api: "openai-completions",
-        models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }]);
 
       await expect(
-        runCatalog(state, {
-          provider: state.sglangProvider!,
+        runCatalog({
+          provider: getProvider("sglang"),
           config: {
             agents: {
               defaults: {
@@ -639,16 +544,18 @@ export function describeSglangProviderDiscoveryContract(params: {
           models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
         },
       });
-      expect(buildSglangProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-sglang-key",
         baseUrl: "http://sglang-router.example/v1",
+        label: "SGLang",
+        discoverRuntimeContext: false,
       });
     });
 
     it("keeps explicit self-hosted provider config manual without wildcard visibility", async () => {
       await expect(
-        runCatalog(state, {
-          provider: state.sglangProvider!,
+        runCatalog({
+          provider: getProvider("sglang"),
           config: {
             agents: {
               defaults: {
@@ -683,7 +590,7 @@ export function describeSglangProviderDiscoveryContract(params: {
           }),
         }),
       ).resolves.toBeNull();
-      expect(buildSglangProviderMock).not.toHaveBeenCalled();
+      expect(discoverLocalModelsMock).not.toHaveBeenCalled();
     });
   });
 }
@@ -691,14 +598,23 @@ export function describeSglangProviderDiscoveryContract(params: {
 export function describeMinimaxProviderDiscoveryContract(
   load: ProviderDiscoveryContractPluginLoader,
 ) {
-  const state = {} as DiscoveryState;
-
   describe("minimax provider discovery contract", () => {
-    installDiscoveryHooks(state, { providerIds: ["minimax"], loadMinimax: load });
+    const getProvider = installDiscoveryHooks({ providerIds: ["minimax", "minimax-portal"], load });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            data: [{ id: "MiniMax-M3" }, { id: "MiniMax-M2.7" }, { id: "MiniMax-M2.7-highspeed" }],
+          }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
 
     it("keeps API catalog provider-owned", async () => {
-      const result = await state.runProviderCatalog({
-        provider: state.minimaxProvider!,
+      const result = await runProviderCatalog({
+        provider: getProvider("minimax"),
         config: {},
         env: {
           MINIMAX_API_KEY: "minimax-key",
@@ -737,8 +653,8 @@ export function describeMinimaxProviderDiscoveryContract(
         },
       });
 
-      const result = await runCatalog(state, {
-        provider: state.minimaxPortalProvider!,
+      const result = await runCatalog({
+        provider: getProvider("minimax-portal"),
         config: {},
         env: {} as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: undefined }),
@@ -760,8 +676,8 @@ export function describeMinimaxProviderDiscoveryContract(
     });
 
     it("keeps portal explicit base URL override provider-owned", async () => {
-      const result = await state.runProviderCatalog({
-        provider: state.minimaxPortalProvider!,
+      const result = await runProviderCatalog({
+        provider: getProvider("minimax-portal"),
         config: {
           models: {
             providers: {
@@ -793,14 +709,23 @@ export function describeMinimaxProviderDiscoveryContract(
 export function describeModelStudioProviderDiscoveryContract(
   load: ProviderDiscoveryContractPluginLoader,
 ) {
-  const state = {} as DiscoveryState;
-
   describe("modelstudio provider discovery contract", () => {
-    installDiscoveryHooks(state, { providerIds: ["modelstudio"], loadModelStudio: load });
+    const getProvider = installDiscoveryHooks({ providerIds: ["qwen"], load });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            data: [{ id: "qwen3.5-plus" }, { id: "qwen3-max-2026-01-23" }, { id: "MiniMax-M2.5" }],
+          }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
 
     it("keeps catalog provider-owned", async () => {
-      const result = await state.runProviderCatalog({
-        provider: state.modelStudioProvider!,
+      const result = await runProviderCatalog({
+        provider: getProvider("qwen"),
         config: {
           models: {
             providers: {
@@ -838,18 +763,16 @@ export function describeModelStudioProviderDiscoveryContract(
 export function describeCloudflareAiGatewayProviderDiscoveryContract(
   load: ProviderDiscoveryContractPluginLoader,
 ) {
-  const state = {} as DiscoveryState;
-
   describe("cloudflare-ai-gateway provider discovery contract", () => {
-    installDiscoveryHooks(state, {
+    const getProvider = installDiscoveryHooks({
       providerIds: ["cloudflare-ai-gateway"],
-      loadCloudflareAiGateway: load,
+      load,
     });
 
     it("keeps catalog disabled without stored metadata", async () => {
       await expect(
-        runCatalog(state, {
-          provider: state.cloudflareAiGatewayProvider!,
+        runCatalog({
+          provider: getProvider("cloudflare-ai-gateway"),
           config: {},
           env: {} as NodeJS.ProcessEnv,
           resolveProviderApiKey: () => ({ apiKey: undefined }),
@@ -883,8 +806,8 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
         },
       });
 
-      const result = await runCatalog(state, {
-        provider: state.cloudflareAiGatewayProvider!,
+      const result = await runCatalog({
+        provider: getProvider("cloudflare-ai-gateway"),
         config: {},
         env: {
           CLOUDFLARE_AI_GATEWAY_API_KEY: "secret-value",
@@ -906,3 +829,4 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

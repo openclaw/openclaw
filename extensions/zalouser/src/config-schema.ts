@@ -1,23 +1,22 @@
-// Zalouser helper module supports config schema behavior.
 import {
   AllowFromListSchema,
-  buildCatchallMultiAccountChannelSchema,
+  buildMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
-  ToolPolicySchema,
+  buildGroupEntrySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 
-const groupConfigSchema = z.object({
-  enabled: z.boolean().optional(),
-  requireMention: z.boolean().optional(),
-  tools: ToolPolicySchema,
-});
+export const ZalouserGroupConfigSchema = buildGroupEntrySchema()
+  .omit({ toolsBySender: true, skills: true, allowFrom: true, systemPrompt: true })
+  .strip();
 
-const zalouserAccountSchema = z.object({
+export const ZalouserAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
+  mediaMaxMb: z.number().positive().optional(),
   markdown: MarkdownConfigSchema,
   profile: z.string().optional(),
   dangerouslyAllowNameMatching: z.boolean().optional(),
@@ -26,9 +25,11 @@ const zalouserAccountSchema = z.object({
   historyLimit: z.number().int().min(0).optional(),
   groupAllowFrom: AllowFromListSchema,
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  groups: z.object({}).catchall(groupConfigSchema).optional(),
+  groups: z.object({}).catchall(ZalouserGroupConfigSchema).optional(),
   messagePrefix: z.string().optional(),
   responsePrefix: z.string().optional(),
 });
 
-export const ZalouserConfigSchema = buildCatchallMultiAccountChannelSchema(zalouserAccountSchema);
+export const ZalouserConfigSchema = buildMultiAccountChannelSchema(ZalouserAccountSchema, {
+  accountsMode: "catchall",
+});

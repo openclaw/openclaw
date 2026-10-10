@@ -1,6 +1,89 @@
 // Canvas-render tests cover [embed] shortcode extraction and text stripping.
 import { describe, expect, it } from "vitest";
-import { extractCanvasShortcodes } from "./canvas-render.ts";
+import {
+  extractCanvasFromDetails,
+  extractCanvasFromText,
+  extractCanvasShortcodes,
+} from "./canvas-render.ts";
+
+describe("extractCanvasFromText", () => {
+  it("preserves a valid pinned board widget identity", () => {
+    expect(
+      extractCanvasFromText(
+        JSON.stringify({
+          kind: "canvas",
+          view: {
+            id: "cv_status",
+            url: "/__openclaw__/canvas/documents/cv_status/index.html",
+            boardWidgetName: "release-status",
+          },
+        }),
+      ),
+    ).toMatchObject({ viewId: "cv_status", boardWidgetName: "release-status" });
+  });
+
+  it("preserves node-panel presentation metadata", () => {
+    expect(
+      extractCanvasFromText(
+        JSON.stringify({
+          kind: "canvas",
+          presentation: { target: "node_panel", title: "Status" },
+          view: { id: "cv_status", url: "/__openclaw__/canvas/documents/cv_status/index.html" },
+        }),
+      ),
+    ).toMatchObject({ surface: "node_panel", viewId: "cv_status", title: "Status" });
+  });
+
+  it("extracts safe MCP App preview metadata from tool details", () => {
+    expect(
+      extractCanvasFromDetails({
+        mcpAppPreview: {
+          kind: "canvas",
+          view: { id: "cv_app" },
+          presentation: { target: "assistant_message", sandbox: "scripts" },
+          mcpApp: {
+            viewId: "cv_app",
+            serverName: "demo",
+            toolName: "show",
+            uiResourceUri: "ui://demo/app",
+            toolCallId: "call-1",
+            originSessionKey: "agent:main:main",
+            resultMetaState: "unavailable",
+          },
+        },
+      }),
+    ).toMatchObject({
+      viewId: "cv_app",
+      mcpApp: {
+        viewId: "cv_app",
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolCallId: "call-1",
+        originSessionKey: "agent:main:main",
+        resultMetaState: "unavailable",
+      },
+    });
+  });
+
+  it("keeps MCP App previews opaque while preserving model-visible results", () => {
+    const preview = extractCanvasFromText(
+      JSON.stringify({
+        kind: "canvas",
+        view: { id: "cv_app" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: { viewId: "cv_app" },
+        result: [{ type: "text", text: "model-visible result" }],
+      }),
+    );
+
+    expect(preview).toMatchObject({
+      viewId: "cv_app",
+      sandbox: "scripts",
+      mcpApp: { viewId: "cv_app" },
+    });
+  });
+});
 
 describe("extractCanvasShortcodes", () => {
   it("does not let a self-closing embed start a greedy block match", () => {
@@ -15,7 +98,7 @@ describe("extractCanvasShortcodes", () => {
     // The visible text between the self-closing embed and the stray close
     // marker must be preserved, not silently stripped.
     expect(text).toContain("keep me");
-    expect(text).toBe("keep me [/embed]");
+    expect(text).toBe(" keep me [/embed]");
   });
 
   it("still extracts a normal block embed and strips only the shortcode span", () => {
@@ -34,5 +117,21 @@ describe("extractCanvasShortcodes", () => {
     expect(previews).toHaveLength(1);
     expect(previews[0]?.url).toBe("https://b.com");
     expect(text).toBe("see  end");
+  });
+
+  it.each([
+    ["indented code", '    [embed url="https://example.com/image.png"]\n    example\n    [/embed]'],
+    ["inline code", '`[embed url="https://example.com/image.png" /]`'],
+  ])("preserves literal embed examples in %s", (_kind, example) => {
+    const input = `Before the example.\n\n${example}\n\nAfter the example.`;
+    expect(extractCanvasShortcodes(input)).toEqual({ text: input, previews: [] });
+  });
+});
+
+it("removes a shortcode without rewriting surrounding literal whitespace", () => {
+  const source = '    a\n\n\n    b\n\n[embed ref="doc1" /]';
+  expect(extractCanvasShortcodes(source)).toMatchObject({
+    text: "    a\n\n\n    b\n\n",
+    previews: [{ viewId: "doc1" }],
   });
 });

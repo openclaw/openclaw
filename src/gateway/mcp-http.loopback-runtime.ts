@@ -1,53 +1,83 @@
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
   nonOwnerToken: string;
 };
 
-export type McpLoopbackToolCallResult = {
+export type McpLoopbackToolCallTerminalOutcome =
+  | { outcome: "blocked"; deniedReason: string }
+  | { outcome: "cancelled" | "failed" | "timed_out" | "unknown"; result?: unknown };
+
+export type McpLoopbackToolCallOutcome =
+  | { outcome: "completed"; result?: unknown }
+  | McpLoopbackToolCallTerminalOutcome;
+
+type McpLoopbackToolCallResult = {
   toolName: string;
   args: Record<string, unknown>;
-  result?: unknown;
-  isError: boolean;
-};
+  correlationId?: string;
+} & McpLoopbackToolCallOutcome;
 
 export type McpLoopbackToolCallStart = Pick<McpLoopbackToolCallResult, "toolName" | "args">;
 
-type McpLoopbackToolCallCapture = {
-  generation: number;
-  onYield?: (message: string) => Promise<void> | void;
+type McpLoopbackToolCallObservers = {
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
   onRequestFinish?: () => void;
-  onToolCallStart?: (call: McpLoopbackToolCallStart) => void;
+  onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
   onToolCallUpdate?: (calls: {
     previous: McpLoopbackToolCallStart;
     current: McpLoopbackToolCallStart;
   }) => void;
   onToolCallFinish?: (call: McpLoopbackToolCallStart, state: { prepared: boolean }) => void;
   onToolCallResult: (call: McpLoopbackToolCallResult) => void;
+};
+
+type McpLoopbackToolCallCapture = McpLoopbackToolCallObservers & {
+  generation: number;
   inFlight: number;
   activityVersion: number;
   activityWaiters: Set<() => void>;
 };
 
-export type McpLoopbackRequestCaptureHandle = {
+type McpLoopbackRequestCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   classified: boolean;
   finished: boolean;
 };
 
-export type McpLoopbackToolCallCaptureHandle = {
+type McpLoopbackToolCallCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   call: McpLoopbackToolCallStart;
+  correlationId?: string;
   prepared: boolean;
   finished: boolean;
 };
 
 let activeRuntime: McpLoopbackRuntime | undefined;
 let nextToolCallCaptureGeneration = 0;
-const toolCallCaptures = new Map<string, McpLoopbackToolCallCapture>();
+const toolCallCaptures = resolveGlobalMap<string, McpLoopbackToolCallCapture>(
+  Symbol.for("openclaw.mcpLoopbackToolCallCaptures"),
+  (captures) => {
+    for (const key of captures.keys()) {
+      deleteMcpLoopbackToolCallCapture(key);
+    }
+  },
+);
+
+function observeCapture<T>(observe: () => T): T | undefined {
+  try {
+    return observe();
+  } catch {
+    // Delivery observation is diagnostic; it must not alter request or tool execution.
+    return undefined;
+  }
+}
 
 function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
   const capture = toolCallCaptures.get(captureKey);
@@ -70,35 +100,18 @@ function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCa
 }
 
 /** Start loopback tool-call result capture for one serialized CLI invocation. */
-export function beginMcpLoopbackToolCallCapture(params: {
-  captureKey: string;
-  onYield?: (message: string) => Promise<void> | void;
-  onRequestStart?: () => void;
-  onRequestClassified?: () => void;
-  onRequestFinish?: () => void;
-  onToolCallStart?: (call: McpLoopbackToolCallStart) => void;
-  onToolCallUpdate?: (calls: {
-    previous: McpLoopbackToolCallStart;
-    current: McpLoopbackToolCallStart;
-  }) => void;
-  onToolCallFinish?: (call: McpLoopbackToolCallStart, state: { prepared: boolean }) => void;
-  onToolCallResult: (call: McpLoopbackToolCallResult) => void;
-}): void {
-  const captureKey = params.captureKey.trim();
+export function beginMcpLoopbackToolCallCapture({
+  captureKey: rawCaptureKey,
+  ...observers
+}: McpLoopbackToolCallObservers & { captureKey: string }): void {
+  const captureKey = rawCaptureKey.trim();
   if (!captureKey) {
     return;
   }
   nextToolCallCaptureGeneration += 1;
   toolCallCaptures.set(captureKey, {
+    ...observers,
     generation: nextToolCallCaptureGeneration,
-    onYield: params.onYield,
-    onRequestStart: params.onRequestStart,
-    onRequestClassified: params.onRequestClassified,
-    onRequestFinish: params.onRequestFinish,
-    onToolCallStart: params.onToolCallStart,
-    onToolCallUpdate: params.onToolCallUpdate,
-    onToolCallFinish: params.onToolCallFinish,
-    onToolCallResult: params.onToolCallResult,
     inFlight: 0,
     activityVersion: 0,
     activityWaiters: new Set(),
@@ -108,15 +121,20 @@ export function beginMcpLoopbackToolCallCapture(params: {
 /** Resolve yield state bound to the request's admitted CLI capture generation. */
 export function resolveMcpLoopbackYieldContext(
   captureHandle: McpLoopbackRequestCaptureHandle | undefined,
-): { cacheKey: string; onYield: (message: string) => Promise<void> } | undefined {
+):
+  | {
+      cacheKey: string;
+      onYield: (message: string, acknowledgment?: string) => Promise<void>;
+    }
+  | undefined {
   const capture = captureHandle?.capture;
   if (!capture?.onYield) {
     return undefined;
   }
   return {
     cacheKey: String(capture.generation),
-    onYield: async (message: string) => {
-      await capture.onYield?.(message);
+    onYield: async (message: string, acknowledgment?: string) => {
+      await capture.onYield?.(message, acknowledgment);
     },
   };
 }
@@ -135,11 +153,7 @@ export function markMcpLoopbackRequestStarted(
   }
   capture.inFlight += 1;
   notifyMcpLoopbackToolCallCaptureActivity(capture);
-  try {
-    capture.onRequestStart?.();
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter request handling.
-  }
+  observeCapture(() => capture.onRequestStart?.());
   return { capture, classified: false, finished: false };
 }
 
@@ -151,11 +165,7 @@ export function markMcpLoopbackRequestClassified(
     return;
   }
   captureHandle.classified = true;
-  try {
-    captureHandle.capture.onRequestClassified?.();
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter request handling.
-  }
+  observeCapture(() => captureHandle.capture.onRequestClassified?.());
 }
 
 /** Mark an authenticated request as settled and wake capture drains. */
@@ -168,11 +178,7 @@ export function markMcpLoopbackRequestFinished(
   markMcpLoopbackRequestClassified(captureHandle);
   captureHandle.finished = true;
   const { capture } = captureHandle;
-  try {
-    capture.onRequestFinish?.();
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter request handling.
-  }
+  observeCapture(() => capture.onRequestFinish?.());
   capture.inFlight = Math.max(0, capture.inFlight - 1);
   notifyMcpLoopbackToolCallCaptureActivity(capture);
 }
@@ -196,12 +202,10 @@ export function markMcpLoopbackToolCallStarted(params: {
   const call = { toolName, args: params.args };
   capture.inFlight += 1;
   notifyMcpLoopbackToolCallCaptureActivity(capture);
-  try {
-    capture.onToolCallStart?.(call);
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter tool execution.
-  }
-  return { capture, call, prepared: false, finished: false };
+  const observedCorrelationId = observeCapture(() => capture.onToolCallStart?.(call));
+  const correlationId =
+    typeof observedCorrelationId === "string" ? observedCorrelationId : undefined;
+  return { capture, call, correlationId, prepared: false, finished: false };
 }
 
 /** Update an admitted call with the final arguments produced by gateway hooks. */
@@ -215,35 +219,37 @@ export function updateMcpLoopbackToolCallCapture(
   const previous = captureHandle.call;
   captureHandle.call = call;
   captureHandle.prepared = true;
-  try {
+  observeCapture(() => {
     captureHandle.capture.onToolCallUpdate?.({ previous, current: call });
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter tool execution.
-  }
+  });
 }
 
 /** Report a completed call without letting observer failures alter tool execution. */
-export function recordMcpLoopbackToolCallResult(params: {
-  captureHandle: McpLoopbackToolCallCaptureHandle;
-  toolName: string;
-  args: Record<string, unknown>;
-  result?: unknown;
-  isError: boolean;
-}): void {
+export function recordMcpLoopbackToolCallResult(
+  params: {
+    captureHandle: McpLoopbackToolCallCaptureHandle;
+    toolName: string;
+    args: Record<string, unknown>;
+  } & McpLoopbackToolCallOutcome,
+): void {
   const toolName = params.toolName.trim();
   if (!toolName) {
     return;
   }
-  try {
+  observeCapture(() => {
+    const outcome: McpLoopbackToolCallOutcome =
+      params.outcome === "blocked"
+        ? { outcome: "blocked", deniedReason: params.deniedReason }
+        : { outcome: params.outcome, result: params.result };
     params.captureHandle.capture.onToolCallResult({
       toolName,
       args: params.args,
-      result: params.result,
-      isError: params.isError,
+      ...outcome,
+      ...(params.captureHandle.correlationId
+        ? { correlationId: params.captureHandle.correlationId }
+        : {}),
     });
-  } catch {
-    // Delivery observation is diagnostic state; it must not turn a successful tool call into error.
-  }
+  });
 }
 
 /** Mark a captured loopback tool call as settled and wake idle drains. */
@@ -255,11 +261,9 @@ export function markMcpLoopbackToolCallFinished(
   }
   captureHandle.finished = true;
   const { capture } = captureHandle;
-  try {
+  observeCapture(() => {
     capture.onToolCallFinish?.(captureHandle.call, { prepared: captureHandle.prepared });
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter tool execution.
-  }
+  });
   capture.inFlight = Math.max(0, capture.inFlight - 1);
   notifyMcpLoopbackToolCallCaptureActivity(capture);
 }
@@ -268,22 +272,16 @@ async function waitForMcpLoopbackToolCallCaptureActivity(
   capture: McpLoopbackToolCallCapture,
   timeoutMs: number,
 ): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (active: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      capture.activityWaiters.delete(resolveActivity);
-      resolve(active);
-    };
-    const resolveActivity = () => finish(true);
-    const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
-    timer.unref?.();
-    capture.activityWaiters.add(resolveActivity);
-  });
+  const activity = createDeferredCore<boolean>();
+  const resolveActivity = () => activity.resolve(true);
+  capture.activityWaiters.add(resolveActivity);
+  try {
+    return await raceWithTimeout(activity.promise, Math.max(0, timeoutMs), () => false, {
+      ref: false,
+    });
+  } finally {
+    capture.activityWaiters.delete(resolveActivity);
+  }
 }
 
 /** Wait for admitted calls to settle and for a quiet request-admission grace. */
@@ -328,17 +326,9 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
   return true;
 }
 
-/** Clear an unfinished invocation capture. Attempt keys are unique per CLI execution. */
+/** Clear observers for this capture key. Grant admission is fenced separately. */
 export function clearMcpLoopbackToolCallCapture(captureKey: string): void {
   deleteMcpLoopbackToolCallCapture(captureKey.trim());
-}
-
-/** Clear transient capture state between isolated tests. */
-export function clearMcpLoopbackToolCallCapturesForTest(): void {
-  for (const captureKey of toolCallCaptures.keys()) {
-    deleteMcpLoopbackToolCallCapture(captureKey);
-  }
-  nextToolCallCaptureGeneration = 0;
 }
 
 /** Return a copy of the active loopback runtime, if one has been installed. */
@@ -349,14 +339,6 @@ export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
 /** Install the active loopback runtime used by in-process MCP callers. */
 export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
   activeRuntime = { ...runtime };
-}
-
-/** Choose the bearer token matching owner/non-owner caller identity. */
-export function resolveMcpLoopbackBearerToken(
-  runtime: McpLoopbackRuntime,
-  senderIsOwner: boolean,
-): string {
-  return senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
 }
 
 /** Clear loopback runtime only when the owning token matches the active runtime. */
@@ -370,19 +352,7 @@ const MCP_AUTH_HEADERS = {
   Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
 } as const;
 
-const MCP_CONTEXT_HEADERS = {
-  "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-  "x-openclaw-session-id": "${OPENCLAW_MCP_SESSION_ID}",
-  "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
-  "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
-  "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-  "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
-  "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
-  "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
-  "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
-  "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
-  "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
-  "x-openclaw-require-explicit-message-target": "${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}",
+const MCP_CAPTURE_HEADERS = {
   "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
 } as const;
 
@@ -401,7 +371,7 @@ function createMcpServerConfig(port: number, headers: Record<string, string>) {
 
 /** Build the MCP server config injected into agents for loopback tool access. */
 export function createMcpLoopbackServerConfig(port: number) {
-  return createMcpServerConfig(port, { ...MCP_AUTH_HEADERS, ...MCP_CONTEXT_HEADERS });
+  return createMcpServerConfig(port, { ...MCP_AUTH_HEADERS, ...MCP_CAPTURE_HEADERS });
 }
 
 export function createMcpAttachGrantServerConfig(port: number) {

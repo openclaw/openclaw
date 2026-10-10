@@ -3,13 +3,13 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-public enum JPEGTranscodeError: LocalizedError, Sendable {
+enum JPEGTranscodeError: LocalizedError, Sendable {
     case decodeFailed
     case propertiesMissing
     case encodeFailed
     case sizeLimitExceeded(maxBytes: Int, actualBytes: Int)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .decodeFailed:
             "Failed to decode image data"
@@ -23,27 +23,9 @@ public enum JPEGTranscodeError: LocalizedError, Sendable {
     }
 }
 
-public struct JPEGTranscoder: Sendable {
-    public static func clampQuality(_ quality: Double) -> Double {
+struct JPEGTranscoder: Sendable {
+    static func clampQuality(_ quality: Double) -> Double {
         min(1.0, max(0.05, quality))
-    }
-
-    /// Re-encodes image data to JPEG, optionally downscaling so that the *oriented* pixel width is <= `maxWidthPx`.
-    ///
-    /// - Important: This normalizes EXIF orientation (the output pixels are rotated if needed; orientation tag is not
-    ///   relied on).
-    public static func transcodeToJPEG(
-        imageData: Data,
-        maxWidthPx: Int?,
-        quality: Double,
-        maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
-    {
-        try self.transcodeToJPEG(
-            imageData: imageData,
-            maxWidthPx: maxWidthPx,
-            maxLongEdgePx: nil,
-            quality: quality,
-            maxBytes: maxBytes)
     }
 
     /// Re-encodes image data to JPEG, optionally downscaling so the *oriented* longest edge is <= `maxLongEdgePx`.
@@ -51,10 +33,10 @@ public struct JPEGTranscoder: Sendable {
     /// When `maxLongEdgePx` is provided it takes precedence over `maxWidthPx`.
     /// - Important: This normalizes EXIF orientation (the output pixels are rotated if needed; orientation tag is not
     ///   relied on).
-    public static func transcodeToJPEG(
+    static func transcodeToJPEG(
         imageData: Data,
         maxWidthPx: Int? = nil,
-        maxLongEdgePx: Int?,
+        maxLongEdgePx: Int? = nil,
         quality: Double,
         maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
     {
@@ -151,11 +133,7 @@ public struct JPEGTranscoder: Sendable {
             targetMaxPixelSize = nextPixelSize
         }
 
-        if best.data.count > maxBytes {
-            throw JPEGTranscodeError.sizeLimitExceeded(maxBytes: maxBytes, actualBytes: best.data.count)
-        }
-
-        return best
+        throw JPEGTranscodeError.sizeLimitExceeded(maxBytes: maxBytes, actualBytes: best.data.count)
     }
 
     /// JPEG cannot store alpha. Flatten transparent sources over white before encoding so ImageIO does not composite

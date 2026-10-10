@@ -1,34 +1,56 @@
 // Lazy lifecycle runtime export hub used by gateway run-loop restart paths.
+// run-loop.ts primes this hub before the HTTP listener binds, so each re-export
+// must target the module that defines the symbol rather than a re-export facade;
+// a facade also evaluates its siblings and drags their graphs onto cold start.
+export { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
+export { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
+export { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 export {
-  abortEmbeddedAgentRun,
-  getActiveEmbeddedRunCount,
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
-  waitForActiveEmbeddedRuns,
-} from "../../agents/embedded-agent-runner/runs.js";
-export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
-export { getRuntimeConfig } from "../../config/config.js";
-export {
+  resolveGatewayRestartDecision,
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";
+export { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 export {
-  resolveGatewayRestartDeferralTimeoutMs,
-  consumeGatewayRestartIntentPayloadSync,
-  consumeGatewaySigusr1RestartIntent,
-  consumeGatewayRestartIntentSync,
-  consumeGatewaySigusr1RestartAuthorization,
-  isGatewaySigusr1RestartExternallyAllowed,
-  markGatewaySigusr1RestartHandled,
-  peekGatewaySigusr1RestartReason,
+  consumeGatewayRestartIntent,
+  consumeGatewayRestartAuthorization,
+  isGatewayRestartExternallyAllowed,
+  markGatewayRestartHandled,
+  peekGatewayRestartReason,
   resetGatewayRestartStateForInProcessRestart,
-  scheduleGatewaySigusr1Restart,
+  requestGatewayRestartWithSignalAdmission,
+  rollbackGatewayRestartSignalAdmission,
+  scheduleGatewayRestart,
 } from "../../infra/restart.js";
-export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
+export {
+  prepareGatewayRestartHandoffRuntime,
+  writeGatewayRestartHandoff,
+} from "../../infra/restart-handoff.js";
+export {
+  cancelManagedServiceUpdateHandoff,
+  claimManagedServiceUpdateHandoff,
+  commitManagedServiceUpdateHandoff,
+  isForegroundUpdateHandoff,
+  completeForegroundUpdateHandoffAfterClose,
+  captureForegroundUpdateHandoffStop,
+  requestManagedServiceUpdateHandoffPark,
+  waitForSystemServiceUpdateHandoffs,
+} from "../../infra/update-managed-service-handoff.js";
+export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
 export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
-export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
+export {
+  markUpdateRestartSentinelFailure,
+  readRestartSentinelReadOnly,
+  writeRestartSentinelIfUnchanged,
+} from "../../infra/restart-sentinel.js";
+export { waitForGatewayHealthyRestart } from "../daemon-cli/restart-health.js";
+export { detectGatewayRespawnSupervisorIdentity } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
+export {
+  createGatewayActiveWorkSnapshot,
+  waitForGatewayActiveWork,
+} from "../../infra/gateway-active-work.js";
 export {
   advanceCronActiveJobGeneration,
   resetCronActiveJobs,
@@ -38,13 +60,8 @@ export {
   abortActiveCronTaskRuns,
   retireActiveCronTaskRunTracking,
   waitForActiveCronTaskRuns,
-} from "../../tasks/cron-task-cancel.js";
-export {
-  getActiveTaskCount,
-  markGatewayDraining,
-  resetAllLanes,
-  waitForActiveTasks,
-} from "../../process/command-queue.js";
-export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
-export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
-export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";
+} from "../../cron/service/active-run-cancellation.js";
+export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
+export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
+
+export { stopActiveManagedProviderLocalServices } from "../../agents/provider-runtime-lifecycle.js";

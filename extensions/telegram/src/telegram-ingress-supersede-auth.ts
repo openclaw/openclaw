@@ -1,0 +1,159 @@
+import type { Message } from "grammy/types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTelegramDmAllow } from "./access-groups.js";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import {
+  resolveTelegramGroupAllowFromContext,
+  resolveTelegramMessageThreadSpec,
+} from "./bot/helpers.js";
+import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
+import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
+
+type UpdateSenderFacts = {
+  senderId: string;
+  chatId: number;
+  isGroup: boolean;
+  message: Message;
+};
+
+function extractUpdateSenderFacts(update: unknown): UpdateSenderFacts | null {
+  if (!update || typeof update !== "object") {
+    return null;
+  }
+  const root = update as Record<string, unknown>;
+  let message: Message | undefined;
+  for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
+    const candidate = root[key];
+    if (candidate && typeof candidate === "object") {
+      message = candidate as Message;
+      break;
+    }
+  }
+  let from = message?.from;
+  if (!message) {
+    const callback = root.callback_query;
+    if (callback && typeof callback === "object") {
+      const cb = callback as Record<string, unknown>;
+      const sender = cb.from;
+      const msg = cb.message;
+      if (sender && typeof sender === "object" && msg && typeof msg === "object") {
+        message = msg as Message;
+        from = sender as Message["from"];
+      }
+    }
+  }
+  const chat = message?.chat;
+  if (!message || typeof chat?.id !== "number" || typeof from?.id !== "number") {
+    return null;
+  }
+  const chatType = typeof chat.type === "string" ? chat.type : "private";
+  return {
+    senderId: String(from.id),
+    chatId: chat.id,
+    isGroup: chatType !== "private",
+    message,
+  };
+}
+
+/** Ambient room_event-shaped updates (no user text body) stay supersedable. */
+export function isTelegramAmbientSpooledUpdate(update: unknown): boolean {
+  if (!update || typeof update !== "object") {
+    return false;
+  }
+  const root = update as Record<string, unknown>;
+  return (
+    root.message_reaction != null ||
+    root.message_reaction_count != null ||
+    root.chat_member != null ||
+    root.my_chat_member != null ||
+    root.chat_join_request != null ||
+    root.chat_boost != null ||
+    root.removed_chat_boost != null
+  );
+}
+
+export type TelegramSupersedeAuthContext = {
+  cfg: OpenClawConfig;
+  accountId: string;
+  /** Bot username for @bot command targeting (from getMe / botInfo). */
+  botUsername?: string;
+};
+
+/**
+ * Whether the raw update's sender is command-authorized.
+ * Reuses resolveTelegramGroupAllowFromContext — same group/topic allowFrom
+ * overrides and access-group expansion as normal message ingress.
+ */
+export async function isTelegramSpooledUpdateSenderAuthorized(
+  update: unknown,
+  auth: TelegramSupersedeAuthContext,
+): Promise<boolean> {
+  const facts = extractUpdateSenderFacts(update);
+  if (!facts) {
+    return false;
+  }
+  const accountCfg = mergeTelegramAccountConfig(auth.cfg, auth.accountId);
+  const dmPolicy = accountCfg.dmPolicy ?? "pairing";
+  const allowFrom = accountCfg.allowFrom;
+  const groupAllowFrom = accountCfg.groupAllowFrom ?? accountCfg.allowFrom;
+  const threadSpec = resolveTelegramMessageThreadSpec(facts.message);
+  const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+    cfg: auth.cfg,
+    chatId: facts.chatId,
+    accountId: auth.accountId,
+    dmPolicy,
+    allowFrom,
+    senderId: facts.senderId,
+    isGroup: facts.isGroup,
+    threadSpec,
+    groupAllowFrom,
+    resolveTelegramGroupConfig: (chatId, messageThreadId, cfg) => {
+      const telegramCfg = mergeTelegramAccountConfig(cfg, auth.accountId);
+      return resolveTelegramScopedGroupConfig(telegramCfg, chatId, messageThreadId);
+    },
+  });
+
+  const { resolvedThreadId, storeAllowFrom, groupAllowOverride, effectiveGroupAllow } =
+    groupAllowContext;
+
+  if (
+    facts.isGroup &&
+    resolveTelegramEffectiveGroupPolicy({
+      cfg: auth.cfg,
+      telegramCfg: accountCfg,
+      groupConfig: groupAllowContext.groupConfig,
+      topicConfig: groupAllowContext.topicConfig,
+    }) === "disabled"
+  ) {
+    return false;
+  }
+
+  const dmAllow = await resolveTelegramDmAllow({
+    cfg: auth.cfg,
+    groupAllowOverride,
+    allowFrom,
+    accountId: auth.accountId,
+    senderId: facts.senderId,
+    storeAllowFrom: facts.isGroup ? [] : storeAllowFrom,
+    dmPolicy,
+  });
+
+  const gate = await resolveTelegramCommandIngressAuthorization({
+    accountId: auth.accountId,
+    cfg: auth.cfg,
+    dmPolicy,
+    isGroup: facts.isGroup,
+    chatId: facts.chatId,
+    ...(resolvedThreadId !== undefined ? { resolvedThreadId } : {}),
+    senderId: facts.senderId,
+    effectiveDmAllow: dmAllow.effectiveAllow,
+    effectiveGroupAllow,
+    eventKind: "message",
+    allowTextCommands: true,
+    hasControlCommand: true,
+    modeWhenAccessGroupsOff: "allow",
+    includeDmAllowForGroupCommands: false,
+  });
+  return gate.authorized;
+}

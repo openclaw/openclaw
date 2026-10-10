@@ -1,3 +1,5 @@
+import { asFiniteNumberInRange } from "@openclaw/normalization-core/number-coercion";
+
 /** Normalized source kind for channel-provided geographic locations. */
 export type LocationSource = "pin" | "place" | "live";
 
@@ -12,6 +14,65 @@ export type NormalizedLocation = {
   source?: LocationSource;
   caption?: string;
 };
+
+/** Portable outbound location fields supported by channel send adapters. */
+export type OutboundLocation = Pick<
+  NormalizedLocation,
+  "latitude" | "longitude" | "accuracy" | "name" | "address"
+>;
+
+function readOptionalLocationText(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+
+/** Normalize a portable location payload at an outbound/plugin boundary. */
+export function normalizeOutboundLocation(
+  value: unknown,
+  label = "location",
+): OutboundLocation | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const raw = value as Record<string, unknown>;
+  const rawLatitude = raw.latitude;
+  const rawLongitude = raw.longitude;
+  const latitude = asFiniteNumberInRange(rawLatitude, { min: -90, max: 90 });
+  if (latitude === undefined) {
+    throw new Error(`${label}.latitude must be a finite number between -90 and 90.`);
+  }
+  const longitude = asFiniteNumberInRange(rawLongitude, { min: -180, max: 180 });
+  if (longitude === undefined) {
+    throw new Error(`${label}.longitude must be a finite number between -180 and 180.`);
+  }
+  const rawAccuracy = raw.accuracy;
+  const accuracy = asFiniteNumberInRange(rawAccuracy, { min: 0, max: 1500 });
+  if (rawAccuracy !== undefined && accuracy === undefined) {
+    throw new Error(`${label}.accuracy must be a finite number between 0 and 1500.`);
+  }
+  for (const unsupportedField of ["source", "isLive", "caption"] as const) {
+    if (raw[unsupportedField] !== undefined) {
+      throw new Error(`${label}.${unsupportedField} is not supported for outbound locations.`);
+    }
+  }
+  const name = readOptionalLocationText(raw.name, `${label}.name`);
+  const address = readOptionalLocationText(raw.address, `${label}.address`);
+  return {
+    latitude,
+    longitude,
+    ...(accuracy !== undefined ? { accuracy } : {}),
+    ...(name ? { name } : {}),
+    ...(address ? { address } : {}),
+  };
+}
 
 /** Location payload after default source and live-state inference. */
 type ResolvedLocation = NormalizedLocation & {
@@ -35,10 +96,6 @@ function formatAccuracy(accuracy?: number): string {
   return ` ±${Math.round(accuracy ?? 0)}m`;
 }
 
-function formatCoords(latitude: number, longitude: number): string {
-  return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-}
-
 /**
  * Formats the safe inline location body shown to the model.
  *
@@ -47,7 +104,7 @@ function formatCoords(latitude: number, longitude: number): string {
  */
 export function formatLocationText(location: NormalizedLocation): string {
   const resolved = resolveLocation(location);
-  const coords = formatCoords(resolved.latitude, resolved.longitude);
+  const coords = `${resolved.latitude.toFixed(6)}, ${resolved.longitude.toFixed(6)}`;
   const accuracy = formatAccuracy(resolved.accuracy);
 
   if (resolved.source === "live" || resolved.isLive) {

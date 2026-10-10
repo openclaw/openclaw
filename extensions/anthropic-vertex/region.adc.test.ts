@@ -1,7 +1,6 @@
-// Anthropic Vertex tests cover region.adc plugin behavior.
 import { platform } from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
@@ -10,30 +9,33 @@ const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  existsSyncMock.mockImplementation((pathname) => actual.existsSync(pathname));
-  readFileSyncMock.mockImplementation((pathname, options) =>
-    String(pathname) === "/tmp/vertex-adc.json"
-      ? '{"project_id":"vertex-project"}'
-      : actual.readFileSync(pathname, options as never),
-  );
   return {
     ...actual,
     existsSync: existsSyncMock,
-    readFileSync: readFileSyncMock,
     default: {
       ...actual,
       existsSync: existsSyncMock,
-      readFileSync: readFileSyncMock,
     },
   };
 });
 
+vi.mock("openclaw/plugin-sdk/secret-file-runtime", () => ({
+  tryReadSecretFileSync: (pathname: string) => readFileSyncMock(pathname, "utf8"),
+}));
+
 import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexProjectId } from "./region.js";
 
 describe("anthropic-vertex ADC reads", () => {
-  afterEach(() => {
-    existsSyncMock.mockClear();
-    readFileSyncMock.mockClear();
+  beforeEach(() => {
+    existsSyncMock.mockReset();
+    readFileSyncMock.mockReset();
+    // The secret-file fixture owns its contents, independently of unrelated fs imports.
+    readFileSyncMock.mockImplementation((pathname) => {
+      if (String(pathname) !== "/tmp/vertex-adc.json") {
+        throw new Error(`unexpected ADC fixture path: ${String(pathname)}`);
+      }
+      return '{"project_id":"vertex-project"}';
+    });
   });
 
   afterAll(() => {
@@ -45,9 +47,6 @@ describe("anthropic-vertex ADC reads", () => {
     const env = {
       GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex-adc.json",
     } as NodeJS.ProcessEnv;
-
-    existsSyncMock.mockClear();
-    readFileSyncMock.mockClear();
 
     expect(resolveAnthropicVertexProjectId(env)).toBe("vertex-project");
     expect(hasAnthropicVertexAvailableAuth(env)).toBe(true);
@@ -65,15 +64,12 @@ describe("anthropic-vertex ADC reads", () => {
       HOME: homeDir,
     } as NodeJS.ProcessEnv;
 
-    readFileSyncMock.mockImplementation((pathname, options) =>
-      String(pathname) === defaultAdcPath
-        ? '{"project_id":"vertex-project"}'
-        : String(pathname) === "/tmp/vertex-adc.json"
-          ? '{"project_id":"vertex-project"}'
-          : (() => {
-              throw new Error(`unexpected readFileSync(${String(pathname)}, ${String(options)})`);
-            })(),
-    );
+    readFileSyncMock.mockImplementation((pathname) => {
+      if (String(pathname) !== defaultAdcPath) {
+        throw new Error(`unexpected ADC fixture path: ${String(pathname)}`);
+      }
+      return '{"project_id":"vertex-project"}';
+    });
 
     expect(resolveAnthropicVertexProjectId(env)).toBe("vertex-project");
     expect(hasAnthropicVertexAvailableAuth(env)).toBe(true);

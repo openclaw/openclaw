@@ -1,5 +1,4 @@
 // Hosted media provider live producer tests cover QA evidence wiring.
-import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -80,13 +79,12 @@ describe("hosted media provider live QA producer", () => {
     expect(classifyHostedMediaFailureStatus("provider response was malformed")).toBe("fail");
   });
 
-  it("maps video provider live coverage roles without making tool invocation primary", () => {
+  it("binds video provider coverage from the scenario catalog", () => {
     const artifactBase = path.join(os.tmpdir(), "openclaw-hosted-media-live-test");
     const options = parseHostedMediaOptions(["--suite", "video", "--artifact-base", artifactBase]);
     const evidence = buildHostedMediaEvidence({
       options,
       result: {
-        artifacts: [{ kind: "log", path: "hosted-media-live.log" }],
         durationMs: 10,
         status: "pass",
       },
@@ -101,18 +99,6 @@ describe("hosted media provider live QA producer", () => {
 });
 
 describe("hosted media provider live CLI", () => {
-  it("prints help through the real node --import tsx entrypoint", () => {
-    const result = spawnSync(process.execPath, ["--import", "tsx", SOURCE_PATH, "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Media live harness");
-    expect(result.stdout).toContain("pnpm test:live:media");
-    expect(result.stderr).toBe("");
-  });
-
   it("rejects unknown global providers for the selected suites", () => {
     expect(() =>
       parseArgs(["image", "--providers", "definitely-not-a-provider", "--all-providers"]),
@@ -156,13 +142,6 @@ describe("hosted media provider live CLI", () => {
     });
   });
 
-  it("parses the explicit empty-run escape hatch", () => {
-    expect(parseArgs(["--allow-empty"])).toMatchObject({
-      allowEmpty: true,
-      requireAuth: true,
-    });
-  });
-
   it("fails explicit suite selections that auth filtering would skip", () => {
     const options = parseArgs([
       "image",
@@ -193,7 +172,7 @@ describe("hosted media provider live CLI", () => {
         providers: [],
         skippedReason: "no providers selected",
       },
-      { suite: MEDIA_SUITES.video, providers: ["openai"] },
+      { suite: MEDIA_SUITES.video, providers: [], skippedReason: "no providers selected" },
     ]);
 
     expect(skipped).toEqual([]);
@@ -230,6 +209,7 @@ describe("hosted media provider live CLI", () => {
   it("defaults to all suites with auth filtering", async () => {
     vi.stubEnv("TEST_AUTH_OPENAI", "1");
     vi.stubEnv("TEST_AUTH_GOOGLE", "1");
+    vi.stubEnv("TEST_AUTH_KIE", "1");
     vi.stubEnv("TEST_AUTH_MINIMAX", "1");
     vi.stubEnv("TEST_AUTH_FAL", "1");
     vi.stubEnv("TEST_AUTH_VYDRA", "1");
@@ -251,15 +231,20 @@ describe("hosted media provider live CLI", () => {
     expect(requirePlanEntry(plan, "music").providers).toEqual(["fal", "google", "minimax"]);
     expect(requirePlanEntry(plan, "video").providers).toEqual([
       "google",
+      "kie",
       "minimax",
-      "openai",
       "vydra",
     ]);
   });
 
   it("supports suite-specific provider filters without auth narrowing", async () => {
     const plan = await buildRunPlan(
-      parseArgs(["video", "--video-providers", "fal,openai,runway", "--all-providers"]),
+      parseArgs([
+        "video",
+        "--video-providers",
+        "fal,google,kie,novita,pixverse,runway,zai",
+        "--all-providers",
+      ]),
       {
         collectProviderApiKeysImpl: collectProviderApiKeysMock,
         getProviderEnvVarsImpl: (provider) => [`TEST_AUTH_${provider.toUpperCase()}`],
@@ -270,7 +255,15 @@ describe("hosted media provider live CLI", () => {
     expect(plan).toHaveLength(1);
     const [entry] = plan;
     expect(entry?.suite.id).toBe("video");
-    expect(entry?.providers).toEqual(["fal", "openai", "runway"]);
+    expect(entry?.providers).toEqual([
+      "fal",
+      "google",
+      "kie",
+      "novita",
+      "pixverse",
+      "runway",
+      "zai",
+    ]);
   });
 
   it("forwards quiet flags separately from passthrough args", () => {

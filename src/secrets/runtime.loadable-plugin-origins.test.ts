@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
+import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js";
 
 const manifestMocks = vi.hoisted(() => ({
   listPluginOriginsFromMetadataSnapshot: vi.fn(
@@ -20,7 +21,7 @@ const manifestMocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-manifest.runtime.js", () => ({
   listPluginOriginsFromMetadataSnapshot: manifestMocks.listPluginOriginsFromMetadataSnapshot,
-  loadPluginMetadataSnapshot: manifestMocks.loadPluginMetadataSnapshot,
+  resolveConfigWidePluginManifestRegistry: manifestMocks.loadPluginMetadataSnapshot,
 }));
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
@@ -32,76 +33,7 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
     manifestMocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
   });
 
-  it("skips metadata snapshot loading when plugin entries are absent", async () => {
-    await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        models: {
-          providers: {
-            openai: {
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
-            },
-          },
-        },
-      }),
-      env: { OPENAI_API_KEY: "sk-test" },
-      includeAuthStoreRefs: false,
-    });
-
-    expect(manifestMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("derives loadable plugin origins from the shared metadata snapshot", async () => {
-    const snapshot = {
-      plugins: [{ id: "demo", origin: "workspace" }],
-    };
-    manifestMocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
-
-    await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        plugins: {
-          entries: {
-            demo: {
-              config: {
-                apiKey: { source: "env", provider: "default", id: "DEMO_API_KEY" },
-              },
-            },
-          },
-        },
-      }),
-      env: { HOME: "/home/demo", DEMO_API_KEY: "sk-demo" },
-      includeAuthStoreRefs: false,
-    });
-
-    const snapshotCalls = manifestMocks.loadPluginMetadataSnapshot.mock.calls as unknown as Array<
-      [
-        {
-          config: {
-            plugins?: unknown;
-          };
-          workspaceDir: unknown;
-          env: Record<string, unknown>;
-        },
-      ]
-    >;
-    const snapshotParams = snapshotCalls[0]?.[0];
-    expect(snapshotParams?.config.plugins).toStrictEqual({
-      entries: {
-        demo: {
-          config: {
-            apiKey: { source: "env", provider: "default", id: "DEMO_API_KEY" },
-          },
-        },
-      },
-    });
-    expect(typeof snapshotParams?.workspaceDir).toBe("string");
-    expect(snapshotParams?.env.HOME).toBe("/home/demo");
-    expect(snapshotParams?.env.DEMO_API_KEY).toBe("sk-demo");
-    expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(snapshot);
-  });
-
-  it("carries the shared manifest registry into plugin-managed SecretRef resolution", async () => {
+  it("keeps full plugin policy while projecting provider-auth assignments", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-runtime-secret-provider-"));
     fs.chmodSync(rootDir, 0o700);
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
@@ -151,35 +83,56 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
     };
 
     try {
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: { source: "exec", provider: "vault", id: "gateway/token" },
+      const config = asConfig({
+        plugins: {
+          entries: {
+            "vault-secrets": { enabled: true },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "exec", provider: "vault", id: "gateway/token" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "exec", provider: "vault", id: "models/openai" },
+              models: [],
             },
           },
-          secrets: {
-            providers: {
-              vault: {
-                source: "exec",
-                pluginIntegration: {
-                  pluginId: "vault-secrets",
-                  integrationId: "vault",
-                },
+        },
+        secrets: {
+          providers: {
+            vault: {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "vault-secrets",
+                integrationId: "vault",
               },
             },
           },
-        }),
-        env: { HOME: rootDir },
-        includeAuthStoreRefs: false,
-        pluginMetadataSnapshot,
+        },
       });
+      const snapshot = await withSecureTestNodeExecPath(async () =>
+        prepareSecretsRuntimeSnapshot({
+          config,
+          assignmentConfig: asConfig({
+            models: config.models,
+            secrets: config.secrets,
+          }),
+          env: { HOME: rootDir },
+          includeAuthStoreRefs: false,
+          pluginMetadataSnapshot,
+        }),
+      );
 
-      expect(snapshot.config.gateway?.auth?.token).toBe("value:gateway/token");
+      expect(snapshot.config.gateway).toBeUndefined();
+      expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("value:models/openai");
       expect(manifestMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
       expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(
-        pluginMetadataSnapshot,
+        pluginMetadataSnapshot.manifestRegistry,
       );
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });

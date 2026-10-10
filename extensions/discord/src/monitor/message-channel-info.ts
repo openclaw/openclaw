@@ -1,4 +1,4 @@
-// Discord plugin module implements message channel info behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -7,14 +7,12 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelType, Message } from "../internal/discord.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import {
+  discordChannelInfoCacheState,
+  type DiscordChannelInfo,
+} from "./message-channel-info-state.js";
 
-export type DiscordChannelInfo = {
-  type: ChannelType;
-  name?: string;
-  topic?: string;
-  parentId?: string;
-  ownerId?: string;
-};
+export type { DiscordChannelInfo } from "./message-channel-info-state.js";
 export type DiscordChannelInfoClient = {
   fetchChannel(channelId: string): Promise<unknown>;
 };
@@ -26,28 +24,17 @@ type DiscordMessageWithChannelId = Message & {
 
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
-const DISCORD_CHANNEL_INFO_CACHE = new Map<
-  string,
-  { value: DiscordChannelInfo | null; expiresAt: number }
->();
-
-export function resetDiscordChannelInfoCacheForTest() {
-  DISCORD_CHANNEL_INFO_CACHE.clear();
-}
-
-function resolveDiscordChannelInfoCacheExpiresAt(ttlMs: number, nowMs: number): number | undefined {
-  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
-}
-
+const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
 function cacheDiscordChannelInfo(
   channelId: string,
   value: DiscordChannelInfo | null,
   ttlMs: number,
   nowMs: number,
 ): void {
-  const expiresAt = resolveDiscordChannelInfoCacheExpiresAt(ttlMs, nowMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
   if (expiresAt !== undefined) {
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, { value, expiresAt });
+    discordChannelInfoCacheState.entries.set(channelId, { value, expiresAt });
+    pruneMapToMaxSize(discordChannelInfoCacheState.entries, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
   }
 }
 
@@ -68,18 +55,31 @@ export function resolveDiscordMessageChannelId(params: {
   );
 }
 
+export function buildDiscordChannelInfo(
+  channel: unknown,
+  options?: { rawTypeFallback?: boolean },
+): DiscordChannelInfo | null {
+  const info = resolveDiscordChannelInfoSafe(channel);
+  const type =
+    (info.type as ChannelType | undefined) ??
+    (options?.rawTypeFallback ? (channel as { type?: ChannelType }).type : undefined);
+  return type === undefined
+    ? null
+    : { type, name: info.name, topic: info.topic, parentId: info.parentId, ownerId: info.ownerId };
+}
+
 export async function resolveDiscordChannelInfo(
   client: DiscordChannelInfoClient,
   channelId: string,
 ): Promise<DiscordChannelInfo | null> {
   const rawNow = Date.now();
   const now = asDateTimestampMs(rawNow);
-  const cached = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
+  const cached = discordChannelInfoCacheState.entries.get(channelId);
   if (cached) {
     if (now !== undefined && cached.expiresAt > now) {
       return cached.value;
     }
-    DISCORD_CHANNEL_INFO_CACHE.delete(channelId);
+    discordChannelInfoCacheState.entries.delete(channelId);
   }
   try {
     const channel = await client.fetchChannel(channelId);
@@ -87,19 +87,10 @@ export async function resolveDiscordChannelInfo(
       cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, rawNow);
       return null;
     }
-    const channelInfo = resolveDiscordChannelInfoSafe(channel);
-    const rawChannel = channel as { type?: ChannelType };
-    const type = (channelInfo.type as ChannelType | undefined) ?? rawChannel.type;
-    if (type === undefined) {
+    const payload = buildDiscordChannelInfo(channel, { rawTypeFallback: true });
+    if (!payload) {
       return null;
     }
-    const payload: DiscordChannelInfo = {
-      type,
-      name: channelInfo.name,
-      topic: channelInfo.topic,
-      parentId: channelInfo.parentId,
-      ownerId: channelInfo.ownerId,
-    };
     cacheDiscordChannelInfo(channelId, payload, DISCORD_CHANNEL_INFO_CACHE_TTL_MS, rawNow);
     return payload;
   } catch (err) {

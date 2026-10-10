@@ -1,5 +1,5 @@
-// Discord plugin module implements components.base behavior.
 import type { BaseComponentInteraction } from "./interactions.js";
+export { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 export type ComponentParserResult = {
   key: string;
@@ -10,12 +10,12 @@ export type ComponentData<
 > = {
   [K in T]: ComponentParserResult["data"][K];
 };
-export type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
+type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
 
 export function parseCustomId(id: string): ComponentParserResult {
-  const [rawKey, ...parts] = id.split(";");
-  const [keyPart, firstValue] = rawKey.split("=");
-  const key = keyPart.includes(":") ? keyPart.split(":")[0] : keyPart;
+  const [rawKey = "", ...parts] = id.split(";");
+  const [keyPart = "", firstValue] = rawKey.split("=");
+  const key = keyPart.split(":", 1)[0] ?? "";
   const data: ComponentParserResult["data"] = {};
   const entries = firstValue === undefined ? parts : [rawKey.slice(key.length + 1), ...parts];
   for (const entry of entries) {
@@ -30,13 +30,9 @@ export function parseCustomId(id: string): ComponentParserResult {
   return { key, data };
 }
 
-export function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
-
 export function colorToNumber(value: string | number | undefined): number | undefined {
   if (typeof value === "number") {
-    return value;
+    return Number.isInteger(value) && value >= 0 && value <= 0xffffff ? value : undefined;
   }
   if (typeof value === "string" && /^#?[0-9a-f]{6}$/i.test(value)) {
     return Number.parseInt(value.replace(/^#/, ""), 16);

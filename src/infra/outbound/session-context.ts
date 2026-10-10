@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 
 export type OutboundSessionContext = {
@@ -35,6 +36,13 @@ export type OutboundSessionContext = {
   policyKey?: string;
   /** Explicit conversation type for policy resolution when a session key is generic. */
   conversationType?: SilentReplyConversationType;
+  /**
+   * Caller-declared destination conversation kind for metadata-only audit
+   * projection. Never derived from session-key parsing: policy keys can name
+   * an acted-on session that is not the delivery destination, and a wrong
+   * "direct" here over-collects under audit.messages="direct".
+   */
+  conversationKind?: "direct" | "group" | "channel";
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
   /** Originating account id used for requester-scoped group policy resolution. */
@@ -65,51 +73,44 @@ export function buildOutboundSessionContext(params: {
 }): OutboundSessionContext | undefined {
   const key = normalizeOptionalString(params.sessionKey);
   const policyKey = normalizeOptionalString(params.policySessionKey);
-  const normalizedChatType = normalizeChatType(params.conversationType ?? undefined);
-  const conversationType: SilentReplyConversationType | undefined =
-    normalizedChatType === "group" || normalizedChatType === "channel"
-      ? "group"
-      : normalizedChatType === "direct"
-        ? "direct"
-        : params.isGroup === true
-          ? "group"
-          : params.isGroup === false
-            ? "direct"
-            : undefined;
+  const deliveryRoute = parseSessionDeliveryRoute(policyKey ?? key);
+  const declaredChatType = normalizeChatType(params.conversationType ?? undefined);
+  const groupChatType =
+    params.isGroup === true ? "group" : params.isGroup === false ? "direct" : undefined;
+  // conversationKind feeds the metadata-only audit projection and must carry
+  // only caller-declared destination facts. Session-key parses can name a
+  // policy/acted-on session that is not this delivery's destination (native
+  // command target overrides); a guessed "direct" would over-collect under
+  // audit.messages="direct". Destination-gated parsing lives in outbound-audit.
+  const conversationKind = declaredChatType ?? groupChatType;
+  // conversationType keeps the historical policy derivation (declared type,
+  // then session-key parse, then isGroup) and intentionally folds channels
+  // into groups for silent-reply policy.
+  const normalizedChatType =
+    declaredChatType ?? normalizeChatType(deliveryRoute?.peerKind) ?? groupChatType;
+  const conversationType = normalizedChatType === "channel" ? "group" : normalizedChatType;
   const explicitAgentId = normalizeOptionalString(params.agentId);
-  const requesterAccountId = normalizeOptionalString(params.requesterAccountId);
-  const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
-  const requesterSenderName = normalizeOptionalString(params.requesterSenderName);
-  const requesterSenderUsername = normalizeOptionalString(params.requesterSenderUsername);
-  const requesterSenderE164 = normalizeOptionalString(params.requesterSenderE164);
-  const derivedAgentId = key
-    ? resolveSessionAgentId({ sessionKey: key, config: params.cfg })
-    : undefined;
-  // Prefer explicit caller ownership, but derive from the canonical session key
-  // so redirected deliveries still get workspace-scoped media policy.
-  const agentId = explicitAgentId ?? derivedAgentId;
-  if (
-    !key &&
-    !policyKey &&
-    !conversationType &&
-    !agentId &&
-    !requesterAccountId &&
-    !requesterSenderId &&
-    !requesterSenderName &&
-    !requesterSenderUsername &&
-    !requesterSenderE164
-  ) {
-    return undefined;
-  }
-  return {
+  const agentId = key
+    ? resolveSessionAgentId({ sessionKey: key, config: params.cfg, agentId: explicitAgentId })
+    : explicitAgentId;
+  const context: OutboundSessionContext = {
     ...(key ? { key } : {}),
     ...(policyKey ? { policyKey } : {}),
     ...(conversationType ? { conversationType } : {}),
+    ...(conversationKind ? { conversationKind } : {}),
     ...(agentId ? { agentId } : {}),
-    ...(requesterAccountId ? { requesterAccountId } : {}),
-    ...(requesterSenderId ? { requesterSenderId } : {}),
-    ...(requesterSenderName ? { requesterSenderName } : {}),
-    ...(requesterSenderUsername ? { requesterSenderUsername } : {}),
-    ...(requesterSenderE164 ? { requesterSenderE164 } : {}),
   };
+  for (const field of [
+    "requesterAccountId",
+    "requesterSenderId",
+    "requesterSenderName",
+    "requesterSenderUsername",
+    "requesterSenderE164",
+  ] as const) {
+    const value = normalizeOptionalString(params[field]);
+    if (value) {
+      context[field] = value;
+    }
+  }
+  return Object.keys(context).length > 0 ? context : undefined;
 }

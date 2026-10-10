@@ -1,0 +1,337 @@
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { listAgentEntries } from "../agents/agent-scope.js";
+import {
+  OPENCLAW_DOCS_URL,
+  OPENCLAW_SOURCE_URL,
+  resolveOpenClawReferencePaths,
+} from "../agents/docs-path.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
+import {
+  resolveConfiguredPrimaryModelForAgent,
+  resolveConfiguredSetupModelForAgent,
+} from "../agents/utility-model.js";
+import {
+  readConfigFileSnapshot,
+  resolveConfigPath,
+  resolveGatewayPort,
+  type OpenClawConfig,
+} from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { createSetupTranslator, type SetupTranslator } from "../wizard/i18n/index.js";
+import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
+
+type SystemAgentSummary = {
+  id: string;
+  name?: string;
+  isDefault: boolean;
+  model?: string;
+  utilityModel?: string;
+  workspace?: string;
+};
+
+export type SystemAgentOverview = {
+  config: {
+    path: string;
+    exists: boolean;
+    valid: boolean;
+    issues: string[];
+    hash: string | null;
+  };
+  agents: SystemAgentSummary[];
+  defaultAgentId: string;
+  defaultModel?: string;
+  /** Explicit utility route available to setup while the regular model is unconfigured. */
+  setupModel?: string;
+  utilityModel?: string;
+  tools: {
+    codex: LocalCommandProbe;
+    claude: LocalCommandProbe;
+    gemini: LocalCommandProbe;
+    apiKeys: {
+      openai: boolean;
+      anthropic: boolean;
+    };
+  };
+  gateway: {
+    url: string;
+    source: string;
+    reachable: boolean;
+    error?: string;
+  };
+  references: {
+    docsPath?: string;
+    docsUrl: string;
+    sourcePath?: string;
+    sourceUrl: string;
+  };
+};
+
+function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): SystemAgentSummary[] {
+  const entries = listAgentEntries(cfg);
+  if (entries.length === 0) {
+    const utility = readUtilityModelSetting(cfg, defaultAgentId);
+    return [
+      {
+        id: defaultAgentId,
+        isDefault: true,
+        model: resolveConfiguredPrimaryModelForAgent({ cfg, agentId: defaultAgentId }),
+        ...(utility.kind === "explicit" ? { utilityModel: utility.modelRef } : {}),
+      },
+    ];
+  }
+  const seen = new Set<string>();
+  const summaries: SystemAgentSummary[] = [];
+  // Agent ids are normalized and deduped so config aliases do not produce duplicate setup choices.
+  for (const entry of entries) {
+    const id = normalizeAgentId(entry.id);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const summary: SystemAgentSummary = {
+      id,
+      isDefault: id === defaultAgentId,
+    };
+    if (typeof entry.name === "string") {
+      summary.name = entry.name;
+    }
+    const model = resolveConfiguredPrimaryModelForAgent({ cfg, agentId: id });
+    if (model) {
+      summary.model = model;
+    }
+    const utility = readUtilityModelSetting(cfg, id);
+    if (utility.kind === "explicit") {
+      summary.utilityModel = utility.modelRef;
+    }
+    if (typeof entry.workspace === "string") {
+      summary.workspace = entry.workspace;
+    }
+    summaries.push(summary);
+  }
+  return summaries;
+}
+
+export async function loadSystemAgentOverview(
+  opts: { agentId?: string } = {},
+): Promise<SystemAgentOverview> {
+  const env = process.env;
+  const snapshot = await readConfigFileSnapshot();
+  const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
+  const defaultAgentId = resolveAmbientOwnerAgentId(cfg, opts.agentId);
+  const defaultModel =
+    resolveConfiguredPrimaryModelForAgent({ cfg, agentId: defaultAgentId }) ??
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
+  const setupSelection = resolveConfiguredSetupModelForAgent({ cfg, agentId: defaultAgentId });
+  const utility = readUtilityModelSetting(cfg, defaultAgentId);
+  const configPath = snapshot.path || resolveConfigPath(env);
+  let gatewayUrl = `ws://127.0.0.1:${resolveGatewayPort(cfg, env)}`;
+  let gatewaySource = "local loopback";
+  let gatewayError: string | undefined;
+  try {
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
+    const details = buildGatewayConnectionDetails({ config: cfg, configPath });
+    gatewayUrl = details.url;
+    gatewaySource = details.urlSource;
+    gatewayError = details.remoteFallbackNote;
+  } catch (err) {
+    gatewayError = err instanceof Error ? err.message : String(err);
+  }
+  const [codex, claude, gemini, gateway, references] = await Promise.all([
+    // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
+    probeLocalCommand("codex"),
+    probeLocalCommand("claude"),
+    probeLocalCommand("gemini"),
+    probeGatewayUrl(gatewayUrl),
+    resolveOpenClawReferencePaths({
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+    }),
+  ]);
+  return {
+    config: {
+      path: configPath,
+      exists: snapshot.exists,
+      valid: snapshot.valid,
+      issues: snapshot.issues.map(
+        (issue) => `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
+      ),
+      hash: snapshot.hash ?? null,
+    },
+    agents: buildAgentSummaries(cfg, defaultAgentId),
+    defaultAgentId,
+    defaultModel,
+    ...(setupSelection?.modelTarget === "utility" ? { setupModel: setupSelection.modelRef } : {}),
+    ...(utility.kind === "explicit" ? { utilityModel: utility.modelRef } : {}),
+    tools: {
+      codex,
+      claude,
+      gemini,
+      apiKeys: {
+        openai: Boolean(env.OPENAI_API_KEY?.trim()),
+        anthropic: Boolean(env.ANTHROPIC_API_KEY?.trim()),
+      },
+    },
+    gateway: {
+      url: gateway.url,
+      source: gatewaySource,
+      reachable: gateway.reachable,
+      error: gateway.error ?? gatewayError,
+    },
+    references: {
+      docsPath: references.docsPath ?? undefined,
+      docsUrl: OPENCLAW_DOCS_URL,
+      sourcePath: references.sourcePath ?? undefined,
+      sourceUrl: OPENCLAW_SOURCE_URL,
+    },
+  };
+}
+
+function formatCommandProbe(probe: LocalCommandProbe): string {
+  if (!probe.found) {
+    return "not found";
+  }
+  if (probe.version) {
+    return probe.version;
+  }
+  return probe.error ? `found (${probe.error})` : "found";
+}
+
+export function formatSystemAgentOverview(overview: SystemAgentOverview): string {
+  const agentLines = overview.agents.map((agent) => {
+    const bits = [
+      agent.id,
+      agent.isDefault ? "default" : undefined,
+      agent.name ? `name=${agent.name}` : undefined,
+      agent.model ? `model=${agent.model}` : undefined,
+      agent.utilityModel ? `utility=${agent.utilityModel}` : undefined,
+      agent.workspace ? `workspace=${agent.workspace}` : undefined,
+    ].filter(Boolean);
+    return `  - ${bits.join(" | ")}`;
+  });
+  const configStatus = overview.config.valid
+    ? overview.config.exists
+      ? "valid"
+      : "missing"
+    : "invalid";
+  const issueLines =
+    overview.config.issues.length > 0
+      ? ["Config issues:", ...overview.config.issues.map((issue) => `  - ${issue}`)]
+      : [];
+  return [
+    "OpenClaw online. Little claws, typed tools.",
+    "",
+    `Config: ${configStatus}`,
+    `Path: ${overview.config.path}`,
+    `Default agent: ${overview.defaultAgentId}`,
+    `Default model: ${overview.defaultModel ?? "not configured"}`,
+    ...(overview.setupModel ? [`Setup model: ${overview.setupModel}`] : []),
+    ...(overview.utilityModel ? [`Utility model: ${overview.utilityModel}`] : []),
+    "Agents:",
+    ...agentLines,
+    `Codex: ${formatCommandProbe(overview.tools.codex)}`,
+    `Claude Code: ${formatCommandProbe(overview.tools.claude)}`,
+    `Gemini CLI: ${formatCommandProbe(overview.tools.gemini)}`,
+    `API keys: OpenAI ${overview.tools.apiKeys.openai ? "found" : "not found"}, Anthropic ${
+      overview.tools.apiKeys.anthropic ? "found" : "not found"
+    }`,
+    `AI: ${
+      overview.defaultModel || overview.setupModel
+        ? `conversation runs on ${overview.defaultModel ?? overview.setupModel}`
+        : "inference unavailable; run openclaw onboard before starting OpenClaw"
+    }`,
+    `Docs: ${overview.references.docsPath ?? overview.references.docsUrl}`,
+    overview.references.sourcePath
+      ? `Source: ${overview.references.sourcePath}`
+      : `Source: ${overview.references.sourceUrl}`,
+    `Gateway: ${overview.gateway.reachable ? "reachable" : "not reachable"} (${overview.gateway.url}, ${overview.gateway.source})`,
+    overview.gateway.error ? `Gateway note: ${overview.gateway.error}` : undefined,
+    `Next: ${recommendSystemAgentNextStep(overview)}`,
+    ...issueLines,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function recommendSystemAgentNextStep(overview: SystemAgentOverview): string {
+  if (!overview.config.exists) {
+    return 'run "openclaw onboard" to establish inference';
+  }
+  if (!overview.config.valid) {
+    return 'run "validate config" or "doctor" to inspect the config';
+  }
+  if (!overview.defaultModel) {
+    return overview.setupModel
+      ? 'continue setup here; run "openclaw onboard" to choose your regular agent model'
+      : 'run "openclaw onboard" to establish inference';
+  }
+  if (!overview.gateway.reachable) {
+    return 'run "gateway status" or "restart gateway"';
+  }
+  return 'run "talk to agent" to enter your default agent';
+}
+
+function formatStartupAction(overview: SystemAgentOverview): string | undefined {
+  if (!overview.config.valid) {
+    return "Config needs attention. Run `doctor` to inspect it.";
+  }
+  if (!overview.defaultModel && !overview.setupModel) {
+    return "Inference is unavailable. Run `openclaw onboard` and complete a live model check.";
+  }
+  if (!overview.defaultModel) {
+    return "Setup and utility inference are ready. Choose a regular agent model in Model Setup or run `openclaw onboard`.";
+  }
+  return undefined;
+}
+
+/**
+ * Welcome shown right after inference activation. OpenClaw owns the
+ * remaining workspace, Gateway, channel, and agent setup.
+ */
+export function formatSystemAgentOnboardingWelcome(
+  overview: SystemAgentOverview,
+  translate: SetupTranslator = createSetupTranslator({ keyPrefix: "wizard.onboardingWelcome" }),
+): string {
+  return [
+    `## ${translate("inferenceReady")}`,
+    "",
+    `- ${translate(overview.defaultModel ? "verifiedModel" : "verifiedSetupModel", {
+      model: overview.defaultModel ?? overview.setupModel ?? translate("notConfigured"),
+    })}`,
+    `- ${overview.gateway.reachable ? translate("gatewayRunning", { url: overview.gateway.url }) : translate("gatewayUnavailable")}`,
+    `- ${translate("optionalSetup")}`,
+    `- ${translate("channelCommands")}`,
+    "",
+    translate(overview.defaultModel ? "readyNext" : "readySetupNext"),
+  ].join("\n");
+}
+
+export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): string {
+  const agent = overview.agents.find((entry) => entry.id === overview.defaultAgentId);
+  const agentLabel = agent?.name
+    ? `${overview.defaultAgentId} (${agent.name})`
+    : overview.defaultAgentId;
+  const configStatus = !overview.config.exists
+    ? "missing"
+    : overview.config.valid
+      ? "valid"
+      : "invalid";
+  return [
+    "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
+    // Inference status stays independent of the recovery action line: with an
+    // invalid config AND no model, both problems must be visible.
+    overview.defaultModel
+      ? `Model: ${overview.defaultModel}.`
+      : overview.setupModel
+        ? `Setup model: ${overview.setupModel}.`
+        : "Inference is unavailable.",
+    `Config: ${configStatus}. Default agent: ${agentLabel}.`,
+    overview.gateway.reachable
+      ? `Gateway: reachable at ${overview.gateway.url}.`
+      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first check.`,
+    formatStartupAction(overview),
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}

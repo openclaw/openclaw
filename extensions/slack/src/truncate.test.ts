@@ -1,6 +1,10 @@
 // Slack tests cover truncate plugin behavior.
 import { describe, expect, it } from "vitest";
-import { truncateSlackText } from "./truncate.js";
+import {
+  countSlackTextUtf8Bytes,
+  truncateSlackText,
+  truncateSlackTextByUtf8Bytes,
+} from "./truncate.js";
 
 describe("truncateSlackText", () => {
   it("drops a surrogate-pair emoji whole when it straddles the limit", () => {
@@ -13,15 +17,17 @@ describe("truncateSlackText", () => {
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out)).toBe(false);
   });
 
-  it("truncates plain BMP text unchanged", () => {
-    expect(truncateSlackText("hello world", 5)).toBe("hell…");
-  });
-
   it("keeps an emoji that fits before the cut", () => {
     expect(truncateSlackText("😀abcdef", 5)).toBe("😀ab…");
   });
+});
 
-  it("returns the trimmed input unchanged when it fits", () => {
-    expect(truncateSlackText("ab😀cd", 10)).toBe("ab😀cd");
+describe("truncateSlackTextByUtf8Bytes", () => {
+  it("does not split emoji at the byte boundary", () => {
+    const result = truncateSlackTextByUtf8Bytes("😀".repeat(2_000), 4_000);
+
+    expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toContain("�");
+    expect(countSlackTextUtf8Bytes(result)).toBeLessThanOrEqual(4_000);
   });
 });

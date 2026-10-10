@@ -1,0 +1,56 @@
+import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
+import { describe, expect, it } from "vitest";
+import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
+
+function shouldPause(details?: unknown): boolean {
+  return shouldPauseGatewayReconnect({
+    details,
+    protocolMismatchIsTerminal: true,
+  });
+}
+
+describe("shouldPauseGatewayReconnect", () => {
+  it.each([
+    "AUTH_IDENTITY_HEADER_REQUIRED",
+    ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
+    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+    ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+  ])("pauses reconnect for %s", (code) => {
+    expect(shouldPause({ code })).toBe(true);
+  });
+
+  it("keeps reconnect active when pairing retry hints allow it", () => {
+    expect(
+      shouldPause({
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        reason: "not-paired",
+        recommendedNextStep: "wait_then_retry",
+        pauseReconnect: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves token mismatch to the caller's bounded retry policy", () => {
+    expect(shouldPause({ code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH })).toBe(false);
+  });
+
+  it("keeps the identity-header pause behind a pending device-token retry", () => {
+    expect(
+      shouldPauseGatewayReconnect({
+        details: { code: "AUTH_IDENTITY_HEADER_REQUIRED" },
+        deviceTokenRetryPending: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps generic unauthorized failures reconnecting", () => {
+    expect(shouldPause({ code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED })).toBe(false);
+  });
+
+  it.each([undefined, {}, { code: "SOME_FUTURE_CODE" }])(
+    "keeps reconnect active for recoverable details",
+    (details) => {
+      expect(shouldPause(details)).toBe(false);
+    },
+  );
+});

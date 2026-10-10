@@ -1,12 +1,59 @@
-/**
- * Public enqueue knobs shared by command-lane callers and narrower injection
- * points that should not import the full queue implementation.
- */
+/** Why a lane cannot admit, from the narrowest cause outward. */
+export type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
+
+export type CommandLaneSnapshot = {
+  lane: string;
+  queuedCount: number;
+  activeCount: number;
+  maxConcurrent: number;
+  /** Capacity applies independently to each session or swarm group. */
+  concurrencyScope?: "session" | "swarm";
+  swarmGroupKey?: string;
+  saturatedLaneCount?: number;
+  draining: boolean;
+  generation: number;
+  group?: string;
+  /** Sum of active tasks across every member of the group. Always derived. */
+  groupActive?: number;
+  /** Hard aggregate cap shared by the group's members. */
+  groupBudget?: number;
+  /** Slots within the budget this lane may always claim. */
+  reservedForLane?: number;
+  /**
+   * Why this lane cannot start more work right now, or null if it can.
+   * `lane` is the lane's own maxConcurrent; the other two are group-imposed and
+   * are invisible to a lane-local view — see `noteLaneWaitIfBusy`.
+   */
+  blockedBy?: CommandLaneBlockReason;
+};
+
+export type CommandQueueTaskDeadline =
+  | { kind: "bounded"; deadlineAtMs: number }
+  | { kind: "unlimited" };
+
 export type CommandQueueEnqueueOptions = {
+  sessionTarget?: Readonly<{ agentId?: string; sessionKey?: string; sessionId: string }>;
+  /** Enqueue-time provenance for diagnostics only; never used for admission. */
+  taskIdentity?: Readonly<{
+    taskKind: string;
+    sessionKey?: string;
+    runId?: string;
+    requesterSessionKey?: string;
+  }>;
+  /** Owner-resolved capacity, installed atomically with this enqueue. */
+  maxConcurrent?: number;
+  /** Cancels queued admission; the task owns cancellation after it starts. */
+  abortSignal?: AbortSignal;
+  /** Called only when this entry remains queued after immediate lane admission. */
+  onQueued?: () => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  /** Replaces idle timing with an owner deadline; undefined restores idle timing. */
+  taskTimeoutSubscribe?: (
+    onDeadline: (deadline: CommandQueueTaskDeadline | undefined) => void,
+  ) => () => void;
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
@@ -14,7 +61,6 @@ export type CommandQueueEnqueueOptions = {
   priority?: "foreground" | "normal" | "background";
 };
 
-/** Minimal queue function contract used by code that only needs to schedule work. */
 export type CommandQueueEnqueueFn = <T>(
   task: () => Promise<T>,
   opts?: CommandQueueEnqueueOptions,

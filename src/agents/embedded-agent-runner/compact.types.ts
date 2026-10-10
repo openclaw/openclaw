@@ -1,81 +1,106 @@
-/**
- * Shared parameter and metric types for embedded-agent compaction.
- */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-import type { ChatType } from "../../channels/chat-type.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
-import type { SkillSnapshot } from "../../skills/types.js";
-import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 
-export type CompactEmbeddedAgentSessionParams = {
-  sessionId: string;
+export type CompactEmbeddedAgentSessionParams = Pick<
+  import("./run/params.js").RunEmbeddedAgentParams,
+  | "requireWorkspaceOnly"
+  | "sessionTarget"
+  | "sessionId"
+  | "sessionKey"
+  | "agentId"
+  | "sandboxSessionKey"
+  | "sandboxAgentId"
+  | "messageChannel"
+  | "messageProvider"
+  | "clientCaps"
+  | "pinnedWidgetAuthoring"
+  | "chatType"
+  | "agentAccountId"
+  | "conversationRoutePeerId"
+  | "conversationToolPolicy"
+  | "currentChannelId"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "authProfileId"
+  | "authProfileIdSource"
+  | "groupId"
+  | "groupChannel"
+  | "groupSpace"
+  | "memberRoleIds"
+  | "spawnedBy"
+  | "inputProvenance"
+  | "trustedInternalHandoff"
+  | "toolsAllow"
+  | "disableTools"
+  | "runtimePluginToolGrant"
+  | "scheduledToolPolicy"
+  | "workspaceDir"
+  | "bootstrapWorkspaceDir"
+  | "cwd"
+  | "permissionMode"
+  | "sessionRoot"
+  | "agentDir"
+  | "config"
+  | "toolOverrides"
+  | "skillsSnapshot"
+  | "senderIsOwner"
+  | "provider"
+  | "model"
+  | "modelFallbacksOverride"
+  | "contextTokenBudget"
+  | "agentHarnessId"
+  | "modelSelectionLocked"
+  | "thinkLevel"
+  | "reasoningLevel"
+  | "bashElevated"
+  | "lane"
+  | "enqueue"
+  | "extraSystemPrompt"
+  | "sourceReplyDeliveryMode"
+  | "ownerNumbers"
+  | "abortSignal"
+  | "allowGatewaySubagentBinding"
+  | "oneShotCliRun"
+> & {
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   runId?: string;
-  sessionKey?: string;
-  /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
-  sessionTarget?: AgentRunSessionTarget;
-  /** Caller-resolved owner agent for global session aliases. */
-  agentId?: string;
-  /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
-  sandboxSessionKey?: string;
-  messageChannel?: string;
-  messageProvider?: string;
-  chatType?: ChatType;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
+  /** Host-resolved memory partition inherited from the compacted session. */
+  memoryAudience?: import("../../plugins/memory-provider-types.js").MemoryAudience;
+  /** Host-resolved sandbox fact paired with the compacted session authority. */
+  memorySandboxed?: boolean;
   /** Trusted sender id from inbound context for scoped message-tool discovery. */
   senderId?: string;
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
-  authProfileId?: string;
   /** Host-resolved provider credential for native harness compaction. */
   resolvedApiKey?: string;
-  /** Group id for channel-level tool policy resolution. */
-  groupId?: string | null;
-  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
-  groupChannel?: string | null;
-  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
-  groupSpace?: string | null;
-  /** Parent session key for subagent policy inheritance. */
-  spawnedBy?: string | null;
+  /** Host-resolved ambient native-tool boundary for this compaction operation. */
+  nativeToolSurface?: "unrestricted" | "host-isolated";
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
-  workspaceDir: string;
-  /** Optional task working directory; workspaceDir remains the agent bootstrap workspace. */
-  cwd?: string;
-  agentDir?: string;
-  config?: OpenClawConfig;
-  skillsSnapshot?: SkillSnapshot;
-  senderIsOwner?: boolean;
-  provider?: string;
-  model?: string;
   /** Caller-resolved model/provider shape used by native harness compactors. */
   runtimeModel?: Model;
-  /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
-  modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */
   contextEngine?: ContextEngine;
-  /** Optional caller-resolved token budget for harness-owned compaction. */
-  contextTokenBudget?: number;
   /** Optional caller-resolved runtime context for harness-owned context-engine compaction. */
   contextEngineRuntimeContext?: ContextEngineRuntimeContext;
-  /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
-  agentHarnessId?: string;
+  /** Resumable native CLI session targeted by an explicit manual compaction. */
+  cliSessionId?: string;
+  /** Complete persisted CLI binding targeted by an explicit manual compaction. */
+  cliSessionBinding?: CliSessionBinding;
+  /** Owning session facts required for placement and runtime preparation. */
+  sessionEntry?: SessionEntry;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
-  thinkLevel?: ThinkLevel;
-  reasoningLevel?: ReasoningLevel;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
-  bashElevated?: ExecElevatedDefaults;
+  /** Host-prepared route and credential selection for native harness compaction. */
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
+  execOverrides?: Pick<ExecToolDefaults, "host" | "mode" | "security" | "ask" | "node" | "nodeCwd">;
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;
@@ -94,22 +119,16 @@ export type CompactEmbeddedAgentSessionParams = {
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
-  lane?: string;
-  enqueue?: CommandQueueEnqueueFn;
-  extraSystemPrompt?: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  ownerNumbers?: string[];
-  abortSignal?: AbortSignal;
+  /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
+  compactionTimeoutReset?: () => void;
+  /** @internal Host watchdog ceiling (epoch ms); the summary request ends one window before it. */
+  compactionDeadlineAt?: number;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];
     sessionId: string;
     sessionKey: string;
   }) => void | Promise<void>;
-  /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
-  allowGatewaySubagentBinding?: boolean;
-  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
-  oneShotCliRun?: boolean;
 };
 
 export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
@@ -118,12 +137,4 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
 > & {
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
-};
-
-export type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
 };

@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Lazy-loaded dependency bundle for remote-profile tab operation tests.
  */
@@ -13,17 +14,16 @@ export type RemoteProfileTestDeps = {
   closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
   createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
   createJsonListFetchMock: typeof import("./server-context.remote-tab-ops.harness.js").createJsonListFetchMock;
+  createTestBrowserRouteContext: typeof import("./server-context.remote-tab-ops.harness.js").createTestBrowserRouteContext;
   createRemoteRouteHarness: typeof import("./server-context.remote-tab-ops.harness.js").createRemoteRouteHarness;
   createSequentialPageLister: typeof import("./server-context.remote-tab-ops.harness.js").createSequentialPageLister;
   makeState: typeof import("./server-context.remote-tab-ops.harness.js").makeState;
   originalFetch: typeof import("./server-context.remote-tab-ops.harness.js").originalFetch;
 };
 
-let remoteProfileTestDepsPromise: Promise<RemoteProfileTestDeps> | undefined;
-
 /** Loads remote-profile tab operation dependencies after Chrome mocks are installed. */
-export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps> {
-  remoteProfileTestDepsPromise ??= (async () => {
+const loadRemoteProfileTestDepsOnce = createLazyRuntimeModule(() =>
+  (async () => {
     await import("./server-context.chrome-test-harness.js");
     const cdpModule = await import("./cdp.js");
     const chromeModule = await import("./chrome.js");
@@ -34,6 +34,7 @@ export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps
     const { createBrowserRouteContext } = await import("./server-context.js");
     const {
       createJsonListFetchMock,
+      createTestBrowserRouteContext,
       createRemoteRouteHarness,
       createSequentialPageLister,
       makeState,
@@ -48,14 +49,16 @@ export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps
       closePlaywrightBrowserConnection,
       createBrowserRouteContext,
       createJsonListFetchMock,
+      createTestBrowserRouteContext,
       createRemoteRouteHarness,
       createSequentialPageLister,
       makeState,
       originalFetch,
     };
-  })();
-  return await remoteProfileTestDepsPromise;
-}
+  })(),
+);
+
+export const loadRemoteProfileTestDeps = loadRemoteProfileTestDepsOnce;
 
 /** Installs per-test mock reset and Playwright connection cleanup. */
 export function installRemoteProfileTestLifecycle(deps: RemoteProfileTestDeps): void {

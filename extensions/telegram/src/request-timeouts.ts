@@ -1,11 +1,10 @@
-// Telegram plugin module implements request timeouts behavior.
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
 } from "openclaw/plugin-sdk/number-runtime";
 
 export const TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS = 45_000;
-const TELEGRAM_OUTBOUND_TEXT_REQUEST_TIMEOUT_MS = 60_000;
+const TELEGRAM_DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const TELEGRAM_DEFAULT_LONG_POLL_TIMEOUT_SECONDS = 30;
 const TELEGRAM_LONG_POLL_ABORT_MARGIN_SECONDS = 5;
 
@@ -24,10 +23,10 @@ const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   pinchatmessage: 15_000,
   sendanimation: 30_000,
   sendaudio: 30_000,
-  sendchataction: TELEGRAM_OUTBOUND_TEXT_REQUEST_TIMEOUT_MS,
+  sendchataction: TELEGRAM_DEFAULT_REQUEST_TIMEOUT_MS,
   senddocument: 30_000,
-  sendmessage: TELEGRAM_OUTBOUND_TEXT_REQUEST_TIMEOUT_MS,
-  sendmessagedraft: TELEGRAM_OUTBOUND_TEXT_REQUEST_TIMEOUT_MS,
+  sendmessage: TELEGRAM_DEFAULT_REQUEST_TIMEOUT_MS,
+  sendmessagedraft: TELEGRAM_DEFAULT_REQUEST_TIMEOUT_MS,
   sendphoto: 30_000,
   sendvideo: 30_000,
   sendvoice: 30_000,
@@ -36,14 +35,15 @@ const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   setwebhook: 15_000,
 } as const;
 
-function resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
+function resolveConfiguredTimeoutMs(timeoutSeconds: unknown, minimumMs: number): number {
   if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
-    return undefined;
+    return Math.max(minimumMs, 0);
   }
-  return (
+  return Math.max(
+    minimumMs,
     finiteSecondsToTimerSafeMilliseconds(Math.max(1, timeoutSeconds), {
       floorSeconds: true,
-    }) ?? MAX_TIMER_TIMEOUT_MS
+    }) ?? MAX_TIMER_TIMEOUT_MS,
   );
 }
 
@@ -54,12 +54,13 @@ export function resolveTelegramRequestTimeoutMs(
   if (!method) {
     return undefined;
   }
-  const baseTimeoutMs =
-    TELEGRAM_REQUEST_TIMEOUTS_MS[method as keyof typeof TELEGRAM_REQUEST_TIMEOUTS_MS];
-  if (baseTimeoutMs === undefined || method === "getupdates") {
-    return baseTimeoutMs;
+  if (method === "getupdates") {
+    return TELEGRAM_REQUEST_TIMEOUTS_MS.getupdates;
   }
-  return Math.max(baseTimeoutMs, resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 0);
+  const baseTimeoutMs =
+    TELEGRAM_REQUEST_TIMEOUTS_MS[method as keyof typeof TELEGRAM_REQUEST_TIMEOUTS_MS] ??
+    TELEGRAM_DEFAULT_REQUEST_TIMEOUT_MS;
+  return resolveConfiguredTimeoutMs(timeoutSeconds, baseTimeoutMs);
 }
 
 export function resolveTelegramLongPollTimeoutSeconds(timeoutSeconds: unknown): number {
@@ -76,10 +77,5 @@ export function resolveTelegramLongPollTimeoutSeconds(timeoutSeconds: unknown): 
 }
 
 export function resolveTelegramStartupProbeTimeoutMs(timeoutSeconds: unknown): number {
-  const getMeTimeoutMs = resolveTelegramRequestTimeoutMs("getme") ?? 15_000;
-  if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
-    return getMeTimeoutMs;
-  }
-  const configuredTimeoutMs = resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 1_000;
-  return Math.max(getMeTimeoutMs, configuredTimeoutMs);
+  return resolveConfiguredTimeoutMs(timeoutSeconds, TELEGRAM_REQUEST_TIMEOUTS_MS.getme);
 }

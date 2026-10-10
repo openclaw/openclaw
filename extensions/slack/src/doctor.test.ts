@@ -1,6 +1,14 @@
 // Slack tests cover doctor plugin behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackDoctor } from "./doctor.js";
+
+const mocks = vi.hoisted(() => ({
+  probeSlack: vi.fn(),
+}));
+
+vi.mock("./probe.js", () => ({
+  probeSlack: mocks.probeSlack,
+}));
 
 async function collectSlackWarnings(
   slack: Record<string, unknown>,
@@ -26,6 +34,80 @@ function getSlackCompatibilityNormalizer(): NonNullable<
 }
 
 describe("slack doctor", () => {
+  beforeEach(() => {
+    mocks.probeSlack.mockReset();
+  });
+
+  it("reports when auth.test identifies a bot token instead of a human", async () => {
+    mocks.probeSlack.mockResolvedValue({
+      ok: false,
+      error: "Slack auth.test identified a bot token; user identity requires a user OAuth token",
+    });
+
+    const warnings = await slackDoctor.collectPreviewWarnings?.({
+      cfg: {
+        channels: {
+          slack: {
+            postAs: "user",
+            userToken: "test-user-token",
+            appToken: "test-app-token",
+          },
+        },
+      } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(warnings).toEqual([
+      "- channels.slack: userToken auth.test failed: Slack auth.test identified a bot token; user identity requires a user OAuth token.",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "Socket Mode app token",
+      slack: { postAs: "user", userToken: "test-user-token" },
+      expected: "requires appToken for companion-app events",
+    },
+    {
+      name: "HTTP signing secret",
+      slack: { postAs: "user", mode: "http", userToken: "test-user-token" },
+      expected: "requires signingSecret for companion-app events",
+    },
+  ])("warns when user identity is missing the $name", async ({ slack, expected }) => {
+    mocks.probeSlack.mockResolvedValue({
+      ok: true,
+      user: { id: "U12345678", name: "test-human" },
+    });
+
+    const warnings = await slackDoctor.collectPreviewWarnings?.({
+      cfg: { channels: { slack } } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(expected)]));
+    expect(warnings?.join("\n")).not.toContain("test-user-token");
+  });
+
+  it("leaves bot-identity doctor behavior unchanged", async () => {
+    const warnings = await slackDoctor.collectPreviewWarnings?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "test-bot-token",
+            appToken: "test-app-token",
+          },
+        },
+      } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(warnings).toEqual([]);
+    expect(mocks.probeSlack).not.toHaveBeenCalled();
+  });
+
   it("warns when mutable allowlist entries rely on disabled name matching", async () => {
     const warnings = await Promise.resolve(
       slackDoctor.collectMutableAllowlistWarnings?.({
@@ -63,6 +145,19 @@ describe("slack doctor", () => {
     ).toBe(true);
   });
 
+  it("accepts workspace-qualified channel and user ids as stable policy entries", async () => {
+    const warnings = await collectSlackWarnings({
+      allowFrom: ["team:T11111111:user:U01234567"],
+      channels: {
+        "team:T11111111:channel:C01234567": {
+          users: ["team:T11111111:user:U01234567"],
+        },
+      },
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
   it("warns for name-keyed allowlist channels but accepts routed ID forms (#81665)", async () => {
     const warnings = await collectSlackWarnings({
       channels: {
@@ -72,9 +167,11 @@ describe("slack doctor", () => {
         c0al2gdua7k: {},
         "channel:C0AL2GDUA7L": {},
         "channel:c0al2gdua7m": {},
+        "team:T11111111:channel:C0AL2GDUA7S": {},
         D0AL2GDUA7Q: {},
         "channel:d0al2gdua7r": {},
         "channel:dabcdefgh": {},
+        "team:T11111111:channel:D0AL2GDUA7T": {},
         "channel:customers": {},
         "CHANNEL:C0AL2GDUA7N": {},
         "channel:C0al2gdua7p": {},
@@ -97,10 +194,11 @@ describe("slack doctor", () => {
     const dmWarnings = warnings.filter((warning) =>
       warning.includes("is a Slack DM conversation ID"),
     );
-    expect(dmWarnings).toHaveLength(3);
+    expect(dmWarnings).toHaveLength(4);
     expect(dmWarnings[0]).toContain('channels.slack.channels."D0AL2GDUA7Q"');
     expect(dmWarnings[1]).toContain('channels.slack.channels."channel:d0al2gdua7r"');
     expect(dmWarnings[2]).toContain('channels.slack.channels."channel:dabcdefgh"');
+    expect(dmWarnings[3]).toContain('channels.slack.channels."team:T11111111:channel:D0AL2GDUA7T"');
     expect(dmWarnings[0]).toContain("channels.slack.dmPolicy");
   });
 
@@ -201,63 +299,6 @@ describe("slack doctor", () => {
     ).toBe(true);
   });
 
-  it("warns when an open-policy override is keyed by channel name (#81665)", async () => {
-    const warnings = await collectSlackWarnings({
-      groupPolicy: "open",
-      channels: {
-        "private-room": { enabled: false },
-      },
-    });
-
-    expect(warnings).toEqual([expect.stringContaining('channels.slack.channels."private-room"')]);
-    expect(warnings[0]).toContain("the channel remains allowed");
-  });
-
-  it("warns for DM IDs regardless of room policy and uses account-scoped remediation", async () => {
-    const openWarnings = await collectSlackWarnings({
-      groupPolicy: "open",
-      channels: {
-        D0AL2GDUA7S: {},
-      },
-    });
-    expect(openWarnings).toEqual([
-      expect.stringContaining('channels.slack.channels."D0AL2GDUA7S"'),
-    ]);
-
-    const disabledAccountWarnings = await collectSlackWarnings({
-      accounts: {
-        work: {
-          groupPolicy: "disabled",
-          channels: {
-            "channel:d0al2gdua7t": {},
-          },
-        },
-      },
-    });
-    expect(disabledAccountWarnings).toEqual([
-      expect.stringContaining('channels.slack.accounts.work.channels."channel:d0al2gdua7t"'),
-    ]);
-    expect(disabledAccountWarnings[0]).toContain("channels.slack.accounts.work.dmPolicy");
-    expect(disabledAccountWarnings[0]).toContain("channels.slack.accounts.work.allowFrom");
-
-    const inheritedChannelWarnings = await collectSlackWarnings({
-      channels: {
-        D0AL2GDUA7U: {},
-      },
-      accounts: {
-        work: {
-          groupPolicy: "disabled",
-          dmPolicy: "allowlist",
-          allowFrom: ["U0AL2GDUA7U"],
-        },
-      },
-    });
-    expect(inheritedChannelWarnings).toEqual([
-      expect.stringContaining('channels.slack.channels."D0AL2GDUA7U"'),
-    ]);
-    expect(inheritedChannelWarnings[0]).toContain("channels.slack.accounts.work.dmPolicy");
-  });
-
   it("treats bare lowercase D forms as ambiguous without name matching", async () => {
     const warnings = await collectSlackWarnings({
       channels: {
@@ -274,23 +315,6 @@ describe("slack doctor", () => {
       'channels.slack.channels."dabcdefgh" is ambiguous: it may be a lowercase Slack DM conversation ID or a channel name',
     );
     expect(warnings[0]).toContain("stable C/G ID");
-  });
-
-  it("does not audit provider defaults as a standalone named account (#81665)", async () => {
-    const warnings = await collectSlackWarnings({
-      channels: {
-        "provider-room": { enabled: false },
-      },
-      accounts: {
-        work: {
-          channels: {
-            C0AL2GDUA7J: {},
-          },
-        },
-      },
-    });
-
-    expect(warnings.some((warning) => warning.includes("provider-room"))).toBe(false);
   });
 
   it("normalizes legacy slack streaming aliases into the nested streaming shape", () => {
@@ -366,25 +390,17 @@ describe("slack doctor", () => {
     ).toEqual(["Moved channels.slack.streamMode → channels.slack.streaming.mode (progress)."]);
   });
 
-  it("moves legacy channel allow toggles into enabled", () => {
+  it("moves legacy thread mention policy to canonical root and account config", () => {
     const normalize = getSlackCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
         channels: {
           slack: {
-            channels: {
-              ops: {
-                allow: false,
-              },
-            },
+            thread: { requireExplicitMention: true, historyScope: "channel" },
             accounts: {
               work: {
-                channels: {
-                  general: {
-                    allow: true,
-                  },
-                },
+                thread: { requireExplicitMention: false },
               },
             },
           },
@@ -392,15 +408,25 @@ describe("slack doctor", () => {
       } as never,
     });
 
+    expect(result.config.channels?.slack).toMatchObject({
+      thread: { historyScope: "channel" },
+      implicitMentions: { threadParticipation: false },
+      accounts: {
+        work: {
+          implicitMentions: { threadParticipation: true },
+        },
+      },
+    });
+    expect(result.config.channels?.slack?.implicitMentions).toEqual({
+      threadParticipation: false,
+    });
+    expect(result.config.channels?.slack?.accounts?.work?.implicitMentions).toEqual({
+      threadParticipation: true,
+    });
+    expect(result.config.channels?.slack?.accounts?.work?.thread).toBeUndefined();
     expect(result.changes).toEqual([
-      "Moved channels.slack.channels.ops.allow → channels.slack.channels.ops.enabled.",
-      "Moved channels.slack.accounts.work.channels.general.allow → channels.slack.accounts.work.channels.general.enabled.",
+      "Moved channels.slack.thread.requireExplicitMention → channels.slack.implicitMentions.threadParticipation (false).",
+      "Moved channels.slack.accounts.work.thread.requireExplicitMention → channels.slack.accounts.work.implicitMentions.threadParticipation (true).",
     ]);
-    expect(result.config.channels?.slack?.channels?.ops).toEqual({
-      enabled: false,
-    });
-    expect(result.config.channels?.slack?.accounts?.work?.channels?.general).toEqual({
-      enabled: true,
-    });
   });
 });

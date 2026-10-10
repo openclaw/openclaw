@@ -3,16 +3,17 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import {
+  parseConcreteConfigPathTokens,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
-import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
-
-/** Registry target id accepted by a secrets apply plan. */
-export type SecretsPlanTargetType = string;
 
 /** One planned SecretRef mutation against config or auth-profile storage. */
 export type SecretsPlanTarget = {
-  type: SecretsPlanTargetType;
+  type: string;
   /**
    * Dot path in the target config surface for operator readability.
    * Examples:
@@ -60,26 +61,10 @@ export type SecretsApplyPlan = {
   };
 };
 
-const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-
-function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
-  return SecretProviderSchema.safeParse(value).success;
-}
-
-function hasForbiddenPathSegment(segments: string[]): boolean {
-  return segments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment));
-}
-
 /** Resolves a user-supplied plan target through the registry after path safety checks. */
-export function resolveValidatedPlanTarget(candidate: {
-  type?: SecretsPlanTargetType;
-  path?: string;
-  pathSegments?: string[];
-  agentId?: string;
-  providerId?: string;
-  accountId?: string;
-  authProfileProvider?: string;
-}): ResolvedPlanTarget | null {
+export function resolveValidatedPlanTarget(
+  candidate: Partial<Omit<SecretsPlanTarget, "ref">>,
+): ResolvedPlanTarget | null {
   if (typeof candidate.type !== "string" || !candidate.type.trim()) {
     return null;
   }
@@ -87,11 +72,26 @@ export function resolveValidatedPlanTarget(candidate: {
   if (!path) {
     return null;
   }
-  const segments =
-    Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
+  let parsedTokens: ConcreteConfigPathSegment[];
+  let segments: string[];
+  const hasPathSegments =
+    Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0;
+  try {
+    parsedTokens = parseConcreteConfigPathTokens(path);
+    segments = hasPathSegments
       ? normalizeStringEntries(candidate.pathSegments)
-      : parseDotPath(path);
-  if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
+      : parsedTokens.map(String);
+  } catch {
+    return null;
+  }
+  const parsedPathMatches =
+    segments.length === parsedTokens.length &&
+    segments.every((segment, index) => segment === String(parsedTokens[index]));
+  if (
+    segments.length === 0 ||
+    segments.some(isBlockedObjectKey) ||
+    (!parsedPathMatches && path !== segments.join("."))
+  ) {
     return null;
   }
   // Registry resolution is the ownership gate; caller-provided paths must map to a known
@@ -99,6 +99,9 @@ export function resolveValidatedPlanTarget(candidate: {
   return resolvePlanTargetAgainstRegistry({
     type: candidate.type,
     pathSegments: segments,
+    pathTokens: parsedPathMatches ? parsedTokens : segments,
+    // Only an authored array pattern can disambiguate indices in shipped v1 dotted plans.
+    allowLegacyArrayString: path === segments.join("."),
     providerId: candidate.providerId,
     accountId: candidate.accountId,
   });
@@ -118,33 +121,16 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       return false;
     }
     const candidate = target as Partial<SecretsPlanTarget>;
-    const ref = candidate.ref as Partial<SecretRef> | undefined;
-    const resolved = resolveValidatedPlanTarget({
-      type: candidate.type,
-      path: candidate.path,
-      pathSegments: candidate.pathSegments,
-      agentId: candidate.agentId,
-      providerId: candidate.providerId,
-      accountId: candidate.accountId,
-      authProfileProvider: candidate.authProfileProvider,
-    });
+    const resolved = resolveValidatedPlanTarget(candidate);
     if (
-      typeof candidate.path !== "string" ||
-      !candidate.path.trim() ||
       (candidate.pathSegments !== undefined && !Array.isArray(candidate.pathSegments)) ||
       !resolved ||
-      !ref ||
-      typeof ref !== "object" ||
-      (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
-      typeof ref.provider !== "string" ||
-      ref.provider.trim().length === 0 ||
-      typeof ref.id !== "string" ||
-      ref.id.trim().length === 0 ||
-      !isValidSecretRef(ref as SecretRef)
+      !candidate.ref ||
+      !isValidSecretRef(candidate.ref)
     ) {
       return false;
     }
-    if (resolved.entry.configFile === "auth-profiles.json") {
+    if (resolved.entry.configFile === "auth-profile-store") {
       if (typeof candidate.agentId !== "string" || candidate.agentId.trim().length === 0) {
         return false;
       }
@@ -165,7 +151,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       if (!isValidSecretProviderAlias(providerAlias)) {
         return false;
       }
-      if (!isSecretProviderConfigShape(providerValue)) {
+      if (!SecretProviderSchema.safeParse(providerValue).success) {
         return false;
       }
     }
@@ -191,6 +177,8 @@ export function normalizeSecretsPlanOptions(
   return {
     scrubEnv: options?.scrubEnv ?? true,
     scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
-    scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
+    // Deprecated plan input retained for protocol compatibility. Doctor owns
+    // legacy auth.json migration; secrets apply never reads or rewrites it.
+    scrubLegacyAuthJson: false,
   };
 }

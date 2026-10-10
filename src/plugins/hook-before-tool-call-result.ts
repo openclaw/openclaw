@@ -1,3 +1,5 @@
+import type { ApprovalScope } from "../infra/approval-scope.js";
+
 export const PluginApprovalResolutions = {
   ALLOW_ONCE: "allow-once",
   ALLOW_ALWAYS: "allow-always",
@@ -16,9 +18,11 @@ export type PluginHookBeforeToolCallResult = {
   requireApproval?: {
     title: string;
     description: string;
+    scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
-    timeoutBehavior?: "allow" | "deny";
+    /** Override timeout text and return the timeout as a blocked tool result. */
+    timeoutReason?: string;
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;

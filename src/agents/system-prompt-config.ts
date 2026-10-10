@@ -5,61 +5,67 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildTtsSystemPromptHint } from "../tts/tts.js";
-import { resolveAgentConfig } from "./agent-scope.js";
-import { buildModelAliasLines } from "./model-alias-lines.js";
-import { resolveOwnerDisplaySetting } from "./owner-display.js";
+import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
+import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
+import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
-type AgentSystemPromptRenderParams = Parameters<typeof buildAgentSystemPrompt>[0];
-
-/** Config-derived system prompt fields passed into the prompt renderer. */
-type ResolvedAgentSystemPromptConfig = Pick<
-  AgentSystemPromptRenderParams,
-  | "ownerDisplay"
-  | "ownerDisplaySecret"
-  | "subagentDelegationMode"
-  | "ttsHint"
-  | "modelAliasLines"
-  | "memoryCitationsMode"
-  | "fsWorkspaceOnly"
->;
-
-type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
+type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPrompt>[0] & {
   config?: OpenClawConfig;
   agentId?: string;
+  preparedTtsPreferences?: PreparedTtsPreferences;
+  tools?: { name: string; parameters: unknown }[];
+  preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases" | "isCurrent">;
 };
 
-/** Resolves all config-derived system prompt fields for an agent. */
-export function resolveAgentSystemPromptConfig(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-}): ResolvedAgentSystemPromptConfig {
-  const { config, agentId } = params;
-  const ownerDisplay = resolveOwnerDisplaySetting(config);
-  const agentSubagents =
-    config && agentId ? resolveAgentConfig(config, agentId)?.subagents : undefined;
-  return {
-    ownerDisplay: ownerDisplay.ownerDisplay,
-    ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-    subagentDelegationMode:
-      agentSubagents?.delegationMode ??
-      config?.agents?.defaults?.subagents?.delegationMode ??
-      "suggest",
-    ttsHint: config ? buildTtsSystemPromptHint(config, agentId) : undefined,
-    modelAliasLines: buildModelAliasLines(config),
-    memoryCitationsMode: config?.memory?.citations,
-    fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
-  };
+function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["preparedModelRuntime"]) {
+  if (!owner?.isCurrent()) {
+    return [];
+  }
+  return (owner.configuredModelAliases ?? [])
+    .toSorted((a, b) => a.alias.localeCompare(b.alias))
+    .map(({ alias, provider, model }) => `- ${alias}: ${provider}/${model}`);
 }
 
 /** Builds the agent system prompt after applying config-derived prompt fields. */
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
-  const { config, agentId, ...renderParams } = params;
-  const configParams = config ? resolveAgentSystemPromptConfig({ config, agentId }) : {};
+  const {
+    config,
+    tools,
+    agentId: explicitAgentId,
+    preparedModelRuntime,
+    preparedTtsPreferences,
+    ...renderParams
+  } = params;
+  const agentId = explicitAgentId ?? (tools ? params.runtimeInfo?.agentId : undefined);
+  if (tools) {
+    renderParams.toolNames = tools.map((tool) => tool.name);
+    renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
+  }
+  if (!config) {
+    return buildAgentSystemPrompt(renderParams);
+  }
+  const includeFullSections =
+    renderParams.promptMode !== "minimal" && renderParams.promptMode !== "none";
   return buildAgentSystemPrompt({
     ...renderParams,
-    ...configParams,
+    ownerDisplay: "raw",
+    ownerDisplaySecret: undefined,
+    subagentDelegationMode: resolveMainSessionDelegationMode({
+      config,
+      agentId,
+      sessionKey: renderParams.runtimeInfo?.sessionKey,
+    }),
+    ttsHint: includeFullSections
+      ? buildTtsSystemPromptHint(config, agentId, {
+          preparedTtsPreferences,
+          messageToolOnly: renderParams.sourceReplyDeliveryMode === "message_tool_only",
+        })
+      : undefined,
+    modelAliasLines: includeFullSections ? buildModelAliasLines(preparedModelRuntime) : [],
+    memoryCitationsMode: config.memory?.citations,
+    fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
   });
 }

@@ -1,36 +1,38 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AppearanceThemeFamily
+import ai.openclaw.app.AppearanceThemeMode
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
-/** Default canvas seam color used when gateway/user params omit a hex color. */
-const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
-
-/** Small tuple used by Android node handlers that need four return values. */
-data class Quad<A, B, C, D>(
-  val first: A,
-  val second: B,
-  val third: C,
-  val fourth: D,
-)
-
-/** Escapes a Kotlin string into a JSON string literal without building a JsonElement. */
-fun String.toJsonString(): String {
-  val escaped =
-    this
-      .replace("\\", "\\\\")
-      .replace("\"", "\\\"")
-      .replace("\n", "\\n")
-      .replace("\r", "\\r")
-  return "\"$escaped\""
-}
-
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+internal fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
+
+internal fun escapeSqlLikeLiteral(value: String): String = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+internal fun nodeInvokeError(
+  code: String,
+  message: String,
+): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
+
+internal inline fun nodeInvokeJson(
+  unavailableCode: String,
+  fallbackMessage: String,
+  encode: () -> String,
+): GatewaySession.InvokeResult =
+  try {
+    GatewaySession.InvokeResult.ok(encode())
+  } catch (err: Throwable) {
+    nodeInvokeError(unavailableCode, err.message ?: fallbackMessage)
+  }
 
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
 fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
@@ -48,44 +50,36 @@ fun readJsonPrimitive(
   key: String,
 ): JsonPrimitive? = params?.get(key) as? JsonPrimitive
 
-/** Parses an optional integer invoke param. */
 fun parseJsonInt(
   params: JsonObject?,
   key: String,
 ): Int? = readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
 
-/** Parses an optional decimal invoke param. */
 fun parseJsonDouble(
   params: JsonObject?,
   key: String,
 ): Double? = readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
 
-/** Parses an optional string invoke param. */
 fun parseJsonString(
   params: JsonObject?,
   key: String,
 ): String? = readJsonPrimitive(params, key)?.contentOrNull
 
-/** Parses strict true/false flags from string-like JSON primitives. */
+/** Parses true/false flags from JSON primitives, including common string aliases. */
 fun parseJsonBooleanFlag(
   params: JsonObject?,
   key: String,
 ): Boolean? {
   val value = readJsonPrimitive(params, key)?.contentOrNull?.trim()?.lowercase() ?: return null
   return when (value) {
-    "true" -> true
-    "false" -> false
+    "true", "yes", "1" -> true
+    "false", "no", "0" -> false
     else -> null
   }
 }
 
 /** Converts JSON null to Kotlin null while preserving primitive text content. */
-fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
+fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.contentOrNull
 
 /** Parses #RRGGBB or RRGGBB into opaque ARGB. */
 fun parseHexColorArgb(raw: String?): Long? {
@@ -97,15 +91,50 @@ fun parseHexColorArgb(raw: String?): Long? {
   return 0xFF000000L or rgb
 }
 
+/**
+ * Per-profile accent from a users.prefs.get entries payload. Null for missing or
+ * malformed values so callers fall back to the gateway accent.
+ */
+fun resolveProfileAccentArgb(entries: JsonObject?): Long? {
+  val value = entries?.get("ui.accent")?.takeIf { it !is JsonNull }
+  return parseHexColorArgb((value as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull)
+}
+
+fun resolveGatewayThemeFamily(config: JsonObject?): AppearanceThemeFamily {
+  val raw = gatewayUiPrefs(config)?.get("theme").asStringOrNull()
+  return AppearanceThemeFamily.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeFamily.Claw
+}
+
+fun resolveGatewayThemeMode(config: JsonObject?): AppearanceThemeMode {
+  val raw = gatewayUiPrefs(config)?.get("themeMode").asStringOrNull()
+  return AppearanceThemeMode.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeMode.System
+}
+
+private fun gatewayUiPrefs(config: JsonObject?): JsonObject? =
+  config
+    ?.get("ui")
+    .asObjectOrNull()
+    ?.get("prefs")
+    .asObjectOrNull()
+
+fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
+  val ui = config?.get("ui").asObjectOrNull()
+  // Control UI precedence (gateway talk.config): a present user accent wins over the
+  // operator seam color even when it is not a usable hex string; only an absent or
+  // JSON-null accent falls through, matching the gateway's `??` selection.
+  val chosen =
+    ui
+      ?.get("prefs")
+      .asObjectOrNull()
+      ?.get("accent")
+      ?.takeIf { it !is JsonNull }
+      ?: ui?.get("seamColor")
+  return parseHexColorArgb((chosen as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull)
+}
+
 /** Converts gateway invocation throwables into protocol code/message pairs. */
 fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
   val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = "UNAVAILABLE: error")
   val message = if (parsed.hadExplicitCode) parsed.prefixedMessage else parsed.message
   return parsed.code to message
-}
-
-/** Normalizes user/session keys while preserving main as the canonical session id. */
-fun normalizeMainKey(raw: String?): String? {
-  val trimmed = raw?.trim().orEmpty()
-  return if (trimmed.isEmpty()) null else trimmed
 }

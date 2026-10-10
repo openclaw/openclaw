@@ -1,0 +1,209 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { logVerbose } from "../../globals.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import type { PartialReplyPayload } from "../get-reply-options.types.js";
+import { stripHeartbeatToken } from "../heartbeat.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+} from "../tokens.js";
+import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
+import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
+
+export async function deliverPreparedBlockReply(
+  opts: Pick<GetReplyOptions, "onPreparedBlockReply" | "onBlockReply"> | undefined,
+  payload: ReplyPayload,
+  context?: BlockReplyContext,
+): Promise<void> {
+  if (opts?.onPreparedBlockReply) {
+    for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+      await opts.onPreparedBlockReply(plan, context);
+    }
+  } else {
+    await opts?.onBlockReply?.(payload, context);
+  }
+}
+
+/** Builds the channel-presentation callbacks shared by CLI and embedded runs. */
+export function createAgentTurnPresentation(params: {
+  turn: AgentTurnParams;
+  replyMediaContext: ReplyMediaContext;
+  directBlockDeliveries: DirectBlockDelivery[];
+  heartbeatState: { didLogStrip: boolean };
+}) {
+  const classifyReplyText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    let text = payload.text;
+    const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
+    if (params.turn.followupRun.run.silentExpected) {
+      return { skip: true };
+    }
+    if (!params.turn.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.didStrip && !params.heartbeatState.didLogStrip) {
+        params.heartbeatState.didLogStrip = true;
+        logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+      }
+      if (stripped.shouldSkip && !reply.hasMedia) {
+        return { skip: true };
+      }
+      text = stripped.text;
+    }
+    if (
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
+      isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
+      isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
+    ) {
+      return { skip: true };
+    }
+    if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
+      text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
+    }
+    if (!text) {
+      return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
+    }
+    return { text, skip: false };
+  };
+
+  // Previews are cumulative, so a held lead reappears in the next partial or
+  // the final reply once the text diverges from NO_REPLY. Leading punctuation
+  // can wrap the complete marker, so hold its unfinished preview too.
+  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    const preview = payload.text?.trim();
+    const unwrapped = preview?.replace(/^\p{P}+/u, "").trimStart();
+    return unwrapped === SILENT_REPLY_TOKEN[0] ||
+      (unwrapped !== preview && isSilentReplyPrefixText(unwrapped, SILENT_REPLY_TOKEN))
+      ? { skip: true }
+      : classifyReplyText(payload);
+  };
+
+  const sanitizeStreamingText = (
+    text: string | undefined,
+    errorContext: boolean,
+  ): { text?: string; skip: boolean } => {
+    if (!text) {
+      return { skip: true };
+    }
+    const conversationContext =
+      params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
+    const sanitized = errorContext
+      ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
+      : sanitizeUserFacingText(text, { conversationContext, streaming: true });
+    return sanitized.trim()
+      ? { text: sanitized, skip: isSilentReplyPayloadText(sanitized, SILENT_REPLY_TOKEN) }
+      : { skip: true };
+  };
+
+  const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    const classified = classifyReplyText(payload);
+    if (classified.skip || !classified.text) {
+      return classified;
+    }
+    return sanitizeStreamingText(classified.text, Boolean(payload.isError));
+  };
+
+  const preserveProgressCallbackStartOrder =
+    params.turn.opts?.preserveProgressCallbackStartOrder === true;
+  const presentWithTyping = async (
+    typingPromise: Promise<void>,
+    startPresentation: () => boolean | void | Promise<boolean | void>,
+  ) => {
+    if (!preserveProgressCallbackStartOrder) {
+      await typingPromise;
+      const operation = params.turn.replyOperation;
+      // Successful settlement keeps delivery alive; delayed typing must not
+      // reopen presentation after this operation has committed its final answer.
+      if (
+        operation &&
+        (operation.abortSignal.aborted ||
+          operation.result ||
+          hasCommittedReplyOperationOutcome(operation))
+      ) {
+        return false;
+      }
+      return await startPresentation();
+    }
+    let presentationPromise: boolean | void | Promise<boolean | void>;
+    try {
+      presentationPromise = startPresentation();
+    } catch (err) {
+      // Typing already started; observe a secondary failure if presentation throws inline.
+      void typingPromise.catch(() => undefined);
+      throw err;
+    }
+    const [, result] = await Promise.all([typingPromise, presentationPromise]);
+    return result;
+  };
+
+  const presentPartialReply = async (payload: ReplyPayload, runtime: "cli" | "embedded") => {
+    const classified = classifyStreamingPartial(payload);
+    if (classified.skip || !classified.text) {
+      return runtime === "embedded" ? false : undefined;
+    }
+    const textForTyping = classified.text;
+    let didMaterialize = false;
+    let materializedText: string | undefined;
+    const materializeText = () => {
+      if (!didMaterialize) {
+        const sanitized = sanitizeStreamingText(textForTyping, false);
+        materializedText = sanitized.skip ? undefined : sanitized.text;
+        didMaterialize = true;
+      }
+      return materializedText;
+    };
+    // Embedded drafts consume cumulative text lazily; CLI previews arrive already paced.
+    const partialPayload: PartialReplyPayload =
+      runtime === "cli"
+        ? { text: materializeText() }
+        : {
+            get text() {
+              return materializeText();
+            },
+            mediaUrls: payload.mediaUrls,
+          };
+    const onPartialReply = params.turn.opts?.onPartialReply;
+    return await presentWithTyping(params.turn.typingSignals.signalTextDelta(textForTyping), () =>
+      !onPartialReply || (runtime === "cli" && !partialPayload.text)
+        ? false
+        : onPartialReply(partialPayload),
+    );
+  };
+
+  const blockReplyPipeline = params.turn.blockReplyPipeline;
+  // One handler owns threading and direct-send dedupe for this fallback cycle.
+  const blockReplyHandler =
+    params.turn.opts?.onPreparedBlockReply || params.turn.opts?.onBlockReply
+      ? createBlockReplyDeliveryHandler({
+          onBlockReply: (payload, context) =>
+            deliverPreparedBlockReply(params.turn.opts, payload, context),
+          currentMessageId:
+            params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
+          replyThreading: params.turn.replyThreading,
+          normalizeStreamingText,
+          applyReplyToMode: params.turn.applyReplyToMode,
+          normalizeMediaPaths: params.replyMediaContext.normalizePayload,
+          typingSignals: params.turn.typingSignals,
+          reasoningPayloadsEnabled: params.turn.opts?.reasoningPayloadsEnabled,
+          commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
+          blockStreamingEnabled: params.turn.blockStreamingEnabled,
+          blockReplyPipeline,
+          directBlockDeliveries: params.directBlockDeliveries,
+        })
+      : undefined;
+
+  return {
+    presentPartialReply,
+    normalizeStreamingText,
+    presentWithTyping,
+    blockReplyHandler,
+  };
+}

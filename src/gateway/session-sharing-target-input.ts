@@ -1,0 +1,282 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
+import {
+  isApprovalSessionTargetMethod,
+  sessionMutationTargetFields,
+} from "./session-method-policy.js";
+import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import {
+  resolveChatSendSessionKey,
+  resolveRequestedSessionAgentId,
+} from "./session-request-agent.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
+
+export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+
+export function resolveChatSendAuthorizationTarget(
+  cfg: OpenClawConfig,
+  target: SessionMutationTarget,
+): Result<SessionMutationTarget, ErrorShape> {
+  const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+  return agent.ok
+    ? ok({
+        ...target,
+        agentId: agent.agentId,
+        sessionKey: resolveChatSendSessionKey(cfg, target.sessionKey, agent.agentId),
+      })
+    : err(agent.error);
+}
+
+/** Authorization selects the same chat target without rewriting the raw request's replay aliases. */
+export function resolveChatSendAuthorizationParams(
+  cfg: OpenClawConfig,
+  params: unknown,
+): Result<unknown, ErrorShape> {
+  const record = asOptionalRecord(params);
+  if (typeof record?.sessionKey !== "string") {
+    return ok(params);
+  }
+  const target = resolveChatSendAuthorizationTarget(cfg, {
+    sessionKey: record.sessionKey,
+    agentId: normalizeOptionalString(record.agentId),
+  });
+  return target.ok
+    ? ok({ ...record, sessionKey: target.value.sessionKey, agentId: target.value.agentId })
+    : err(target.error);
+}
+
+export function resolveDirectSessionTargets(
+  method: string,
+  params: unknown,
+): SessionMutationTarget[] {
+  if (method === "sessions.create" || method === "sessions.list") {
+    return [];
+  }
+  const record = asOptionalRecord(params);
+  if (!record) {
+    return [];
+  }
+  const candidates = [record.key, record.sessionKey];
+  if (method.startsWith("sessions.") && Array.isArray(record.keys)) {
+    candidates.push(...record.keys);
+  }
+  if (Array.isArray(record.sessionKeys)) {
+    candidates.push(...record.sessionKeys);
+  }
+  const agentId = normalizeOptionalString(record.agentId);
+  return candidates.flatMap((candidate): SessionMutationTarget[] =>
+    typeof candidate === "string"
+      ? [{ sessionKey: candidate, ...(agentId ? { agentId } : {}) }]
+      : [],
+  );
+}
+
+export function resolveDirectIncognitoTargets(
+  method: string,
+  params: unknown,
+): SessionMutationTarget[] {
+  return resolveDirectSessionTargets(method, params).filter((target) =>
+    isIncognitoSessionKey(
+      canonicalizeSessionKeyForAgent(target.agentId ?? DEFAULT_AGENT_ID, target.sessionKey),
+    ),
+  );
+}
+
+export function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
+  return normalizeOptionalString(asOptionalRecord(params)?.[key]);
+}
+
+function preparedGroupTargets(context: GatewayRequestContext) {
+  const projection = getSessionRowProjection(context);
+  if (!projection) {
+    throw new Error("Session group membership is unavailable during Gateway startup");
+  }
+  return projection.sessionGroupTargets();
+}
+
+function resolveSessionGroupsPutMutationTargets(
+  context: GatewayRequestContext,
+  requestParams: unknown,
+): SessionMutationTarget[] | undefined {
+  const names =
+    requestParams && typeof requestParams === "object" && "names" in requestParams
+      ? requestParams.names
+      : undefined;
+  if (!Array.isArray(names)) {
+    return undefined;
+  }
+  const requested = new Set(normalizeUniqueTrimmedStringList(names));
+  const dropped = readSessionGroupCatalog()
+    .groups.map((group) => group.name)
+    .filter((name) => !requested.has(name));
+  if (dropped.length === 0) {
+    return [];
+  }
+  const byName = preparedGroupTargets(context);
+  return dropped.flatMap((name) => byName.get(name) ?? []);
+}
+
+function resolveApprovalSessionTarget(
+  method: string,
+  params: unknown,
+  context: GatewayRequestContext,
+): SessionMutationTarget | undefined {
+  const id = readSessionSharingStringParam(params, "id");
+  if (!id) {
+    return undefined;
+  }
+  const kind = readSessionSharingStringParam(params, "kind");
+  const manager =
+    method === "plugin.approval.resolve" || kind === "plugin"
+      ? context.pluginApprovalManager
+      : method === "approval.resolve" && kind === "system-agent"
+        ? context.systemAgentApprovalManager
+        : context.execApprovalManager;
+  const resolvedId = manager?.lookupLocalApprovalId(id, { includeResolved: true });
+  const recordId =
+    resolvedId?.kind === "exact" || resolvedId?.kind === "prefix" ? resolvedId.id : id;
+  const request = manager?.getLocalSnapshot(recordId)?.request;
+  const sessionKey = readSessionSharingStringParam(request, "sessionKey");
+  const agentId = readSessionSharingStringParam(request, "agentId");
+  return sessionKey
+    ? {
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+      }
+    : undefined;
+}
+
+/** Realtime creates authorize their effective default; transcription stays sessionless. */
+export function resolveTalkSessionTargetInput(
+  method: string,
+  params: unknown,
+  connId?: string,
+):
+  | { kind: "request"; sessionKey?: string }
+  | ({ kind: "relay" } & NonNullable<ReturnType<typeof resolveUnifiedTalkSessionTarget>>)
+  | undefined {
+  if (method === "talk.session.steer") {
+    const sessionId = readSessionSharingStringParam(params, "sessionId");
+    const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
+    return retained ? { kind: "relay", ...retained } : undefined;
+  }
+  if (
+    method !== "talk.client.create" &&
+    method !== "talk.client.toolCall" &&
+    method !== "talk.session.create" &&
+    method !== "talk.client.transcript" &&
+    method !== "talk.client.close" &&
+    method !== "talk.client.steer"
+  ) {
+    return undefined;
+  }
+  const sessionKey = readSessionSharingStringParam(params, "sessionKey");
+  if (sessionKey) {
+    return { kind: "request", sessionKey };
+  }
+  if (method === "talk.client.create") {
+    return { kind: "request" };
+  }
+  if (
+    method === "talk.session.create" &&
+    (readSessionSharingStringParam(params, "mode") ?? "realtime") === "realtime" &&
+    readSessionSharingStringParam(params, "transport") !== "managed-room"
+  ) {
+    return { kind: "request" };
+  }
+  return undefined;
+}
+
+export function resolveSessionMutationTargets(params: {
+  method: string;
+  requestParams: unknown;
+  context: GatewayRequestContext;
+}): SessionMutationTarget[] | undefined {
+  if (params.method === "sessions.patchMany") {
+    const targets =
+      params.requestParams &&
+      typeof params.requestParams === "object" &&
+      "targets" in params.requestParams
+        ? params.requestParams.targets
+        : undefined;
+    return Array.isArray(targets)
+      ? targets.slice(0, 101).flatMap((target): SessionMutationTarget[] => {
+          const sessionKey = readSessionSharingStringParam(target, "key");
+          const agentId = readSessionSharingStringParam(target, "agentId");
+          return sessionKey ? [{ sessionKey, ...(agentId ? { agentId } : {}) }] : [];
+        })
+      : undefined;
+  }
+  if (
+    params.method === "sessions.groups.rename" ||
+    params.method === "sessions.groups.delete" ||
+    params.method === "sessions.groups.update"
+  ) {
+    const groupName = readSessionSharingStringParam(params.requestParams, "name");
+    return groupName ? [...(preparedGroupTargets(params.context).get(groupName) ?? [])] : undefined;
+  }
+  if (params.method === "sessions.groups.put") {
+    return resolveSessionGroupsPutMutationTargets(params.context, params.requestParams);
+  }
+  if (isApprovalSessionTargetMethod(params.method)) {
+    const target = resolveApprovalSessionTarget(
+      params.method,
+      params.requestParams,
+      params.context,
+    );
+    return target ? [target] : undefined;
+  }
+  const requestedAgentId = readSessionSharingStringParam(params.requestParams, "agentId");
+  const directTargets: SessionMutationTarget[] = [];
+  for (const field of sessionMutationTargetFields(params.method)) {
+    const sessionKey = readSessionSharingStringParam(params.requestParams, field);
+    if (!sessionKey) {
+      continue;
+    }
+    // sessions.create applies its selected agent to the parent only for the
+    // unqualified global sentinels; other parents resolve their own store.
+    const parentUsesRequestedAgent =
+      field !== "parentSessionKey" || ["global", "unknown"].includes(sessionKey.toLowerCase());
+    directTargets.push({
+      sessionKey,
+      ...(requestedAgentId && parentUsesRequestedAgent ? { agentId: requestedAgentId } : {}),
+    });
+  }
+  if (directTargets.length) {
+    return directTargets;
+  }
+  if (params.method === "board.event" || params.method === "board.action") {
+    const ticket = readSessionSharingStringParam(params.requestParams, "ticket");
+    const claims = ticket
+      ? resolveAuthorizedBoardViewTicketClaims(ticket, { gatewayContext: params.context })
+      : undefined;
+    if (!claims || (requestedAgentId && requestedAgentId !== claims.agentId)) {
+      return undefined;
+    }
+    return [
+      {
+        sessionKey: claims.sessionKey,
+        ...(claims.agentId ? { agentId: claims.agentId } : {}),
+      },
+    ];
+  }
+  if (params.method !== "sessions.abort") {
+    return undefined;
+  }
+  const runId = readSessionSharingStringParam(params.requestParams, "runId");
+  const run = runId ? params.context.chatAbortControllers.get(runId) : undefined;
+  return run
+    ? [{ sessionKey: run.sessionKey, ...(run.agentId ? { agentId: run.agentId } : {}) }]
+    : undefined;
+}

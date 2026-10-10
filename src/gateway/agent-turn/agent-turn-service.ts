@@ -1,0 +1,588 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
+import {
+  releaseMainSessionRecoveryOwner,
+  type MainSessionRecoveryOwnerLease,
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
+import { errorShapeFromError } from "../error-shape.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
+import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
+import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
+import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
+import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
+import { authorizeResolvedSessionMutation } from "../session-sharing.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { createAgentAdmissionController } from "./agent-admission-controller.js";
+import { prepareAgentContentPhase } from "./agent-content-phase.js";
+import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
+import { AgentRequestReservationEndedError, replayAgentTurnIfCached } from "./agent-dedupe.js";
+import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
+import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
+import type { AgentRequestPreflight } from "./agent-request-preflight.js";
+import { prepareAgentRequestRouting } from "./agent-request-routing.js";
+import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
+import { startAgentRunExecution } from "./agent-run-execution-phase.js";
+import { persistAgentSessionPhase } from "./agent-session-persist.js";
+import { prepareAgentWaitForTurn } from "./agent-wait.js";
+import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
+import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
+
+type AgentTurnStartRequest = {
+  privateCompletion?: true;
+  settleWakeReplay?: RequesterSettleWakeReplay;
+  assertAdmissionCurrent?: () => void;
+  assertInputCommitAllowed?: () => void;
+  hasCurrentClientAuthority?: () => boolean;
+  preflight: AgentRequestPreflight;
+  principal: AgentTurnPrincipal | null;
+  io: AgentTurnIo;
+  onRunObserved?: (runId: string) => void;
+};
+
+export function createAgentTurnService(
+  { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
+  assertContextCurrent?: () => void,
+) {
+  const startTurn = async ({
+    privateCompletion,
+    settleWakeReplay,
+    assertAdmissionCurrent,
+    assertInputCommitAllowed,
+    hasCurrentClientAuthority,
+    preflight,
+    principal,
+    io,
+    onRunObserved,
+  }: AgentTurnStartRequest): Promise<void> => {
+    const promptedAt = Date.now();
+    assertAdmissionCurrent?.();
+    if (replayAgentTurnIfCached({ preflight, context, io, acceptedOnly: privateCompletion })) {
+      return;
+    }
+    assertInputCommitAllowed?.();
+    const respond: RespondFn = (ok, payload, error, meta) =>
+      io.emitAcceptance([ok, payload, error], meta);
+    const runFacts = { ...preflight };
+    const {
+      request,
+      cfg,
+      runId,
+      canUseCronRunContinuation,
+      expectedSession,
+      expectedExistingSessionId,
+      normalizedSpawned,
+      isRestartRecoveryResumeRun,
+      suppressVisibleSessionEffects,
+      agentDedupeKeys,
+    } = runFacts;
+    // Cached replay returns before a new lifecycle generation is observed, matching
+    // the idempotency path that preceded this service extraction.
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
+    let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
+    let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
+    let spawnedByValue: string | undefined;
+    const ownerConnId = typeof principal?.connId === "string" ? principal.connId : undefined;
+    const ownerDeviceId =
+      typeof principal?.connect?.device?.id === "string" ? principal.connect.device.id : undefined;
+    const dedupeLifecycle = createAgentDedupeLifecycle({
+      ...preflight,
+      privateCompletion,
+      lifecycleGeneration,
+      ownerConnId,
+      ownerDeviceId,
+      context,
+      io,
+    });
+    const routing = await prepareAgentRequestRouting({
+      ...preflight,
+      context,
+      respond,
+      reserveDedupe: dedupeLifecycle.reserve,
+      bindDedupeSessionTarget: dedupeLifecycle.bindSessionTarget,
+      clearDedupe: dedupeLifecycle.clearUnaccepted,
+      assertCurrent: composeSessionSourceAssertion([
+        assertContextCurrent,
+        assertAdmissionCurrent,
+        assertInputCommitAllowed,
+      ]),
+    });
+    if (!routing) {
+      return;
+    }
+    const {
+      requestedBestEffortDeliver,
+      requestedSessionId,
+      sessionKeyFromTo,
+      requestedSessionKeyRaw,
+      preAcceptedReservedSessionKey,
+      preAttachmentSession,
+    } = routing;
+    const assertRequestCurrent = composeSessionSourceAssertion([
+      assertAdmissionCurrent,
+      () => dedupeLifecycle.assertReservationCurrent(),
+      assertInputCommitAllowed,
+    ]);
+    let agentId = routing.agentId;
+    let requestedSessionKey = routing.requestedSessionKey;
+    let gatewayAdmissionTransferred = false;
+    let preparedOffloadedRefs: OffloadedRef[] = [];
+    let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
+    let releaseGatewayAdmission = () => {};
+    let respondToAdmissionOutcome = () => false;
+    const cronContinuation = createCronContinuationController({
+      runId,
+      lifecycleGeneration,
+      context,
+    });
+    try {
+      assertAdmissionCurrent?.();
+      const content = await prepareAgentContentPhase({
+        ...preflight,
+        ...routing,
+        assertAdmissionCurrent: assertRequestCurrent,
+        context,
+        respond,
+        requestedSessionKey,
+        agentId,
+      }).catch(dedupeLifecycle.handlePreparationFailure(assertAdmissionCurrent));
+      if (!content) {
+        return;
+      }
+      preparedOffloadedRefs = content.offloadedRefs;
+      assertAdmissionCurrent?.();
+      agentId = content.agentId;
+      requestedSessionKey = content.requestedSessionKey;
+      // Participation is authorized below against the canonical session the run
+      // actually targets (see prepareAgentSession). A keyless request resolves its
+      // default/effective session there, so authorizing only an explicit key here
+      // would let a non-member drive a restricted default session.
+      let effectiveTranscriptInputText = content.effectiveTranscriptInputText;
+      let message = content.message;
+      const {
+        images,
+        imageOrder,
+        media,
+        offloadedRefs,
+        recipientChannel,
+        recipientAccountId,
+        recipientThreadId,
+        to,
+      } = content;
+      let resolvedSessionId = requestedSessionId;
+      let sessionEntry: SessionEntry | undefined;
+      let effectiveBootstrapContextRunKind = request.bootstrapContextRunKind;
+      let restoredCronContinuation: RestoredCronContinuation | undefined;
+      let restoredCronContinuationIdentity:
+        | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
+        | undefined;
+      let sessionPersistedBeforeGatewayAdmission = false;
+      let bestEffortDeliver = requestedBestEffortDeliver ?? false;
+      let cfgForAgent: OpenClawConfig | undefined;
+      let resolvedSessionKey = requestedSessionKey;
+      let resolvedSessionAgentId: string | undefined;
+      let isNewSession = false;
+      let supersededSessionId: string | undefined;
+      let skipAgentInitialSessionTouch = false;
+      let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
+      let admittedSessionId = resolvedSessionId ?? runId;
+      const admissionController = createAgentAdmissionController({
+        assertAdmissionCurrent,
+        runId,
+        lifecycleGeneration,
+        agentDedupeKeys,
+        preAcceptedReservedSessionKey,
+        expectedSession,
+        ...(isRestartRecoveryResumeRun
+          ? { admissionOwner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER }
+          : {}),
+        context,
+        io,
+        dedupeLifecycle,
+        getRequestedSessionKey: () => requestedSessionKey,
+        getResolvedSessionKey: () => resolvedSessionKey,
+        getResolvedSessionId: () => resolvedSessionId,
+        getResolvedSessionAgentId: () => resolvedSessionAgentId,
+        getAgentId: () => agentId,
+        getSessionPersisted: () => sessionPersistedBeforeGatewayAdmission,
+        getSupersededSessionId: () => supersededSessionId,
+        setAdmittedSessionId: (sessionId) => {
+          admittedSessionId = sessionId;
+        },
+      });
+      releaseGatewayAdmission = admissionController.release;
+      respondToAdmissionOutcome = () => {
+        admissionController.assertAllowed();
+        return admissionController.respondToOutcome();
+      };
+      const resetPhase = await runAgentResetPhase({
+        assertAdmissionCurrent: assertRequestCurrent,
+        request,
+        cfg,
+        requestedSessionKey,
+        resolvedSessionId,
+        effectiveTranscriptInputText,
+        message,
+        agentId,
+        sessionKeyFromTo,
+        lifecycleGeneration,
+        runId,
+        agentDedupeKeys,
+        client: principal,
+        context,
+        respond,
+        abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
+        setCommittedResetCompletion: dedupeLifecycle.setCommittedResetCompletion,
+      });
+      requestedSessionKey = resetPhase.requestedSessionKey;
+      resolvedSessionId = resetPhase.resolvedSessionId;
+      effectiveTranscriptInputText = resetPhase.effectiveTranscriptInputText;
+      message = resetPhase.message;
+      if (resetPhase.accepted) {
+        dedupeLifecycle.markAccepted(true);
+      }
+      if (resetPhase.stop) {
+        return;
+      }
+
+      if (requestedSessionKey) {
+        const preparedSession = await prepareAgentSession({
+          cfg,
+          requestedSessionKey,
+          requestedSessionId,
+          expectedExistingSessionId,
+          agentId,
+          recipientChannel,
+          request,
+          canUseCronRunContinuation,
+          lifecycleGeneration,
+          effectiveBootstrapContextRunKind,
+          preAttachmentSession,
+          respond,
+          assertCurrent: assertRequestCurrent,
+        });
+        assertRequestCurrent();
+        if (!preparedSession) {
+          return;
+        }
+        const {
+          cfg: cfgLocal,
+          storePath,
+          entry,
+          canonicalKey: canonicalSessionKey,
+          storeKeys,
+          maintenanceConfig: sessionMaintenanceConfig,
+          canonicalSessionAgentId: sessionAgentId,
+          mainSessionKey,
+          sessionId,
+          touchInteraction,
+        } = preparedSession;
+        cfgForAgent = cfgLocal;
+        // Authorize the canonical session the run will actually target — covering
+        // keyless requests whose default/effective session is resolved only here —
+        // before any run side effects (admission, dispatch).
+        const sessionAuthorizationError =
+          authorizeGatewaySessionCreation({
+            cfg: cfgLocal,
+            client: principal,
+            agentId: sessionAgentId,
+          }) ??
+          authorizeResolvedSessionMutation({
+            cfg: cfgLocal,
+            client: principal,
+            sessionKey: canonicalSessionKey,
+            agentId: sessionAgentId,
+          });
+        if (sessionAuthorizationError) {
+          io.emitAcceptance([false, undefined, sessionAuthorizationError]);
+          return;
+        }
+        effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
+        restoredCronContinuationIdentity = preparedSession.restoredCronContinuationIdentity;
+        sessionPersistedBeforeGatewayAdmission =
+          preparedSession.sessionPersistedBeforeGatewayAdmission;
+        isNewSession = preparedSession.isNewSession;
+        const requestDeliveryHint = normalizeDeliveryContext({
+          channel: recipientChannel?.trim(),
+          to,
+          accountId: recipientAccountId?.trim(),
+          // Pass threadId directly — normalizeDeliveryContext handles both
+          // string and numeric threadIds (e.g., Matrix uses integers).
+          threadId: recipientThreadId,
+        });
+        const explicitSessionKey = normalizeOptionalString(request.sessionKey);
+        const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
+          buildAgentSessionPatch({
+            ...preparedSession,
+            freshEntry,
+            initialEntry: entry,
+            sessionAgentId,
+            canonicalSessionKey,
+            normalizedSpawned,
+            requestDeliveryHint,
+            requestLabel: request.label,
+            ...(explicitSessionKey ? { explicitSessionKey } : {}),
+            pluginOwnerId:
+              freshEntry === undefined
+                ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)
+                : undefined,
+            expectedExistingSessionId,
+            hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
+            requestedSessionId,
+            fallbackSessionId: sessionId,
+          });
+        const patchBuild = await buildSessionPatch(entry);
+        assertRequestCurrent();
+        isNewSession = patchBuild.isNewSession;
+        sessionEntry = mergeSessionEntry(entry, patchBuild.patch);
+        resolvedSessionId = sessionEntry?.sessionId ?? sessionId;
+        admittedSessionId = resolvedSessionId ?? runId;
+        resolvedSessionKey = canonicalSessionKey;
+        resolvedSessionAgentId = sessionAgentId;
+        try {
+          await admissionController.acquire(storePath ?? `agent:${sessionAgentId}`);
+        } catch (err) {
+          io.emitAcceptance([
+            false,
+            undefined,
+            errorShapeFromError(ErrorCodes.INVALID_REQUEST, err),
+          ]);
+          return;
+        }
+        if (admissionController.respondToOutcome()) {
+          return;
+        }
+        const persistedSession = await persistAgentSessionPhase({
+          onSessionCommitted: (committedEntry) =>
+            dedupeLifecycle.bindSessionTarget({
+              sessionKey: canonicalSessionKey,
+              agentId: sessionAgentId,
+              sessionId: committedEntry.sessionId,
+            }),
+          assertAdmissionCurrent: assertRequestCurrent,
+          request,
+          cfg: cfgLocal,
+          storePath,
+          storeKeys,
+          entry,
+          canonicalSessionKey,
+          sessionAgentId,
+          mainSessionKey,
+          creation: await prepareSkillLibrarySessionCreation(
+            principal,
+            () => context.getRuntimeConfig(),
+            resolveAgentRunSessionCreation(principal),
+          ),
+          ...(principal?.authenticatedUserProfile
+            ? { requestingOperatorProfileId: principal.authenticatedUserProfile.profileId }
+            : {}),
+          ...(principal?.internal?.operatorRoleActor
+            ? { operatorRoleActor: principal.internal.operatorRoleActor }
+            : {}),
+          lifecycleGeneration,
+          isRestartRecoveryResumeRun,
+          runId,
+          agentId,
+          suppressVisibleSessionEffects,
+          restoredCronContinuationIdentity,
+          initialPatchBuild: patchBuild,
+          buildSessionPatch,
+          initialSessionEntry: sessionEntry,
+          initialResolvedSessionId: resolvedSessionId,
+          initialSessionPersistedBeforeGatewayAdmission: sessionPersistedBeforeGatewayAdmission,
+          initialSupersededSessionId: supersededSessionId,
+          touchInteraction,
+          requestedBestEffortDeliver,
+          bestEffortDeliver,
+          expectedSession,
+          maintenanceConfig: sessionMaintenanceConfig,
+          abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
+          assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
+          respondToGatewayAdmissionOutcome: admissionController.respondToOutcome,
+          updateAdmissionState: (state) => {
+            resolvedSessionId = state.resolvedSessionId;
+            admittedSessionId = state.admittedSessionId;
+            supersededSessionId = state.supersededSessionId;
+            sessionPersistedBeforeGatewayAdmission = state.sessionPersistedBeforeGatewayAdmission;
+          },
+          getAdmittedSessionId: () => admittedSessionId,
+          setCronContinuationClaim: cronContinuation.setClaim,
+          setMainRestartRecoveryOwnerLease: (lease) => {
+            mainRestartRecoveryOwnerLease = lease;
+          },
+          respond,
+        });
+        if (!persistedSession) {
+          return;
+        }
+        sessionEntry = persistedSession.sessionEntry;
+        resolvedSessionId = persistedSession.resolvedSessionId;
+        sessionPersistedBeforeGatewayAdmission =
+          persistedSession.sessionPersistedBeforeGatewayAdmission;
+        supersededSessionId = persistedSession.supersededSessionId;
+        admittedSessionId = persistedSession.admittedSessionId;
+        skipAgentInitialSessionTouch = persistedSession.skipAgentInitialSessionTouch;
+        isNewSession = persistedSession.isNewSession;
+        spawnedByValue = persistedSession.spawnedBy;
+        resolvedGroupId = persistedSession.groupId;
+        resolvedGroupChannel = persistedSession.groupChannel;
+        resolvedGroupSpace = persistedSession.groupSpace;
+        pendingChatRun = persistedSession.pendingChatRun;
+        bestEffortDeliver = persistedSession.bestEffortDeliver;
+        restoredCronContinuation = persistedSession.restoredCronContinuation;
+      }
+
+      const delivery = await resolveAgentDeliveryPhase({
+        ...content,
+        request,
+        cfg,
+        cfgForAgent,
+        sessionEntry,
+        resolvedSessionKey,
+        resolvedSessionAgentId,
+        agentId,
+        bestEffortDeliver,
+        runId,
+        client: principal,
+        context,
+        respond,
+        isWebchatConnect,
+        onRunObserved,
+      });
+      if (!delivery) {
+        return;
+      }
+      const { activeSessionAgentId } = delivery;
+
+      const runParams = {
+        ...runFacts,
+        cfgForAgent,
+        sessionEntry,
+        resolvedSessionKey,
+        requestedSessionKey,
+        activeSessionAgentId,
+        delivery,
+        restoredCronContinuation,
+        lifecycleGeneration,
+        images,
+        context,
+        io,
+        client: principal,
+      };
+      const preparedDispatch = await prepareAgentRunDispatch({
+        ...runParams,
+        assertAdmissionCurrent: assertRequestCurrent,
+        hasCurrentClientAuthority,
+        promptedAt,
+        requestedSessionKeyRaw,
+        preAcceptedReservedSessionKey,
+        restoredCronContinuationIdentity,
+        getAdmittedSessionId: () => admittedSessionId,
+        ownerConnId,
+        ownerDeviceId,
+        pendingChatRun,
+        message,
+        effectiveTranscriptInputText,
+        offloadedRefs,
+        onUserTurnMediaPersisted: () => {
+          preparedOffloadedRefs = [];
+        },
+        privateCompletion,
+        settleWakeReplay,
+        abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
+        acquireGatewayWorkAdmission: admissionController.acquire,
+        assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
+        hasGatewayAdmissionOutcome: admissionController.hasOutcome,
+        respondToGatewayAdmissionOutcome: admissionController.respondToOutcome,
+        admissionAgentId: admissionController.admissionAgentId,
+        getGatewayWorkAdmission: admissionController.getAdmission,
+        setAdmittedRunAbort: admissionController.setAdmittedRunAbort,
+        getAdmittedRunAbort: admissionController.getAdmittedRunAbort,
+        markAgentRunAccepted: dedupeLifecycle.markAccepted,
+        getOwnedAgentDedupeKeys: dedupeLifecycle.ownedReservationKeys,
+      });
+      if (!preparedDispatch) {
+        return;
+      }
+      resolvedSessionId = admittedSessionId;
+      // The prepared dispatch now owns either transcript-persisted media or its
+      // closed unpersisted ref set; admission must not retain a second owner.
+      preparedOffloadedRefs = [];
+      gatewayAdmissionTransferred = true;
+      // Retain the original command and cleanup after the caller receives acceptance.
+      void context
+        .trackExecution(() =>
+          startAgentRunExecution({
+            ...runParams,
+            assertContextCurrent,
+            prepared: preparedDispatch,
+            mainRestartRecoveryOwnerLease,
+            resolvedSessionId,
+            agentId,
+            isNewSession,
+            imageOrder,
+            media,
+            inputProvenance: preparedDispatch.userTurn.inputProvenance,
+            spawnedBy: spawnedByValue,
+            groupId: resolvedGroupId,
+            groupChannel: resolvedGroupChannel,
+            groupSpace: resolvedGroupSpace,
+            bestEffortDeliver,
+            effectiveBootstrapContextRunKind,
+            skipAgentInitialSessionTouch,
+            releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
+          }),
+        )
+        .catch((error: unknown) => {
+          preparedDispatch.releaseCallerAuthority?.();
+          context.logGateway.warn(`agent execution cleanup failed: ${String(error)}`);
+        });
+      mainRestartRecoveryOwnerLease = undefined;
+    } catch (error) {
+      if (!(error instanceof AgentRequestReservationEndedError)) {
+        throw error;
+      }
+      if (!respondToAdmissionOutcome()) {
+        dedupeLifecycle.handlePreparationFailure(assertAdmissionCurrent)(error);
+      }
+    } finally {
+      try {
+        if (!gatewayAdmissionTransferred) {
+          let pendingRecovery: Awaited<ReturnType<typeof releaseMainSessionRecoveryOwner>> =
+            undefined;
+          try {
+            pendingRecovery = await releaseMainSessionRecoveryOwner(mainRestartRecoveryOwnerLease);
+          } finally {
+            try {
+              releaseGatewayAdmission();
+            } finally {
+              try {
+                await cronContinuation.releaseWithRecovery();
+              } finally {
+                scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+              }
+            }
+          }
+        }
+      } finally {
+        await discardPreparedInboundMedia(preparedOffloadedRefs);
+        dedupeLifecycle.clearUnaccepted();
+      }
+    }
+  };
+
+  const prepareWaitForTurn = (params: AgentWaitParams) => prepareAgentWaitForTurn(context, params);
+  const waitForTurn = async (params: AgentWaitParams) => await prepareWaitForTurn(params).wait();
+
+  return { startTurn, prepareWaitForTurn, waitForTurn };
+}

@@ -1,16 +1,6 @@
 import Commander
 import Foundation
 
-@MainActor
-struct ServiceRootCommand: ParsableCommand {
-    static var commandDescription: CommandDescription {
-        CommandDescription(
-            commandName: "service",
-            abstract: "Manage launchd agent",
-            subcommands: [ServiceInstall.self, ServiceUninstall.self, ServiceStatus.self])
-    }
-}
-
 private enum LaunchdHelper {
     static let label = "com.swabble.agent"
 
@@ -25,19 +15,19 @@ private enum LaunchdHelper {
             "Label": label,
             "ProgramArguments": [executable, "serve"],
             "RunAtLoad": true,
-            "KeepAlive": true
+            "KeepAlive": true,
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try data.write(to: plistURL)
+        try data.write(to: self.plistURL)
     }
 
     static func removePlist() throws {
-        try? FileManager.default.removeItem(at: plistURL)
+        try? FileManager.default.removeItem(at: self.plistURL)
     }
 }
 
 @MainActor
-struct ServiceInstall: ParsableCommand {
+struct ServiceInstall: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "install", abstract: "Install user launch agent")
     }
@@ -50,7 +40,7 @@ struct ServiceInstall: ParsableCommand {
 }
 
 @MainActor
-struct ServiceUninstall: ParsableCommand {
+struct ServiceUninstall: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "uninstall", abstract: "Remove launch agent")
     }
@@ -62,7 +52,7 @@ struct ServiceUninstall: ParsableCommand {
 }
 
 @MainActor
-struct ServiceStatus: ParsableCommand {
+struct ServiceStatus: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "status", abstract: "Show launch agent status")
     }

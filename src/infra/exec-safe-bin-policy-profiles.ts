@@ -1,11 +1,10 @@
 // Defines safe-bin policy profile fixtures and metadata.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-
 export type SafeBinProfile = {
   minPositional?: number;
   maxPositional?: number;
   allowedValueFlags?: ReadonlySet<string>;
+  allowedBooleanFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
   // Precomputed long-option metadata for GNU abbreviation resolution.
   knownLongFlags?: readonly string[];
@@ -22,6 +21,10 @@ export type SafeBinProfileFixture = {
 
 export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
 
+type BuiltinSafeBinProfileFixture = SafeBinProfileFixture & {
+  allowedBooleanFlags?: readonly string[];
+};
+
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
 export const DEFAULT_SAFE_BINS = ["cut", "uniq", "head", "tail", "tr", "wc"] as const;
@@ -36,16 +39,14 @@ const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
 export function collectKnownLongFlags(
   allowedValueFlags: ReadonlySet<string>,
   deniedFlags: ReadonlySet<string>,
+  allowedBooleanFlags: ReadonlySet<string> = NO_FLAGS,
 ): string[] {
   const known = new Set<string>();
-  for (const flag of allowedValueFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
-    }
-  }
-  for (const flag of deniedFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
+  for (const flags of [allowedValueFlags, allowedBooleanFlags, deniedFlags]) {
+    for (const flag of flags) {
+      if (flag.startsWith("--")) {
+        known.add(flag);
+      }
     }
   }
   return Array.from(known);
@@ -74,14 +75,16 @@ export function buildLongFlagPrefixMap(
   return prefixMap;
 }
 
-function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
+function compileSafeBinProfile(fixture: BuiltinSafeBinProfileFixture): SafeBinProfile {
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
+  const allowedBooleanFlags = toFlagSet(fixture.allowedBooleanFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
-  const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags);
+  const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
     allowedValueFlags,
+    allowedBooleanFlags,
     deniedFlags,
     knownLongFlags,
     knownLongFlagsSet: new Set(knownLongFlags),
@@ -90,14 +93,19 @@ function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
 }
 
 function compileSafeBinProfiles(
-  fixtures: Record<string, SafeBinProfileFixture>,
+  fixtures: Record<string, BuiltinSafeBinProfileFixture>,
 ): Record<string, SafeBinProfile> {
   return Object.fromEntries(
     Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
-  ) as Record<string, SafeBinProfile>;
+  );
 }
 
-export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
+const HEAD_TAIL_PROFILE = {
+  maxPositional: 0,
+  allowedBooleanFlags: ["--quiet", "--silent", "--verbose", "--zero-terminated", "-q", "-v", "-z"],
+};
+
+const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {
   jq: {
     maxPositional: 1,
     allowedValueFlags: ["--arg", "--argjson", "--argstr"],
@@ -159,6 +167,14 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-f",
       "-d",
     ],
+    allowedBooleanFlags: [
+      "--complement",
+      "--only-delimited",
+      "--zero-terminated",
+      "-n",
+      "-s",
+      "-z",
+    ],
   },
   sort: {
     maxPositional: 0,
@@ -195,13 +211,25 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-s",
       "-w",
     ],
+    allowedBooleanFlags: [
+      "--count",
+      "--repeated",
+      "--unique",
+      "--ignore-case",
+      "--zero-terminated",
+      "-c",
+      "-d",
+      "-u",
+      "-i",
+      "-z",
+    ],
   },
   head: {
-    maxPositional: 0,
+    ...HEAD_TAIL_PROFILE,
     allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
   },
   tail: {
-    maxPositional: 0,
+    ...HEAD_TAIL_PROFILE,
     allowedValueFlags: [
       "--lines",
       "--bytes",
@@ -211,13 +239,38 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-n",
       "-c",
     ],
+    // Follow/retry modes are unbounded and do not belong in auto-approved safe-bin use.
+    deniedFlags: ["--follow", "--retry", "-F", "-f"],
   },
   tr: {
     minPositional: 1,
     maxPositional: 2,
+    allowedBooleanFlags: [
+      "--complement",
+      "--delete",
+      "--squeeze-repeats",
+      "--truncate-set1",
+      "-C",
+      "-c",
+      "-d",
+      "-s",
+      "-t",
+    ],
   },
   wc: {
     maxPositional: 0,
+    allowedBooleanFlags: [
+      "--bytes",
+      "--chars",
+      "--lines",
+      "--max-line-length",
+      "--words",
+      "-L",
+      "-c",
+      "-l",
+      "-m",
+      "-w",
+    ],
     deniedFlags: ["--files0-from"],
   },
 };
@@ -295,33 +348,4 @@ export function resolveSafeBinProfiles(
     ...SAFE_BIN_PROFILES,
     ...compileSafeBinProfiles(normalizedFixtures),
   };
-}
-
-function resolveSafeBinDeniedFlags(
-  fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
-): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
-  for (const [name, fixture] of Object.entries(fixtures)) {
-    const denied = sortUniqueStrings(fixture.deniedFlags ?? []);
-    if (denied.length > 0) {
-      out[name] = denied;
-    }
-  }
-  return out;
-}
-
-export function renderSafeBinDeniedFlagsDocBullets(
-  fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
-): string {
-  const deniedByBin = resolveSafeBinDeniedFlags(fixtures);
-  const bins = Object.keys(deniedByBin).toSorted();
-  return bins
-    .map((bin) => `- \`${bin}\`: ${deniedByBin[bin].map((flag) => `\`${flag}\``).join(", ")}`)
-    .join("\n");
-}
-
-export function renderDefaultSafeBinsDocText(
-  defaults: readonly string[] = DEFAULT_SAFE_BINS,
-): string {
-  return defaults.map((bin) => `\`${bin}\``).join(", ");
 }

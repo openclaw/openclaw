@@ -1,0 +1,113 @@
+export type QaReportCheck = {
+  name: string;
+  status: "pass" | "fail" | "skip";
+  details?: string;
+};
+
+export type QaReportScenario = QaReportCheck & {
+  steps?: QaReportCheck[];
+};
+
+function pushQaReportDetailsBlock(lines: string[], label: string, details: string, indent = "") {
+  if (!details.includes("\n")) {
+    lines.push(`${indent}- ${label}: ${details}`);
+    return;
+  }
+  lines.push(`${indent}- ${label}:`);
+  lines.push("", "```text", details, "```");
+}
+
+function pushQaReportCheck(lines: string[], check: QaReportCheck, indent = "") {
+  const marker = check.status === "pass" ? "x" : " ";
+  const outcome = check.status === "pass" ? "" : ` (${check.status})`;
+  lines.push(`${indent}- [${marker}] ${check.name}${outcome}`);
+  if (check.details) {
+    pushQaReportDetailsBlock(lines, "Details", check.details, `${indent}  `);
+  }
+}
+
+export function renderQaMarkdownReport(params: {
+  title: string;
+  inProgress?: boolean;
+  startedAt: Date;
+  finishedAt: Date;
+  checks?: QaReportCheck[];
+  scenarios?: QaReportScenario[];
+  timeline?: string[];
+  notes?: string[];
+}) {
+  const checks = params.checks ?? [];
+  const scenarios = params.scenarios ?? [];
+  const outcomes = [...checks, ...scenarios];
+  const passCount = outcomes.filter((check) => check.status === "pass").length;
+  const failCount = outcomes.filter((check) => check.status === "fail").length;
+  const skipCount = outcomes.filter((check) => check.status === "skip").length;
+
+  const lines = [
+    `# ${params.title}${params.inProgress ? " (In Progress)" : ""}`,
+    "",
+    ...(params.inProgress ? ["- Status: running"] : []),
+    `- Started: ${params.startedAt.toISOString()}`,
+    `- ${params.inProgress ? "Updated" : "Finished"}: ${params.finishedAt.toISOString()}`,
+    `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
+    `- Passed: ${passCount}`,
+    `- Failed: ${failCount}`,
+    `- Skipped: ${skipCount}`,
+    "",
+  ];
+
+  if (checks.length > 0) {
+    lines.push("## Checks", "");
+    for (const check of checks) {
+      pushQaReportCheck(lines, check);
+    }
+  }
+
+  if (scenarios.length > 0) {
+    lines.push("", "## Scenarios", "");
+    for (const scenario of scenarios) {
+      lines.push(`### ${scenario.name}`);
+      lines.push("");
+      lines.push(`- Status: ${scenario.status}`);
+      if (scenario.details) {
+        pushQaReportDetailsBlock(lines, "Details", scenario.details);
+      }
+      if (scenario.steps?.length) {
+        lines.push("- Steps:");
+        for (const step of scenario.steps) {
+          pushQaReportCheck(lines, step, "  ");
+        }
+      }
+      lines.push("");
+    }
+  }
+
+  if (params.timeline && params.timeline.length > 0) {
+    lines.push("## Timeline", "");
+    for (const item of params.timeline) {
+      lines.push(`- ${item}`);
+    }
+  }
+
+  if (params.notes && params.notes.length > 0) {
+    lines.push("", "## Notes", "");
+    for (const note of params.notes) {
+      lines.push(`- ${note}`);
+    }
+  }
+
+  lines.push("");
+  return lines.join("\n");
+}
+
+export function escapeTableCell(value: string): string {
+  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
+}
+
+export function pushQaReportListSection(lines: string[], title: string, items: readonly string[]) {
+  lines.push(`## ${title}`, "");
+  for (const item of items) {
+    lines.push(`- ${item}`);
+  }
+  lines.push("");
+}

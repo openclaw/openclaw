@@ -6,10 +6,10 @@ scenario:
   category: reliability
   coverage:
     primary:
-      - personal.failure-recovery
+      - agent-runtime.failure-recovery
     secondary:
-      - personal.no-fake-progress
-      - tools.evidence
+      - agent-runtime.failure-recovery-no-fake-progress
+      - agent-runtime.failure-recovery-evidence
   risk: medium
   capabilities:
     - tools.read
@@ -23,7 +23,6 @@ scenario:
     - Final reply keeps the retry boundary clear instead of pretending a retry succeeded.
   docsRefs:
     - docs/concepts/personal-agent-benchmark-pack.md
-    - docs/automation/tasks.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
     - extensions/qa-lab/src/suite-runtime-agent-process.ts
@@ -112,9 +111,9 @@ flow:
           args:
             - ref: env
             - 60000
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -165,7 +164,7 @@ flow:
               expr: "`personal failure recovery reply overclaimed status: ${outbound.text}`"
         - set: recoveryDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(requestCountBefore).filter((request) => /personal failure recovery check/i.test(String(request.allInputText ?? ''))) : []"
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => /personal failure recovery check/i.test(String(request.allInputText ?? ''))) : []"
         - assert:
             expr: "!env.mock || recoveryDebugRequests.filter((request) => request.plannedToolName === 'read').length >= 2"
             message:

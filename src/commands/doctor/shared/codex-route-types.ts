@@ -1,0 +1,53 @@
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+
+export type MutableRecord = Record<string, unknown>;
+
+export type CodexRouteHit = {
+  path: string;
+  model: string;
+  canonicalModel: string;
+};
+
+export type CompactionOverrideKey = "model" | "provider";
+
+export type UnsupportedCodexCompactionOverride = {
+  path: string;
+  key: CompactionOverrideKey;
+  value: string;
+};
+
+export type LegacyLosslessCompactionConfig = {
+  providerPath: string;
+  providerValue: string;
+  modelPath?: string;
+  modelValue?: string;
+};
+
+export type CodexRuntimeRouteHit = {
+  path: string;
+  modelRef: string;
+  canonicalModel: string;
+  agentId?: string;
+};
+
+export type DisabledCodexPluginRouteIssue = Omit<CodexRuntimeRouteHit, "agentId"> & {
+  /** True when explicit plugin policy blocks auto-enabling the Codex plugin. */
+  repairBlocked: boolean;
+};
+
+export type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverrideKey, boolean>;
+
+export type ConfigRouteRepairResult = {
+  cfg: OpenClawConfig;
+  changes: CodexRouteHit[];
+  runtimePolicyChanges: string[];
+  unsupportedCompactionChanges: string[];
+};
+
+export type CodexSessionRouteRepairSummary = {
+  scannedStores: number;
+  repairedStores: number;
+  repairedSessions: number;
+  warnings: string[];
+  changes: string[];
+};

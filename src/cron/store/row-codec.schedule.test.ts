@@ -1,54 +1,63 @@
-// Round-trips each CronSchedule kind through the SQLite column codec so the
-// on-exit command/cwd persistence (v1 reuses schedule_expr/schedule_tz) is
-// covered alongside the existing kinds.
 import { describe, expect, it } from "vitest";
+import { makeCronJob } from "../delivery.test-helpers.js";
 import type { CronSchedule } from "../types.js";
-import { bindScheduleColumns, scheduleFromRow } from "./row-codec.js";
-import type { CronJobRow } from "./schema.js";
+import { projectCronJobThroughStorageCodec } from "./row-codec.js";
 
-function roundTrip(schedule: CronSchedule): CronSchedule | null {
-  const cols = bindScheduleColumns(schedule);
-  // scheduleFromRow only reads the schedule_* / at / every_ms / anchor_ms /
-  // stagger_ms columns; the rest of the row is irrelevant here.
-  return scheduleFromRow(cols as unknown as CronJobRow);
-}
+describe("canonical cron schedule JSON round-trip", () => {
+  it("keeps private runtime authority out of job_json", () => {
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const job = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority,
+      runtimeAuthorityRecoveryRequired: true,
+    });
+    expect(job.runtimeAuthority).toBeUndefined();
+    expect(job.runtimeAuthorityRecoveryRequired).toBeUndefined();
 
-describe("schedule column codec round-trip", () => {
-  it("round-trips an on-exit schedule with command + cwd", () => {
-    expect(roundTrip({ kind: "on-exit", command: "make build", cwd: "/repo" })).toEqual({
-      kind: "on-exit",
-      command: "make build",
+    const malformed = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority: { ...runtimeAuthority, version: 2 } as never,
+    });
+    expect(malformed.runtimeAuthority).toBeUndefined();
+  });
+
+  it("round-trips a paced stream without aliasing input config or runtime state", () => {
+    const schedule: CronSchedule = {
+      kind: "stream",
+      command: ["node", "events.mjs"],
       cwd: "/repo",
+      mode: "match",
+      match: "^ready:",
+      batchMs: 100,
+      maxBatchBytes: 2_048,
+    };
+    const triggerState = { cursor: { position: 7 }, items: ["first"] };
+    const input = makeCronJob({
+      schedule,
+      pacing: { min: "15m", max: "4h" },
+      state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
     });
-  });
+    const before = structuredClone(input);
+    const projected = projectCronJobThroughStorageCodec(input);
 
-  it("round-trips an on-exit schedule without cwd", () => {
-    expect(roundTrip({ kind: "on-exit", command: "./watch.sh" })).toEqual({
-      kind: "on-exit",
-      command: "./watch.sh",
+    expect(projected.schedule).toStrictEqual(schedule);
+    expect(projected.pacing).toStrictEqual(input.pacing);
+    expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
+    expect(input).toStrictEqual(before);
+    expect(Object.is(projected.schedule, input.schedule)).toBe(false);
+    expect(Object.is(projected.pacing, input.pacing)).toBe(false);
+    expect(Object.is(projected.state, input.state)).toBe(false);
+    expect(Object.is(projected.state.triggerState, triggerState)).toBe(false);
+    triggerState.cursor.position = 9;
+    triggerState.items.push("second");
+    expect(projected.state.triggerState).toStrictEqual({
+      cursor: { position: 7 },
+      items: ["first"],
     });
-  });
-
-  it("keeps existing kinds intact (no cross-talk from on-exit column reuse)", () => {
-    expect(roundTrip({ kind: "every", everyMs: 60_000 })).toEqual({
-      kind: "every",
-      everyMs: 60_000,
-    });
-    expect(roundTrip({ kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" })).toEqual({
-      kind: "cron",
-      expr: "0 9 * * *",
-      tz: "Asia/Shanghai",
-    });
-    expect(roundTrip({ kind: "at", at: "2026-01-01T00:00:00.000Z" })).toEqual({
-      kind: "at",
-      at: "2026-01-01T00:00:00.000Z",
-    });
-  });
-
-  it("an on-exit row is decoded as on-exit, not cron (schedule_kind disambiguates)", () => {
-    const cols = bindScheduleColumns({ kind: "on-exit", command: "sleep 5" });
-    expect(cols.schedule_kind).toBe("on-exit");
-    const decoded = scheduleFromRow(cols as unknown as CronJobRow);
-    expect(decoded?.kind).toBe("on-exit");
   });
 });

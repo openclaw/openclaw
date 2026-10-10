@@ -1,0 +1,426 @@
+import type { AuditStore } from "./audit.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+import { deterministicChecks } from "./checks.js";
+import { fromBase64url } from "./encoding.js";
+import {
+  bodyHash,
+  openClaimed,
+  ReplayedError,
+  seal,
+  validateEnvelopeMetadata,
+  validateMessageBody,
+  type Envelope,
+  type MessageBody,
+  type OpenOptions,
+  type SealOptions,
+} from "./envelope.js";
+import {
+  admitVerdict,
+  type GuardAdapter,
+  type GuardDirection,
+  type GuardRequest,
+  type Verdict,
+} from "./guard.js";
+import { parseHandleEpoch } from "./identity.js";
+import { signReceipt, type SignedReceipt } from "./receipts.js";
+
+export interface ReviewRequest {
+  id: string;
+  from: string;
+  to: string;
+  direction: GuardDirection;
+  bodyHash: string;
+  approvalDigest: string;
+  verdict: Verdict;
+}
+
+export interface ReviewApproval {
+  approved: boolean;
+  approvalDigest: string;
+}
+
+export type ReviewDecisionState = "none" | "pending" | { approved: boolean };
+
+// lookup runs BEFORE any guard call on redelivery: a pending review must
+// short-circuit without re-classifying, or every redelivery becomes a fresh
+// roll of a stochastic classifier and a single stray "allow" bypasses the
+// owner's still-pending review (observed live before this contract existed).
+export interface ReviewGate {
+  lookup(approvalDigest: string): Promise<ReviewDecisionState>;
+  request(request: ReviewRequest): Promise<ReviewApproval | undefined>;
+}
+
+export class PipelineError extends Error {
+  constructor(
+    readonly stage: "deterministic" | "guard" | "review",
+    message: string,
+    readonly verdict?: Verdict,
+    readonly receipt?: SignedReceipt,
+    readonly reviewOutcome?: "pending" | "denied",
+    readonly approvalDigest?: string,
+  ) {
+    super(message);
+    this.name = "PipelineError";
+  }
+}
+
+interface GuardedPipelineOptions {
+  guard: GuardAdapter;
+  audit: AuditStore;
+  policyVersion: string;
+  reviewGate?: ReviewGate;
+}
+
+export interface ComposeOutboundOptions extends GuardedPipelineOptions, SealOptions {}
+
+export interface OutboundResult {
+  envelope: Envelope;
+  verdict: Verdict;
+}
+
+export async function composeOutbound(options: ComposeOutboundOptions): Promise<OutboundResult> {
+  validateEnvelopeMetadata(
+    options.id,
+    options.from,
+    options.to,
+    options.ts ?? Math.floor(Date.now() / 1000),
+  );
+  validateMessageBody(options.body);
+  if (
+    fromBase64url(options.senderSigningSecretKey).length !== 32 ||
+    fromBase64url(options.recipientEncryptionPublicKey).length !== 32
+  ) {
+    throw new Error("invalid outbound key material");
+  }
+  const checks = deterministicChecks(options.body.text);
+  if (
+    checks.findings.some(
+      (finding) => finding.code === "invalid_utf8" || finding.code === "too_large",
+    )
+  ) {
+    throw new PipelineError("deterministic", "invalid outbound message");
+  }
+  const proposalHash = bodyHash(options.body);
+  const approvalDigest = computeApprovalDigest(
+    options.id,
+    options.from,
+    options.to,
+    "outbound",
+    proposalHash,
+    options.policyVersion,
+  );
+  await options.audit.appendEvent("proposal", {
+    id: options.id,
+    from: options.from,
+    to: options.to,
+    bodyHash: proposalHash,
+    approvalDigest,
+    body: options.body,
+  });
+  if (!checks.allowed) {
+    await options.audit.appendEvent("deterministic_verdict", {
+      id: options.id,
+      approvalDigest,
+      decision: "deny",
+      findings: checks.findings,
+    });
+    throw new PipelineError("deterministic", "deterministic checks denied message");
+  }
+  const verdict = await classifyWithReview(
+    options,
+    "outbound",
+    options.id,
+    proposalHash,
+    approvalDigest,
+    options.from,
+    options.to,
+    options.body.text,
+  );
+  const envelope = seal(options);
+  await options.audit.appendEvent("envelope", { id: options.id, approvalDigest, envelope });
+  return { envelope, verdict };
+}
+
+export interface ComposeInboundOptions extends GuardedPipelineOptions, OpenOptions {
+  envelope: Envelope;
+  recipientSigningSecretKey: string;
+}
+
+export type InboundResult =
+  | { disposition: "accepted"; body: MessageBody; verdict: Verdict; receipt: SignedReceipt }
+  | { disposition: "duplicate"; body?: MessageBody; receipt: SignedReceipt };
+
+const REPLAY_CLAIM_HEARTBEAT_MS = 60_000;
+
+// Caller MUST ack the relay with receipt. For accepted or duplicate-accepted results, it MUST
+// idempotently deliver every present body to channel ingress, keyed by envelope id.
+export async function composeInbound(options: ComposeInboundOptions): Promise<InboundResult> {
+  const opened = await openClaimed(options);
+  if (opened.claim === "duplicate") {
+    if (opened.receipt === undefined) {
+      throw new ReplayedError("duplicate envelope");
+    }
+    return opened.body === undefined
+      ? { disposition: "duplicate", receipt: opened.receipt }
+      : { disposition: "duplicate", body: opened.body, receipt: opened.receipt };
+  }
+  let finalized = false;
+  const peer = parseHandleEpoch(options.envelope.from).handle;
+  const refreshClaim = async () => {
+    await options.replayStore.refresh?.(peer, options.envelope.id);
+  };
+  const pendingRefreshes = new Set<Promise<void>>();
+  const heartbeat = options.replayStore.refresh
+    ? setInterval(() => {
+        const pending = refreshClaim().catch(() => undefined);
+        pendingRefreshes.add(pending);
+        void pending.then(() => pendingRefreshes.delete(pending));
+      }, REPLAY_CLAIM_HEARTBEAT_MS)
+    : undefined;
+  heartbeat?.unref?.();
+  try {
+    const proposalHash = bodyHash(opened.body);
+    const approvalDigest = computeApprovalDigest(
+      options.envelope.id,
+      options.envelope.from,
+      options.self,
+      "inbound",
+      proposalHash,
+      options.policyVersion,
+    );
+    const checks = deterministicChecks(opened.body.text);
+    if (!checks.allowed) {
+      await refreshClaim();
+      await options.audit.appendEvent("deterministic_verdict", {
+        id: options.envelope.id,
+        approvalDigest,
+        decision: "deny",
+        findings: checks.findings,
+      });
+      const receipt = await completeRejection(
+        options,
+        peer,
+        proposalHash,
+        approvalDigest,
+        "deterministic_deny",
+      );
+      finalized = true;
+      throw new PipelineError(
+        "deterministic",
+        "deterministic checks denied message",
+        undefined,
+        receipt,
+      );
+    }
+    let verdict: Verdict;
+    try {
+      verdict = await classifyWithReview(
+        options,
+        "inbound",
+        options.envelope.id,
+        proposalHash,
+        approvalDigest,
+        options.envelope.from,
+        options.self,
+        opened.body.text,
+      );
+    } catch (error) {
+      if (!(error instanceof PipelineError)) {
+        throw error;
+      }
+      const reviewDenied = error.stage === "review" && error.reviewOutcome === "denied";
+      // A guard_failure records classifier unavailability, not a content denial.
+      // Release that claim for redelivery instead of signing a terminal rejection.
+      const guardDenied =
+        error.stage === "guard" &&
+        error.verdict?.decision === "deny" &&
+        error.verdict.category !== "guard_failure";
+      if (!reviewDenied && !guardDenied) {
+        throw error;
+      }
+      await refreshClaim();
+      const receipt = await completeRejection(
+        options,
+        peer,
+        proposalHash,
+        approvalDigest,
+        reviewDenied ? "review_denied" : "guard_deny",
+      );
+      finalized = true;
+      throw new PipelineError(
+        error.stage,
+        error.message,
+        error.verdict,
+        receipt,
+        reviewDenied ? "denied" : undefined,
+        reviewDenied ? approvalDigest : undefined,
+      );
+    }
+    await refreshClaim();
+    const inboxEntry = await options.audit.appendEvent("inbox", {
+      id: options.envelope.id,
+      bodyHash: proposalHash,
+      approvalDigest,
+      text: opened.body.text,
+      verdict,
+    });
+    const receipt = signReceipt(
+      {
+        id: options.envelope.id,
+        bodyHash: proposalHash,
+        auditHead: inboxEntry.entryHash,
+        status: "accepted",
+      },
+      options.recipientSigningSecretKey,
+    );
+    await options.audit.appendEvent("receipt", {
+      id: options.envelope.id,
+      approvalDigest,
+      receipt,
+    });
+    await options.replayStore.complete(peer, options.envelope.id, receipt, opened.body);
+    finalized = true;
+    return { disposition: "accepted", body: opened.body, verdict, receipt };
+  } catch (error) {
+    if (!finalized) {
+      await options.replayStore.release(peer, options.envelope.id);
+    }
+    throw error;
+  } finally {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    await Promise.all(pendingRefreshes);
+  }
+}
+
+async function completeRejection(
+  options: ComposeInboundOptions,
+  peer: string,
+  proposalHash: string,
+  approvalDigest: string,
+  category: string,
+): Promise<SignedReceipt> {
+  const rejectionEntry = await options.audit.appendEvent("inbox_rejected", {
+    id: options.envelope.id,
+    bodyHash: proposalHash,
+    approvalDigest,
+    decision: "deny",
+    category,
+  });
+  const receipt = signReceipt(
+    {
+      id: options.envelope.id,
+      bodyHash: proposalHash,
+      auditHead: rejectionEntry.entryHash,
+      status: "rejected",
+      category,
+    },
+    options.recipientSigningSecretKey,
+  );
+  await options.audit.appendEvent("receipt", { id: options.envelope.id, approvalDigest, receipt });
+  await options.replayStore.complete(peer, options.envelope.id, receipt);
+  return receipt;
+}
+
+async function classifyWithReview(
+  options: GuardedPipelineOptions,
+  direction: GuardDirection,
+  id: string,
+  proposalHash: string,
+  approvalDigest: string,
+  source: string,
+  destination: string,
+  text: string,
+): Promise<Verdict> {
+  const request: GuardRequest = {
+    direction,
+    source,
+    destination,
+    text,
+    policyVersion: options.policyVersion,
+  };
+  const binding = {
+    id,
+    from: source,
+    to: destination,
+    direction,
+    bodyHash: proposalHash,
+    approvalDigest,
+  };
+  const classify = async (afterApproval = false): Promise<Verdict> => {
+    const verdict = admitVerdict(
+      await options.guard.classify(request),
+      options.guard.pinnedModel,
+      request.policyVersion,
+    );
+    await options.audit.appendEvent("guard_verdict", {
+      ...binding,
+      ...(afterApproval ? { afterApproval: true } : {}),
+      ...verdict,
+    });
+    if (verdict.decision === "deny") {
+      throw new PipelineError(
+        "guard",
+        afterApproval
+          ? "guard denied approved message"
+          : direction === "outbound"
+            ? "Reef outbound guard denied the message. Do not retry or rephrase it automatically; ask the owner before sending related content."
+            : "guard denied message",
+        verdict,
+      );
+    }
+    return verdict;
+  };
+  // The recorded review decision owns redelivery: consult it before spending a
+  // guard call. Pending retries add neither classifications nor audit entries.
+  const existingDecision = (await options.reviewGate?.lookup(approvalDigest)) ?? "none";
+  let verdict: Verdict | undefined;
+  let approval: ReviewApproval | undefined;
+  if (existingDecision === "none") {
+    verdict = await classify();
+    if (verdict.decision !== "review") {
+      return verdict;
+    }
+    approval = await options.reviewGate?.request({ ...binding, verdict });
+  } else if (existingDecision !== "pending") {
+    approval = { ...existingDecision, approvalDigest };
+  }
+  if (!approval || approval.approvalDigest !== approvalDigest) {
+    throw new PipelineError(
+      "review",
+      approval ? "approval digest mismatch" : "review approval pending",
+      verdict,
+      undefined,
+      "pending",
+      approvalDigest,
+    );
+  }
+  if (!approval.approved) {
+    throw new PipelineError(
+      "review",
+      "review explicitly denied",
+      verdict,
+      undefined,
+      "denied",
+      approvalDigest,
+    );
+  }
+  // One post-approval classification per delivery attempt, whether the approval
+  // arrived inside the original call or before a relay redelivery.
+  await options.audit.appendEvent("review_approval", { ...binding, approved: true });
+  return classify(true);
+}
+
+function computeApprovalDigest(
+  id: string,
+  from: string,
+  to: string,
+  direction: GuardDirection,
+  proposalHash: string,
+  policyVersion: string,
+): string {
+  return sha256Hex(
+    canonicalBytes({ id, from, to, direction, bodyHash: proposalHash, policyVersion }),
+  );
+}

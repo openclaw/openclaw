@@ -1,4 +1,4 @@
-/** Agent runtime id normalization and retired runtime-selection compatibility helpers. */
+/** Agent runtime id normalization helpers. */
 export type EmbeddedAgentRuntime = "openclaw" | "auto" | (string & {});
 
 export const OPENCLAW_AGENT_RUNTIME_ID = "openclaw";
@@ -29,16 +29,6 @@ export function normalizeOptionalAgentRuntimeId(raw: unknown): EmbeddedAgentRunt
   }
   const value = raw.trim().toLowerCase();
   return value ? normalizeEmbeddedAgentRuntime(value) : undefined;
-}
-
-/**
- * @deprecated Whole-agent runtime environment selection is retired. Use
- * provider/model runtime policy or a registered agent harness instead.
- */
-export function resolveEmbeddedAgentRuntime(
-  _env: NodeJS.ProcessEnv = process.env,
-): EmbeddedAgentRuntime {
-  return OPENCLAW_AGENT_RUNTIME_ID;
 }
 
 /** Returns whether a runtime id should be treated as the default runtime selection. */

@@ -1,57 +1,69 @@
 /**
- * Public SDK subpath for memory host storage, indexing, and search primitives.
+ * Private runtime facade for memory host storage, indexing, and search primitives.
  */
+export { encodeSqliteStringSet, sqliteStringSetEntries } from "../infra/kysely-sync.js";
+export {
+  ensureMemoryEntryOriginsSchema,
+  readMemoryEntryOriginsInDatabase,
+  recordMemoryEntryOriginsInDatabase,
+  type MemoryEntryOrigin,
+} from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
+
 export {
   buildFileEntry,
-  buildMemoryReadResult,
-  buildMemoryReadResultFromSlice,
   buildMultimodalChunkForIndexing,
-  chunkMarkdown,
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
-  cosineSimilarity,
-  DEFAULT_MEMORY_READ_LINES,
-  DEFAULT_MEMORY_READ_MAX_CHARS,
-  ensureDir,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
+  createMemorySearchDeadlineControl,
+  ensureMemoryChunkProvenance,
   ensureMemoryIndexSchema,
   hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
+  isAutomaticMemoryEntryEligible,
   isFileMissingError,
-  isTransientMemoryReadError,
   listMemoryFiles,
   loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
+  matchesExtraMemoryPathEntry,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  MEMORY_CHUNKING_VERSION,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
-  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-  normalizeExtraMemoryPaths,
-  parseEmbedding,
+  normalizeExtraMemoryPathEntries,
   readMemoryFile,
+  readCuratedProjectMemoryCandidates,
+  readCuratedMemoryTriggerCandidates,
+  readMemoryRecallMetadata,
   retryTransientMemoryRead,
-  remapChunkLines,
   requireNodeSqlite,
-  resolveMemoryBackendConfig,
+  formatMemoryIndexRebuildGuidance,
+  resolveMemoryIndexIdentityDiagnostic,
+  resolveMemoryIndexSearchDiagnostic,
+  resolveMemorySearchStaleness,
   runWithConcurrency,
-  statRegularFile,
+  stopMemorySqliteWalMaintenance,
+  stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
-/** Origin bucket for memory search results exposed through the SDK. */
-export type MemorySource = "memory" | "sessions";
+export type {
+  MemoryWorkspaceFiles,
+  MemoryWorkspaceWatchRequest,
+  MemoryEntryProvenance,
+  MemoryExtraPath,
+  MemorySearchResult,
+  MemorySource,
+} from "../../packages/memory-host-sdk/src/engine-storage.js";
 
-/** Normalized search hit shape returned by memory host searches. */
-export type MemorySearchResult = {
-  path: string;
-  startLine: number;
-  endLine: number;
-  score: number;
-  vectorScore?: number;
-  textScore?: number;
-  snippet: string;
-  source: MemorySource;
-  citation?: string;
-};
+export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 
 /** Health probe result for embedding provider availability checks. */
 export type MemoryEmbeddingProbeResult = {
@@ -66,14 +78,16 @@ export type MemoryEmbeddingProbeResult = {
 export type {
   MemoryChunk,
   MemoryFileEntry,
+  MemoryIndexIdentityDiagnostic,
+  MemoryIndexIdentityState,
   MemoryProviderStatus,
   MemoryReadResult,
+  MemorySearchDeadlineControl,
+  MemorySearchDeadlineControlOptions,
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySyncProgressUpdate,
   MemorySessionSyncTarget,
   MemorySyncParams,
-  ResolvedMemoryBackendConfig,
-  ResolvedQmdConfig,
-  ResolvedQmdMcporterConfig,
+  MemoryVectorIndexState,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";

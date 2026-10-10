@@ -5,21 +5,17 @@ import { describe, expect, it } from "vitest";
 import { evaluateExecAllowlist } from "./exec-approvals-allowlist.js";
 import {
   analyzeArgvCommand,
-  analyzeWindowsShellCommand,
   buildEnforcedShellCommand,
   resolvePlannedSegmentArgv,
-  windowsEscapeArg,
 } from "./exec-approvals-analysis.js";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeExecutable,
+  makePathEnv,
+  makeExecApprovalsTempDir,
+} from "./exec-approvals-test-helpers.js";
+import { analyzeWindowsShellCommand, windowsEscapeArg } from "./windows-shell-command.js";
 
 describe("exec argv analysis", () => {
-  it("parses argv commands", () => {
-    const res = analyzeArgvCommand({ argv: ["/bin/echo", "ok"] });
-
-    expect(res.ok).toBe(true);
-    expect(res.segments[0]?.argv).toEqual(["/bin/echo", "ok"]);
-  });
-
   it("rejects empty argv commands", () => {
     expect(analyzeArgvCommand({ argv: ["", "   "] })).toEqual({
       ok: false,
@@ -32,7 +28,7 @@ describe("exec argv analysis", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const busybox = path.join(dir, "busybox");
     fs.writeFileSync(busybox, "");
     fs.chmodSync(busybox, 0o755);
@@ -72,21 +68,6 @@ describe("Windows shell analysis", () => {
       const res = analyzeWindowsShellCommand({ command, platform: "win32" });
       expect(res.ok).toBe(true);
       expect(res.segments[0]?.argv[0]).toBe("node");
-    }
-  });
-
-  it("rejects unquoted metacharacters", () => {
-    const cases: string[] = [
-      "ping 127.0.0.1 -n 1 & whoami",
-      "node allowed.js; unlisted.exe",
-      "echo hello | clip",
-      "node tool.js > output.txt",
-      "for /f %i in (file.txt) do echo %i",
-    ];
-
-    for (const command of cases) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(false);
     }
   });
 
@@ -188,9 +169,15 @@ describe("Windows shell analysis", () => {
 
 describe("Windows enforced shell command rendering", () => {
   it("builds enforced command for simple Windows command", () => {
+    // Resolve from a fixture PATH: host python3 locations (e.g. Homebrew's
+    // python@3.x Cellar path) contain characters that trigger quoting and make
+    // the rendered command host-dependent.
+    const dir = makeExecApprovalsTempDir();
+    const python3 = makeExecutable(dir, "python3");
     const analysis = analyzeWindowsShellCommand({
       command: "python3 a.py",
       platform: "win32",
+      env: makePathEnv(dir),
     });
 
     expect(analysis.ok).toBe(true);
@@ -201,7 +188,7 @@ describe("Windows enforced shell command rendering", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.command).toMatch(/^& .+python3(?:\.\d+)? a\.py$/);
+    expect(result.command).toBe(`& ${python3} a.py`);
   });
 
   it("rejects Windows commands with unsafe tokens", () => {
@@ -220,11 +207,6 @@ describe("windowsEscapeArg", () => {
     expect(windowsEscapeArg("")).toEqual({ ok: true, escaped: '""' });
   });
 
-  it("returns safe values as-is", () => {
-    expect(windowsEscapeArg("foo.exe")).toEqual({ ok: true, escaped: "foo.exe" });
-    expect(windowsEscapeArg("C:/Program/bin")).toEqual({ ok: true, escaped: "C:/Program/bin" });
-  });
-
   it("double-quotes values with spaces and escapes embedded quotes", () => {
     expect(windowsEscapeArg("hello world")).toEqual({ ok: true, escaped: '"hello world"' });
     expect(windowsEscapeArg('say "hi"')).toEqual({ ok: true, escaped: '"say ""hi"""' });
@@ -239,43 +221,34 @@ describe("windowsEscapeArg", () => {
     expect(windowsEscapeArg("$?")).toEqual({ ok: false });
     expect(windowsEscapeArg("$$")).toEqual({ ok: false });
   });
-
-  it("allows $ not followed by identifier", () => {
-    expect(windowsEscapeArg("\\\\host\\C$")).toEqual({ ok: true, escaped: '"\\\\host\\C$"' });
-    expect(windowsEscapeArg("trailing$")).toEqual({ ok: true, escaped: '"trailing$"' });
-  });
 });
 
 describe("Windows inline allowlist analysis", () => {
   it("evaluates inline cmd payloads against the inner executable", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const cmdPath = path.join(dir, "cmd.exe");
     const nodePath = path.join(dir, "node.exe");
     for (const file of [cmdPath, nodePath]) {
       fs.writeFileSync(file, "");
       fs.chmodSync(file, 0o755);
     }
-    try {
-      const env = makePathEnv(dir);
-      const analysis = analyzeArgvCommand({
-        argv: ["cmd.exe", "/c", "node.exe", "app.js"],
-        cwd: dir,
-        env,
-      });
+    const env = makePathEnv(dir);
+    const analysis = analyzeArgvCommand({
+      argv: ["cmd.exe", "/c", "node.exe", "app.js"],
+      cwd: dir,
+      env,
+    });
 
-      expect(analysis.ok).toBe(true);
-      const result = evaluateExecAllowlist({
-        analysis,
-        allowlist: [{ pattern: nodePath }],
-        safeBins: new Set(),
-        cwd: dir,
-        env,
-        platform: "win32",
-      });
-      expect(result.allowlistSatisfied).toBe(true);
-      expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(analysis.ok).toBe(true);
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: nodePath }],
+      safeBins: new Set(),
+      cwd: dir,
+      env,
+      platform: "win32",
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
   });
 });

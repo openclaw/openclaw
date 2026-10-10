@@ -1,59 +1,50 @@
 // Evaluates heartbeat active-hours windows.
 import { resolveUserTimezone } from "../agents/date-time.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HeartbeatConfig } from "./heartbeat-config.js";
 
 // Heartbeat active-hours helpers interpret user/local/IANA timezones and treat
 // invalid config as permissive so bad schedules do not disable heartbeats.
-type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
-
 const ACTIVE_HOURS_TIME_PATTERN = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/;
 
-/** Resolve the timezone used to evaluate heartbeat active hours. */
-export function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "user") {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
-  if (trimmed === "local") {
+/** Resolve the formatter used to evaluate heartbeat active hours. */
+function resolveActiveHoursFormatter(
+  cfg: OpenClawConfig,
+  raw?: string,
+): Intl.DateTimeFormat | null {
+  let timeZone = raw?.trim();
+  const isExplicit = timeZone && timeZone !== "user" && timeZone !== "local";
+  if (!timeZone || timeZone === "user") {
+    timeZone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+  } else if (timeZone === "local") {
     const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return host?.trim() || "UTC";
+    timeZone = host?.trim() || "UTC";
   }
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-    return trimmed;
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
   } catch {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+    return isExplicit ? resolveActiveHoursFormatter(cfg) : null;
   }
 }
 
-function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
+function parseActiveHoursTime(allow24: boolean, raw?: string): number | null {
   if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) {
     return null;
   }
   const [hourStr, minuteStr] = raw.split(":");
   const hour = Number(hourStr);
   const minute = Number(minuteStr);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
-  }
-  if (hour === 24) {
-    if (!opts.allow24 || minute !== 0) {
-      return null;
-    }
-    return 24 * 60;
-  }
-  return hour * 60 + minute;
+  return hour === 24 && !allow24 ? null : hour * 60 + minute;
 }
 
-function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
+function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat): number | null {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(nowMs));
+    const parts = formatter.formatToParts(new Date(nowMs));
     const map: Record<string, string> = {};
     for (const part of parts) {
       if (part.type !== "literal") {
@@ -82,8 +73,8 @@ export function isWithinActiveHours(
     return true;
   }
 
-  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
-  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
+  const startMin = parseActiveHoursTime(false, active.start);
+  const endMin = parseActiveHoursTime(true, active.end);
   if (startMin === null || endMin === null) {
     return true;
   }
@@ -91,14 +82,16 @@ export function isWithinActiveHours(
     return false;
   }
 
-  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
-  if (currentMin === null) {
+  const formatter = resolveActiveHoursFormatter(cfg, active.timezone);
+  if (!formatter) {
     return true;
   }
 
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
+  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), formatter);
+  if (currentMin === null) {
+    return true;
   }
-  return currentMin >= startMin || currentMin < endMin;
+  return endMin > startMin
+    ? currentMin >= startMin && currentMin < endMin
+    : currentMin >= startMin || currentMin < endMin;
 }

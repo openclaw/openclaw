@@ -12,9 +12,16 @@ type CapturedGatewayResponse = {
 };
 
 function makeGatewayHandlerTestContext(): GatewayRequestContext {
+  // Gateway authority checks compare the current config snapshot by identity.
+  const runtimeConfig = {};
   return {
-    getRuntimeConfig: () => ({}),
-    logGateway: vi.fn(),
+    getRuntimeConfig: () => runtimeConfig,
+    logGateway: {
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    },
   } as unknown as GatewayRequestContext;
 }
 

@@ -1,71 +1,124 @@
-// Imessage tests cover the downtime-recovery cursor.
-import { createHash } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import {
+  createIMessagePluginStateSyncStoreForTest,
+  installIMessageStateRuntimeForTest,
+} from "../test-support/runtime.js";
 import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
 
-function writeLegacyCatchupCursor(accountId: string, lastSeenRowid: number): void {
-  const store = getIMessageRuntime().state.openSyncKeyedStore<{
-    lastSeenMs: number;
-    lastSeenRowid: number;
-  }>({ namespace: "imessage.catchup-cursors", maxEntries: 256 });
-  const key = createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 32);
-  store.register(key, { lastSeenMs: Date.now(), lastSeenRowid });
+const hosts = ["current", "2026.9.4"] as const;
+type Host = (typeof hosts)[number];
+const accountId = "default";
+const dbIdentity = "remote:synthetic:chat.db";
+const cursorKey = `${accountId}\u0000${dbIdentity}`;
+const cursorStoreOptions = { namespace: "imessage.recovery-cursor", maxEntries: 64 };
+
+function seedCursor(rowid: number) {
+  createIMessagePluginStateSyncStoreForTest<{ lastRowid: number }>(cursorStoreOptions).register(
+    cursorKey,
+    { lastRowid: rowid },
+  );
 }
 
-describe("iMessage recovery cursor", () => {
+function useHost(host: Host, options: { beforeWrite?: () => void; compareError?: Error } = {}) {
+  const state = getIMessageRuntime().state;
+  const openKeyedStore = state.openKeyedStore.bind(state);
+  const openSyncKeyedStore = state.openSyncKeyedStore.bind(state);
+  const syncOpen = vi
+    .spyOn(state, "openSyncKeyedStore")
+    .mockImplementation(<T>(storeOptions: OpenKeyedStoreOptions) => {
+      const store = openSyncKeyedStore<T>(storeOptions);
+      const update = store.update?.bind(store);
+      if (options.beforeWrite && update) {
+        store.update = (...args) => {
+          options.beforeWrite?.();
+          return update(...args);
+        };
+      }
+      return store;
+    });
+  vi.spyOn(state, "openKeyedStore").mockImplementation(
+    <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
+      const store = openKeyedStore<T>(storeOptions);
+      if (host === "2026.9.4") {
+        delete store.observe;
+        delete store.compareAndApply;
+      } else if (store.compareAndApply && (options.beforeWrite || options.compareError)) {
+        const compareAndApply = store.compareAndApply.bind(store);
+        store.compareAndApply = async (...args) => {
+          if (options.compareError) {
+            throw options.compareError;
+          }
+          options.beforeWrite?.();
+          return await compareAndApply(...args);
+        };
+      }
+      return store;
+    },
+  );
+  return syncOpen;
+}
+
+describe("iMessage recovery cursor persistence", () => {
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
   });
 
-  it("returns null before anything is recorded", () => {
-    expect(loadIMessageRecoveryCursor("default")).toBeNull();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("persists the last dispatched rowid", () => {
-    advanceIMessageRecoveryCursor("default", 100);
-    expect(loadIMessageRecoveryCursor("default")).toBe(100);
+  it.each(hosts)("%s keeps the greatest row across concurrent completions", async (host) => {
+    const syncOpen = useHost(host);
+    await Promise.all(
+      [30, 10, 50, 20, 40].map((rowid) =>
+        advanceIMessageRecoveryCursor(accountId, dbIdentity, rowid),
+      ),
+    );
+    expect(await loadIMessageRecoveryCursor(accountId, dbIdentity)).toBe(50);
+    expect(await loadIMessageRecoveryCursor("other", dbIdentity)).toBeNull();
+    expect(await loadIMessageRecoveryCursor(accountId, "remote:synthetic:other.db")).toBeNull();
+    expect(syncOpen.mock.calls.length > 0).toBe(host === "2026.9.4");
   });
 
-  it("advances forward only and never rewinds", () => {
-    advanceIMessageRecoveryCursor("default", 100);
-    advanceIMessageRecoveryCursor("default", 50);
-    expect(loadIMessageRecoveryCursor("default")).toBe(100);
-    advanceIMessageRecoveryCursor("default", 150);
-    expect(loadIMessageRecoveryCursor("default")).toBe(150);
+  it.each(hosts)("%s persists an expected-row rewind for a replaced database", async (host) => {
+    seedCursor(9000);
+    const syncOpen = useHost(host);
+    expect(await loadIMessageRecoveryCursor(accountId, dbIdentity, { watermarkRowid: 5000 })).toBe(
+      5000,
+    );
+    expect(await loadIMessageRecoveryCursor(accountId, dbIdentity)).toBe(5000);
+    expect(syncOpen.mock.calls.length > 0).toBe(host === "2026.9.4");
   });
 
-  it("scopes the cursor per account", () => {
-    advanceIMessageRecoveryCursor("work", 10);
-    advanceIMessageRecoveryCursor("home", 20);
-    expect(loadIMessageRecoveryCursor("work")).toBe(10);
-    expect(loadIMessageRecoveryCursor("home")).toBe(20);
+  it.each(hosts)("%s preserves a cursor changed before rewind admission", async (host) => {
+    seedCursor(9000);
+    const syncOpen = useHost(host, { beforeWrite: () => seedCursor(9100) });
+    expect(await loadIMessageRecoveryCursor(accountId, dbIdentity, { watermarkRowid: 5000 })).toBe(
+      9100,
+    );
+    expect(await loadIMessageRecoveryCursor(accountId, dbIdentity)).toBe(9100);
+    expect(syncOpen.mock.calls.length > 0).toBe(host === "2026.9.4");
   });
 
-  it("ignores non-finite rowids", () => {
-    advanceIMessageRecoveryCursor("default", Number.NaN);
-    expect(loadIMessageRecoveryCursor("default")).toBeNull();
-  });
-
-  it("seeds from the retired catchup cursor once on upgrade, then consumes it", () => {
-    writeLegacyCatchupCursor("default", 4321);
-    // First load with no recovery cursor seeds from the legacy catchup cursor.
-    expect(loadIMessageRecoveryCursor("default")).toBe(4321);
-    // The legacy entry is consumed and the value is now the recovery cursor, so
-    // a later load still returns it without re-reading the legacy store.
-    expect(loadIMessageRecoveryCursor("default")).toBe(4321);
-  });
-
-  it("can skip legacy catchup cursor migration when compatibility catchup still owns it", () => {
-    writeLegacyCatchupCursor("default", 4321);
-    expect(loadIMessageRecoveryCursor("default", { migrateLegacyCatchup: false })).toBeNull();
-    expect(loadIMessageRecoveryCursor("default")).toBe(4321);
-  });
-
-  it("prefers an existing recovery cursor over the legacy catchup cursor", () => {
-    advanceIMessageRecoveryCursor("default", 9000);
-    writeLegacyCatchupCursor("default", 10);
-    expect(loadIMessageRecoveryCursor("default")).toBe(9000);
-  });
+  it.each(["advance", "rewind"] as const)(
+    "does not fall back to sync storage after a modern %s comparison fails",
+    async (operation) => {
+      seedCursor(9000);
+      const syncOpen = useHost("current", { compareError: new Error("synthetic CAS refusal") });
+      if (operation === "advance") {
+        await advanceIMessageRecoveryCursor(accountId, dbIdentity, 9100);
+      } else {
+        expect(
+          await loadIMessageRecoveryCursor(accountId, dbIdentity, { watermarkRowid: 5000 }),
+        ).toBe(5000);
+      }
+      expect(await loadIMessageRecoveryCursor(accountId, dbIdentity)).toBe(9000);
+      expect(syncOpen).not.toHaveBeenCalled();
+    },
+  );
 });

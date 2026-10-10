@@ -1,6 +1,6 @@
 /** Tests ACP tool-call location extraction limits. */
 import { describe, expect, it } from "vitest";
-import { extractToolCallLocations } from "./event-mapper.js";
+import { extractToolCallLocations, formatToolTitle } from "./event-mapper.js";
 
 describe("extractToolCallLocations", () => {
   it("enforces the global node visit cap across nested structures", () => {
@@ -16,5 +16,21 @@ describe("extractToolCallLocations", () => {
       throw new Error("expected bounded tool-call locations");
     }
     expect(locations).toEqual([{ path: "/tmp/file-0.txt" }, { path: "/tmp/file-1.txt" }]);
+  });
+});
+
+describe("formatToolTitle", () => {
+  it("formats tool arguments with an unset optional value", () => {
+    expect(formatToolTitle("exec", { command: "echo ok", cwd: undefined })).toBe(
+      "exec: command: echo ok, cwd: undefined",
+    );
+  });
+
+  it("does not split surrogate pairs when truncating argument values", () => {
+    const title = formatToolTitle("exec", {
+      command: `${"x".repeat(99)}🚀tail`,
+    });
+
+    expect(title).toBe(`exec: command: ${"x".repeat(99)}...`);
   });
 });

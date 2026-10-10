@@ -2,14 +2,93 @@
 import { describe, expect, it } from "vitest";
 import {
   booleanFlag,
-  floatFlag,
+  classifyBoundedUnsignedDecimal,
   intFlag,
+  isOpenEndedTruthyValue,
+  isStrictAffirmativeValue,
   parseFlagArgs,
+  parsePermissiveBooleanToken,
+  parseStrictBooleanArg,
+  readFlagValue,
+  requireOptionArgument,
   stringFlag,
   stringListFlag,
-} from "../../scripts/lib/arg-utils.mjs";
+} from "../../scripts/lib/arg-utils.runtime.mjs";
+
+describe("scripts/lib/arg-utils strict scalar grammars", () => {
+  it.each([
+    { input: "true", expected: true },
+    { input: "false", expected: false },
+    { input: true, error: "--enabled must be true or false." },
+  ])("parses strict Boolean token %#", ({ input, expected, error }) => {
+    if (error) {
+      expect(() => parseStrictBooleanArg(input, "--enabled")).toThrow(error);
+      return;
+    }
+    expect(parseStrictBooleanArg(input, "--enabled")).toBe(expected);
+  });
+
+  it.each([
+    { input: "0", min: 1, max: 10, expected: { kind: "below" } },
+    { input: "-1", min: 0, max: 10, expected: { kind: "syntax" } },
+  ])("classifies bounded unsigned decimal %#", ({ input, min, max, expected }) => {
+    expect(classifyBoundedUnsignedDecimal(input, min, max)).toEqual(expected);
+  });
+});
+
+describe("scripts/lib/arg-utils required option arguments", () => {
+  it("returns the original split option value", () => {
+    expect(requireOptionArgument(["--output", "  report.json  "], 0, "--output")).toBe(
+      "  report.json  ",
+    );
+  });
+
+  it.each(["-h"])("rejects missing value %#", (value) => {
+    const argv = value === undefined ? ["--output"] : ["--output", value];
+    expect(() => requireOptionArgument(argv, 0, "--output")).toThrow(
+      new Error("--output requires a value"),
+    );
+  });
+});
+
+describe("scripts/lib/arg-utils permissive Boolean tokens", () => {
+  it.each([
+    { input: "yes", expected: true },
+    { input: "off", expected: false },
+    { input: "enabled", expected: undefined },
+    { input: true, expected: undefined },
+  ])("parses $input as $expected", ({ input, expected }) => {
+    expect(parsePermissiveBooleanToken(input)).toBe(expected);
+  });
+});
+
+describe("scripts/lib/arg-utils environment Boolean policies", () => {
+  it.each([{ input: undefined, expected: false }])(
+    "applies open-ended truthiness to $input",
+    ({ input, expected }) => {
+      expect(isOpenEndedTruthyValue(input)).toBe(expected);
+    },
+  );
+
+  it.each([
+    { input: undefined, expected: false },
+    { input: "Yes", expected: true },
+  ])("applies strict affirmative truthiness to $input", ({ input, expected }) => {
+    expect(isStrictAffirmativeValue(input)).toBe(expected);
+  });
+});
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
+  it("uses the last value when a flag is repeated", () => {
+    expect(readFlagValue(["-p", "first.json", "-p", "second.json"], "-p")).toBe("second.json");
+    expect(
+      readFlagValue(
+        ["--tsBuildInfoFile=first.tsbuildinfo", "--tsBuildInfoFile", "second.tsbuildinfo"],
+        "--tsBuildInfoFile",
+      ),
+    ).toBe("second.tsbuildinfo");
+  });
+
   it("ignores the conventional option separator by default", () => {
     const parsed = parseFlagArgs(["--", "--limit", "30"], { limit: 10 }, [
       intFlag("--limit", "limit", { min: 1 }),
@@ -18,30 +97,29 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(parsed.limit).toBe(30);
   });
 
-  it("parses inline flag assignments", () => {
-    const parsed = parseFlagArgs(
-      ["--label=changed-tests", "--limit=30", "--factor=1.5"],
-      { factor: 1, label: "", limit: 10 },
-      [
-        stringFlag("--label", "label"),
-        intFlag("--limit", "limit", { min: 1 }),
-        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
-      ],
-    );
-
-    expect(parsed).toEqual({
-      factor: 1.5,
-      label: "changed-tests",
-      limit: 30,
-    });
-  });
-
   it("collects repeatable string flags", () => {
     const parsed = parseFlagArgs(["--match", "alpha", "--match=beta"], { match: [] as string[] }, [
       stringListFlag("--match", "match"),
     ]);
 
     expect(parsed.match).toEqual(["alpha", "beta"]);
+  });
+
+  it("supports split-only, empty, transformed, and last-value-wins string contracts", () => {
+    expect(() =>
+      parseFlagArgs(["--value=inline"], { value: "" }, [
+        stringFlag("--value", "value", { allowInline: false }),
+      ]),
+    ).toThrow("Unknown option: --value=inline");
+    expect(
+      parseFlagArgs(["--value", "", "--value", "SECOND"], { value: "" }, [
+        stringFlag("--value", "value", {
+          allowEmpty: true,
+          repeatable: true,
+          transform: (value) => value.toLowerCase(),
+        }),
+      ]).value,
+    ).toBe("second");
   });
 
   it("rejects duplicate single-value flags", () => {
@@ -58,28 +136,6 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(() =>
       parseFlagArgs(["--json", "--json"], { json: false }, [booleanFlag("--json", "json")]),
     ).toThrow("--json was provided more than once");
-  });
-
-  it("requires custom specs to declare consumed flags", () => {
-    expect(() =>
-      parseFlagArgs(
-        ["--custom"],
-        {},
-        [
-          {
-            consume(argv, index) {
-              if (argv[index] !== "--custom") {
-                return null;
-              }
-              return {
-                nextIndex: index,
-                apply() {},
-              };
-            },
-          },
-        ],
-      ),
-    ).toThrow("parseFlagArgs specs must declare a flag for consumed options");
   });
 
   it("rejects missing string flag values before consuming the next option", () => {
@@ -109,17 +165,10 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
       parseFlagArgs(["--limit"], { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]),
     ).toThrow("--limit requires a value");
     expect(() =>
-      parseFlagArgs(["--limit", "--factor", "1.5"], { factor: 1, limit: 10 }, [
+      parseFlagArgs(["--limit", "--factor", "1.5"], { limit: 10 }, [
         intFlag("--limit", "limit", { min: 1 }),
-        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
       ]),
     ).toThrow("--limit requires a value");
-    expect(() =>
-      parseFlagArgs(["--factor", "--limit", "2"], { factor: 1, limit: 10 }, [
-        intFlag("--limit", "limit", { min: 1 }),
-        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
-      ]),
-    ).toThrow("--factor requires a value");
     expect(() =>
       parseFlagArgs(["--limit", "20files"], { limit: 10 }, [
         intFlag("--limit", "limit", { min: 1 }),
@@ -128,11 +177,6 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(() =>
       parseFlagArgs(["--limit", "0"], { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]),
     ).toThrow("--limit must be at least 1");
-    expect(() =>
-      parseFlagArgs(["--factor", "1e3"], { factor: 1 }, [
-        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
-      ]),
-    ).toThrow("--factor must be a number");
   });
 
   it("can preserve the option separator for callers that need to handle it", () => {

@@ -1,9 +1,8 @@
-// OC Path module implements parse behavior.
 import { LineCounter, parseDocument } from "yaml";
 import type { Diagnostic } from "../ast.js";
 import type { YamlAst } from "./ast.js";
 
-export interface YamlParseResult {
+interface YamlParseResult {
   readonly ast: YamlAst;
   readonly diagnostics: readonly Diagnostic[];
 }

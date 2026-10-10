@@ -3,9 +3,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it } from "vitest";
 import {
+  buildDiscordConversationRouteContext,
   buildDiscordRoutePeer,
   resolveDiscordBoundConversationRoute,
-  resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
   shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
@@ -16,7 +16,7 @@ function buildWorkerBindingConfig(peer: {
 }): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "worker" }],
+      entries: { worker: {} },
     },
     bindings: [
       {
@@ -32,42 +32,33 @@ function buildWorkerBindingConfig(peer: {
 }
 
 describe("discord route resolution helpers", () => {
-  it("builds a direct peer from DM metadata", () => {
+  it("keeps a group DM keyed by its conversation instead of one sender", () => {
     expect(
       buildDiscordRoutePeer({
         isDirectMessage: true,
-        isGroupDm: false,
+        isGroupDm: true,
         directUserId: "user-1",
-        conversationId: "channel-1",
+        conversationId: "group-dm-1",
       }),
-    ).toEqual({
-      kind: "direct",
-      id: "user-1",
-    });
+    ).toEqual({ kind: "group", id: "group-dm-1" });
   });
 
-  it("resolves bound session keys on top of the routed session", () => {
-    const route: ResolvedAgentRoute = {
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:main:discord:channel:c1",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    };
-
+  it("records the direct routing peer separately from the native DM channel", () => {
     expect(
-      resolveDiscordEffectiveRoute({
-        route,
-        boundSessionKey: "agent:worker:discord:channel:c1",
-        matchedBy: "binding.channel",
+      buildDiscordConversationRouteContext({
+        isDirectMessage: true,
+        isGroupDm: false,
+        directUserId: "user-1",
+        conversationId: "dm-1",
+        isThread: false,
       }),
     ).toEqual({
-      ...route,
-      agentId: "worker",
-      sessionKey: "agent:worker:discord:channel:c1",
-      matchedBy: "binding.channel",
+      ConversationRouteContextObserved: true,
+      ConversationRoutePeerId: "user-1",
+      NativeChannelId: "dm-1",
+      InboundAccessAuthorized: true,
+      MessageThreadId: undefined,
+      ThreadParentId: undefined,
     });
   });
 
@@ -100,28 +91,6 @@ describe("discord route resolution helpers", () => {
     ).toEqual(configuredRoute.route);
   });
 
-  it("resolves the same route shape as the inline Discord route inputs", () => {
-    const cfg = buildWorkerBindingConfig({ kind: "channel", id: "c1" });
-
-    expect(
-      resolveDiscordConversationRoute({
-        cfg,
-        accountId: "default",
-        guildId: "g1",
-        memberRoleIds: [],
-        peer: { kind: "channel", id: "c1" },
-      }),
-    ).toEqual({
-      agentId: "worker",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:worker:discord:channel:c1",
-      mainSessionKey: "agent:worker:main",
-      lastRoutePolicy: "session",
-      matchedBy: "binding.peer",
-    });
-  });
-
   it("composes route building with effective-route overrides", () => {
     const cfg = buildWorkerBindingConfig({ kind: "direct", id: "user-1" });
 
@@ -140,6 +109,8 @@ describe("discord route resolution helpers", () => {
       agentId: "worker",
       channel: "discord",
       accountId: "default",
+      dmScope: "main",
+      groupScope: "per-group",
       sessionKey: "agent:worker:discord:direct:user-1",
       mainSessionKey: "agent:worker:main",
       lastRoutePolicy: "session",

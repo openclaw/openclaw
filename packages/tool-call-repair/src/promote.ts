@@ -1,4 +1,8 @@
-// Tool Call Repair module implements promote behavior.
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */
@@ -21,11 +25,50 @@ export type PlainTextToolCallPromotionOptions = {
   isRetainableNonTextBlock?: (block: Record<string, unknown>) => boolean;
   message: unknown;
   requireAssistantRole?: boolean;
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   resolveToolName?: ToolCallRepairNameResolver;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+export type PlainTextToolCallMessageProjection = {
+  message: Record<string, unknown>;
+  sourceToProjectedContentIndex: ReadonlyMap<number, number>;
+};
+
+/** Builds the shared assistant-message shape for a repaired text tool call. */
+export function createPromotedPlainTextToolCallBlock(
+  block: PlainTextToolCallBlock,
+  name: string,
+): Record<string, unknown> {
+  return {
+    type: "toolCall",
+    id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
+    name,
+    arguments: block.arguments,
+    partialArgs: JSON.stringify(block.arguments),
+  };
+}
+
+/** Emits the complete provider-neutral lifecycle for promoted tool-call blocks. */
+export function createPromotedPlainTextToolCallEvents(
+  message: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const content = Array.isArray(message.content) ? message.content : [];
+  return content.flatMap((block, contentIndex) => {
+    const toolCall = asRecord(block);
+    if (toolCall?.type !== "toolCall") {
+      return [];
+    }
+    return [
+      { type: "toolcall_start", contentIndex, partial: message },
+      {
+        type: "toolcall_delta",
+        contentIndex,
+        delta: typeof toolCall.partialArgs === "string" ? toolCall.partialArgs : "{}",
+        partial: message,
+      },
+      { type: "toolcall_end", contentIndex, toolCall, partial: message },
+    ];
+  });
 }
 
 function resolveExactToolName(rawName: string, allowedToolNames: Set<string>): string | null {
@@ -35,9 +78,18 @@ function resolveExactToolName(rawName: string, allowedToolNames: Set<string>): s
 function createPromotedToolCallBlocks(
   text: string,
   options: PlainTextToolCallPromotionOptions,
+  lineBreakOffsets?: ReadonlySet<number>,
 ): Record<string, unknown>[] | undefined {
-  const parsedBlocks = parseStandalonePlainTextToolCallBlocks(text);
+  const parsedBlocks = parseStandalonePlainTextToolCallBlocks(
+    text,
+    undefined,
+    lineBreakOffsets ? { lineBreakOffsets } : undefined,
+  );
   if (!parsedBlocks) {
+    return undefined;
+  }
+  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
+  if (parsedBlocks.some((block) => isOffsetInProtectedRanges(block.start, protectedRanges))) {
     return undefined;
   }
 
@@ -53,149 +105,33 @@ function createPromotedToolCallBlocks(
   return toolCalls;
 }
 
-function createPromotedToolCallBlocksFromTextParts(
-  textParts: readonly string[],
+/** Promotes text calls and maps source blocks retained in the projected message. */
+export function projectStandalonePlainTextToolCallMessage(
   options: PlainTextToolCallPromotionOptions,
-): Record<string, unknown>[] | undefined {
-  const exactText = textParts.join("").trim();
-  if (!exactText) {
-    return [];
-  }
-  for (const text of createTextPartPromotionCandidates(textParts, exactText)) {
-    const toolCalls = createPromotedToolCallBlocks(text, options);
-    if (toolCalls) {
-      return toolCalls;
-    }
-  }
-  return undefined;
-}
-
-function createTextPartPromotionCandidates(
-  textParts: readonly string[],
-  exactText: string,
-): string[] {
-  // Some providers split structural markers across text parts; try repaired and exact joins
-  // before falling back to newline joins so valid payloads promote without changing content.
-  const repairedText = joinTextPartsWithStructuralLineBreaks(textParts).trim();
-  const newlineJoinedText = textParts.join("\n").trim();
-  return [...new Set([repairedText, exactText, newlineJoinedText].filter(Boolean))];
-}
-
-function joinTextPartsWithStructuralLineBreaks(textParts: readonly string[]): string {
-  let text = "";
-  for (const part of textParts) {
-    if (text && shouldInsertStructuralLineBreak(text, part)) {
-      text += "\n";
-    }
-    text += part;
-  }
-  return text;
-}
-
-function shouldInsertStructuralLineBreak(left: string, right: string): boolean {
-  if (!left || !right || /[\r\n]$/u.test(left) || /^\s/u.test(right)) {
-    return false;
-  }
-  const trimmedLeft = left.trimEnd();
-  return (
-    /<parameter=[A-Za-z0-9_.:-]{1,120}>$/iu.test(trimmedLeft) ||
-    /^\[[A-Za-z0-9_-]+\]$/u.test(trimmedLeft)
-  );
-}
-
-function shouldPromoteMessage(options: PlainTextToolCallPromotionOptions): boolean {
-  if (options.allowedToolNames.size === 0) {
-    return false;
-  }
+): PlainTextToolCallMessageProjection | undefined {
   const messageRecord = asRecord(options.message);
-  if (!messageRecord) {
-    return false;
-  }
-  if (options.requireAssistantRole && messageRecord.role !== "assistant") {
-    return false;
-  }
-  return !options.allowedStopReasons || options.allowedStopReasons.has(messageRecord.stopReason);
-}
-
-/** Extracts candidate standalone tool-call text while rejecting mixed unsafe content. */
-export function extractStandalonePlainTextToolCallText(params: {
-  allowOtherNonTextBlocks?: boolean;
-  allowedStopReasons?: ReadonlySet<unknown>;
-  isRetainableNonTextBlock?: (block: Record<string, unknown>) => boolean;
-  message: unknown;
-  requireAssistantRole?: boolean;
-}): string | undefined {
-  const record = asRecord(params.message);
-  if (!record) {
-    return undefined;
-  }
-  if (params.requireAssistantRole && record.role !== "assistant") {
-    return undefined;
-  }
-  if (params.allowedStopReasons && !params.allowedStopReasons.has(record.stopReason)) {
-    return undefined;
-  }
-
-  const content = record.content;
-  if (typeof content === "string") {
-    const text = content.trim();
-    return text || undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-
-  const textParts: string[] = [];
-  for (const block of content) {
-    const blockRecord = asRecord(block);
-    if (!blockRecord) {
-      return undefined;
-    }
-    if (blockRecord.type === "text") {
-      if (typeof blockRecord.text !== "string") {
-        return undefined;
-      }
-      if (blockRecord.text.trim()) {
-        textParts.push(blockRecord.text);
-      }
-      continue;
-    }
-    if (params.isRetainableNonTextBlock?.(blockRecord) || params.allowOtherNonTextBlocks) {
-      continue;
-    }
-    return undefined;
-  }
-
-  const text = textParts.join("").trim();
-  return text || undefined;
-}
-
-/** Promotes standalone plain-text tool-call messages into provider-native content blocks. */
-export function promoteStandalonePlainTextToolCallMessage(
-  options: PlainTextToolCallPromotionOptions,
-): Record<string, unknown> | undefined {
-  if (!shouldPromoteMessage(options)) {
-    return undefined;
-  }
-  const messageRecord = asRecord(options.message);
-  if (!messageRecord) {
+  if (
+    !messageRecord ||
+    options.allowedToolNames.size === 0 ||
+    (options.requireAssistantRole && messageRecord.role !== "assistant") ||
+    (options.allowedStopReasons && !options.allowedStopReasons.has(messageRecord.stopReason))
+  ) {
     return undefined;
   }
 
   const originalContent = messageRecord.content;
   if (typeof originalContent === "string") {
-    const text = originalContent.trim();
-    if (!text) {
-      return undefined;
-    }
-    const toolCalls = createPromotedToolCallBlocks(text, options);
+    const toolCalls = createPromotedToolCallBlocks(originalContent, options);
     if (!toolCalls) {
       return undefined;
     }
     return {
-      ...messageRecord,
-      content: toolCalls,
-      stopReason: "toolUse",
+      message: {
+        ...messageRecord,
+        content: toolCalls,
+        stopReason: "toolUse",
+      },
+      sourceToProjectedContentIndex: new Map(),
     };
   }
 
@@ -204,25 +140,32 @@ export function promoteStandalonePlainTextToolCallMessage(
   }
 
   const content: Array<Record<string, unknown>> = [];
+  const sourceToProjectedContentIndex = new Map<number, number>();
   let promotedTextBlock = false;
   let textParts: string[] = [];
-  const flushTextParts = (): boolean | undefined => {
-    if (textParts.length === 0) {
-      return false;
-    }
-    const toolCalls = createPromotedToolCallBlocksFromTextParts(textParts, options);
+  const flushTextParts = (): boolean => {
+    const text = textParts.join("");
+    let offset = 0;
+    const lineBreakOffsets = new Set(
+      textParts.slice(0, -1).map((part) => {
+        offset += part.length;
+        return offset;
+      }),
+    );
+    lineBreakOffsets.delete(text.length);
+    const toolCalls = text.trim()
+      ? createPromotedToolCallBlocks(text, options, lineBreakOffsets)
+      : [];
     textParts = [];
-    if (toolCalls?.length === 0) {
-      return false;
-    }
     if (!toolCalls) {
-      return undefined;
+      return false;
     }
     content.push(...toolCalls);
+    promotedTextBlock ||= toolCalls.length > 0;
     return true;
   };
 
-  for (const block of originalContent) {
+  for (const [sourceIndex, block] of originalContent.entries()) {
     const blockRecord = asRecord(block);
     if (!blockRecord) {
       return undefined;
@@ -231,35 +174,30 @@ export function promoteStandalonePlainTextToolCallMessage(
       if (typeof blockRecord.text !== "string") {
         return undefined;
       }
-      if (blockRecord.text.trim()) {
-        textParts.push(blockRecord.text);
-      }
+      textParts.push(blockRecord.text);
       continue;
     }
-    const promotedTextRun = flushTextParts();
-    if (promotedTextRun === undefined) {
+    if (!flushTextParts()) {
       return undefined;
     }
-    promotedTextBlock ||= promotedTextRun;
     if (options.isRetainableNonTextBlock?.(blockRecord)) {
+      sourceToProjectedContentIndex.set(sourceIndex, content.length);
       content.push(blockRecord);
       continue;
     }
     return undefined;
   }
 
-  const promotedTrailingTextRun = flushTextParts();
-  if (promotedTrailingTextRun === undefined) {
-    return undefined;
-  }
-  promotedTextBlock ||= promotedTrailingTextRun;
-  if (!promotedTextBlock) {
+  if (!flushTextParts() || !promotedTextBlock) {
     return undefined;
   }
 
   return {
-    ...messageRecord,
-    content,
-    stopReason: "toolUse",
+    message: {
+      ...messageRecord,
+      content,
+      stopReason: "toolUse",
+    },
+    sourceToProjectedContentIndex,
   };
 }

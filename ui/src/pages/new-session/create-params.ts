@@ -1,0 +1,128 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+
+const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * One closed visibility mode instead of independent incognito/draft booleans:
+ * an incognito session is never persisted, so "incognito draft" is unrepresentable.
+ */
+export type NewSessionVisibility = "normal" | "draft" | "incognito";
+export type DraftSessionCreateOverrides = Partial<
+  Pick<SessionCreateParams, "message" | "attachments" | "displayName">
+> & { mentions?: readonly HumanMention[]; visibility?: NewSessionVisibility };
+export type DraftSessionCreateSelection = Partial<
+  Pick<
+    SessionCreateParams,
+    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
+  >
+> & {
+  message: string;
+  mentions?: readonly HumanMention[];
+  visibility: NewSessionVisibility;
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+};
+
+export function isWorktreeNameValid(value: string): boolean {
+  const name = value.trim();
+  return !name || WORKTREE_NAME_PATTERN.test(name);
+}
+
+export function buildDraftSessionCreateParams(draft: {
+  agentId: string;
+  message: string;
+  mentions?: readonly HumanMention[];
+  displayName?: string;
+  deferInitialTurn?: boolean;
+  model?: string;
+  agentRuntime?: string;
+  contextWindow?: string;
+  thinkingLevel?: string;
+  fastMode?: SessionCreateParams["fastMode"];
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+  permissionMode?: SessionCreateParams["permissionMode"];
+  visibility?: NewSessionVisibility;
+  attachments?: SessionCreateParams["attachments"];
+  projectId?: string;
+  projectGitUrl?: string;
+  repository?: SessionCreateParams["repository"];
+  worktree: boolean;
+  worktreeSource?: SessionCreateParams["worktreeSource"];
+  baseRef?: string;
+  worktreeName?: string;
+  cwd?: string;
+  workspace?: string;
+  catalogId?: string;
+  category?: string;
+}): SessionCreateParams {
+  const displayName = normalizeOptionalString(draft.displayName);
+  const baseRef = normalizeOptionalString(draft.baseRef);
+  const worktreeName = normalizeOptionalString(draft.worktreeName);
+  const cwd = normalizeOptionalString(draft.cwd);
+  const workspace = normalizeOptionalString(draft.workspace);
+  const catalogId = normalizeOptionalString(draft.catalogId);
+  const category = normalizeOptionalString(draft.category);
+  const model = normalizeOptionalString(draft.model);
+  const agentRuntime = normalizeOptionalString(draft.agentRuntime);
+  const contextWindow = normalizeOptionalString(draft.contextWindow);
+  const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
+  const message = draft.deferInitialTurn ? "" : draft.message;
+  const titleSource =
+    draft.deferInitialTurn && draft.visibility !== "incognito"
+      ? truncateUtf16Safe(draft.message.trim(), 1_000)
+      : undefined;
+  const emptyWorkspace = draft.worktreeSource === "empty";
+  const repository = emptyWorkspace ? undefined : draft.repository;
+  const projectId =
+    emptyWorkspace || repository ? undefined : normalizeOptionalString(draft.projectId);
+  const projectGitUrl =
+    !emptyWorkspace &&
+    !repository &&
+    !projectId &&
+    (message.trim() || (!draft.deferInitialTurn && draft.attachments?.length))
+      ? normalizeOptionalString(draft.projectGitUrl)
+      : undefined;
+  const customFolder =
+    !emptyWorkspace && !repository && !projectId && !projectGitUrl && cwd && cwd !== workspace
+      ? cwd
+      : undefined;
+  return {
+    agentId: normalizeAgentId(draft.agentId),
+    message,
+    ...(!draft.deferInitialTurn && draft.mentions?.length
+      ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
+      : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(titleSource ? { titleSource } : {}),
+    ...(draft.visibility === "incognito" ? { incognito: true } : {}),
+    ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
+    ...(!draft.deferInitialTurn && draft.attachments?.length
+      ? { attachments: draft.attachments }
+      : {}),
+    ...(catalogId ? { catalogId } : {}),
+    ...(category ? { category } : {}),
+    ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && model && agentRuntime ? { agentRuntime } : {}),
+    ...(!catalogId && contextWindow ? { contextWindow } : {}),
+    ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
+    ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
+    ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(projectGitUrl ? { projectGitUrl } : {}),
+    ...(repository ? { repository: { ...repository } } : {}),
+    ...(customFolder ? { cwd: customFolder } : {}),
+    ...(emptyWorkspace ? { worktree: true, worktreeSource: "empty" as const } : {}),
+    ...(draft.worktree && !repository && !emptyWorkspace
+      ? {
+          worktree: true,
+          // Passing the base explicitly also skips the create-time origin fetch.
+          ...(baseRef ? { worktreeBaseRef: baseRef } : {}),
+          ...(worktreeName ? { worktreeName } : {}),
+        }
+      : {}),
+  };
+}

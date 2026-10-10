@@ -1,51 +1,20 @@
-// Memory Wiki plugin module implements prompt section behavior.
-import fs from "node:fs";
-import path from "node:path";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  loadMemoryWikiCompiledCache,
+  type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiCompiledDigestClaim,
+  type MemoryWikiCompiledDigestPage,
+} from "./compiled-cache.js";
+import type { MemoryWikiConfigResolver, ResolvedMemoryWikiConfig } from "./config.js";
 
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const DIGEST_MAX_PAGES = 4;
 const DIGEST_MAX_CLAIMS_PER_PAGE = 2;
+const DIGEST_MAX_PAGE_TITLE_CHARS = 160;
+const DIGEST_MAX_CLAIM_CHARS = 700;
+const DIGEST_MAX_PROMPT_CHARS = 2_800;
 
-type PromptDigestClaim = {
-  text: string;
-  status?: string;
-  confidence?: number;
-  freshnessLevel?: string;
-};
-
-type PromptDigestPage = {
-  title: string;
-  kind: string;
-  claimCount: number;
-  questions?: string[];
-  contradictions?: string[];
-  topClaims?: PromptDigestClaim[];
-};
-
-type PromptDigest = {
-  pageCounts?: Record<string, number>;
-  claimCount?: number;
-  contradictionClusters?: Array<unknown>;
-  pages?: PromptDigestPage[];
-};
-
-function tryReadPromptDigest(config: ResolvedMemoryWikiConfig): PromptDigest | null {
-  const digestPath = path.join(config.vault.path, AGENT_DIGEST_PATH);
-  try {
-    const raw = fs.readFileSync(digestPath, "utf8");
-    const parsed = JSON.parse(raw) as PromptDigest;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function rankPromptDigestPage(page: PromptDigestPage): number {
+function rankPromptDigestPage(page: MemoryWikiCompiledDigestPage): number {
   return (
     (page.contradictions?.length ?? 0) * 6 +
     (page.questions?.length ?? 0) * 4 +
@@ -55,20 +24,13 @@ function rankPromptDigestPage(page: PromptDigestPage): number {
 }
 
 function rankPromptClaimFreshness(level?: string): number {
-  switch (level) {
-    case "fresh":
-      return 3;
-    case "aging":
-      return 2;
-    case "stale":
-      return 1;
-    default:
-      return 0;
-  }
+  return ["stale", "aging", "fresh"].indexOf(level ?? "") + 1;
 }
 
-function sortPromptClaims(claims: PromptDigestClaim[]): PromptDigestClaim[] {
-  return [...claims].toSorted((left, right) => {
+function sortPromptClaims(
+  claims: MemoryWikiCompiledDigestClaim[],
+): MemoryWikiCompiledDigestClaim[] {
+  return claims.toSorted((left, right) => {
     const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
     const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
     if (leftConfidence !== rightConfidence) {
@@ -83,7 +45,7 @@ function sortPromptClaims(claims: PromptDigestClaim[]): PromptDigestClaim[] {
   });
 }
 
-function formatPromptClaim(claim: PromptDigestClaim): string {
+function formatPromptClaim(claim: MemoryWikiCompiledDigestClaim): string {
   const qualifiers = [
     claim.status?.trim() ? `status ${claim.status.trim()}` : null,
     typeof claim.confidence === "number" ? `confidence ${claim.confidence.toFixed(2)}` : null,
@@ -95,16 +57,14 @@ function formatPromptClaim(claim: PromptDigestClaim): string {
   return `${claim.text} (${qualifiers.join(", ")})`;
 }
 
-function buildDigestPromptSection(config: ResolvedMemoryWikiConfig): string[] {
-  if (!config.context.includeCompiledDigestPrompt) {
-    return [];
-  }
-  const digest = tryReadPromptDigest(config);
+function buildDigestPromptSection(
+  digest: MemoryWikiCompiledCacheSnapshot["digest"] | undefined,
+): string[] {
   if (!digest?.pages?.length) {
     return [];
   }
 
-  const selectedPages = [...digest.pages]
+  const selectedPages = digest.pages
     .filter(
       (page) =>
         (page.claimCount ?? 0) > 0 ||
@@ -129,9 +89,7 @@ function buildDigestPromptSection(config: ResolvedMemoryWikiConfig): string[] {
     "## Compiled Wiki Snapshot",
     `Compiled wiki currently tracks ${digest.claimCount ?? 0} claims across ${selectedPages.length} high-signal pages.`,
   ];
-  if (Array.isArray(digest.contradictionClusters)) {
-    lines.push(`Contradiction clusters: ${digest.contradictionClusters.length}.`);
-  }
+  lines.push(`Contradiction clusters: ${digest.contradictionCount}.`);
   for (const page of selectedPages) {
     const details = [
       page.kind,
@@ -141,88 +99,72 @@ function buildDigestPromptSection(config: ResolvedMemoryWikiConfig): string[] {
         ? `${page.contradictions?.length} contradiction notes`
         : null,
     ].filter(Boolean);
-    lines.push(`- ${page.title}: ${details.join(", ")}`);
+    lines.push(
+      `- ${truncateUtf16Safe(page.title, DIGEST_MAX_PAGE_TITLE_CHARS)}: ${details.join(", ")}`,
+    );
     for (const claim of sortPromptClaims(page.topClaims ?? []).slice(
       0,
       DIGEST_MAX_CLAIMS_PER_PAGE,
     )) {
-      lines.push(`  - ${formatPromptClaim(claim)}`);
+      lines.push(`  - ${truncateUtf16Safe(formatPromptClaim(claim), DIGEST_MAX_CLAIM_CHARS)}`);
     }
   }
   lines.push("");
-  return lines;
+  return truncateUtf16Safe(lines.join("\n"), DIGEST_MAX_PROMPT_CHARS).split("\n");
 }
 
 function buildWikiToolGuidance(availableTools: Set<string>): string[] {
-  const hasMemorySearch = availableTools.has("memory_search");
-  const hasMemoryGet = availableTools.has("memory_get");
   const hasWikiSearch = availableTools.has("wiki_search");
   const hasWikiGet = availableTools.has("wiki_get");
-  const hasWikiApply = availableTools.has("wiki_apply");
-  const hasWikiLint = availableTools.has("wiki_lint");
-
-  if (
-    !hasMemorySearch &&
-    !hasMemoryGet &&
-    !hasWikiSearch &&
-    !hasWikiGet &&
-    !hasWikiApply &&
-    !hasWikiLint
-  ) {
-    return [];
-  }
-
-  const lines = [
-    "## Compiled Wiki",
-    "Use the wiki when the answer depends on accumulated project knowledge, prior syntheses, entity pages, or source-backed notes that should survive beyond one conversation.",
-  ];
-
-  if (hasMemorySearch) {
-    lines.push(
-      "Prefer `memory_search` with `corpus=all` for one recall pass across durable memory and the compiled wiki when both are relevant.",
-    );
-  }
-  if (hasMemoryGet) {
-    lines.push(
-      "Use `memory_get` with `corpus=wiki` or `corpus=all` when you already know the page path and want a small excerpt without leaving the shared memory tool flow.",
-    );
-  }
-
-  if (hasWikiSearch && hasWikiGet) {
-    lines.push(
-      "Workflow: `wiki_search` first, then `wiki_get` for the exact page or imported memory file you need. Use this when you want wiki-specific ranking or provenance details instead of the broader shared memory flow.",
-    );
-  } else if (hasWikiSearch) {
-    lines.push(
-      "Use `wiki_search` before answering from stored knowledge when you want wiki-specific ranking or provenance details.",
-    );
-  } else if (hasWikiGet) {
-    lines.push(
-      "Use `wiki_get` to inspect specific wiki pages or imported memory files by path/id.",
-    );
-  }
-
-  if (hasWikiApply) {
-    lines.push(
-      "Use `wiki_apply` for narrow synthesis filing and metadata repair instead of rewriting managed markdown blocks by hand.",
-    );
-  }
-  if (hasWikiLint) {
-    lines.push("After meaningful wiki updates, run `wiki_lint` before trusting the vault.");
-  }
-  lines.push("");
-  return lines;
+  const guidance = [
+    availableTools.has("memory_search")
+      ? "Prefer `memory_search` with `corpus=all` for one recall pass across durable memory and the compiled wiki when both are relevant."
+      : "",
+    availableTools.has("memory_get")
+      ? "Use `memory_get` with `corpus=wiki` or `corpus=all` when you already know the page path and want a small excerpt without leaving the shared memory tool flow."
+      : "",
+    hasWikiSearch && hasWikiGet
+      ? "Workflow: `wiki_search` first, then `wiki_get` for the exact page or imported memory file you need. Use this when you want wiki-specific ranking or provenance details instead of the broader shared memory flow."
+      : hasWikiSearch
+        ? "Use `wiki_search` before answering from stored knowledge when you want wiki-specific ranking or provenance details."
+        : hasWikiGet
+          ? "Use `wiki_get` to inspect specific wiki pages or imported memory files by path/id."
+          : "",
+    availableTools.has("wiki_apply")
+      ? "Use `wiki_apply` for narrow synthesis filing and metadata repair instead of rewriting managed markdown blocks by hand."
+      : "",
+    availableTools.has("wiki_lint")
+      ? "After meaningful wiki updates, run `wiki_lint` before trusting the vault."
+      : "",
+  ].filter(Boolean);
+  return guidance.length > 0
+    ? [
+        "## Compiled Wiki",
+        "Use the wiki when the answer depends on accumulated project knowledge, prior syntheses, entity pages, or source-backed notes that should survive beyond one conversation.",
+        ...guidance,
+        "",
+      ]
+    : [];
 }
 
-export function createWikiPromptSectionBuilder(
-  config: ResolvedMemoryWikiConfig,
-): MemoryPromptSectionBuilder {
-  return ({ availableTools }) => {
-    const digestLines = buildDigestPromptSection(config);
-    const toolGuidance = buildWikiToolGuidance(availableTools);
-    if (digestLines.length === 0 && toolGuidance.length === 0) {
+export function createWikiPromptSectionBuilder(): MemoryPromptSectionBuilder {
+  return ({ availableTools }) => buildWikiToolGuidance(availableTools);
+}
+
+export function createWikiPromptSectionPreparer(params: {
+  config: ResolvedMemoryWikiConfig;
+  resolveConfig: MemoryWikiConfigResolver;
+}) {
+  return async ({ agentId }: Parameters<MemoryPromptSectionBuilder>[0]) => {
+    // Context-free preparation must not choose or disclose another agent's vault.
+    if (params.config.vault.scope === "agent" && !agentId) {
       return [];
     }
-    return [...toolGuidance, ...digestLines];
+    const config = params.resolveConfig(agentId);
+    if (!config.context.includeCompiledDigestPrompt) {
+      return [];
+    }
+    const snapshot = await loadMemoryWikiCompiledCache(config);
+    return buildDigestPromptSection(snapshot?.digest);
   };
 }

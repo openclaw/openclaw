@@ -1,36 +1,25 @@
+import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 // Shared exec approval analysis types and Windows-only shell enforcement helpers.
 import { rebuildWindowsShellCommandFromSource, windowsEscapeArg } from "./windows-shell-command.js";
-import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 
 export { analyzeArgvCommand } from "./exec-argv-analysis.js";
 
 export {
   matchAllowlist,
-  parseExecArgvToken,
-  resolveAllowlistCandidatePath,
-  resolveApprovalAuditCandidatePath,
+  buildCwdBoundHashedArgPattern,
   resolveApprovalAuditTrustPath,
-  resolveCommandResolution,
   resolveCommandResolutionFromArgv,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
   resolveExecutionTargetTrustPath,
-  resolvePolicyAllowlistCandidatePath,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
   resolvePolicyTargetTrustPath,
   resolveExecutableTrustPath,
-  type CommandResolution,
   type ExecutableResolution,
-  type ExecArgvToken,
 } from "./exec-command-resolution.js";
 
-export {
-  analyzeWindowsShellCommand,
-  isWindowsPlatform,
-  tokenizeWindowsSegment,
-  windowsEscapeArg,
-} from "./windows-shell-command.js";
+export { isWindowsPlatform } from "./windows-shell-command.js";
 export type {
   ExecCommandAnalysis,
   ExecCommandSegment,

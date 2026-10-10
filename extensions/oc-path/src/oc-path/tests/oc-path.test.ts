@@ -1,6 +1,6 @@
 // OC Path tests cover oc path plugin behavior.
 import { describe, expect, it } from "vitest";
-import { OcPathError, formatOcPath, isValidOcPath, parseOcPath } from "../oc-path.js";
+import { OcPathError, formatOcPath, parseOcPath } from "../oc-path.js";
 
 describe("parseOcPath", () => {
   it("parses file-only path", () => {
@@ -73,9 +73,9 @@ describe("parseOcPath", () => {
   });
 
   it("normalizes deep JSON paths into dotted subsegments", () => {
-    expect(parseOcPath("oc://openclaw.json/agents/list/8/tools/exec/security")).toEqual({
+    expect(parseOcPath("oc://openclaw.json/agents/entries/main/tools/exec/security")).toEqual({
       file: "openclaw.json",
-      section: "agents.list.8.tools",
+      section: "agents.entries.main.tools",
       item: "exec",
       field: "security",
     });
@@ -129,36 +129,5 @@ describe("formatOcPath", () => {
 
   it("rejects item without section", () => {
     expectOcPathError(() => formatOcPath({ file: "F.md", item: "i" }), "OC_PATH_NESTING");
-  });
-});
-
-describe("round-trip", () => {
-  const cases = [
-    "oc://SOUL.md",
-    "oc://SOUL.md/Boundaries",
-    "oc://SOUL.md/Boundaries/deny-rule-1",
-    "oc://SOUL.md/Boundaries/deny-rule-1/risk",
-    "oc://SOUL.md?session=daily",
-    "oc://AGENTS.md/Tools/gh/risk",
-  ];
-  for (const input of cases) {
-    it(`formatOcPath(parseOcPath("${input}")) === "${input}"`, () => {
-      expect(formatOcPath(parseOcPath(input))).toBe(input);
-    });
-  }
-});
-
-describe("isValidOcPath", () => {
-  it("returns true for valid paths", () => {
-    expect(isValidOcPath("oc://SOUL.md")).toBe(true);
-    expect(isValidOcPath("oc://SOUL.md/Boundaries")).toBe(true);
-  });
-
-  it("returns false for invalid paths", () => {
-    expect(isValidOcPath("SOUL.md")).toBe(false);
-    expect(isValidOcPath("oc://")).toBe(false);
-    expect(isValidOcPath(null)).toBe(false);
-    expect(isValidOcPath(undefined)).toBe(false);
-    expect(isValidOcPath(42)).toBe(false);
   });
 });

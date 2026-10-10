@@ -1,0 +1,50 @@
+import * as fs from "node:fs";
+import { createRequire } from "node:module";
+import * as path from "node:path";
+
+/**
+ * Resolve the bin/ directory inside the installed @microsoft/mxc-sdk package.
+ * Returns the arch-specific subdirectory (x64 or arm64) if available.
+ */
+function resolveSdkBinDir(): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    const sdkPkgPath = require.resolve("@microsoft/mxc-sdk/package.json");
+    const sdkRoot = path.dirname(sdkPkgPath);
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    const archBin = path.join(sdkRoot, "bin", arch);
+    if (fs.existsSync(archBin)) {
+      return archBin;
+    }
+    const flatBin = path.join(sdkRoot, "bin");
+    if (fs.existsSync(flatBin)) {
+      return flatBin;
+    }
+  } catch {
+    // SDK not installed; skip.
+  }
+  return null;
+}
+
+export function resolveMxcBinaryPath(configOverride?: string): string {
+  if (configOverride) {
+    const resolvedOverride = path.win32.isAbsolute(configOverride)
+      ? configOverride
+      : path.resolve(configOverride);
+    if (!fs.existsSync(resolvedOverride)) {
+      throw new Error(`MXC binary not found at configured path: ${configOverride}`);
+    }
+    return resolvedOverride;
+  }
+
+  const binaryName = "wxc-exec.exe";
+  const sdkBinDir = resolveSdkBinDir();
+  const binaryPath = sdkBinDir ? path.join(sdkBinDir, binaryName) : undefined;
+
+  if (!binaryPath || !fs.existsSync(binaryPath)) {
+    throw new Error(
+      `MXC executor "${binaryName}" not found. Install @microsoft/mxc-sdk or set mxcBinaryPath in config.`,
+    );
+  }
+  return binaryPath;
+}

@@ -1,7 +1,8 @@
 // Windows launcher normalization for npm/bun wrappers that duplicate node.exe in argv.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-/** Remove duplicated Windows node launcher argv entries while preserving normal POSIX argv. */
+const CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
+
 export function normalizeWindowsArgv(
   argv: string[],
   options: {
@@ -17,23 +18,12 @@ export function normalizeWindowsArgv(
     return argv;
   }
 
-  const stripControlChars = (value: string): string => {
-    let out = "";
-    for (let i = 0; i < value.length; i += 1) {
-      const code = value.charCodeAt(i);
-      if (code >= 32 && code !== 127) {
-        out += value[i];
-      }
-    }
-    return out;
-  };
-
-  const normalizeArg = (value: string): string =>
-    stripControlChars(value)
-      .replace(/^['"]+|['"]+$/g, "")
-      .trim();
   const normalizeCandidate = (value: string): string =>
-    normalizeArg(value).replace(/^\\\\\\?\\/, "");
+    value
+      .replace(CONTROL_CHARS, "")
+      .replace(/^['"]+|['"]+$/g, "")
+      .trim()
+      .replace(/^\\\\\\?\\/, "");
   const basename = (value: string): string => value.split(/[\\/]/).pop() ?? value;
 
   const execPath = normalizeCandidate(options.execPath ?? process.execPath);
@@ -49,40 +39,12 @@ export function normalizeWindowsArgv(
     }
     const lower = normalizeLowercaseStringOrEmpty(normalized);
     const base = basename(lower);
-    return (
-      lower === execPathLower ||
-      base === execBase ||
-      lower.endsWith("\\node.exe") ||
-      lower.endsWith("/node.exe") ||
-      base === "node.exe"
-    );
+    return lower === execPathLower || base === execBase || base === "node.exe";
   };
 
-  const argv0IsExecPath = isExecPath(argv[0]);
   const next = [...argv];
-  let removedLauncherPrefix = false;
-  for (const i = 1; i < next.length; ) {
-    if (isExecPath(next[i])) {
-      next.splice(i, 1);
-      removedLauncherPrefix = true;
-      continue;
-    }
-    break;
+  while (isExecPath(next[1])) {
+    next.splice(1, 1);
   }
-  if (next.length < 3 || (!argv0IsExecPath && !removedLauncherPrefix)) {
-    return next;
-  }
-  const cleaned = [...next];
-  for (const i = 2; i < cleaned.length; ) {
-    const arg = cleaned[i];
-    if (!arg || arg.startsWith("-")) {
-      break;
-    }
-    if (isExecPath(arg)) {
-      cleaned.splice(i, 1);
-      continue;
-    }
-    break;
-  }
-  return cleaned;
+  return next;
 }

@@ -1,5 +1,5 @@
-// Migrate Claude plugin module implements plan behavior.
 import { createMigrationItem, summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
@@ -9,7 +9,6 @@ import { buildConfigItems } from "./config.js";
 import { buildMemoryItems } from "./memory.js";
 import { buildSkillItems } from "./skills.js";
 import { discoverClaudeSource, hasClaudeSource } from "./source.js";
-import { resolveTargets } from "./targets.js";
 
 function addArchiveItem(
   items: MigrationItem[],
@@ -39,40 +38,53 @@ export async function buildClaudePlan(ctx: MigrationProviderContext): Promise<Mi
       `Claude state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
-  const targets = resolveTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   const items: MigrationItem[] = [];
-  items.push(...(await buildMemoryItems({ source, targets, overwrite: ctx.overwrite })));
-  items.push(...(await buildConfigItems({ ctx, source })));
-  items.push(...(await buildSkillItems({ source, targets, overwrite: ctx.overwrite })));
-  for (const archivePath of source.archivePaths) {
+  const memoryOnly =
+    ctx.itemKinds !== undefined &&
+    ctx.itemKinds.length > 0 &&
+    ctx.itemKinds.every((kind) => kind === "memory");
+  items.push(
+    ...(await buildMemoryItems({
+      source,
+      targets,
+      overwrite: ctx.overwrite,
+      includeInstructions: !memoryOnly,
+    })),
+  );
+  if (!memoryOnly) {
+    items.push(...(await buildConfigItems({ ctx, source })));
+    items.push(...(await buildSkillItems({ source, targets, overwrite: ctx.overwrite })));
+    for (const archivePath of source.archivePaths) {
+      addArchiveItem(items, {
+        id: archivePath.id,
+        source: archivePath.path,
+        relativePath: archivePath.relativePath,
+      });
+    }
     addArchiveItem(items, {
-      id: archivePath.id,
-      source: archivePath.path,
-      relativePath: archivePath.relativePath,
+      id: "archive:CLAUDE.local.md",
+      source: source.projectLocalMemoryPath,
+      relativePath: "CLAUDE.local.md",
+      message:
+        "Claude local project memory is personal machine-local state. It is archived for manual review.",
+    });
+    addArchiveItem(items, {
+      id: "archive:.claude/rules",
+      source: source.projectRulesDir,
+      relativePath: ".claude/rules",
+    });
+    addArchiveItem(items, {
+      id: "archive:user-agents",
+      source: source.userAgentsDir,
+      relativePath: "agents/user",
+    });
+    addArchiveItem(items, {
+      id: "archive:project-agents",
+      source: source.projectAgentsDir,
+      relativePath: "agents/project",
     });
   }
-  addArchiveItem(items, {
-    id: "archive:CLAUDE.local.md",
-    source: source.projectLocalMemoryPath,
-    relativePath: "CLAUDE.local.md",
-    message:
-      "Claude local project memory is personal machine-local state. It is archived for manual review.",
-  });
-  addArchiveItem(items, {
-    id: "archive:.claude/rules",
-    source: source.projectRulesDir,
-    relativePath: ".claude/rules",
-  });
-  addArchiveItem(items, {
-    id: "archive:user-agents",
-    source: source.userAgentsDir,
-    relativePath: "agents/user",
-  });
-  addArchiveItem(items, {
-    id: "archive:project-agents",
-    source: source.projectAgentsDir,
-    relativePath: "agents/project",
-  });
 
   const warnings = [
     ...(items.some((item) => item.status === "conflict")
@@ -96,7 +108,7 @@ export async function buildClaudePlan(ctx: MigrationProviderContext): Promise<Mi
     summary: summarizeMigrationItems(items),
     items,
     warnings,
-    nextSteps: ["Run openclaw doctor after applying the migration."],
+    nextSteps: memoryOnly ? [] : ["Run openclaw doctor after applying the migration."],
     metadata: { agentDir: targets.agentDir },
   };
 }

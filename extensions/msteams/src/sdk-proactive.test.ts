@@ -10,7 +10,8 @@ const clientState = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("@microsoft/teams.api", () => ({
+vi.mock("@microsoft/teams.api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@microsoft/teams.api")>()),
   Client: vi.fn(function MockClient(this: unknown, serviceUrl: string, http: unknown) {
     clientState.created.push({ serviceUrl, http });
     return {
@@ -36,6 +37,33 @@ describe("sendMSTeamsActivityWithReference", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("sends a legacy bot-only imported reference instead of rejecting it", async () => {
+    vi.stubEnv("SERVICE_URL", "https://bot.example.com/api/messages");
+    const app = {
+      client: { request: vi.fn() },
+      api: { serviceUrl: "https://smba.trafficmanager.net/teams" },
+    } as unknown as MSTeamsApp;
+
+    const result = await sendMSTeamsActivityWithReference(
+      app,
+      {
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        bot: { id: "28:legacy-bot", name: "OpenClaw" },
+        user: { id: "29:user" },
+        conversation: {
+          id: "19:conversation@thread.tacv2",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+      },
+      { type: "message", text: "hello" },
+    );
+
+    expect(result).toMatchObject({ id: "activity-1" });
+    expect(clientState.create).toHaveBeenCalledTimes(1);
   });
 
   it("sends through a reference-scoped API client without the protected SDK activitySender", async () => {
@@ -93,5 +121,43 @@ describe("sendMSTeamsActivityWithReference", () => {
         channelData: { tenant: { id: "tenant-1" } },
       }),
     });
+  });
+});
+
+describe("stored serviceUrl SDK admission", () => {
+  it.each([
+    {
+      agent: undefined,
+      serviceUrl: undefined,
+      message: "Invalid stored reference: missing agent.id",
+    },
+    {
+      agent: { id: "28:bot" },
+      serviceUrl: undefined,
+      message: "Invalid stored reference: missing serviceUrl",
+    },
+    {
+      agent: { id: "28:bot" },
+      serviceUrl: "https://msteams.botframework.azure.cn/teams/",
+      message:
+        "msteams proactive send blocked for 19:conversation@thread.tacv2: stored conversation serviceUrl (https://msteams.botframework.azure.cn/teams) requires channels.msteams.cloud=China.",
+    },
+  ])("preserves validation order: $message", async ({ agent, serviceUrl, message }) => {
+    clientState.created.length = 0;
+    clientState.create.mockClear();
+    const app = {
+      client: { request: vi.fn() },
+      api: { serviceUrl: "https://smba.trafficmanager.net/teams" },
+    } as unknown as MSTeamsApp;
+    await expect(
+      sendMSTeamsActivityWithReference(
+        app,
+        { agent, serviceUrl, conversation: { id: "19:conversation@thread.tacv2" } },
+        { type: "message", text: "hello" },
+        { serviceUrlBoundary: { cloud: "Public" } },
+      ),
+    ).rejects.toThrow(new Error(message));
+    expect(clientState.created).toEqual([]);
+    expect(clientState.create).not.toHaveBeenCalled();
   });
 });

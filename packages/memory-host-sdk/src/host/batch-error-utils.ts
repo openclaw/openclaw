@@ -1,40 +1,55 @@
-// Memory Host SDK helper module supports batch error utils behavior.
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import type { EmbeddingBatchOutputLine } from "./batch-output.js";
+import { getBatchResponseError } from "./batch-response-error.js";
 import { formatErrorMessage } from "./error-utils.js";
 
 // Extracts provider batch error text from output and unavailable error files.
 
-/** Minimal batch output line shape that can carry provider error messages. */
-type BatchOutputErrorLike = {
-  error?: { message?: string };
-  response?: {
-    body?:
-      | string
-      | {
-          error?: { message?: string };
-        };
-  };
-};
+const BATCH_ERROR_DETAIL_MAX_CHARS = 500;
+const BATCH_ERROR_DETAIL_TRUNCATED_SUFFIX = "... [truncated]";
+const EMBEDDING_BATCH_UNAVAILABLE_CODE = "embedding_batch_unavailable";
 
-/** Pull a nested response error message without assuming a fixed provider body shape. */
-function getResponseErrorMessage(line: BatchOutputErrorLike | undefined): string | undefined {
-  const body = line?.response?.body;
-  if (typeof body === "string") {
-    return body || undefined;
+/** Signals that a provider cannot run the configured embedding batch operation. */
+export class EmbeddingBatchUnavailableError extends Error {
+  readonly code = EMBEDDING_BATCH_UNAVAILABLE_CODE;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "EmbeddingBatchUnavailableError";
   }
-  if (!body || typeof body !== "object") {
-    return undefined;
+}
+
+export function isEmbeddingBatchUnavailableError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
   }
-  return typeof body.error?.message === "string" ? body.error.message : undefined;
+  try {
+    return (error as { code?: unknown }).code === EMBEDDING_BATCH_UNAVAILABLE_CODE;
+  } catch {
+    return false;
+  }
 }
 
 /** Return the first useful error message from batch output lines. */
-export function extractBatchErrorMessage(lines: BatchOutputErrorLike[]): string | undefined {
-  const first = lines.find((line) => line.error?.message || getResponseErrorMessage(line));
-  return first?.error?.message ?? getResponseErrorMessage(first);
+export function extractBatchErrorMessage(lines: EmbeddingBatchOutputLine[]): string | undefined {
+  const first = lines.find((line) => line.error?.message || getBatchResponseError(line.response));
+  return first?.error?.message || getBatchResponseError(first?.response);
+}
+
+/** Redact and bound provider-controlled batch diagnostics before logging them. */
+export function formatBatchErrorDetail(detail: string | undefined): string | undefined {
+  if (!detail) {
+    return undefined;
+  }
+  return truncateWithMarker(formatErrorMessage(detail), BATCH_ERROR_DETAIL_MAX_CHARS, {
+    marker: BATCH_ERROR_DETAIL_TRUNCATED_SUFFIX,
+    reserve: BATCH_ERROR_DETAIL_TRUNCATED_SUFFIX.length,
+    trimEnd: false,
+  });
 }
 
 /** Format a failed error-file read without hiding the underlying read problem. */
 export function formatUnavailableBatchError(err: unknown): string | undefined {
-  const message = formatErrorMessage(err);
+  const message = formatBatchErrorDetail(formatErrorMessage(err));
   return message ? `error file unavailable: ${message}` : undefined;
 }

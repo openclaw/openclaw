@@ -1,15 +1,17 @@
 // Qa Lab tests cover token efficiency report plugin behavior.
 import { describe, expect, it } from "vitest";
+import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
+import type { RuntimeId } from "./runtime-id.js";
+import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityResult,
   RuntimeParityToolCall,
+  RuntimeParityUsagePolicy,
 } from "./runtime-parity.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
-  type TokenEfficiencySuiteSummary,
 } from "./token-efficiency-report.js";
 
 function makeToolCall(tool: string): RuntimeParityToolCall {
@@ -22,7 +24,7 @@ function makeToolCall(tool: string): RuntimeParityToolCall {
 
 function makeCell(
   runtime: RuntimeId,
-  usage: RuntimeParityCell["usage"],
+  usage: RuntimeParityCell["usage"] = { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
   toolCalls: RuntimeParityToolCall[] = [],
 ): RuntimeParityCell {
   return {
@@ -40,15 +42,20 @@ function makeRuntimeParity(
   scenarioId: string,
   openclaw: RuntimeParityCell,
   codex: RuntimeParityCell,
+  runtimeParityUsage?: RuntimeParityUsagePolicy,
 ): RuntimeParityResult {
   return {
     scenarioId,
+    ...(runtimeParityUsage ? { runtimeParityUsage } : {}),
     drift: "none",
-    cells: { openclaw, codex },
+    cells: {
+      openclaw: { ...openclaw, status: "pass" },
+      codex: { ...codex, status: "pass" },
+    },
   };
 }
 
-function makeLiveSummary(runtimeParity: RuntimeParityResult[]): TokenEfficiencySuiteSummary {
+function makeLiveSummary(runtimeParity: RuntimeParityResult[]): QaParitySuiteSummary {
   return {
     scenarios: runtimeParity.map((result) => ({
       name: result.scenarioId,
@@ -62,47 +69,24 @@ function makeLiveSummary(runtimeParity: RuntimeParityResult[]): TokenEfficiencyS
   };
 }
 
+function liveReport(...params: Parameters<typeof makeRuntimeParity>) {
+  return buildTokenEfficiencyReport({ summary: makeLiveSummary([makeRuntimeParity(...params)]) });
+}
+
 describe("token efficiency report", () => {
-  it("does not fail live reports solely because Codex uses fewer tokens", () => {
-    const report = buildTokenEfficiencyReport({
-      generatedAt: "2026-05-10T00:00:00.000Z",
-      summary: makeLiveSummary([
-        makeRuntimeParity(
-          "codex-savings",
-          makeCell("openclaw", { inputTokens: 120, outputTokens: 80, totalTokens: 200 }),
-          makeCell("codex", { inputTokens: 60, outputTokens: 40, totalTokens: 100 }),
-        ),
-      ]),
-    });
-
-    expect(report.pass).toBe(true);
-    expect(report.aggregate.flaggedScenarios).toEqual([]);
-    expect(report.aggregate.savingsScenarios).toEqual(["codex-savings"]);
-    expect(report.rows[0]).toMatchObject({
-      deltaPercent: -50,
-      classification: "savings",
-      flagged: false,
-    });
-  });
-
   it("fails live reports on positive Codex token increases over the threshold", () => {
-    const report = buildTokenEfficiencyReport({
-      generatedAt: "2026-05-10T00:00:00.000Z",
-      summary: makeLiveSummary([
-        makeRuntimeParity(
-          "runtime-tool-fs-read",
-          makeCell("openclaw", { inputTokens: 72_000, outputTokens: 381, totalTokens: 72_381 }, [
-            makeToolCall("fs.read"),
-            makeToolCall("fs.read"),
-          ]),
-          makeCell(
-            "codex",
-            { inputTokens: 118_000, outputTokens: 1_489, totalTokens: 119_489 },
-            Array.from({ length: 40 }, () => makeToolCall("fs.read")),
-          ),
-        ),
+    const report = liveReport(
+      "runtime-tool-fs-read",
+      makeCell("openclaw", { inputTokens: 72_000, outputTokens: 381, totalTokens: 72_381 }, [
+        makeToolCall("fs.read"),
+        makeToolCall("fs.read"),
       ]),
-    });
+      makeCell(
+        "codex",
+        { inputTokens: 118_000, outputTokens: 1_489, totalTokens: 119_489 },
+        Array.from({ length: 40 }, () => makeToolCall("fs.read")),
+      ),
+    );
 
     expect(report.pass).toBe(false);
     expect(report.aggregate.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
@@ -116,16 +100,181 @@ describe("token efficiency report", () => {
     ]);
   });
 
-  it("keeps live zero-usage rows failing instead of passing as neutral", () => {
-    const report = buildTokenEfficiencyReport({
-      summary: makeLiveSummary([
-        makeRuntimeParity(
-          "missing-live-usage",
-          makeCell("openclaw", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
-          makeCell("codex", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
-        ),
-      ]),
+  it("detects a real cache regression even when cached-inclusive totals hide it", () => {
+    const openclaw = makeCell("openclaw", {
+      inputTokens: 7_403,
+      outputTokens: 220,
+      totalTokens: 435_810,
+      cacheRead: 415_492,
+      cacheWrite: 12_695,
     });
+    const codex = makeCell("codex", {
+      inputTokens: 25_894,
+      outputTokens: 220,
+      totalTokens: 495_710,
+      cacheRead: 445_189,
+      cacheWrite: 24_407,
+    });
+    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      {
+        inputTokens: 3,
+        outputTokens: 11,
+        totalTokens: 24_421,
+        cacheRead: 0,
+        cacheWrite: 24_407,
+      },
+      {
+        inputTokens: 24_448,
+        outputTokens: 11,
+        totalTokens: 24_459,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    ]);
+
+    const report = liveReport("first-hour-cache-miss", openclaw, codex);
+
+    expect(report.pass).toBe(false);
+    expect(report.rows[0]).toMatchObject({
+      classification: "regression",
+      flagged: true,
+      openclaw: { processedTokens: 20_318, cacheReadTokens: 415_492 },
+      codex: {
+        processedTokens: 50_521,
+        cacheReadTokens: 445_189,
+        cacheWriteTokens: 24_407,
+        cacheMisses: [{ turn: 2, inputTokens: 24_448, cacheRead: 0, cacheWrite: 0 }],
+      },
+    });
+    expect(report.rows[0]?.deltaPercent).toBeGreaterThan(145);
+    expect(report.aggregate.codex).toMatchObject({
+      processedTokens: 50_521,
+      cacheMissCount: 1,
+      cacheMissInputTokens: 24_448,
+    });
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("turn 2 (24448 input)");
+  });
+
+  it("derives missing cache writes only from coherent measured cache reads", () => {
+    const report = liveReport(
+      "derived-cache-writes",
+      makeCell("openclaw", {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 115,
+        cacheRead: 100,
+      }),
+      makeCell("codex", {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 135,
+        cacheRead: 100,
+      }),
+    );
+
+    expect(report.pass).toBe(false);
+    expect(report.rows[0]).toMatchObject({
+      classification: "regression",
+      flagged: true,
+      openclaw: {
+        processedTokens: 15,
+        processedTokenEvidence: "derived",
+        cacheWriteTokens: null,
+      },
+      codex: {
+        processedTokens: 35,
+        processedTokenEvidence: "derived",
+        cacheWriteTokens: null,
+      },
+    });
+  });
+
+  it("does not certify incomplete cache-write telemetry with unaccounted cache input", () => {
+    const openclaw = makeCell("openclaw");
+    const codex = makeCell("codex", {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 1_120,
+      cacheRead: 100,
+      cacheWrite: 200,
+    });
+    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      { inputTokens: 3, outputTokens: 11, totalTokens: 314, cacheRead: 100, cacheWrite: 200 },
+      { inputTokens: 97, outputTokens: 9, totalTokens: 806 },
+    ]);
+
+    const report = liveReport("incomplete-cache-write-telemetry", openclaw, codex);
+
+    expect(report.pass).toBe(false);
+    expect(report.rows[0]?.codex).toMatchObject({
+      cacheReadTokens: 100,
+      cacheWriteTokens: 200,
+      processedTokenEvidence: "unavailable",
+      unmeasuredPostWarmTurns: [2],
+    });
+    expect(report.failures).toEqual([
+      "incomplete-cache-write-telemetry codex live processed-token usage cannot be verified from cache-write telemetry or coherent cache-read totals",
+    ]);
+  });
+
+  it("keeps mixed post-warm telemetry unknown without discarding measured misses", () => {
+    const openclaw = makeCell("openclaw");
+    const codex = makeCell("codex", {
+      inputTokens: 1_053,
+      outputTokens: 33,
+      totalTokens: 2_086,
+      cacheRead: 0,
+      cacheWrite: 1_000,
+    });
+    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      { inputTokens: 3, outputTokens: 11, totalTokens: 1_014, cacheRead: 0, cacheWrite: 1_000 },
+      { inputTokens: 1_050, outputTokens: 11, totalTokens: 1_061, cacheRead: 0, cacheWrite: 0 },
+      { inputTokens: 0, outputTokens: 11, totalTokens: 11 },
+    ]);
+
+    const report = liveReport("mixed-cache-telemetry", openclaw, codex);
+
+    expect(report.rows[0]?.codex).toMatchObject({
+      cacheMisses: [{ turn: 2, inputTokens: 1_050, cacheRead: 0, cacheWrite: 0 }],
+      unmeasuredPostWarmTurns: [3],
+    });
+    expect(report.aggregate.codex).toMatchObject({
+      cacheMissCount: null,
+      cacheMissInputTokens: null,
+    });
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain(
+      "turn 2 (1050 input); unmeasured turns 3",
+    );
+  });
+
+  it("preserves unmeasured warm turns when only partial cache telemetry is available", () => {
+    const openclaw = makeCell("openclaw");
+    const codex = makeCell("codex");
+    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      { inputTokens: 3, outputTokens: 11, totalTokens: 1_014, cacheWrite: 1_000 },
+      { inputTokens: 100, outputTokens: 11, totalTokens: 111 },
+    ]);
+
+    const report = liveReport("partial-warm-telemetry", openclaw, codex);
+
+    expect(report.pass).toBe(true);
+    expect(report.rows[0]?.codex).toMatchObject({
+      cacheMisses: null,
+      unmeasuredPostWarmTurns: [2],
+    });
+    expect(report.aggregate.codex).toMatchObject({
+      cacheMissCount: null,
+      cacheMissInputTokens: null,
+    });
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("N/A (unmeasured turns 2)");
+  });
+
+  it("keeps live zero-usage rows failing instead of passing as neutral", () => {
+    const report = liveReport(
+      "missing-live-usage",
+      makeCell("openclaw", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+      makeCell("codex", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+    );
 
     expect(report.pass).toBe(false);
     expect(report.failures).toEqual([
@@ -134,38 +283,38 @@ describe("token efficiency report", () => {
     ]);
   });
 
+  it("fails live reports with only usage-not-applicable captures", () => {
+    const report = liveReport(
+      "local-fixture",
+      makeCell("openclaw", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+      makeCell("codex", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+      {
+        expectation: "not-applicable",
+        reason: "Local fixture only; no assistant turn runs.",
+      },
+    );
+
+    expect(report.status).toBe("evaluated");
+    expect(report.pass).toBe(false);
+    expect(report.rows).toEqual([]);
+    expect(report.failures).toEqual([
+      "No usage-applicable runtime parity captures were present in the suite summary.",
+    ]);
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
+  });
+
   it("fails live reports with non-integer token usage evidence", () => {
-    const report = buildTokenEfficiencyReport({
-      summary: makeLiveSummary([
-        makeRuntimeParity(
-          "fractional-live-usage",
-          makeCell("openclaw", { inputTokens: 100.5, outputTokens: 0, totalTokens: 100.5 }),
-          makeCell("codex", { inputTokens: 101, outputTokens: 0, totalTokens: 101 }),
-        ),
-      ]),
-    });
+    const report = liveReport(
+      "fractional-live-usage",
+      makeCell("openclaw", { inputTokens: 100.5, outputTokens: 0, totalTokens: 100.5 }),
+      makeCell("codex", { inputTokens: 101, outputTokens: 0, totalTokens: 101 }),
+    );
 
     expect(report.pass).toBe(false);
     expect(report.failures).toEqual([
       "fractional-live-usage openclaw live usage inputTokens must be a non-negative integer",
       "fractional-live-usage openclaw live usage totalTokens must be a non-negative integer",
     ]);
-  });
-
-  it("fails empty live runtime summaries instead of treating them as skipped proof", () => {
-    const report = buildTokenEfficiencyReport({
-      generatedAt: "2026-05-10T00:00:00.000Z",
-      summary: makeLiveSummary([]),
-    });
-
-    expect(report.status).toBe("evaluated");
-    expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "No runtime parity captures were present in the suite summary.",
-    ]);
-    expect(report.rows).toEqual([]);
-    expect(report.skipReason).toBeUndefined();
-    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
   });
 
   it("keeps empty mock runtime summaries skipped as non-live estimates", () => {

@@ -1,0 +1,529 @@
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  coerceSecretRef,
+  isValidEnvSecretRefId,
+  type SecretProviderConfig,
+  type SecretRef,
+  type SecretRefSource,
+} from "../config/types.secrets.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
+import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import {
+  formatExecSecretRefIdValidationMessage,
+  isValidFileSecretRefId,
+  isValidSecretProviderAlias,
+  validateExecSecretRefId,
+} from "../secrets/ref-contract.js";
+import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
+import {
+  parseConcreteConfigPathWithProvenance,
+  toDotPath,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
+import {
+  formatConfigSetPath,
+  parseConfigSetPath,
+  parseConfigSetValue,
+  type PathSegment,
+  validatePathSegments,
+} from "./config-cli-path.js";
+import type { ConfigSetDryRunInputMode } from "./config-set-dryrun.js";
+import {
+  decodeConfigMutationInput,
+  parseBatchSource,
+  parseConfigMutationJson5,
+  readConfigMutationFileSync,
+  resolveConfigSetMode,
+  type ConfigSetBatchEntry,
+  type ConfigSetOptions,
+} from "./config-set-input.js";
+
+const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
+
+export type ConfigSetOperation = {
+  inputMode: ConfigSetDryRunInputMode;
+  requestedPath: PathSegment[];
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
+  setPath: PathSegment[];
+  value: unknown;
+  mutation?: "set" | "merge" | "replace" | "delete";
+  schemaValidated?: boolean;
+};
+
+export type ConfigPatchOptions = {
+  file?: string;
+  stdin?: boolean;
+  dryRun?: boolean;
+  allowExec?: boolean;
+  json?: boolean;
+  replacePath?: string[];
+};
+
+export type ConfigUnsetOptions = {
+  dryRun?: boolean;
+  allowExec?: boolean;
+  json?: boolean;
+};
+
+export type ConfigMutationOptions = ConfigUnsetOptions & {
+  merge?: boolean;
+  replace?: boolean;
+};
+
+function modeError(message: string): Error {
+  return new Error(`config set mode error: ${message}`);
+}
+
+export function configPatchModeError(message: string): Error {
+  return new Error(`config patch mode error: ${message}`);
+}
+
+function parseSecretRefSource(raw: string, label: string): SecretRefSource {
+  const source = raw.trim();
+  if (source === "env" || source === "file" || source === "exec" || source === "store") {
+    return source;
+  }
+  throw new Error(`${label} must be one of: env, file, exec, store.`);
+}
+
+function parseSecretRefBuilder(params: {
+  provider: string;
+  source: string;
+  id: string;
+  fieldPrefix: string;
+}): SecretRef {
+  const provider = params.provider.trim();
+  if (!provider) {
+    throw new Error(`${params.fieldPrefix}.provider is required.`);
+  }
+  if (!isValidSecretProviderAlias(provider)) {
+    throw new Error(
+      `${params.fieldPrefix}.provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").`,
+    );
+  }
+
+  const source = parseSecretRefSource(params.source, `${params.fieldPrefix}.source`);
+  const id = params.id.trim();
+  if (!id) {
+    throw new Error(`${params.fieldPrefix}.id is required.`);
+  }
+  if ((source === "env" || source === "store") && !isValidEnvSecretRefId(id)) {
+    throw new Error(
+      `${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for ${source} refs.`,
+    );
+  }
+  if (source === "file" && !isValidFileSecretRefId(id)) {
+    throw new Error(
+      `${params.fieldPrefix}.id must be an absolute JSON pointer (or "value" for singleValue mode).`,
+    );
+  }
+  if (source === "exec" && !validateExecSecretRefId(id).ok) {
+    throw new Error(formatExecSecretRefIdValidationMessage());
+  }
+  return { source, provider, id };
+}
+
+function parseOptionalPositiveInteger(raw: string | undefined, flag: string): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`${flag} must not be empty.`);
+  }
+  const parsed = parseStrictPositiveInteger(trimmed);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseProviderEnvEntries(
+  entries: string[] | undefined,
+): Record<string, string> | undefined {
+  if (!entries || entries.length === 0) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) {
+      throw new Error("--provider-env expects KEY=*** entries.");
+    }
+    const key = entry.slice(0, separator).trim();
+    if (!key) {
+      throw new Error("--provider-env key must not be empty.");
+    }
+    env[key] = entry.slice(separator + 1);
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function validateProviderAliasPath(path: PathSegment[]): void {
+  if (path.length !== 3 || path[0] !== "secrets" || path[1] !== "providers") {
+    throw new Error(
+      'Provider builder mode requires path "secrets.providers.<alias>" (example: secrets.providers.vault).',
+    );
+  }
+  const alias = path[2] ?? "";
+  if (!isValidSecretProviderAlias(alias)) {
+    throw new Error(
+      `Provider alias "${alias}" must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").`,
+    );
+  }
+}
+
+function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig {
+  const sourceRaw = opts.providerSource?.trim();
+  if (!sourceRaw) {
+    throw new Error("--provider-source is required in provider builder mode.");
+  }
+  const source = parseSecretRefSource(sourceRaw, "--provider-source");
+  const timeoutMs = parseOptionalPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
+  const maxBytes = parseOptionalPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
+  const noOutputTimeoutMs = parseOptionalPositiveInteger(
+    opts.providerNoOutputTimeoutMs,
+    "--provider-no-output-timeout-ms",
+  );
+  const maxOutputBytes = parseOptionalPositiveInteger(
+    opts.providerMaxOutputBytes,
+    "--provider-max-output-bytes",
+  );
+  const providerEnv = parseProviderEnvEntries(opts.providerEnv);
+
+  let provider: SecretProviderConfig;
+  if (source === "env") {
+    const allowlist = normalizeStringEntries(opts.providerAllowlist);
+    for (const envName of allowlist) {
+      if (!isValidEnvSecretRefId(envName)) {
+        throw new Error(
+          `--provider-allowlist entry "${envName}" must match /^[A-Z][A-Z0-9_]{0,127}$/.`,
+        );
+      }
+    }
+    provider = { source: "env", ...(allowlist.length > 0 ? { allowlist } : {}) };
+  } else if (source === "file") {
+    const filePath = opts.providerPath?.trim();
+    if (!filePath) {
+      throw new Error("--provider-path is required when --provider-source file is used.");
+    }
+    const modeRaw = opts.providerMode?.trim();
+    if (modeRaw && modeRaw !== "singleValue" && modeRaw !== "json") {
+      throw new Error("--provider-mode must be one of: singleValue, json.");
+    }
+    const mode = modeRaw === "singleValue" || modeRaw === "json" ? modeRaw : undefined;
+    provider = {
+      source: "file",
+      path: filePath,
+      ...(mode ? { mode } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(maxBytes !== undefined ? { maxBytes } : {}),
+    };
+  } else if (source === "store") {
+    provider = { source: "store" };
+  } else {
+    const command = opts.providerCommand?.trim();
+    if (!command) {
+      throw new Error("--provider-command is required when --provider-source exec is used.");
+    }
+    provider = {
+      source: "exec",
+      command,
+      ...(opts.providerArg?.length ? { args: opts.providerArg } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
+      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
+      ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
+      ...(providerEnv ? { env: providerEnv } : {}),
+      ...(opts.providerPassEnv?.length
+        ? { passEnv: normalizeStringEntries(opts.providerPassEnv) }
+        : {}),
+      ...(opts.providerTrustedDir?.length
+        ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
+        : {}),
+    };
+  }
+
+  const validated = SecretProviderSchema.safeParse(provider);
+  if (!validated.success) {
+    const issue = validated.error.issues[0];
+    throw new Error(
+      `Provider builder config invalid at ${issue?.path?.join(".") ?? "<provider>"}: ${issue?.message ?? "Invalid provider config."}`,
+    );
+  }
+  return validated.data;
+}
+
+function parseSecretRefFromUnknown(value: unknown, label: string): SecretRef {
+  if (!isPlainRecord(value)) {
+    throw new Error(`${label} must be an object with source/provider/id.`);
+  }
+  if (
+    typeof value.provider !== "string" ||
+    typeof value.source !== "string" ||
+    typeof value.id !== "string"
+  ) {
+    throw new Error(`${label} must include string fields: source, provider, id.`);
+  }
+  return parseSecretRefBuilder({
+    provider: value.provider,
+    source: value.source,
+    id: value.id,
+    fieldPrefix: label,
+  });
+}
+
+function buildAssignmentOperation(params: {
+  requestedPath: PathSegment[];
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
+  value: unknown;
+  inputMode: ConfigSetDryRunInputMode;
+  validatedRef?: boolean;
+}): ConfigSetOperation {
+  const resolved = resolveConfigSecretTargetByPath(params.requestedPath, params.pathTokens);
+  const coercedRef = coerceSecretRef(params.value);
+  return {
+    inputMode: params.inputMode,
+    requestedPath: params.requestedPath,
+    ...(params.pathTokens ? { pathTokens: params.pathTokens } : {}),
+    ...(params.quotedNumericSegments
+      ? { quotedNumericSegments: params.quotedNumericSegments }
+      : {}),
+    setPath:
+      coercedRef && resolved?.entry.secretShape === "sibling_ref" && resolved.refPathSegments
+        ? resolved.refPathSegments
+        : params.requestedPath,
+    value: params.value,
+    // Parser-validated refs skip full schema checks only on registered secret targets.
+    ...(params.validatedRef && resolved ? { schemaValidated: true } : {}),
+  };
+}
+
+function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
+  return entries.map((entry, index) => {
+    const { tokens: pathTokens, quotedNumericSegments } = parseConcreteConfigPathWithProvenance(
+      entry.path,
+    );
+    const path = pathTokens.map(String);
+    const pathFields = { requestedPath: path, pathTokens, quotedNumericSegments };
+    if (entry.ref === undefined && entry.provider !== undefined) {
+      validateProviderAliasPath(path);
+      const validated = SecretProviderSchema.safeParse(entry.provider);
+      if (!validated.success) {
+        const issue = validated.error.issues[0];
+        throw new Error(
+          `batch[${index}].provider invalid at ${issue?.path?.join(".") ?? "<provider>"}: ${issue?.message ?? ""}`,
+        );
+      }
+      return {
+        inputMode: "json",
+        ...pathFields,
+        setPath: path,
+        value: validated.data,
+        schemaValidated: true,
+      };
+    }
+    return buildAssignmentOperation({
+      ...pathFields,
+      value:
+        entry.ref === undefined
+          ? entry.value
+          : parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
+      inputMode: "json",
+      validatedRef: entry.ref !== undefined,
+    });
+  });
+}
+
+export function buildConfigSetOperations(params: {
+  path?: string;
+  value?: string;
+  opts: ConfigSetOptions;
+}): ConfigSetOperation[] {
+  const strictJson = Boolean(params.opts.strictJson || params.opts.json);
+  const mode = resolveConfigSetMode(params.opts);
+  if (params.opts.allowExec && !params.opts.dryRun) {
+    throw modeError("--allow-exec requires --dry-run.");
+  }
+  if (params.opts.merge && params.opts.replace) {
+    throw modeError("choose either --merge or --replace, not both.");
+  }
+  const batchEntries = parseBatchSource(params.opts);
+  if (batchEntries) {
+    if (params.path !== undefined || params.value !== undefined) {
+      throw modeError("batch mode does not accept <path> or <value> arguments.");
+    }
+    return parseBatchOperations(batchEntries);
+  }
+
+  const parsedConcretePath =
+    typeof params.path === "string" && params.path.trim()
+      ? parseConcreteConfigPathWithProvenance(params.path)
+      : undefined;
+  if (!parsedConcretePath) {
+    throw modeError(
+      mode === "ref_builder"
+        ? "ref builder mode requires <path>."
+        : mode === "provider_builder"
+          ? "provider builder mode requires <path>."
+          : "value/json mode requires <path> when batch mode is not used.",
+    );
+  }
+  const pathFields = {
+    requestedPath: parsedConcretePath.tokens.map(String),
+    pathTokens: parsedConcretePath.tokens,
+    quotedNumericSegments: parsedConcretePath.quotedNumericSegments,
+  };
+  if (mode === "provider_builder") {
+    if (params.value !== undefined) {
+      throw modeError("provider builder mode does not accept <value>.");
+    }
+    const value = buildProviderFromBuilder(params.opts);
+    validateProviderAliasPath(pathFields.requestedPath);
+    return [
+      {
+        inputMode: "builder",
+        ...pathFields,
+        setPath: pathFields.requestedPath,
+        value,
+        schemaValidated: true,
+      },
+    ];
+  }
+
+  let value: unknown;
+  if (mode === "ref_builder") {
+    if (params.value !== undefined) {
+      throw modeError("ref builder mode does not accept <value>.");
+    }
+    if (!params.opts.refProvider || !params.opts.refSource || !params.opts.refId) {
+      throw modeError(
+        "ref builder mode requires --ref-provider <alias>, --ref-source <env|file|exec|store>, and --ref-id <id>.",
+      );
+    }
+    value = parseSecretRefBuilder({
+      provider: params.opts.refProvider,
+      source: params.opts.refSource,
+      id: params.opts.refId,
+      fieldPrefix: "ref",
+    });
+  } else {
+    if (params.value === undefined) {
+      throw modeError("value/json mode requires <value>.");
+    }
+    value = parseConfigSetValue(params.value, strictJson);
+  }
+  return [
+    buildAssignmentOperation({
+      ...pathFields,
+      value,
+      inputMode: mode === "ref_builder" ? "builder" : mode === "json" ? "json" : "value",
+      validatedRef: mode === "ref_builder",
+    }),
+  ];
+}
+
+async function readStdinText(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw configPatchModeError(
+      "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
+    );
+  }
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: CONFIG_PATCH_STDIN_MAX_BYTES,
+    onOverflow: ({ maxBytes }) =>
+      configPatchModeError(
+        `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
+      ),
+  });
+  return decodeConfigMutationInput(bytes, "--stdin");
+}
+
+export function buildUnsetOperation(
+  path: PathSegment[],
+  pathTokens?: readonly ConcreteConfigPathSegment[],
+): ConfigSetOperation {
+  return {
+    inputMode: "unset",
+    requestedPath: path,
+    ...(pathTokens ? { pathTokens } : {}),
+    setPath: path,
+    value: undefined,
+    mutation: "delete",
+  };
+}
+
+export async function readConfigPatchOperations(
+  opts: ConfigPatchOptions,
+): Promise<ConfigSetOperation[]> {
+  const file = readNonBlankString(opts.file);
+  const stdin = Boolean(opts.stdin);
+  if (Boolean(file) === stdin) {
+    throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
+  }
+  const sourceLabel = stdin ? "--stdin" : "--file";
+  const raw = file ? readConfigMutationFileSync(file, "--file") : await readStdinText();
+  const patch = parseConfigMutationJson5(raw, `${sourceLabel} as JSON5`);
+  const replacePaths = (opts.replacePath ?? []).map(parseConfigSetPath);
+  if (!isPlainRecord(patch)) {
+    throw configPatchModeError("input must be a JSON5 object patch.");
+  }
+  const operations: ConfigSetOperation[] = [];
+  const pathKey = (path: readonly PathSegment[]) => JSON.stringify(path);
+  const replacePathKeys = new Set(replacePaths.map(pathKey));
+  const replacePathLengths = new Set(replacePaths.map((path) => path.length));
+  const matchedReplacePathKeys = new Set<string>();
+  visitConfigValueTree(patch, (value, path) => {
+    const segment = path.at(-1);
+    if (segment === undefined) {
+      return true;
+    }
+    validatePathSegments([segment]);
+    const replacementKey = replacePathLengths.has(path.length) ? pathKey(path) : undefined;
+    const replace = replacementKey !== undefined && replacePathKeys.has(replacementKey);
+    if (replace) {
+      matchedReplacePathKeys.add(replacementKey);
+    }
+    const ref = isPlainRecord(value) ? coerceSecretRef(value) : null;
+    const mergeObject = !replace && isPlainRecord(value) && !ref;
+    if (mergeObject && Object.keys(value).length > 0) {
+      return true;
+    }
+    if (value === null) {
+      operations.push({ ...buildUnsetOperation([...path]), inputMode: "json" });
+    } else {
+      const operation = buildAssignmentOperation({
+        requestedPath: [...path],
+        value: ref ? parseSecretRefFromUnknown(value, `patch.${toDotPath(path)}`) : value,
+        inputMode: "json",
+        validatedRef: Boolean(ref),
+      });
+      if (replace || mergeObject) {
+        operation.mutation = replace ? "replace" : "merge";
+      }
+      operations.push(operation);
+    }
+    return false;
+  });
+
+  const unusedReplacePath = replacePaths.find(
+    (replacePath) => !matchedReplacePathKeys.has(pathKey(replacePath)),
+  );
+  if (unusedReplacePath) {
+    // The message names the argument to correct, so it must print the bracketed form this
+    // command's parser reads back; a dot join turns a quoted key into a path to different nodes.
+    throw configPatchModeError(
+      `--replace-path ${formatConfigSetPath(unusedReplacePath)} did not match any value in the input patch.`,
+    );
+  }
+  if (operations.length === 0) {
+    throw configPatchModeError("input patch did not contain any config updates.");
+  }
+  return operations;
+}

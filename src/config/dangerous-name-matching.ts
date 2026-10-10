@@ -1,4 +1,4 @@
-// Detects dangerous config names used by validation and warnings.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { asBoolean } from "../utils/boolean.js";
 import type { OpenClawConfig } from "./config.js";
 
@@ -18,13 +18,6 @@ type DangerousNameMatchingResolverInput = {
   accountConfig?: DangerousNameMatchingConfig | null | undefined;
 };
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 /** Returns true only for the explicit dangerous name-matching opt-in flag. */
 export function isDangerousNameMatchingEnabled(
   config: DangerousNameMatchingConfig | null | undefined,
@@ -36,10 +29,10 @@ export function isDangerousNameMatchingEnabled(
 export function resolveDangerousNameMatchingEnabled(
   input: DangerousNameMatchingResolverInput,
 ): boolean {
-  if (typeof input.accountConfig?.dangerouslyAllowNameMatching === "boolean") {
-    return input.accountConfig.dangerouslyAllowNameMatching;
-  }
-  return isDangerousNameMatchingEnabled(input.providerConfig);
+  return (
+    asBoolean(input.accountConfig?.dangerouslyAllowNameMatching) ??
+    isDangerousNameMatchingEnabled(input.providerConfig)
+  );
 }
 
 /** Collects provider/account scopes that policy and doctor surfaces can audit. */
@@ -48,12 +41,7 @@ export function collectProviderDangerousNameMatchingScopes(
   provider: string,
 ): ProviderDangerousNameMatchingScope[] {
   const scopes: ProviderDangerousNameMatchingScope[] = [];
-  const channels = asObjectRecord(cfg.channels);
-  if (!channels) {
-    return scopes;
-  }
-
-  const providerCfg = asObjectRecord(channels[provider]);
+  const providerCfg = asNullableRecord(asNullableRecord(cfg.channels)?.[provider]);
   if (!providerCfg) {
     return scopes;
   }
@@ -69,13 +57,13 @@ export function collectProviderDangerousNameMatchingScopes(
     dangerousFlagPath: providerDangerousFlagPath,
   });
 
-  const accounts = asObjectRecord(providerCfg.accounts);
+  const accounts = asNullableRecord(providerCfg.accounts);
   if (!accounts) {
     return scopes;
   }
 
   for (const key of Object.keys(accounts)) {
-    const account = asObjectRecord(accounts[key]);
+    const account = asNullableRecord(accounts[key]);
     if (!account) {
       continue;
     }

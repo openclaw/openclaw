@@ -1,0 +1,374 @@
+// Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
+import { describe, expect, it, vi } from "vitest";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
+import { formatMessageCliText } from "./message-format.js";
+
+const getChannelPluginMock = vi.hoisted(() =>
+  vi.fn((channel: string) =>
+    channel === "directchat" ? { meta: { label: "Direct Chat" } } : undefined,
+  ),
+);
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+  getLoadedChannelPlugin: getChannelPluginMock,
+}));
+
+function readResultPayload(payload: unknown) {
+  return {
+    kind: "action" as const,
+    channel: "matrix" as const,
+    action: "read" as const,
+    handledBy: "plugin" as const,
+    payload,
+    dryRun: false,
+  };
+}
+
+function pinsResultPayload(payload: unknown) {
+  return {
+    kind: "action" as const,
+    channel: "matrix" as const,
+    action: "list-pins" as const,
+    handledBy: "plugin" as const,
+    payload,
+    dryRun: false,
+  };
+}
+
+function searchResultPayload(payload: unknown) {
+  return {
+    kind: "action" as const,
+    channel: "discord" as const,
+    action: "search" as const,
+    handledBy: "plugin" as const,
+    payload,
+    dryRun: false,
+  };
+}
+
+function msg(id: string, ts: string, authorTag: string, content: string) {
+  return { id, ts, authorTag, content };
+}
+
+function textJoined(lines: string[]): string {
+  return lines.join("\n");
+}
+
+describe("formatMessageCliText displayLimit", () => {
+  it("honors displayLimit for list-pins", () => {
+    const pins = Array.from({ length: 40 }, (_, i) =>
+      msg(`pin-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `pin-text-${i}`),
+    );
+
+    const result = pinsResultPayload({ pins });
+    const out = textJoined(formatMessageCliText(result, { displayLimit: 15 }));
+
+    expect(out).toContain("pin-text-0");
+    expect(out).toContain("pin-text-14");
+    expect(out).not.toContain("pin-text-15");
+  });
+
+  it.each([{ displayLimit: undefined, expectedRows: 50 }])(
+    "renders $expectedRows reaction rows for displayLimit $displayLimit",
+    ({ displayLimit, expectedRows }) => {
+      const reactions = Array.from({ length: 80 }, (_, index) => ({
+        name: `reaction-${String(index).padStart(2, "0")}`,
+        count: index + 1,
+      }));
+      const result = {
+        kind: "action",
+        channel: "matrix",
+        action: "reactions",
+        handledBy: "plugin",
+        payload: { reactions },
+        dryRun: false,
+      } satisfies MessageActionResult;
+
+      const output = textJoined(formatMessageCliText(result, { displayLimit }));
+
+      expect(output).toContain(`reaction-${String(expectedRows - 1).padStart(2, "0")}`);
+      expect(output).not.toContain(`reaction-${String(expectedRows).padStart(2, "0")}`);
+    },
+  );
+
+  it("renders an explicit empty search outcome despite an approximate positive total", () => {
+    const result = searchResultPayload({ results: { messages: [], total_results: 1 } });
+    expect(formatMessageCliText(result)).toEqual(["Search results", "No results."]);
+  });
+});
+
+describe("formatMessageCliText reaction labels", () => {
+  const label = "\u001b[2J:party_parrot:🦞\nline";
+  it.each([{ field: "name", reaction: { name: label, emoji: "unused-emoji", key: "unused-key" } }])(
+    "renders the preferred $field label as plain text without changing the payload",
+    ({ reaction }) => {
+      const result = {
+        kind: "action",
+        channel: "matrix",
+        action: "reactions",
+        handledBy: "plugin",
+        payload: {
+          reactions: [{ ...reaction, count: 2, users: ["\u001b[31malice\u001b[0m", "bob\tother"] }],
+        },
+        dryRun: false,
+      } satisfies MessageActionResult;
+      const payload = structuredClone(result.payload);
+      const output = textJoined(formatMessageCliText(result));
+      expect(result.payload).toEqual(payload);
+      expect(output).not.toContain("\u001b[2J");
+      expect(output).toContain(":party_parrot:🦞\\nline");
+      expect(output).not.toContain("unused-");
+      expect(output).toContain("alice");
+      expect(output).toContain("bob\\tother");
+      expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    },
+  );
+});
+
+describe("renderPaginationHint", () => {
+  it.each([
+    { nextBatch: "token-123" },
+    { "@odata.nextLink": "https://graph.microsoft.com/v1.0/next" },
+  ])("emits a hint for provider continuation %j", (continuation) => {
+    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
+    const result = readResultPayload({ messages, ...continuation });
+    expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).toContain(
+      "More results available",
+    );
+  });
+
+  it.each([0, 1])("preserves explicit search continuation with %i returned messages", (count) => {
+    const messages = Array.from({ length: count }, (_, index) =>
+      msg(`id-${index}`, "2026-01-01T00:00:00.000Z", "alice", "hello"),
+    );
+    const result = searchResultPayload({
+      results: { messages: messages.map((message) => [message]), hasMore: true },
+    });
+
+    expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).toContain(
+      "More results available",
+    );
+  });
+});
+
+describe("formatMessageCliText send results", () => {
+  it("prefers and trims a direct plugin payload message ID", () => {
+    const result = {
+      kind: "send",
+      action: "send",
+      channel: "directchat",
+      to: "room-1",
+      handledBy: "plugin",
+      payload: {
+        messageId: " direct-id ",
+        result: { messageId: "nested-id" },
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    expect(formatMessageCliText(result)).toEqual([
+      "✅ Sent via Direct Chat. Message ID: direct-id",
+    ]);
+  });
+
+  it("reports a partial delivery failure without claiming success", () => {
+    const result = {
+      kind: "send",
+      action: "send",
+      channel: "directchat",
+      to: "room-1",
+      handledBy: "core",
+      payload: {},
+      dryRun: false,
+      sendResult: {
+        channel: "directchat",
+        to: "room-1",
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "partial_failed",
+        error: "second attachment rejected",
+        result: { channel: "directchat", messageId: "first-part-1" },
+      },
+    } satisfies MessageActionResult;
+    const output = textJoined(formatMessageCliText(result));
+    expect(output).toContain("second attachment rejected");
+    expect(output).not.toContain("✅ Sent");
+    expect(output).toContain("Message ID: first-part-1");
+  });
+});
+
+describe("formatMessageCliText payload scalars", () => {
+  it("keeps alias reads lazy after the first nonempty string", () => {
+    const reads: string[] = [];
+    const message = Object.create(null) as Record<string, unknown>;
+    Object.defineProperties(message, {
+      id: {
+        enumerable: true,
+        get: () => {
+          reads.push("id");
+          return reads.length === 1 ? "first-id" : "second-id";
+        },
+      },
+      ts: {
+        enumerable: true,
+        get: () => {
+          reads.push("ts");
+          throw new Error("later alias must not be read");
+        },
+      },
+      authorTag: { enumerable: true, value: "alice" },
+      timestamp: { enumerable: true, value: "now" },
+      content: { enumerable: true, value: "hello" },
+    });
+
+    const output = textJoined(formatMessageCliText(readResultPayload({ messages: [message] })));
+    expect(output).toContain("second-id");
+    expect(output).not.toContain("first-id");
+    expect(reads).toEqual(["id", "id"]);
+  });
+
+  it("preserves generic object primitive summaries", () => {
+    const result = {
+      kind: "action",
+      channel: "directchat",
+      action: "channel-info",
+      handledBy: "plugin",
+      payload: {
+        undef: undefined,
+        nil: null,
+        array: [1, 2],
+        object: {},
+        function: () => undefined,
+        bigint: 42n,
+        symbol: Symbol("proof"),
+        string: "  keep  ",
+        number: -3,
+        boolean: false,
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+    for (const expected of [
+      "null",
+      "2 items",
+      "object",
+      "function",
+      "42",
+      "Symbol(proof)",
+      "keep",
+      "-3",
+      "false",
+    ]) {
+      expect(output).toContain(expected);
+    }
+  });
+});
+
+describe("formatMessageCliText provider-reported failures", () => {
+  it.each([
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
+  ] as const)("reports %s without claiming success", (_name, action, payload, expected) => {
+    const result = {
+      kind: action === "poll" ? action : "action",
+      channel: "telegram",
+      action,
+      to: "123",
+      handledBy: "plugin",
+      payload,
+      dryRun: false,
+    } as MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain(expected);
+    expect(output).not.toContain("✅");
+  });
+});
+
+describe("formatMessageCliText poll results", () => {
+  it.each(["direct", "gateway"] as const)(
+    "preserves %s poll summaries with missing and optional result fields",
+    (via) => {
+      for (const [delivery, messageId, pollLine] of [
+        [undefined, "unknown", []],
+        [{ messageId: "p1" }, "p1", []],
+        [{ messageId: "p1", pollId: "poll-1" }, "p1", ["Poll id: poll-1"]],
+        [{ messageId: "", pollId: "" }, "", []],
+      ] as const) {
+        const result = {
+          kind: "poll",
+          action: "poll",
+          channel: "directchat",
+          to: "room-1",
+          handledBy: "core",
+          payload: {},
+          dryRun: false,
+          pollResult: {
+            channel: "directchat",
+            to: "room-1",
+            question: "Lunch?",
+            options: ["Pizza", "Sushi"],
+            maxSelections: 1,
+            durationSeconds: null,
+            durationHours: null,
+            via,
+            result: delivery,
+          },
+        } satisfies MessageActionResult;
+
+        expect(formatMessageCliText(result)).toEqual([
+          via === "direct"
+            ? `✅ Poll sent via Direct Chat. Message ID: ${messageId}`
+            : `✅ Poll sent via gateway (directchat). Message ID: ${messageId}`,
+          ...pollLine,
+        ]);
+      }
+    },
+  );
+});
+
+describe("formatMessageCliText broadcast results", () => {
+  it("reports aggregate failure while preserving every target row", () => {
+    const result = {
+      kind: "broadcast",
+      action: "broadcast",
+      channel: "directchat",
+      handledBy: "core",
+      payload: {
+        results: [
+          ...Array.from({ length: 51 }, (_, index) => ({
+            channel: "directchat" as const,
+            to: `room-ok-${index}`,
+            ok: true as const,
+          })),
+          {
+            channel: "directchat",
+            to: "room-suppressed",
+            ok: false,
+            error: "Broadcast send suppressed: cancelled_by_message_sending_hook.",
+          },
+          {
+            channel: "directchat",
+            to: "room-partial",
+            ok: false,
+            error: "second payload failed",
+            sentBeforeError: true,
+          },
+        ],
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain("Broadcast failed (51/53 succeeded, 2 failed)");
+    expect(output).not.toContain("Broadcast complete");
+    expect(output).toContain("room-ok-50");
+    expect(output).toContain("room-suppressed");
+    expect(output).toContain("room-partial");
+    expect(output).toContain("Broadcast send suppressed");
+    expect(output).toContain("second payload failed");
+  });
+});

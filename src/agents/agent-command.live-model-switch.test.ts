@@ -1,9 +1,68 @@
+import fs from "node:fs/promises";
 /** Tests live model switching behavior in active agent command sessions. */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { expectDefined, toStringifiedError } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  runExclusiveSqliteSessionWrite,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { withInstallationTarget } from "../infra/installation-target-context.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
+import {
+  type CommandSessionEntryFixture,
+  createChannelModelRuntimeConfig,
+  createCommandSessionEntry,
+  createCommandSessionFixture,
+  createConfiguredModelCompatRuntimeConfig,
+  createLegacyAutoFallbackAliasCollisionConfig,
+  createTestModelSelection,
+  createTestModelVisibilityPolicy,
+  makeSuccessResult,
+  resetTestSessionReaders,
+} from "./agent-command.live-model-switch.test-helpers.js";
+import { registerAgentCommandPreparedConfigCases } from "./agent-command.prepared-config.test-support.js";
+import {
+  registerAgentCommandRecoveryCases,
+  withStoredAgentCommandRecoverySession,
+} from "./agent-command.restart-recovery.test-harness.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import { FailoverError } from "./failover/error.js";
+import type { FailoverReason } from "./failover/signal.js";
+import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import { createAgentRunRestartAbortError } from "./run-termination.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
+import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "./run-termination.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -22,11 +81,26 @@ const state = vi.hoisted(() => ({
   acpRunTurnMock: vi.fn((..._args: unknown[]): unknown => undefined),
   buildAcpResultMock: vi.fn(),
   createAcpVisibleTextAccumulatorMock: vi.fn(),
+  emitAcpLifecycleStartMock: vi.fn(),
   emitAcpLifecycleEndMock: vi.fn(),
   emitAcpLifecycleErrorMock: vi.fn(),
+  emitAcpRuntimeEventMock: vi.fn(),
+  gatewayCallMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
+  resolveAcpLifecycleEndFieldsMock: vi.fn(),
+  appendExactAssistantMessageMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
+  runMemoryFlushIfNeededMock: vi.fn(
+    async ({
+      sessionEntry,
+    }: {
+      sessionEntry?: SessionEntry;
+    }): Promise<{ sessionEntry?: SessionEntry; outcome: "skipped" | "failed" }> => ({
+      sessionEntry,
+      outcome: "skipped",
+    }),
+  ),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
   resolveAcpDispatchPolicyErrorMock: vi.fn(),
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
@@ -37,17 +111,27 @@ const state = vi.hoisted(() => ({
   ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
+  isModelSelectionLockedMock: vi.fn(
+    (entry: unknown) =>
+      (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
+  ),
+  applyModelOverrideToSessionEntryMock: vi.fn((_params: unknown) => ({ updated: false })),
+  repairProviderWrappedModelOverrideMock: vi.fn((_params: unknown) => ({ updated: false })),
   resolveAutoFallbackPrimaryProbeMock: vi.fn((_params: unknown) => undefined as unknown),
   resolveChannelModelOverrideMock: vi.fn((_params: unknown) => null as unknown),
   assertLifecycleCurrentMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
+  commandWarnMock: vi.fn(),
+  loadSessionEntryMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
   resolveAgentDeliveryPlanMock: vi.fn(),
+  resolveAgentDeliveryPlanWithSessionRouteMock: vi.fn(),
   resolveAgentOutboundTargetMock: vi.fn(),
   resolveMessageChannelSelectionMock: vi.fn(),
+  createTrajectoryRuntimeRecorderMock: vi.fn(),
   trajectoryRecordEventMock: vi.fn(),
   trajectoryFlushMock: vi.fn(async () => undefined),
   persistSessionEntryMock: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
@@ -55,40 +139,87 @@ const state = vi.hoisted(() => ({
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
-  loadManifestModelCatalogMock: vi.fn(() => []),
+  loadManifestModelCatalogMock: vi.fn((): ModelCatalogSnapshot["entries"] => []),
+  resolvePluginMetadataSnapshotMock: vi.fn(),
+  listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
+  loadProviderScopedThinkingCatalogMock: vi.fn(
+    async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
+  ),
+  loadFullModelCatalogMock: vi.fn(async () => {
+    throw new Error("full model catalog should not materialize");
+  }),
+  loadPreparedModelCatalogSnapshotMock: vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
+    entries: [],
+    routeVariants: [],
+  })),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],
     resolvedSkills: [],
     version: 0,
   })),
-  prepareInternalSessionEffectsTranscriptMock: vi.fn(),
-  removeInternalSessionEffectsTranscriptMock: vi.fn(),
+  prepareInternalSessionEffectsSessionMock: vi.fn(),
+  applySessionEntryLifecycleMutationMock: vi.fn(),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as SessionEntry | undefined,
-  sessionStoreMock: undefined as unknown,
+  sessionStoreMock: undefined as Record<string, SessionEntry> | undefined,
   storePathMock: undefined as string | undefined,
   resolvedSessionKeyMock: undefined as string | undefined,
+  trajectoryRecorderParamsMock: vi.fn(),
+  enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
 
-vi.mock("./model-fallback.js", () => ({
+let manifestMetadataSnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
+
+vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
+  return {
+    ...actual,
+    ensureSessionDiffBaseline: vi.fn(
+      async (params: Parameters<typeof actual.ensureSessionDiffBaseline>[0]) => params.entry,
+    ),
+  };
+});
+
+vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
 
+vi.mock("../audit/execution-identity-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../audit/execution-identity-admission.js")>();
+  return {
+    ...actual,
+    enqueueExecutionIdentityContextAtAdmission: (...args: unknown[]) =>
+      state.enqueueExecutionIdentityContextAtAdmissionMock(...args),
+  };
+});
+
 vi.mock("./command/attempt-execution.runtime.js", () => ({
   buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock(...args),
+  createAcpToolLifecycleTracker: () => ({
+    active: new Map(),
+    terminalToolCallIds: new Set(),
+    saturated: false,
+  }),
   createAcpVisibleTextAccumulator: () => state.createAcpVisibleTextAccumulatorMock(),
   emitAcpAssistantDelta: vi.fn(),
   emitAcpLifecycleEnd: (...args: unknown[]) => state.emitAcpLifecycleEndMock(...args),
   emitAcpLifecycleError: (...args: unknown[]) => state.emitAcpLifecycleErrorMock(...args),
-  emitAcpLifecycleStart: vi.fn(),
-  emitAcpRuntimeEvent: vi.fn(),
+  emitAcpLifecycleStart: (...args: unknown[]) => state.emitAcpLifecycleStartMock(...args),
+  emitAcpPromptSubmitted: vi.fn(),
+  emitAcpRuntimeEvent: (...args: unknown[]) => state.emitAcpRuntimeEventMock(...args),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
+  resolveAcpLifecycleEndFields: (...args: unknown[]) =>
+    state.resolveAcpLifecycleEndFieldsMock(...args),
   persistSessionEntry: vi.fn(),
-  prependInternalEventContext: (body: string) => body,
+  resolveCliTranscriptReplyText: (result: { payloads?: Array<{ text?: string }> }) =>
+    result.payloads
+      ?.map((payload) => payload.text?.trim())
+      .filter(Boolean)
+      .join("\n\n") ?? "",
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
-  sessionFileHasContent: vi.fn(async () => false),
+  sessionTranscriptHasContent: vi.fn(async () => false),
 }));
 
 vi.mock("./command/attempt-execution.shared.js", async () => {
@@ -97,9 +228,14 @@ vi.mock("./command/attempt-execution.shared.js", async () => {
   );
   return {
     ...actual,
-    persistSessionEntry: (...args: unknown[]) => state.persistSessionEntryMock(...args),
+    persistAgentSession: (...args: unknown[]) => state.persistSessionEntryMock(...args),
   };
 });
+
+vi.mock("../config/sessions/transcript.runtime.js", () => ({
+  appendExactAssistantMessageToSessionTranscript: (...args: unknown[]) =>
+    state.appendExactAssistantMessageMock(...args),
+}));
 
 vi.mock("./command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: (...args: unknown[]) => state.deliverAgentCommandResultMock(...args),
@@ -108,6 +244,14 @@ vi.mock("./command/delivery.runtime.js", () => ({
 vi.mock("./command/cli-compaction.js", () => ({
   runCliTurnCompactionLifecycle: (...args: unknown[]) =>
     state.runCliTurnCompactionLifecycleMock(...args),
+}));
+
+vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
+  // Model-switch fixtures have no context pressure; required preflight preserves their session.
+  runSessionCompactionIfNeeded: async (params: { sessionEntry?: SessionEntry }) =>
+    params.sessionEntry,
+  runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
+    state.runMemoryFlushIfNeededMock(params),
 }));
 
 vi.mock("./command/run-context.js", () => ({
@@ -148,35 +292,53 @@ vi.mock("./command/run-context.js", () => ({
 }));
 
 vi.mock("./command/session-store.runtime.js", () => ({
+  loadSessionEntry: (...args: unknown[]) => state.loadSessionEntryMock(...args),
+  loadSessionEntryReadOnly: (...args: unknown[]) => state.loadSessionEntryMock(...args),
   updateSessionStoreAfterAgentRun: (...args: unknown[]) =>
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
 
-vi.mock("./command/session.js", () => ({
-  resolveSession: () => {
-    const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    return {
-      sessionId: "session-1",
-      sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
-      sessionEntry,
-      sessionStore: state.sessionStoreMock,
-      storePath: state.storePathMock,
-      isNewSession: false,
-      persistedThinking:
-        typeof sessionEntry.thinkingLevel === "string" ? sessionEntry.thinkingLevel : undefined,
-      persistedVerbose: undefined,
-    };
-  },
-}));
+vi.mock("./command/session.js", async () => {
+  const { createTestSessionResolver } =
+    await import("./agent-command.live-model-switch.test-mocks.js");
+  return { resolveSession: createTestSessionResolver(state) };
+});
 
 vi.mock("./command/types.js", () => ({}));
 
+// Claim ownership has dedicated store-backed coverage. Keep real recovery commits
+// so command teardown can be tested against the canonical session writer queue.
+vi.mock("./main-session-recovery/main-session-recovery-store.js", () => ({
+  commitMainSessionRecovery: async (
+    ...args: Parameters<
+      typeof import("./main-session-recovery/main-session-recovery-store.js").commitMainSessionRecovery
+    >
+  ) => {
+    const actual = await vi.importActual<
+      typeof import("./main-session-recovery/main-session-recovery-store.js")
+    >("./main-session-recovery/main-session-recovery-store.js");
+    return actual.commitMainSessionRecovery(...args);
+  },
+  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
+  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
+  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
+  validateMainSessionRecoveryOwner: vi.fn(async () => true),
+}));
+
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+}));
+
+vi.mock("./runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  const { createTestRuntimePlugins } =
+    await import("./agent-command.live-model-switch.test-mocks.js");
+  return createTestRuntimePlugins(createEmptyPluginRegistry);
+});
+
+// Harness selection has dedicated coverage; this command suite registers no auto harnesses.
+vi.mock("./harness/support.js", () => ({
+  resolveAutoAgentHarnessId: () => undefined,
 }));
 
 vi.mock("../acp/policy.js", () => ({
@@ -189,23 +351,22 @@ vi.mock("../acp/policy.js", () => ({
 }));
 
 vi.mock("../acp/runtime/errors.js", () => ({
-  toAcpRuntimeError: ({ error }: { error: unknown }) =>
-    error instanceof Error ? error : new Error(String(error)),
+  toAcpRuntimeError: ({ error }: { error: unknown }) => toStringifiedError(error),
+}));
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: (...args: unknown[]) => state.gatewayCallMock(...args),
 }));
 
 vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
   resolveAcpSessionCwd: () => "/tmp",
 }));
 
-vi.mock("../auto-reply/thinking.js", () => ({
-  formatThinkingLevels: () => "low, medium, high",
-  normalizeThinkLevel: (v?: string) => v || undefined,
-  normalizeVerboseLevel: (v?: string) => v || undefined,
-  isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
-  resolveSupportedThinkingLevel: (args: { level?: string }) =>
-    state.resolveSupportedThinkingLevelMock(args),
-  supportsXHighThinking: () => false,
-}));
+vi.mock("../auto-reply/thinking.js", async () => {
+  const { createTestThinkingPolicy } =
+    await import("./agent-command.live-model-switch.test-mocks.js");
+  return createTestThinkingPolicy(state);
+});
 
 vi.mock("../cli/command-format.js", () => ({
   formatCliCommand: (cmd: string) => cmd,
@@ -233,19 +394,47 @@ vi.mock("../config/io.js", () => ({
   }),
 }));
 
-vi.mock("./agent-runtime-config.js", () => {
+vi.mock("./agent-runtime-config.js", () => ({
+  resolveAgentRuntimeConfig: vi.fn(
+    async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+  ),
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   return {
-    resolveAgentRuntimeConfig: async () => ({
-      loadedRaw: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      sourceConfig: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      cfg: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-    }),
+    isPluginMetadataSnapshotCompatible: () => false,
+    rebasePluginMetadataSnapshotManifestRegistry,
+    resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+      state.resolvePluginMetadataSnapshotMock(...args),
+    resolvePluginMetadataSnapshotAsync: async (...args: unknown[]) =>
+      state.resolvePluginMetadataSnapshotMock(...args),
   };
 });
 
-vi.mock("../config/runtime-snapshot.js", () => ({
-  setRuntimeConfigSnapshot: vi.fn(),
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
+  expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
+  hasSkillReferenceCandidate: () => true,
+  prepareSkillCommandsForWorkspace: async (params: unknown) =>
+    state.listSkillCommandsForWorkspaceMock(params),
+  resolveEffectiveAgentSkillFilter: () => undefined,
 }));
+
+vi.mock("../config/runtime-snapshot.js", async () => {
+  const { hashRuntimeConfigValue } = await vi.importActual<
+    typeof import("../config/runtime-snapshot.js")
+  >("../config/runtime-snapshot.js");
+  return {
+    hashRuntimeConfigValue,
+    getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+    // No source snapshot: runtime-source projection no-ops and resolvers read the
+    // provided config directly, matching this suite's pre-projection world.
+    getRuntimeConfigSourceSnapshot: () => null,
+    registerRuntimeConfigSnapshotPreparer: vi.fn(),
+    setRuntimeConfigSnapshot: vi.fn(),
+  };
+});
 
 vi.mock("../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "default",
@@ -259,30 +448,37 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
-  resolveSessionTranscriptFile: async () => ({
-    sessionFile: "/tmp/session.jsonl",
-    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
+  resolveSessionTranscriptFile: async (params: { sessionEntry?: SessionEntry }) => ({
+    sessionFile: params.sessionEntry?.sessionFile ?? "/tmp/session.jsonl",
+    sessionEntry: params.sessionEntry ?? { sessionId: "session-1", updatedAt: Date.now() },
   }),
 }));
 
-vi.mock("./internal-session-effects.js", () => ({
-  prepareInternalSessionEffectsTranscript: (...args: unknown[]) =>
-    state.prepareInternalSessionEffectsTranscriptMock(...args),
-  removeInternalSessionEffectsTranscript: (...args: unknown[]) =>
-    state.removeInternalSessionEffectsTranscriptMock(...args),
+vi.mock("./internal-session-effects.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./internal-session-effects.js")>()),
+  prepareInternalSessionEffectsSession: (...args: unknown[]) =>
+    state.prepareInternalSessionEffectsSessionMock(...args),
 }));
 
-vi.mock("../infra/agent-events.js", () => ({
+vi.mock("../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/agent-events.js")>()),
   assertAgentRunLifecycleGenerationCurrent: (...args: unknown[]) =>
     state.assertLifecycleCurrentMock(...args),
   captureAgentRunLifecycleGeneration: () => "test-generation",
-  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
   getAgentEventLifecycleGeneration: () => "test-generation",
-  onAgentEvent: vi.fn(),
-  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
 }));
+vi.mock("../infra/agent-run-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/agent-run-registry.js")>();
+  return {
+    ...actual,
+    clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
+    registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
+  };
+});
 
 vi.mock("../infra/outbound/session-context.js", () => ({
   buildOutboundSessionContext: () => ({}),
@@ -290,6 +486,8 @@ vi.mock("../infra/outbound/session-context.js", () => ({
 
 vi.mock("../infra/outbound/agent-delivery.js", () => ({
   resolveAgentDeliveryPlan: (...args: unknown[]) => state.resolveAgentDeliveryPlanMock(...args),
+  resolveAgentDeliveryPlanWithSessionRoute: (...args: unknown[]) =>
+    state.resolveAgentDeliveryPlanWithSessionRouteMock(...args),
   resolveAgentOutboundTarget: (...args: unknown[]) => state.resolveAgentOutboundTargetMock(...args),
 }));
 
@@ -303,10 +501,10 @@ vi.mock("../infra/skills-remote.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => {
+  createSubsystemLogger: (subsystem: string) => {
     const logger = {
       info: vi.fn(),
-      warn: vi.fn(),
+      warn: subsystem === "agents/agent-command" ? state.commandWarnMock : vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
       trace: vi.fn(),
@@ -316,6 +514,12 @@ vi.mock("../logging/subsystem.js", () => ({
     return logger;
   },
 }));
+
+afterAll(() => {
+  // This suite runs in a shared worker; do not leak its module-level logger
+  // mock into later files that verify real warning diagnostics.
+  vi.doUnmock("../logging/subsystem.js");
+});
 
 vi.mock("../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: (params: unknown) => state.resolveChannelModelOverrideMock(params),
@@ -327,7 +531,7 @@ vi.mock("../routing/session-key.js", async () => {
   );
   return {
     ...actual,
-    normalizeAgentId: (id: string) => id,
+    normalizeAgentId: vi.fn((id: string) => id),
     normalizeMainKey: (key?: string | null) => key?.trim() || "main",
   };
 });
@@ -344,8 +548,18 @@ vi.mock("../sessions/level-overrides.js", () => ({
 }));
 
 vi.mock("../sessions/model-overrides.js", () => ({
-  applyModelOverrideToSessionEntry: () => ({ updated: false }),
-  repairProviderWrappedModelOverride: () => ({ updated: false }),
+  applyModelOverrideToSessionEntry: (params: unknown) =>
+    state.applyModelOverrideToSessionEntryMock(params),
+  isModelSelectionLocked: (entry: unknown) => state.isModelSelectionLockedMock(entry),
+  MODEL_SELECTION_LOCKED_MESSAGE: "Model selection is locked for this session.",
+  ModelSelectionLockedError: class ModelSelectionLockedError extends Error {
+    constructor() {
+      super("Model selection is locked for this session.");
+      this.name = "ModelSelectionLockedError";
+    }
+  },
+  repairProviderWrappedModelOverride: (params: unknown) =>
+    state.repairProviderWrappedModelOverrideMock(params),
 }));
 
 vi.mock("../sessions/send-policy.js", () => ({
@@ -356,13 +570,18 @@ vi.mock("../terminal/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 
+// mock-isolation: Record only attempt metadata without opening a trajectory database.
 vi.mock("../trajectory/runtime.js", () => ({
-  createTrajectoryRuntimeRecorder: () => ({
-    enabled: true,
-    filePath: "/tmp/session.trajectory.jsonl",
-    recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
-    flush: () => state.trajectoryFlushMock(),
-  }),
+  createTrajectoryRuntimeRecorder: async (params: unknown) => {
+    state.createTrajectoryRuntimeRecorderMock(params);
+    state.trajectoryRecorderParamsMock(params);
+    return {
+      enabled: true,
+      filePath: "/tmp/session.trajectory.jsonl",
+      recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
+      flush: () => state.trajectoryFlushMock(),
+    };
+  },
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -376,33 +595,40 @@ vi.mock("../utils/message-channel.js", () => ({
       .toLowerCase(),
 }));
 
-vi.mock("./agent-scope.js", () => ({
-  clearAutoFallbackPrimaryProbeSelection: vi.fn(),
-  entryMatchesAutoFallbackPrimaryProbe: () => true,
-  hasLegacyAutoFallbackWithoutOrigin: (entry: unknown) =>
-    state.hasLegacyAutoFallbackWithoutOriginMock(entry),
-  hasSessionAutoModelFallbackProvenance: () => false,
-  listAgentEntries: () => [],
-  listAgentIds: () => ["default"],
-  markAutoFallbackPrimaryProbe: vi.fn(),
-  resolveAutoFallbackPrimaryProbe: (params: unknown) =>
-    state.resolveAutoFallbackPrimaryProbeMock(params),
-  resolveAgentConfig: () => undefined,
-  resolveAgentDir: () => "/tmp/agent",
-  resolveDefaultAgentId: () => "default",
-  resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
-  resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
-  resolveSessionAgentId: () => "default",
-  resolveAgentSkillsFilter: () => undefined,
-  resolveAgentWorkspaceDir: () => "/tmp/workspace",
-}));
+vi.mock("./agent-scope.js", async () => {
+  const { resolveAgentModelFallbacksOverride, resolveSubagentSpawnModelFallbacksOverride } =
+    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+  const { createTestAgentScope } = await import("./agent-command.live-model-switch.test-mocks.js");
+  return createTestAgentScope(state, {
+    resolveAgentModelFallbacksOverride,
+    resolveSubagentSpawnModelFallbacksOverride,
+  });
+});
 
-vi.mock("./auth-profiles.js", () => ({
-  ensureAuthProfileStore: () => ({ profiles: {} }),
-}));
+vi.mock("./auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-profiles.js")>("./auth-profiles.js");
+  return {
+    ...actual,
+    ensureAuthProfileStore: () => ({ profiles: {} }),
+  };
+});
 
-vi.mock("./auth-profiles/store.js", () => ({
-  ensureAuthProfileStore: () => state.authProfileStoreMock,
+vi.mock("./auth-profiles/store-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-profiles/store-runtime.js")>(
+    "./auth-profiles/store-runtime.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+  };
+});
+
+vi.mock("./auth-profiles/store.js", async (importOriginal) => ({
+  // Native loader bootstrap still needs the real auth-store factory exports.
+  ...(await importOriginal<typeof import("./auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: () => state.authProfileStoreMock,
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    state.authProfileStoreMock.profiles[profileId],
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -411,8 +637,14 @@ vi.mock("./auth-profiles/session-override.js", () => ({
 }));
 
 vi.mock("./defaults.js", () => ({
+  DEFAULT_CONTEXT_TOKENS: 200_000,
   DEFAULT_MODEL: "claude",
   DEFAULT_PROVIDER: "anthropic",
+}));
+
+// Exec eligibility is outside model-switch scope; avoid loading its policy graph.
+vi.mock("./exec-defaults.js", () => ({
+  resolveNodeExecEligibility: () => ({ canExec: false }),
 }));
 
 vi.mock("./lanes.js", () => ({
@@ -423,304 +655,25 @@ vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: state.loadManifestModelCatalogMock,
 }));
 
-vi.mock("./model-selection.js", () => {
-  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
-  const buildAllowedModelSet = ({
-    cfg,
-    catalog,
-    defaultProvider,
-    defaultModel,
-  }: {
-    cfg?: unknown;
-    catalog?: Array<{ provider: string; id: string }>;
-    defaultProvider: string;
-    defaultModel?: string;
-  }) => {
-    const modelMap =
-      (cfg as { agents?: { defaults?: { models?: Record<string, unknown> } } } | undefined)?.agents
-        ?.defaults?.models ?? {};
-    const configuredCatalog = (
-      (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } } | undefined)
-        ?.models?.providers
-        ? Object.entries(
-            (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } }).models!
-              .providers!,
-          ).flatMap(([provider, entry]) =>
-            Array.isArray(entry?.models)
-              ? entry.models
-                  .filter(
-                    (model): model is Record<string, unknown> =>
-                      Boolean(model) && typeof model === "object",
-                  )
-                  .map((model) => {
-                    const id = typeof model.id === "string" ? model.id : "";
-                    return {
-                      provider,
-                      id,
-                      name: typeof model.name === "string" ? model.name : id,
-                      reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
-                      compat: model.compat,
-                    };
-                  })
-                  .filter((model) => model.id)
-              : [],
-          )
-        : []
-    ) as Array<{ provider: string; id: string }>;
-    const combinedCatalog = [...(catalog ?? []), ...configuredCatalog];
-    const allowedKeys = new Set<string>(
-      Object.keys(modelMap).map((ref) => {
-        const [provider, ...modelParts] = ref.split("/");
-        return `${provider}/${modelParts.join("/")}`;
-      }),
-    );
-    if (defaultModel) {
-      allowedKeys.add(`${defaultProvider}/${defaultModel}`);
+vi.mock("./model-catalog.runtime.js", () => ({
+  // The scoped thinking catalog hydrates from the same runtime snapshot the test controls.
+  loadProviderScopedThinkingCatalog: async (params: unknown) => {
+    const scoped = await state.loadProviderScopedThinkingCatalogMock(params);
+    if (scoped !== undefined) {
+      return scoped;
     }
-    if (Object.keys(modelMap).length === 0) {
-      return {
-        allowedKeys,
-        allowedCatalog: combinedCatalog,
-        allowAny: true,
-      };
-    }
-    return {
-      allowedKeys,
-      allowedCatalog: combinedCatalog.filter((entry) =>
-        allowedKeys.has(`${entry.provider}/${entry.id}`),
-      ),
-      allowAny: false,
-    };
-  };
-  return {
-    buildAllowedModelSet,
-    createModelVisibilityPolicy: (params: {
-      cfg?: unknown;
-      catalog?: Array<{ provider: string; id: string }>;
-      defaultProvider: string;
-      defaultModel?: string;
-    }) => {
-      const allowed = buildAllowedModelSet(params);
-      const allowsKey = (key: string) => {
-        if (allowed.allowAny || allowed.allowedKeys.has(key)) {
-          return true;
-        }
-        const slash = key.indexOf("/");
-        return slash > 0 && allowed.allowedKeys.has(`${key.slice(0, slash)}/*`);
-      };
-      return {
-        ...allowed,
-        exactModelRefs: [],
-        providerWildcards: new Set<string>(),
-        hasConfiguredEntries: !allowed.allowAny,
-        hasProviderWildcards: [...allowed.allowedKeys].some((key) => key.endsWith("/*")),
-        allowsKey,
-        allows: ({ provider, model }: { provider: string; model: string }) =>
-          allowsKey(`${provider}/${model}`),
-        resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
-          const key = `${provider}/${model}`;
-          if (allowsKey(key)) {
-            return { provider, model };
-          }
-          const fallback = allowed.allowedCatalog[0];
-          return fallback ? { provider: fallback.provider, model: fallback.id } : null;
-        },
-        visibleCatalog: ({ catalog }: { catalog: Array<{ provider: string; id: string }> }) =>
-          catalog,
-      };
-    },
-    buildConfiguredModelCatalog: ({ cfg }: { cfg?: unknown }) => {
-      const providers = (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } })
-        ?.models?.providers;
-      if (!providers) {
-        return [];
-      }
-      return Object.entries(providers).flatMap(([provider, entry]) =>
-        Array.isArray(entry?.models)
-          ? entry.models
-              .filter(
-                (model): model is Record<string, unknown> =>
-                  Boolean(model) && typeof model === "object",
-              )
-              .map((model) => {
-                const id = typeof model.id === "string" ? model.id : "";
-                return {
-                  provider,
-                  id,
-                  name: typeof model.name === "string" ? model.name : id,
-                  reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
-                  compat: model.compat,
-                };
-              })
-              .filter((model) => model.id)
-          : [],
-      );
-    },
-    isModelKeyAllowedBySet: (allowedKeys: ReadonlySet<string>, key: string) => {
-      if (allowedKeys.has(key)) {
-        return true;
-      }
-      const slash = key.indexOf("/");
-      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
-    },
-    resolveAllowedModelSelection: ({
-      provider,
-      model,
-      allowAny,
-      allowedKeys,
-      allowedCatalog,
-    }: {
-      provider: string;
-      model: string;
-      allowAny: boolean;
-      allowedKeys: ReadonlySet<string>;
-      allowedCatalog: Array<{ provider: string; id: string }>;
-    }) => {
-      const key = `${provider}/${model}`;
-      if (
-        allowAny ||
-        allowedKeys.has(key) ||
-        (key.includes("/") && allowedKeys.has(`${key.slice(0, key.indexOf("/"))}/*`))
-      ) {
-        return { provider, model };
-      }
-      const fallback = allowedCatalog[0];
-      return fallback ? { provider: fallback.provider, model: fallback.id } : null;
-    },
-    buildModelAliasIndex: ({
-      cfg,
-    }: {
-      cfg?: { agents?: { defaults?: { models?: Record<string, { alias?: string }> } } };
-    }) => {
-      const byAlias = new Map<
-        string,
-        { alias: string; ref: { provider: string; model: string } }
-      >();
-      const byKey = new Map<string, string[]>();
-      for (const [ref, entry] of Object.entries(cfg?.agents?.defaults?.models ?? {})) {
-        const alias = entry?.alias?.trim();
-        if (!alias) {
-          continue;
-        }
-        const [provider, ...modelParts] = ref.split("/");
-        const model = modelParts.join("/");
-        byAlias.set(alias.toLowerCase(), { alias, ref: { provider, model } });
-        byKey.set(`${provider}/${model}`, [alias]);
-      }
-      return { byAlias, byKey };
-    },
-    modelKey: (p: string, m: string) => `${p}/${m}`,
-    normalizeModelRef: (p: string, m: string) => ({ provider: normalizeProviderId(p), model: m }),
-    normalizeProviderId,
-    normalizeProviderIdForAuth: normalizeProviderId,
-    parseModelRef: (m: string, p: string) => {
-      const slash = m.indexOf("/");
-      return slash > 0
-        ? { provider: m.slice(0, slash), model: m.slice(slash + 1) }
-        : { provider: p, model: m };
-    },
-    resolveModelRefFromString: ({
-      raw,
-      defaultProvider,
-      aliasIndex,
-    }: {
-      raw: string;
-      defaultProvider: string;
-      aliasIndex?: {
-        byAlias: Map<string, { alias: string; ref: { provider: string; model: string } }>;
-      };
-    }) => {
-      const aliasMatch = aliasIndex?.byAlias.get(raw.trim().toLowerCase());
-      if (aliasMatch) {
-        return { ref: aliasMatch.ref, alias: aliasMatch.alias };
-      }
-      const slash = raw.indexOf("/");
-      return {
-        ref:
-          slash > 0
-            ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
-            : { provider: defaultProvider, model: raw },
-      };
-    },
-    resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
-      const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
-        ?.agents?.defaults?.model;
-      const primary = typeof raw === "string" ? raw : raw?.primary;
-      const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
-      return { provider, model: modelParts.join("/") || "claude" };
-    },
-    resolveDefaultModelForAgent: ({ cfg }: { cfg?: unknown }) => {
-      const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
-        ?.agents?.defaults?.model;
-      const primary = typeof raw === "string" ? raw : raw?.primary;
-      const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
-      return { provider, model: modelParts.join("/") || "claude" };
-    },
-    resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
-  };
+    return (await state.loadPreparedModelCatalogSnapshotMock()).entries;
+  },
+  loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
+}));
+
+vi.mock("./model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./model-selection.js")>();
+  return { ...actual, ...createTestModelSelection(state) };
 });
 
 vi.mock("./model-visibility-policy.js", () => ({
-  createModelVisibilityPolicy: ({
-    cfg,
-    catalog,
-    defaultProvider,
-    defaultModel,
-  }: {
-    cfg?: unknown;
-    catalog?: Array<{ provider: string; id: string }>;
-    defaultProvider: string;
-    defaultModel?: string;
-  }) => {
-    const modelMap =
-      (cfg as { agents?: { defaults?: { models?: Record<string, unknown> } } } | undefined)?.agents
-        ?.defaults?.models ?? {};
-    const allowedKeys = new Set<string>(
-      Object.keys(modelMap).map((ref) => {
-        const [provider, ...modelParts] = ref.split("/");
-        return `${provider}/${modelParts.join("/")}`;
-      }),
-    );
-    if (defaultModel) {
-      allowedKeys.add(`${defaultProvider}/${defaultModel}`);
-    }
-    const allowAny = Object.keys(modelMap).length === 0;
-    const allowedCatalog = allowAny
-      ? (catalog ?? [])
-      : (catalog ?? []).filter((entry) => allowedKeys.has(`${entry.provider}/${entry.id}`));
-    const allowsKey = (key: string) => {
-      if (allowAny || allowedKeys.has(key)) {
-        return true;
-      }
-      const slash = key.indexOf("/");
-      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
-    };
-    return {
-      allowAny,
-      allowedKeys,
-      allowedCatalog,
-      exactModelRefs: [],
-      providerWildcards: new Set<string>(),
-      hasConfiguredEntries: !allowAny,
-      hasProviderWildcards: [...allowedKeys].some((key) => key.endsWith("/*")),
-      allowsKey,
-      allows: ({ provider, model }: { provider: string; model: string }) =>
-        allowsKey(`${provider}/${model}`),
-      resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
-        const key = `${provider}/${model}`;
-        if (allowsKey(key)) {
-          return { provider, model };
-        }
-        const fallback = allowedCatalog[0];
-        return fallback ? { provider: fallback.provider, model: fallback.id } : null;
-      },
-      visibleCatalog: ({
-        catalog: catalogLocal,
-      }: {
-        catalog: Array<{ provider: string; id: string }>;
-      }) => catalogLocal,
-    };
-  },
+  createModelVisibilityPolicy: createTestModelVisibilityPolicy,
 }));
 
 vi.mock("./provider-auth-aliases.js", () => ({
@@ -796,25 +749,40 @@ vi.mock("./workspace.js", () => ({
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: (...args: unknown[]) => state.acpResolveSessionMock(...args),
+    resolveSessionAsync: async (...args: unknown[]) => state.acpResolveSessionMock(...args),
     runTurn: (...args: unknown[]) => state.acpRunTurnMock(...args),
   }),
 }));
 
+/** Explicit store paths travel with session scope into database Workers. */
+function createCommandSessionPaths(root: string) {
+  return {
+    sessions: path.join(root, "visible", "agents", "default", "sessions", "sessions.json"),
+    internalStore: path.join(root, "internal", "agents", "default", "sessions", "sessions.json"),
+  };
+}
+
+const commandDirectories = useSessionStoreTempDirs(afterAll, "live-model-switch-");
+let commandPaths: ReturnType<typeof createCommandSessionPaths>;
+
 let agentCommand: typeof import("./agent-command.js").agentCommand;
-let agentCommandTesting: typeof import("./agent-command.js").testing;
+let prepareAgentCommandExecution: typeof import("./command/prepare.js").prepareAgentCommandExecution;
+let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
-  agentCommandTesting ??= mod.testing;
+  agentCommandFromSystem ??= mod.agentCommandFromSystem;
+  ({ prepareAgentCommandExecution } = await import("./command/prepare.js"));
 });
 
 type FallbackRunnerParams = {
   provider: string;
   model: string;
   sessionId?: string;
-  run: (provider: string, model: string) => Promise<unknown>;
+  fallbacksOverride?: string[];
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+  run: (provider: string, model: string, options: ModelFallbackRunOptions) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
   classifyResult?: (params: {
     provider: string;
@@ -825,16 +793,50 @@ type FallbackRunnerParams = {
   }) => unknown;
 };
 
+function runInitialFallbackAttempt(
+  params: FallbackRunnerParams,
+  provider = params.provider,
+  model = params.model,
+) {
+  return params.run(provider, model, {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "initial",
+    },
+  });
+}
+
+function runSubsequentFallbackAttempt(
+  params: FallbackRunnerParams,
+  provider: string,
+  model: string,
+  fallbackReason: FailoverReason,
+) {
+  return params.run(provider, model, {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "fallback",
+      fallbackReason,
+    },
+  });
+}
+
 type ModelSwitchOptions = ConstructorParameters<typeof LiveSessionModelSwitchError>[0];
 
-function makeSuccessResult(provider: string, model: string) {
+function makeCliSuccessResult() {
+  const result = makeSuccessResult("openai", "gpt-5.4");
   return {
-    payloads: [{ text: "ok" }],
+    ...result,
     meta: {
-      durationMs: 100,
-      aborted: false,
-      stopReason: "end_turn",
-      agentMeta: { provider, model },
+      ...result.meta,
+      executionTrace: {
+        runner: "cli",
+        fallbackUsed: false,
+        winnerProvider: "openai",
+        winnerModel: "gpt-5.4",
+      },
     },
   };
 }
@@ -843,35 +845,26 @@ function makeEmptyResult(provider: string, model: string) {
   return {
     payloads: [],
     meta: {
+      ...makeSuccessResult(provider, model).meta,
       durationMs: 30_000,
-      aborted: false,
-      stopReason: "end_turn",
       agentHarnessResultClassification: "empty",
-      agentMeta: { provider, model },
     },
   };
 }
 
-function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
-  let invocation = 0;
-  state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-    invocation += 1;
-    if (invocation === 1) {
-      throw new LiveSessionModelSwitchError(switchOptions);
+function setupModelSwitchRetry(switchOptions: ModelSwitchOptions, attemptBeforeSwitch = false) {
+  setupSingleAttemptFallback();
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    if (attemptBeforeSwitch) {
+      await runInitialFallbackAttempt(params);
     }
-    const result = await params.run(params.provider, params.model);
-    return {
-      result,
-      provider: params.provider,
-      model: params.model,
-      attempts: [],
-    };
+    throw new LiveSessionModelSwitchError(switchOptions);
   });
 }
 
 function setupSingleAttemptFallback() {
   state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-    const result = await params.run(params.provider, params.model);
+    const result = await runInitialFallbackAttempt(params);
     return {
       result,
       provider: params.provider,
@@ -881,12 +874,42 @@ function setupSingleAttemptFallback() {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
+function setupSameModelFallback() {
+  state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+    const first = await runInitialFallbackAttempt(params);
+    const result = await runSubsequentFallbackAttempt(
+      params,
+      params.provider,
+      params.model,
+      "unknown",
+    );
+    return { result, provider: params.provider, model: params.model, attempts: [first] };
+  });
 }
+
+function setupSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
+  setupSingleAttemptFallback();
+  state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult(provider, model));
+}
+
+function setupAdmittedSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
+  setupSingleAttemptFallback();
+  state.runAgentAttemptMock.mockImplementation(
+    async (params: { preparedRunAdmission: { admit: (kind: "embedded") => Promise<unknown> } }) => {
+      await params.preparedRunAdmission.admit("embedded");
+      return makeSuccessResult(provider, model);
+    },
+  );
+}
+
+function setupAcpSession(): void {
+  state.acpResolveSessionMock.mockReturnValue({
+    kind: "ready",
+    meta: { agent: "claude", cwd: "/tmp/workspace" },
+  });
+}
+
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -896,11 +919,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
+  return expectDefined(mock.mock.calls[callIndex], `mock call ${callIndex}`)[argIndex];
 }
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
@@ -910,22 +929,82 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
   }
 }
 
-async function runBasicAgentCommand() {
-  await agentCommand({
+function agentLifecycleEvents() {
+  return state.emitAgentEventMock.mock.calls
+    .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+    .filter((event) => event.stream === "lifecycle");
+}
+
+function findPersistedTranscriptRepair() {
+  return state.persistSessionEntryMock.mock.calls
+    .map(([params]) => (params as { entry?: SessionEntry }).entry?.pendingTranscriptRepair)
+    .find((repair) => repair?.length);
+}
+
+function runBasicAgentCommand(overrides: Partial<Parameters<typeof agentCommand>[0]> = {}) {
+  return agentCommand({
     message: "hello",
     to: "+1234567890",
+    ...overrides,
   });
 }
 
-function setupSessionTouchStore(): void {
-  const sessionEntry: SessionEntry = {
-    sessionId: "session-1",
-    updatedAt: 1,
-    skillsSnapshot: { prompt: "", skills: [], version: 0 },
-  };
-  state.sessionEntryMock = sessionEntry;
-  state.sessionStoreMock = { "agent:main:main": sessionEntry };
-  state.storePathMock = "/tmp/openclaw-sessions.json";
+async function runSystemAgentCommand() {
+  await agentCommandFromSystem(
+    {
+      message: "boot",
+      sessionKey: "agent:main:boot",
+      deliver: false,
+    },
+    { boundary: "gateway.boot" },
+  );
+}
+
+function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0]> = {}) {
+  return agentCommand({
+    message: "hello",
+    channel: "discord",
+    to: "discord:dm:123",
+    accountId: "main",
+    deliver: true,
+    ...overrides,
+  });
+}
+
+function runInternalModelCommand(runId: string) {
+  return agentCommand({
+    message: "probe",
+    to: "+1234567890",
+    runId,
+    modelRun: true,
+    promptMode: "none",
+    sessionEffects: "internal",
+  });
+}
+
+function setupStoredSession(
+  overrides: CommandSessionEntryFixture = {},
+  storePath = commandPaths.sessions,
+  sessionKey = "agent:main:main",
+): { entry: SessionEntry; store: Record<string, SessionEntry> } {
+  const fixture = createCommandSessionFixture(overrides, sessionKey);
+  state.sessionEntryMock = fixture.entry;
+  state.sessionStoreMock = fixture.store;
+  state.storePathMock = storePath;
+  return fixture;
+}
+
+function setupBareStoredSession(
+  overrides: CommandSessionEntryFixture = {},
+  storePath = commandPaths.sessions,
+  sessionKey = "agent:main:main",
+): { entry: SessionEntry; store: Record<string, SessionEntry> } {
+  const entry = createCommandSessionEntry(overrides);
+  const store = { [sessionKey]: entry };
+  state.sessionEntryMock = entry;
+  state.sessionStoreMock = store;
+  state.storePathMock = storePath;
+  return { entry, store };
 }
 
 function expectFallbackOverrideCalls(first: boolean, second: boolean) {
@@ -938,8 +1017,19 @@ function expectFallbackOverrideCalls(first: boolean, second: boolean) {
   });
 }
 
+function getAgentCommandRecoveryFixture() {
+  return {
+    state,
+    agentCommand,
+    setupSingleAttemptFallback,
+    setupBareStoredSession,
+    makeSuccessResult,
+  };
+}
+
 describe("agentCommand – LiveSessionModelSwitchError retry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    commandPaths = createCommandSessionPaths(commandDirectories.make());
     vi.clearAllMocks();
     state.acpResolveSessionMock.mockReturnValue(null);
     state.resolveAcpAgentPolicyErrorMock.mockReturnValue(null);
@@ -954,7 +1044,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    manifestMetadataSnapshot = createPluginMetadataSnapshotFixture();
+    state.resolvePluginMetadataSnapshotMock.mockReturnValue(manifestMetadataSnapshot);
+    state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
+    state.loadFullModelCatalogMock.mockClear();
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+    });
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
+    state.isModelSelectionLockedMock.mockImplementation(
+      (entry: unknown) =>
+        (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
+    );
+    state.applyModelOverrideToSessionEntryMock.mockReturnValue({ updated: false });
+    state.repairProviderWrappedModelOverrideMock.mockReturnValue({ updated: false });
     state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue(undefined);
     state.resolveChannelModelOverrideMock.mockImplementation((params: unknown) => {
       const input = params as {
@@ -990,6 +1094,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
         finalizeRaw: () => text,
         finalize: () => text,
+        finalizeReplySnapshot: () => ({ disposition: "visible" as const, text }),
       };
     });
     state.buildAcpResultMock.mockImplementation((params: { payloadText?: string }) => ({
@@ -1008,6 +1113,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionEntry: params.sessionEntry,
       }),
     );
+    state.resolveAcpLifecycleEndFieldsMock.mockReset().mockReturnValue({});
+    state.appendExactAssistantMessageMock.mockReset().mockResolvedValue({
+      ok: true,
+      target: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: commandPaths.sessions,
+      },
+      messageId: "repaired-message",
+    });
     state.runCliTurnCompactionLifecycleMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
     );
@@ -1045,7 +1161,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       resolvedSkills: [],
       version: 0,
     });
-    state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
+    state.deliverAgentCommandResultMock.mockImplementation(
+      async ({
+        result,
+        payloads,
+      }: Parameters<typeof import("./command/delivery.js").deliverAgentCommandResult>[0]) => ({
+        payloads: payloads ?? [],
+        meta: result.meta,
+      }),
+    );
     state.resolveAgentOutboundTargetMock.mockImplementation(
       (params: { plan?: { resolvedTo?: string }; targetMode?: string }) => ({
         resolvedTarget: null,
@@ -1054,6 +1178,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     );
     state.resolveMessageChannelSelectionMock.mockRejectedValue(new Error("channel required"));
+    await resetTestSessionReaders(state);
     state.resolveAgentDeliveryPlanMock.mockImplementation(
       (params: {
         accountId?: string;
@@ -1062,17 +1187,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         requestedChannel?: string;
         sessionEntry?: SessionEntry;
       }) => {
-        const context = params.sessionEntry?.deliveryContext;
-        const channel =
-          params.requestedChannel ??
-          context?.channel ??
-          params.sessionEntry?.lastChannel ??
-          "internal";
-        const to = params.explicitTo ?? context?.to ?? params.sessionEntry?.lastTo;
-        const accountId =
-          params.accountId ?? context?.accountId ?? params.sessionEntry?.lastAccountId;
-        const threadId =
-          params.explicitThreadId ?? context?.threadId ?? params.sessionEntry?.lastThreadId;
+        const context = deliveryContextFromSession(params.sessionEntry);
+        const channel = params.requestedChannel ?? context?.channel ?? "internal";
+        const to = params.explicitTo ?? context?.to;
+        const accountId = params.accountId ?? context?.accountId;
+        const threadId = params.explicitThreadId ?? context?.threadId;
         return {
           baseDelivery: {},
           resolvedChannel: channel,
@@ -1083,98 +1202,494 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         };
       },
     );
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockImplementation((params: unknown) =>
+      state.resolveAgentDeliveryPlanMock(params),
+    );
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
-    state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValue(
-      "/tmp/openclaw-internal-run.jsonl",
+    state.prepareInternalSessionEffectsSessionMock.mockResolvedValue({
+      agentId: "default",
+      sessionId: "internal-session",
+      sessionKey: "agent:default:internal-session-effects:run",
+      storePath: commandPaths.internalStore,
+      sessionFile: `sqlite:default:internal-session:${commandPaths.internalStore}`,
+      sessionEntry: { sessionId: "internal-session", updatedAt: 1 },
+    });
+    state.applySessionEntryLifecycleMutationMock.mockReset().mockResolvedValue(undefined);
+    // Keep tracking and deletion planning real; restore the storage fault boundary after each case.
+    vi.spyOn(sessionAccessor, "applySessionEntryLifecycleMutation").mockImplementation((...args) =>
+      state.applySessionEntryLifecycleMutationMock(...args),
     );
-    state.removeInternalSessionEffectsTranscriptMock.mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetPreparedModelRuntimeSnapshotsForTest();
     vi.restoreAllMocks();
   });
 
-  it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {
+  registerAgentCommandPreparedConfigCases({
+    prepare: (...args) => prepareAgentCommandExecution(...args),
+    getConfig: () => state.defaultRuntimeConfig,
+    setAmbientConfig: (config) => {
+      state.runtimeConfigMock = config;
+    },
+    getMetadataSnapshot: () => manifestMetadataSnapshot,
+    metadataLookups: {
+      skillCommands: state.listSkillCommandsForWorkspaceMock,
+      resolution: state.resolvePluginMetadataSnapshotMock,
+    },
+  });
+
+  it.each([
+    {
+      name: "runtime",
+      switchOptions: { provider: "openai", model: "gpt-5.4", agentRuntimeOverride: "codex" },
+      expectedOverride: true,
+    },
+    {
+      name: "auth",
+      switchOptions: {
+        provider: "anthropic",
+        model: "claude",
+        authProfileId: "profile-99",
+        authProfileIdSource: "user",
+      },
+      expectedOverride: false,
+    },
+    {
+      name: "provider",
+      switchOptions: { provider: "openai", model: "claude" },
+      expectedOverride: true,
+    },
+  ] satisfies Array<{
+    name: string;
+    switchOptions: ModelSwitchOptions;
+    expectedOverride: boolean;
+  }>)(
+    "retries a $name switch without ending the run before delivery",
+    async ({ name, switchOptions, expectedOverride }) => {
+      if (name === "runtime") {
+        setupBareStoredSession({ agentRuntimeOverride: "openclaw" });
+      }
+      setupModelSwitchRetry(switchOptions);
+      state.runAgentAttemptMock.mockResolvedValue(
+        makeSuccessResult(switchOptions.provider, switchOptions.model),
+      );
+      state.resolveEffectiveModelFallbacksMock.mockClear();
+
+      await runBasicAgentCommand();
+
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+      const retry = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
+      expect(retry.provider).toBe(switchOptions.provider);
+      expect(retry.model).toBe(switchOptions.model);
+      expect(retry.sessionId).toBe("session-1");
+      expectFallbackOverrideCalls(false, expectedOverride);
+      if (name === "runtime") {
+        expect(retry.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+        expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
+          agentHarnessRuntimeOverride: "codex",
+        });
+      }
+      expectRecordFields(mockCallArg(state.runAgentAttemptMock), { deferTerminalLifecycle: true });
+      const calls = state.emitAgentEventMock.mock.calls;
+      const phase = (call: unknown[]) => {
+        const event = call[0] as { stream?: string; data?: { phase?: string } };
+        return event?.stream === "lifecycle" ? event.data?.phase : undefined;
+      };
+      expect(calls.filter((call) => phase(call) === "end").length).toBeGreaterThanOrEqual(1);
+      expect(calls.filter((call) => phase(call) === "finishing").length).toBeGreaterThanOrEqual(1);
+      const firstFinishingIndex = calls.findIndex((call) => phase(call) === "finishing");
+      const lastEndIndex = calls.findLastIndex((call) => phase(call) === "end");
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+      const deliveryOrder = state.deliverAgentCommandResultMock.mock.invocationCallOrder[0] ?? 0;
+      expect(
+        state.emitAgentEventMock.mock.invocationCallOrder[firstFinishingIndex] ?? 0,
+      ).toBeLessThan(deliveryOrder);
+      expect(deliveryOrder).toBeLessThan(
+        state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "records authoritative ingress only with audit opt-in=%s",
+    async (enabled) => {
+      if (enabled) {
+        state.runtimeConfigMock = {
+          ...state.defaultRuntimeConfig,
+          logging: { audit: { executionIdentity: true } },
+        };
+        state.enqueueExecutionIdentityContextAtAdmissionMock.mockReturnValue(undefined);
+      }
+      setupAdmittedSuccessfulAttempt();
+
+      await runBasicAgentCommand();
+      if (enabled) {
+        await runSystemAgentCommand();
+        expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+          }),
+          expect.objectContaining({ enabled: true }),
+        );
+        expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+          }),
+          expect.objectContaining({ enabled: true }),
+        );
+      } else {
+        expect(state.enqueueExecutionIdentityContextAtAdmissionMock).not.toHaveBeenCalled();
+      }
+      expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(enabled ? 2 : 1);
+    },
+  );
+
+  it("applies the configured run cwd to ordinary (non-ACP) command sessions", async () => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      agents: {
+        ...state.defaultRuntimeConfig.agents,
+        defaults: { ...state.defaultRuntimeConfig.agents.defaults, cwd: "/tmp/task-repo" },
+      },
+    };
+    // Ordinary sessions resolve to a truthy { kind: "none" }; only a real ACP
+    // placement may keep the configured cwd away from the run.
+    state.acpResolveSessionMock.mockReturnValue({ kind: "none" });
+    setupAdmittedSuccessfulAttempt();
+
+    await runBasicAgentCommand();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/task-repo", workspaceDir: "/tmp/workspace" }),
+    );
+  });
+
+  it.each(["completed", "failed"] as const)(
+    "persists a detached recovery start before closing a %s command",
+    async (outcome) => {
+      const stateDir = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-recovery-start-")),
+      );
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          const sessionKey = "agent:default:main";
+          const storePath = path.join(stateDir, "agents", "default", "sessions", "sessions.json");
+          const runId = "recovery-run";
+          const { entry } = setupStoredSession(
+            {
+              lifecycleRunId: runId,
+              restartRecoveryRuns: [{ runId, lifecycleGeneration: "test-generation" }],
+              mainRestartRecovery: { cycleId: "recovery-cycle", revision: 4, chargedAttempts: 3 },
+            },
+            storePath,
+            sessionKey,
+          );
+          state.resolvedSessionKeyMock = sessionKey;
+          await sessionAccessor.replaceSessionEntry({ sessionKey, storePath }, entry);
+          const started = createDeferred();
+          const releaseWriter = createDeferred();
+          let writer: Promise<void> | undefined;
+          let registration: Promise<void> | undefined;
+          let context: AdmittedRunContext | undefined;
+          let commandSettled = false;
+          const failure = new Error("runtime failed after accepting the recovery turn");
+          setupSingleAttemptFallback();
+          state.runAgentAttemptMock.mockImplementationOnce(
+            async (params: {
+              preparedRunAdmission: PreparedAgentRunAdmission;
+              onAgentEvent: (event: {
+                stream: string;
+                data: Record<string, unknown>;
+              }) => void | Promise<void>;
+            }) => {
+              context = await params.preparedRunAdmission.admit("embedded");
+              writer = runExclusiveSqliteSessionWrite(
+                resolveSqliteScope({ sessionKey, storePath }),
+                async () => await releaseWriter.promise,
+                "session.transcript.batch",
+              );
+              // Real CLI, Pi, and Codex event producers do not await this callback.
+              registration = Promise.resolve(
+                params.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } }),
+              );
+              started.resolve();
+              if (outcome === "failed") {
+                throw failure;
+              }
+              return makeSuccessResult("anthropic", "claude");
+            },
+          );
+          const command = agentCommand({
+            message: "continue interrupted work",
+            sessionKey,
+            runId,
+            mainRestartRecoveryAdmitted: true,
+            mainRestartRecoveryAttempt: 3,
+          }).then(
+            () => {
+              commandSettled = true;
+              return undefined;
+            },
+            (error: unknown) => {
+              commandSettled = true;
+              return error;
+            },
+          );
+          try {
+            await started.promise;
+            // Let the runner's resolved/rejected promise reach command teardown
+            // while the earlier SQLite writer still holds the registration.
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            expect(commandSettled).toBe(false);
+            const admitted = expectDefined(context, "recovery admission");
+            expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+            releaseWriter.resolve();
+            expect(await command).toBe(outcome === "failed" ? failure : undefined);
+            expect(sessionAccessor.loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+              mainRestartRecovery: { chargedAttempts: 3, startedAttempt: 3 },
+            });
+            expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
+          } finally {
+            releaseWriter.resolve();
+            await writer;
+            await registration;
+            await command;
+          }
+        });
+      } finally {
+        await resetPreparedModelRuntimeSnapshotsForTest();
+        await closeOpenClawAgentDatabasesAsync(stateDir);
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
+        );
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["configured", "aliased"] as const)(
+    "forwards the %s model auth profile",
+    async (source) => {
+      const configured = source === "configured";
+      const provider = configured ? "anthropic" : "codex-cli";
+      const model = configured ? "claude" : "gpt-5.4";
+      state.runtimeConfigMock = {
+        agents: {
+          defaults: {
+            ...(configured ? { model: { primary: "anthropic/claude@anthropic:verified" } } : {}),
+            models: { [`${provider}/${model}`]: {} },
+          },
+        },
+      };
+      state.sessionEntryMock = createCommandSessionEntry({
+        updatedAt: Date.now(),
+        skillsSnapshot: { prompt: "", skills: [], version: 0 },
+        ...(configured
+          ? { authProfileOverride: "anthropic:stale-auto", authProfileOverrideSource: "auto" }
+          : {
+              providerOverride: provider,
+              modelOverride: model,
+              authProfileOverride: "openai:work",
+              authProfileOverrideSource: "user",
+            }),
+      });
+      if (!configured) {
+        state.authProfileStoreMock = {
+          profiles: { "openai:work": createApiKeyCredential("openai", "sk-test") },
+        };
+      }
+      setupSuccessfulAttempt(provider, model);
+
+      await runBasicAgentCommand();
+
+      const attempt = mockCallArg(state.runAgentAttemptMock);
+      if (configured) {
+        expectRecordFields(attempt, {
+          providerOverride: provider,
+          modelOverride: model,
+          configuredAuthProfileId: "anthropic:verified",
+        });
+      } else {
+        expectRecordFields(attempt, { authProfileProvider: "codex-cli" });
+        expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+      }
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userLockedAuthProfileId: configured ? undefined : "openai:work",
+        }),
+      );
+    },
+  );
+
+  it("rejects live model switches for locked sessions without retrying", async () => {
     setupModelSwitchRetry({
       provider: "openai",
       model: "gpt-5.4",
     });
-
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-
-    await runBasicAgentCommand();
-
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
-
-    const secondCall = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
-    expect(secondCall.provider).toBe("openai");
-    expect(secondCall.model).toBe("gpt-5.4");
-    expect(secondCall.sessionId).toBe("session-1");
-
-    const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
-      const arg = call[0] as { stream?: string; data?: { phase?: string } };
-      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
+    state.sessionEntryMock = createCommandSessionEntry({
+      sessionId: "session-1",
+      updatedAt: 1,
+      modelSelectionLocked: true,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
     });
-    expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
-    const lifecycleFinishingCalls = state.emitAgentEventMock.mock.calls.filter(
-      (call: unknown[]) => {
-        const arg = call[0] as { stream?: string; data?: { phase?: string } };
-        return arg?.stream === "lifecycle" && arg?.data?.phase === "finishing";
-      },
-    );
-    expect(lifecycleFinishingCalls.length).toBeGreaterThanOrEqual(1);
-    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      deferTerminalLifecycle: true,
+    state.isModelSelectionLockedMock.mockReturnValue(true);
+
+    await expect(runBasicAgentCommand()).rejects.toMatchObject({
+      name: "ModelSelectionLockedError",
+      message: "Model selection is locked for this session.",
     });
-    const firstFinishingIndex = state.emitAgentEventMock.mock.calls.findIndex((call: unknown[]) => {
-      const arg = call[0] as { stream?: string; data?: { phase?: string } };
-      return arg?.stream === "lifecycle" && arg?.data?.phase === "finishing";
-    });
-    const lastEndIndex = state.emitAgentEventMock.mock.calls.findLastIndex((call: unknown[]) => {
-      const arg = call[0] as { stream?: string; data?: { phase?: string } };
-      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
-    });
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
-    const deliveryOrder = state.deliverAgentCommandResultMock.mock.invocationCallOrder[0] ?? 0;
-    expect(
-      state.emitAgentEventMock.mock.invocationCallOrder[firstFinishingIndex] ?? 0,
-    ).toBeLessThan(deliveryOrder);
-    expect(deliveryOrder).toBeLessThan(
-      state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
-    );
+
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
-    let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      invocation++;
-      const result = await params.run(params.provider, params.model);
-      if (invocation === 1) {
-        throw new LiveSessionModelSwitchError({
-          provider: "openai",
-          model: "gpt-5.4",
-        });
+  it.each(["adopted", "legacy-locked", "legacy-unlocked"] as const)(
+    "respects %s harness session ownership before attempts",
+    async (mode) => {
+      setupSuccessfulAttempt("anthropic", "claude");
+      const locked = mode !== "legacy-unlocked";
+      const legacy = mode === "legacy-locked";
+      const modelFields = legacy
+        ? {
+            providerOverride: "openai",
+            modelOverride: "stale-fallback-model",
+            modelOverrideSource: "auto" as const,
+          }
+        : {};
+      if (mode === "adopted") {
+        state.runtimeConfigMock = {
+          agents: { defaults: { models: state.defaultRuntimeConfig.agents.defaults.models } },
+        };
+        state.isModelSelectionLockedMock.mockReturnValue(true);
+      } else {
+        state.resolvedSessionKeyMock = legacy
+          ? "agent:main:plugin-owned"
+          : "agent:main:harness:notes";
+        if (legacy) {
+          state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
+        }
       }
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+      state.sessionEntryMock = createCommandSessionEntry({
+        agentHarnessId: "codex",
+        modelSelectionLocked: locked,
+        ...modelFields,
+        ...(locked
+          ? { skillsSnapshot: { prompt: "", skills: [], version: 0 } }
+          : { sessionFile: "/tmp/legacy-session.jsonl" }),
+        ...(mode === "adopted"
+          ? {
+              pluginExtensions: {
+                codex: { supervision: { sourceThreadId: "019f-codex-thread", modelLocked: true } },
+              },
+            }
+          : {}),
+      });
+
+      await runBasicAgentCommand();
+
+      expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+        agentHarnessRuntimeOverride: locked ? "codex" : undefined,
+        sessionEntry: expect.objectContaining({
+          agentHarnessId: "codex",
+          modelSelectionLocked: locked,
+          ...modelFields,
+          ...(!locked ? { sessionId: "session-1" } : {}),
+        }),
+      });
+      if (mode === "adopted") {
+        const fallback = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+        expect(fallback.resolveAgentHarnessRuntimeOverride?.("anthropic", "claude")).toBe("codex");
+        expect(fallback.fallbacksOverride).toEqual([]);
+        expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+          providerOverride: "anthropic",
+          modelOverride: "claude",
+        });
+      } else if (legacy) {
+        expect(state.applyModelOverrideToSessionEntryMock).not.toHaveBeenCalled();
+        expect(state.repairProviderWrappedModelOverrideMock).not.toHaveBeenCalled();
+      } else {
+        expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it("uses an explicit per-run fallback chain with an explicit model", async () => {
+    setupSingleAttemptFallback();
+    const fallbacks = ["openai/gpt-5.6-terra", "anthropic/claude-sonnet-4-6"];
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand({
+      model: "anthropic/claude",
+      modelFallbacksOverride: fallbacks,
     });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
-    await runBasicAgentCommand();
-
-    const firstAttempt = mockCallArg(state.runAgentAttemptMock, 0) as {
-      fastModeStartedAtMs?: number;
-    };
-    const secondAttempt = mockCallArg(state.runAgentAttemptMock, 1) as {
-      fastModeStartedAtMs?: number;
-    };
-    expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.fallbacksOverride).toEqual(fallbacks);
+    expect(state.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
   });
+
+  it.each(["live-switch", "flushed", "blocked", "internal"] as const)(
+    "preserves %s user-turn persistence across retries",
+    async (mode) => {
+      type AttemptCall = {
+        onUserMessagePersisted?: () => void;
+        suppressPromptPersistenceOnRetry?: boolean;
+        userTurnTranscriptRecorder?: {
+          markBlocked: () => void;
+          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
+        };
+      };
+      const attempts: AttemptCall[] = [];
+      if (mode === "live-switch") {
+        setupModelSwitchRetry({ provider: "openai", model: "gpt-5.4" }, true);
+      } else {
+        setupSameModelFallback();
+      }
+      state.runAgentAttemptMock.mockImplementation(async (attempt: AttemptCall) => {
+        attempts.push(attempt);
+        if (mode === "flushed") {
+          expectDefined(attempt.onUserMessagePersisted, "retry persistence callback")();
+        } else if (attempts.length === 1) {
+          if (mode === "blocked") {
+            attempt.userTurnTranscriptRecorder?.markBlocked();
+          } else if (mode === "live-switch") {
+            attempt.userTurnTranscriptRecorder?.markRuntimePersisted({
+              role: "user",
+              content: "hello",
+            });
+          }
+        }
+        return mode === "internal"
+          ? makeCliSuccessResult()
+          : makeSuccessResult("openai", "gpt-5.4");
+      });
+
+      await runBasicAgentCommand(
+        mode === "internal" ? { message: "internal handoff", suppressPromptPersistence: true } : {},
+      );
+
+      expect(attempts).toHaveLength(2);
+      expect(attempts[0]?.suppressPromptPersistenceOnRetry).toBe(mode === "internal");
+      expect(attempts[1]?.suppressPromptPersistenceOnRetry).toBe(true);
+      if (mode === "live-switch" || mode === "blocked") {
+        expect(attempts[1]?.userTurnTranscriptRecorder).toBe(
+          attempts[0]?.userTurnTranscriptRecorder,
+        );
+      }
+      if (mode === "internal") {
+        expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), { skipUserTurn: true });
+      }
+    },
+  );
 
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
     setupSingleAttemptFallback();
@@ -1208,29 +1723,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("preserves restart ownership when an aborted attempt resolves normally", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue({
-      payloads: [],
-      meta: {
-        durationMs: 100,
-        aborted: true,
-        stopReason: "end_turn",
-        agentMeta: { provider: "anthropic", model: "claude" },
-      },
-    });
     const controller = new AbortController();
-    controller.abort(createAgentRunRestartAbortError());
+    state.runAgentAttemptMock.mockImplementation(async () => {
+      controller.abort(createAgentRunRestartAbortError());
+      return {
+        payloads: [],
+        meta: {
+          durationMs: 100,
+          aborted: true,
+          stopReason: "end_turn",
+          agentMeta: { provider: "anthropic", model: "claude" },
+        },
+      };
+    });
 
     await expect(
-      agentCommand({
-        message: "hello",
-        to: "+1234567890",
+      runBasicAgentCommand({
         abortSignal: controller.signal,
+        runtimePluginToolGrant: { pluginId: "owner-tools", toolNames: ["owner-only"] },
       }),
     ).rejects.toThrow("agent run aborted for restart");
 
-    const lifecycleEvents = state.emitAgentEventMock.mock.calls
-      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
-      .filter((event) => event.stream === "lifecycle");
+    const lifecycleEvents = agentLifecycleEvents();
     expect(lifecycleEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1245,16 +1759,57 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
-  it("preserves restart ownership when an aborted ACP turn resolves normally", async () => {
-    state.acpResolveSessionMock.mockReturnValue({
-      kind: "ready",
-      meta: {
-        agent: "claude",
-        cwd: "/tmp/workspace",
-      },
-    });
+  it.each([
+    ["restart abort", "agent run aborted for restart"],
+    ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
+  ] as const)(
+    "does not run CLI compaction when %s closes after persistence",
+    async (mode, error) => {
+      setupSingleAttemptFallback();
+      setupStoredSession({ contextTokens: 32_768 });
+      const controller = new AbortController();
+      const result = makeCliSuccessResult();
+      state.runAgentAttemptMock.mockResolvedValue(result);
+      const compact = vi.fn();
+      state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(
+        async (params: { sessionEntry?: SessionEntry }, host: { assertActive?: () => void }) => {
+          expectDefined(host.assertActive, "compaction authority")();
+          compact();
+          return params.sessionEntry;
+        },
+      );
+      state.persistCliTurnTranscriptMock.mockImplementationOnce(
+        async (params: { sessionEntry?: SessionEntry }) => {
+          if (mode === "restart abort") {
+            controller.abort(createAgentRunRestartAbortError());
+          } else {
+            state.assertLifecycleCurrentMock.mockImplementationOnce(() => {
+              throw new Error(error);
+            });
+          }
+          return { kind: "persisted", sessionEntry: params.sessionEntry };
+        },
+      );
+
+      await expect(
+        runBasicAgentCommand({
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toThrow(error);
+
+      expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledOnce();
+      expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+      expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+      expect(compact).not.toHaveBeenCalled();
+      expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects pre-aborted ACP admission with the original restart cause", async () => {
+    setupAcpSession();
     const controller = new AbortController();
-    controller.abort(createAgentRunRestartAbortError());
+    const reason = createAgentRunRestartAbortError();
+    controller.abort(reason);
 
     await expect(
       agentCommand({
@@ -1262,110 +1817,125 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionKey: "agent:main:main",
         abortSignal: controller.signal,
       }),
-    ).rejects.toThrow("agent run aborted for restart");
+    ).rejects.toMatchObject({ name: "AbortError", cause: reason });
 
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.emitAcpLifecycleStartMock).not.toHaveBeenCalled();
     expect(state.emitAcpLifecycleEndMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses ACP delivery when restart begins during transcript persistence", async () => {
-    state.acpResolveSessionMock.mockReturnValue({
-      kind: "ready",
-      meta: {
-        agent: "claude",
-        cwd: "/tmp/workspace",
-      },
-    });
-    const controller = new AbortController();
-    state.persistAcpTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => {
-        controller.abort(createAgentRunRestartAbortError());
-        return { kind: "persisted", sessionEntry: params.sessionEntry };
-      },
-    );
+  it.each(["turn", "transcript"] as const)(
+    "suppresses ACP delivery when restart begins during %s settlement",
+    async (phase) => {
+      setupAcpSession();
+      const controller = new AbortController();
+      if (phase === "turn") {
+        state.acpRunTurnMock.mockImplementationOnce(async () => {
+          controller.abort(createAgentRunRestartAbortError());
+        });
+      } else {
+        state.persistAcpTurnTranscriptMock.mockImplementation(
+          async (params: { sessionEntry?: unknown }) => {
+            controller.abort(createAgentRunRestartAbortError());
+            return { kind: "persisted", sessionEntry: params.sessionEntry };
+          },
+        );
+      }
 
-    await expect(
-      agentCommand({
-        message: "hello",
-        sessionKey: "agent:main:main",
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toThrow("agent run aborted for restart");
+      await expect(
+        agentCommand({
+          message: "hello",
+          sessionKey: "agent:main:main",
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toThrow("agent run aborted for restart");
 
-    expect(state.emitAcpLifecycleEndMock).not.toHaveBeenCalled();
-    expect(state.emitAcpLifecycleErrorMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "session-1",
-        sessionKey: "agent:main:main",
-        abortSignal: controller.signal,
-      }),
-    );
-    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledTimes(1);
-    expect(state.buildAcpResultMock).not.toHaveBeenCalled();
-    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-  });
+      expect(state.acpRunTurnMock).toHaveBeenCalledOnce();
+      expect(state.emitAcpLifecycleEndMock).not.toHaveBeenCalled();
+      expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+      if (phase === "transcript") {
+        expect(state.emitAcpLifecycleErrorMock).toHaveBeenCalledWith(
+          expect.objectContaining({ runId: "session-1", sessionKey: "agent:main:main" }),
+        );
+        const lifecycleError = state.emitAcpLifecycleErrorMock.mock.calls[0]?.[0] as
+          | { abortSignal?: AbortSignal }
+          | undefined;
+        expect(lifecycleError?.abortSignal?.aborted).toBe(true);
+        expect(lifecycleError?.abortSignal?.reason).toBe(controller.signal.reason);
+        expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledTimes(1);
+        expect(state.buildAcpResultMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-  it("threads lifecycle ownership into ACP delivery", async () => {
-    state.acpResolveSessionMock.mockReturnValue({
-      kind: "ready",
-      meta: {
-        agent: "claude",
-        cwd: "/tmp/workspace",
-      },
-    });
+  it.each(["ACP", "internal ACP", "normal"] as const)(
+    "threads lifecycle ownership into %s delivery",
+    async (runtime) => {
+      if (runtime !== "normal") {
+        setupAcpSession();
+        await agentCommand({
+          message: "hello",
+          sessionKey: "agent:main:main",
+          ...(runtime === "internal ACP" ? { sessionEffects: "internal" } : {}),
+        });
+        expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
+          "session-1",
+          expect.objectContaining(
+            runtime === "internal ACP"
+              ? {
+                  sessionKey: "agent:main:main",
+                  sessionId: "session-1",
+                  isControlUiVisible: false,
+                  projectSessionActive: false,
+                }
+              : { projectSessionActive: true },
+          ),
+        );
+      } else {
+        setupSuccessfulAttempt();
+        setupStoredSession();
+        await runBasicAgentCommand();
+      }
+
+      const deliveryParams = requireRecord(
+        mockCallArg(state.deliverAgentCommandResultMock),
+        "delivery params",
+      );
+      expect(deliveryParams.assertDeliveryCurrent).toBeTypeOf("function");
+      (deliveryParams.assertDeliveryCurrent as () => void)();
+      expect(state.assertLifecycleCurrentMock).toHaveBeenLastCalledWith("test-generation");
+    },
+  );
+
+  it("persists structured transcript media for ACP turns", async () => {
+    setupAcpSession();
 
     await agentCommand({
-      message: "hello",
+      message: "[media attached: media://inbound/image-1]",
+      transcriptMessage: "",
+      transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
       sessionKey: "agent:main:main",
     });
 
-    const deliveryParams = requireRecord(
-      mockCallArg(state.deliverAgentCommandResultMock),
-      "ACP delivery params",
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptBody: "",
+        userInput: {
+          text: "",
+          media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+        },
+      }),
     );
-    expect(deliveryParams.assertDeliveryCurrent).toBeTypeOf("function");
-    (deliveryParams.assertDeliveryCurrent as () => void)();
-    expect(state.assertLifecycleCurrentMock).toHaveBeenLastCalledWith("test-generation");
-  });
-
-  it("keeps the initial session touch for local runs", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    setupSessionTouchStore();
-
-    await runBasicAgentCommand();
-
-    const touchWrites = state.persistSessionEntryMock.mock.calls.filter((call) => {
-      const entry = (call[0] as { entry?: Record<string, unknown> } | undefined)?.entry;
-      return entry?.lastInteractionAt !== undefined;
-    });
-    expect(touchWrites).toHaveLength(1);
-    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("threads lifecycle ownership into normal delivery", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    setupSessionTouchStore();
-
-    await runBasicAgentCommand();
-
-    const deliveryParams = requireRecord(
-      mockCallArg(state.deliverAgentCommandResultMock),
-      "delivery params",
-    );
-    expect(deliveryParams.assertDeliveryCurrent).toBeTypeOf("function");
-    (deliveryParams.assertDeliveryCurrent as () => void)();
-    expect(state.assertLifecycleCurrentMock).toHaveBeenLastCalledWith("test-generation");
   });
 
   it("passes explicit timeout overrides into agent attempts", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    // Freeze preflight elapsed time to keep the forwarding assertions exact.
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    setupSuccessfulAttempt();
 
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
+    await runBasicAgentCommand({
       timeout: "600",
     });
 
@@ -1395,436 +1965,242 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("rejects unsupported explicit thinking for interactive subagent-key runs", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
-    state.resolvedSessionKeyMock = "agent:planner:subagent:00000000-0000-4000-8000-000000000000";
-    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+  it.each(["subagent", "interactive"] as const)(
+    "rejects unsupported explicit thinking for ordinary sessions on the %s lane",
+    async (lane) => {
+      setupSuccessfulAttempt("anthropic", "claude-fable-5");
+      state.isThinkingLevelSupportedMock.mockReturnValue(false);
+      const { store } = setupStoredSession({ thinkingLevel: "low" });
+      state.resolvedSessionKeyMock = "agent:main:main";
+      const thinking = lane === "subagent" ? "xhigh" : "ultra";
 
-    await expect(
-      agentCommand({
+      await expect(
+        runBasicAgentCommand({
+          thinking,
+          ...(lane === "subagent" ? { sessionKey: "agent:main:main", lane } : {}),
+        }),
+      ).rejects.toThrow(/is not supported/u);
+
+      expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+      expect(store["agent:main:main"]?.thinkingLevel).toBe("low");
+      expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ entry: expect.objectContaining({ thinkingLevel: thinking }) }),
+      );
+    },
+  );
+
+  it.each([undefined, "medium"] as const)(
+    "skips duplicate ingress touches while persisting thinking=%s",
+    async (thinking) => {
+      setupSuccessfulAttempt();
+      setupStoredSession();
+
+      await runBasicAgentCommand({ thinking, skipInitialSessionTouch: true });
+
+      const writes = state.persistSessionEntryMock.mock.calls.map(
+        ([params]) => (params as { entry?: Record<string, unknown> }).entry,
+      );
+      if (thinking) {
+        expect(
+          writes.find((entry) => entry?.thinkingLevel === thinking)?.lastInteractionAt,
+        ).toBeDefined();
+      } else {
+        expect(writes.filter((entry) => entry?.lastInteractionAt !== undefined)).toHaveLength(0);
+      }
+      expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    {
+      name: "uses current run channel context when persisted session metadata is absent",
+      sessionEntry: undefined,
+      command: {
         message: "hello",
-        sessionKey: state.resolvedSessionKeyMock,
-        thinking: "xhigh",
-      }),
-    ).rejects.toThrow(/is not supported/u);
-    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects unsupported explicit thinking for non-subagent sessions on the subagent lane", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
-    state.resolvedSessionKeyMock = "agent:main:main";
-    state.isThinkingLevelSupportedMock.mockReturnValue(false);
-
-    await expect(
-      agentCommand({
+        channel: "discord",
+        groupId: "channel-123",
+        to: "discord:channel:channel-123",
+      },
+      probe: false,
+      legacyFallback: false,
+      expectResolverContext: false,
+    },
+    {
+      name: "keeps persisted channel model override when current run context is internal",
+      sessionEntry: createCommandSessionFixture({ channel: "discord", groupId: "channel-123" })
+        .entry,
+      command: {
         message: "hello",
-        sessionKey: state.resolvedSessionKeyMock,
-        thinking: "xhigh",
-        lane: "subagent",
-      }),
-    ).rejects.toThrow(/is not supported/u);
-    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects unsupported explicit thinking for direct interactive runs", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
-    state.resolvedSessionKeyMock = "agent:main:main";
-    state.isThinkingLevelSupportedMock.mockReturnValue(false);
-
-    await expect(
-      agentCommand({
-        message: "hello",
-        to: "+1234567890",
-        thinking: "xhigh",
-      }),
-    ).rejects.toThrow(/is not supported/u);
-    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
-  });
-
-  it("skips the initial session touch after gateway ingress already persisted activity", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    setupSessionTouchStore();
-
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      skipInitialSessionTouch: true,
-    });
-
-    const touchWrites = state.persistSessionEntryMock.mock.calls.filter((call) => {
-      const entry = (call[0] as { entry?: Record<string, unknown> } | undefined)?.entry;
-      return entry?.lastInteractionAt !== undefined;
-    });
-    expect(touchWrites).toHaveLength(0);
-    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses channel model override as the initial run model for channel-backed sessions", async () => {
-    setupSingleAttemptFallback();
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: "anthropic/default-model",
-          models: {
-            "anthropic/default-model": {},
-            "openai/channel-model": {},
-          },
-        },
+        channel: "internal",
+        messageChannel: "internal",
+        to: "internal",
       },
-      channels: {
-        modelByChannel: {
-          discord: {
-            "channel-123": "openai/channel-model",
-          },
-        },
-      },
-    };
-    state.sessionEntryMock = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      channel: "discord",
-      groupId: "channel-123",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
+      probe: false,
+      legacyFallback: false,
+      expectResolverContext: true,
+    },
+    {
+      name: "uses channel model override after ignoring stale legacy fallback overrides",
+      sessionEntry: createCommandSessionFixture({
+        channel: "discord",
+        groupId: "channel-123",
+        providerOverride: "anthropic",
+        modelOverride: "stale-fallback-model",
+      }).entry,
+      command: undefined,
+      probe: false,
+      legacyFallback: true,
+      expectResolverContext: false,
+    },
+    {
+      name: "probes the channel primary when pinned to an auto fallback",
+      sessionEntry: createCommandSessionFixture({
+        channel: "discord",
+        groupId: "channel-123",
+        providerOverride: "anthropic",
+        modelOverride: "fallback-model",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "channel-model",
+      }).entry,
+      command: undefined,
+      legacyFallback: false,
+      expectResolverContext: false,
+      probe: true,
+    },
+  ])("$name", async ({ sessionEntry, command, legacyFallback, expectResolverContext, probe }) => {
+    setupSuccessfulAttempt("openai", "channel-model");
+    state.runtimeConfigMock = createChannelModelRuntimeConfig(
+      probe ? { additionalModels: { "anthropic/fallback-model": {} } } : {},
+    );
+    if (probe) {
+      state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue({
+        provider: "openai",
+        model: "channel-model",
+        fallbackProvider: "anthropic",
+        fallbackModel: "fallback-model",
+      });
+    }
+    state.sessionEntryMock = sessionEntry;
+    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(legacyFallback);
 
-    await runBasicAgentCommand();
+    await (command ? agentCommand(command) : runBasicAgentCommand());
 
-    expect(mockCallArg(state.resolveChannelModelOverrideMock)).toMatchObject({
-      channel: "discord",
-      groupId: "channel-123",
-    });
-    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
-    expect(fallbackParams.provider).toBe("openai");
-    expect(fallbackParams.model).toBe("channel-model");
-    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      providerOverride: "openai",
-      modelOverride: "channel-model",
-    });
-  });
-
-  it("uses current run channel context when persisted session metadata is absent", async () => {
-    setupSingleAttemptFallback();
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: "anthropic/default-model",
-          models: {
-            "anthropic/default-model": {},
-            "openai/channel-model": {},
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          discord: {
-            "channel-123": "openai/channel-model",
-          },
-        },
-      },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
-
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      groupId: "channel-123",
-      to: "discord:channel:channel-123",
-    });
-
+    if (probe) {
+      expectRecordFields(mockCallArg(state.resolveAutoFallbackPrimaryProbeMock), {
+        primaryProvider: "openai",
+        primaryModel: "channel-model",
+      });
+    }
+    if (expectResolverContext) {
+      expect(mockCallArg(state.resolveChannelModelOverrideMock)).toMatchObject({
+        channel: "discord",
+        groupId: "channel-123",
+      });
+    }
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
     expect(fallbackParams.provider).toBe("openai");
     expect(fallbackParams.model).toBe("channel-model");
   });
 
-  it("keeps persisted channel model override when current run context is internal", async () => {
+  it("uses a concurrent user override adopted during legacy fallback repair", async () => {
     setupSingleAttemptFallback();
+    state.applyModelOverrideToSessionEntryMock.mockImplementation((params: unknown) => {
+      const { entry } = params as { entry: SessionEntry };
+      delete entry.providerOverride;
+      delete entry.modelOverride;
+      delete entry.modelOverrideSource;
+      return { updated: true };
+    });
+    state.hasLegacyAutoFallbackWithoutOriginMock.mockImplementation(
+      (entry: unknown) =>
+        (entry as SessionEntry | undefined)?.modelOverride === "stale-fallback-model",
+    );
     state.runtimeConfigMock = {
       agents: {
         defaults: {
           model: "anthropic/default-model",
           models: {
             "anthropic/default-model": {},
-            "openai/channel-model": {},
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          discord: {
-            "channel-123": "openai/channel-model",
+            "anthropic/stale-fallback-model": {},
+            "google/user-model": {},
           },
         },
       },
     };
-    state.sessionEntryMock = {
+    const sessionEntry = {
       sessionId: "session-1",
       updatedAt: 1,
-      channel: "discord",
-      groupId: "channel-123",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
-
-    await agentCommand({
-      message: "hello",
-      channel: "internal",
-      messageChannel: "internal",
-      to: "internal",
-    });
-
-    expect(mockCallArg(state.resolveChannelModelOverrideMock)).toMatchObject({
-      channel: "discord",
-      groupId: "channel-123",
-    });
-    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
-    expect(fallbackParams.provider).toBe("openai");
-    expect(fallbackParams.model).toBe("channel-model");
-  });
-
-  it("uses channel model override after ignoring stale legacy fallback overrides", async () => {
-    setupSingleAttemptFallback();
-    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: "anthropic/default-model",
-          models: {
-            "anthropic/default-model": {},
-            "openai/channel-model": {},
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          discord: {
-            "channel-123": "openai/channel-model",
-          },
-        },
-      },
-    };
-    state.sessionEntryMock = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      channel: "discord",
-      groupId: "channel-123",
       providerOverride: "anthropic",
       modelOverride: "stale-fallback-model",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
-
-    await runBasicAgentCommand();
-
-    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
-    expect(fallbackParams.provider).toBe("openai");
-    expect(fallbackParams.model).toBe("channel-model");
-  });
-
-  it("probes the channel primary when a session is pinned to an auto fallback", async () => {
-    setupSingleAttemptFallback();
-    state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue({
-      provider: "openai",
-      model: "channel-model",
-      fallbackProvider: "anthropic",
-      fallbackModel: "fallback-model",
-    });
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: "anthropic/default-model",
-          models: {
-            "anthropic/default-model": {},
-            "anthropic/fallback-model": {},
-            "openai/channel-model": {},
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          discord: {
-            "channel-123": "openai/channel-model",
-          },
-        },
-      },
-    };
-    state.sessionEntryMock = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      channel: "discord",
-      groupId: "channel-123",
-      providerOverride: "anthropic",
-      modelOverride: "fallback-model",
       modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "channel-model",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
-
-    await runBasicAgentCommand();
-
-    expectRecordFields(mockCallArg(state.resolveAutoFallbackPrimaryProbeMock), {
-      primaryProvider: "openai",
-      primaryModel: "channel-model",
+    } satisfies SessionEntry;
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = commandPaths.internalStore;
+    state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { entry?: SessionEntry };
+      if (params.entry?.modelOverride === "stale-fallback-model") {
+        return params.entry;
+      }
+      return {
+        ...sessionEntry,
+        updatedAt: 2,
+        providerOverride: "google",
+        modelOverride: "user-model",
+        modelOverrideSource: "user",
+      };
     });
-    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
-    expect(fallbackParams.provider).toBe("openai");
-    expect(fallbackParams.model).toBe("channel-model");
-  });
-
-  it("uses current threaded session key for parent channel model overrides", async () => {
-    setupSingleAttemptFallback();
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: "anthropic/default-model",
-          models: {
-            "anthropic/default-model": {},
-            "openai/parent-channel-model": {},
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          slack: {
-            general: "openai/parent-channel-model",
-          },
-        },
-      },
-    };
-    state.resolvedSessionKeyMock = "agent:main:slack:channel:general:thread:thread-1";
-    state.sessionEntryMock = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      channel: "slack",
-      groupId: "thread-1",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(
-      makeSuccessResult("openai", "parent-channel-model"),
-    );
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("google", "user-model"));
 
     await runBasicAgentCommand();
 
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
-    expect(fallbackParams.provider).toBe("openai");
-    expect(fallbackParams.model).toBe("parent-channel-model");
+    expect(fallbackParams.provider).toBe("google");
+    expect(fallbackParams.model).toBe("user-model");
   });
 
-  it("keeps stored session model overrides ahead of channel model overrides", async () => {
+  it("uses the accepted compaction identity for all post-run session persistence", async () => {
     setupSingleAttemptFallback();
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: "anthropic/default-model",
-          models: {
-            "anthropic/default-model": {},
-            "openai/channel-model": {},
-            "anthropic/stored-model": {},
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          discord: {
-            "channel-123": "openai/channel-model",
-          },
-        },
-      },
-    };
-    state.sessionEntryMock = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      channel: "discord",
-      groupId: "channel-123",
-      providerOverride: "anthropic",
-      modelOverride: "stored-model",
-      modelOverrideSource: "user",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "stored-model"));
-
-    await runBasicAgentCommand();
-
-    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
-    expect(fallbackParams.provider).toBe("anthropic");
-    expect(fallbackParams.model).toBe("stored-model");
-  });
-
-  it("keeps explicit run model overrides ahead of channel model overrides", async () => {
-    setupSingleAttemptFallback();
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: "anthropic/default-model",
-          models: {
-            "anthropic/default-model": {},
-            "openai/channel-model": {},
-            "openai/explicit-model": {},
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          discord: {
-            "channel-123": "openai/channel-model",
-          },
-        },
-      },
-    };
-    state.sessionEntryMock = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      channel: "discord",
-      groupId: "channel-123",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "explicit-model"));
-
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      model: "openai/explicit-model",
-      allowModelOverride: true,
-    });
-
-    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
-    expect(fallbackParams.provider).toBe("openai");
-    expect(fallbackParams.model).toBe("explicit-model");
-  });
-
-  it("uses rotated session identity for all post-run session persistence", async () => {
-    setupSingleAttemptFallback();
-    setupSessionTouchStore();
+    setupStoredSession();
     const rotatedEntry: SessionEntry = {
       sessionId: "rotated-session",
       sessionFile: "/tmp/rotated-session.jsonl",
       updatedAt: 2,
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
-    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
-      typeof makeSuccessResult
-    > & {
-      meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
+    const cliResult = makeCliSuccessResult();
+    const result = {
+      ...cliResult,
+      meta: {
+        ...cliResult.meta,
+        finalAssistantVisibleText: "ok",
+        agentMeta: {
+          ...cliResult.meta.agentMeta,
+          sessionId: "native-thread-session",
+          sessionFile: "/tmp/native-thread-session.jsonl",
+        },
+      },
     };
-    result.meta.executionTrace = {
-      runner: "embedded",
-      fallbackUsed: false,
-      winnerProvider: "openai",
-      winnerModel: "gpt-5.4",
-    };
-    result.meta.finalAssistantVisibleText = "ok";
-    result.meta.agentMeta = {
-      ...result.meta.agentMeta,
-      sessionId: "rotated-session",
-      sessionFile: "/tmp/rotated-session.jsonl",
-    };
-    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runAgentAttemptMock.mockImplementationOnce(
+      async (
+        params: Parameters<typeof import("./command/attempt-execution.js").runAgentAttempt>[0],
+      ) => {
+        const target = expectDefined(params.sessionTarget, "accepted compaction target");
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          target: {
+            ...target,
+            sessionId: rotatedEntry.sessionId,
+            lifecycleRevision: undefined,
+            activeWriterRunId: undefined,
+          },
+        });
+        return result;
+      },
+    );
     state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
       state.sessionStoreMock = { "agent:main:main": rotatedEntry };
     });
@@ -1852,328 +2228,704 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("skips post-run persistence after the session is deleted", async () => {
+  it("repairs pending assistant transcript state before the next model attempt", async () => {
     setupSingleAttemptFallback();
-    setupSessionTouchStore();
-    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
-      typeof makeSuccessResult
-    > & {
-      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    setupStoredSession({
+      pendingTranscriptRepair: [{ id: "repair-1", text: "missing assistant", createdAt: 10 }],
+    });
+    state.runAgentAttemptMock.mockImplementation(async () => {
+      expect(state.appendExactAssistantMessageMock).toHaveBeenCalledTimes(1);
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "queues failed transcript writes only for owned finals (runtimeOwned=%s)",
+    async (runtimeOwned) => {
+      setupSingleAttemptFallback();
+      setupStoredSession();
+      const result = makeCliSuccessResult();
+      if (runtimeOwned) {
+        result.payloads = [
+          setReplyPayloadMetadata({ text: "runtime-owned" }, { assistantTranscriptOwned: true }),
+        ];
+      }
+      state.runAgentAttemptMock.mockResolvedValue(result);
+      state.persistCliTurnTranscriptMock.mockRejectedValue(new Error("transcript unavailable"));
+
+      await runBasicAgentCommand();
+
+      if (runtimeOwned) {
+        expect(findPersistedTranscriptRepair()).toBeUndefined();
+      } else {
+        expect(findPersistedTranscriptRepair()).toEqual([
+          expect.objectContaining({ text: "ok", provider: "openai", model: "gpt-5.4" }),
+        ]);
+        expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("preserves restart recovery ownership when delivery fails after a session rebound", async () => {
+    setupSingleAttemptFallback();
+    setupStoredSession();
+    const sessionStore = state.sessionStoreMock as Record<string, SessionEntry>;
+    const claimedEntry = expectDefined(
+      sessionStore["agent:main:main"],
+      "preclaimed restart recovery session",
+    );
+    claimedEntry.restartRecoveryDeliveryRunId = "session-1";
+    claimedEntry.restartRecoveryDeliveryContext = {
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
     };
-    result.meta.executionTrace = {
-      runner: "cli",
-      fallbackUsed: false,
-      winnerProvider: "openai",
-      winnerModel: "gpt-5.4",
-    };
+    const result = makeCliSuccessResult();
     state.runAgentAttemptMock.mockResolvedValue(result);
     state.persistCliTurnTranscriptMock.mockResolvedValue({
       kind: "session-rebound",
       sessionEntry: undefined,
     });
+    state.deliverAgentCommandResultMock.mockRejectedValue(new Error("delivery failed"));
 
-    await runBasicAgentCommand();
-
-    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
-    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not treat backend CLI session id as OpenClaw session identity", async () => {
-    setupSingleAttemptFallback();
-    setupSessionTouchStore();
-    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
-      typeof makeSuccessResult
-    > & {
-      meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
-    };
-    result.meta.agentMeta = {
-      ...result.meta.agentMeta,
-      sessionId: "backend-cli-session",
-    };
-    state.runAgentAttemptMock.mockResolvedValue(result);
-
-    await runBasicAgentCommand();
-
-    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
-      sessionId: "session-1",
-    });
-    expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
-      expectedSessionIdForFreshDelivery: "session-1",
-    });
-  });
-
-  it("scopes explicit-agent sentinel store keys before command routing", () => {
-    expect(
-      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
-        rawExplicitSessionKey: "global",
-        agentIdOverride: "work",
-        cfg: {},
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: true,
       }),
-    ).toBe("agent:work:global");
-    expect(
-      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
-        rawExplicitSessionKey: "main",
-        agentIdOverride: "work",
-        cfg: {},
-      }),
-    ).toBe("agent:work:main");
+    ).rejects.toThrow("delivery failed");
+
+    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
   });
 
-  it("persists explicit overrides even when ingress skips the initial touch", async () => {
+  it("does not duplicate unpersisted recorder-owned CLI input after completion", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    setupSessionTouchStore();
-
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      thinking: "medium",
-      skipInitialSessionTouch: true,
+    setupStoredSession();
+    state.runAgentAttemptMock.mockResolvedValue(makeCliSuccessResult());
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: "hello", idempotencyKey: "canonical-user:user" },
+      target: () => undefined,
     });
 
-    const touchWrite = state.persistSessionEntryMock.mock.calls.find((call) => {
-      const entry = (call[0] as { entry?: Record<string, unknown> } | undefined)?.entry;
-      return entry?.thinkingLevel === "medium";
-    })?.[0] as { entry?: Record<string, unknown> } | undefined;
-    expect(touchWrite?.entry?.lastInteractionAt).toBeDefined();
-    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+    await runBasicAgentCommand({ userTurnTranscriptRecorder });
+
+    expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({ userTurnTranscriptRecorder });
+    expect(mockCallArg(state.persistCliTurnTranscriptMock)).toMatchObject({ skipUserTurn: true });
   });
 
-  it("does not persist turn-local thinking fallback over a stored session override", async () => {
-    setupSingleAttemptFallback();
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-      thinkingLevel: "high",
+  it("revalidates immutable Ultra for each model fallback without persisting the remap", async () => {
+    const { entry: sessionEntry } = setupStoredSession({ thinkingLevel: "ultra" });
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
     };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.isThinkingLevelSupportedMock.mockReturnValue(false);
-    state.resolveSupportedThinkingLevelMock.mockReturnValue("off");
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
+      const { model, level } = args as { model?: string; level?: string };
+      return model !== "gpt-5.6-luna" || level !== "ultra";
+    });
+    state.resolveSupportedThinkingLevelMock.mockImplementation(
+      ({ level, model }: { level?: string; model?: string }) =>
+        model === "gpt-5.6-luna" && level === "ultra" ? "max" : level,
+    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(params, "openai", "gpt-5.6-sol", "unknown");
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
 
     await runBasicAgentCommand();
 
-    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      resolvedThinkLevel: "off",
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-luna",
+      resolvedThinkLevel: "max",
     });
-    expect(sessionEntry.thinkingLevel).toBe("high");
-    expect(sessionStore["agent:main:main"]?.thinkingLevel).toBe("high");
-    expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "ultra",
+    });
+    expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        entry: expect.objectContaining({ thinkingLevel: "off" }),
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        level: "ultra",
+        agentRuntime: "codex",
       }),
     );
+    expect(sessionEntry.thinkingLevel).toBe("ultra");
+    expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ thinkingLevel: "max" }),
+      }),
+    );
+    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
+      preserveRuntimeModel: true,
+    });
   });
 
-  it("persists and clears current run delivery context for restart recovery", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = { "agent:main:main": sessionEntry };
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
-
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      threadId: "reply-1",
-      deliver: true,
-    });
-
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      threadId: "reply-1",
-    });
-    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
-    expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
-  });
-
-  it("preserves parsed explicit target threads for restart recovery", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = { "agent:main:main": sessionEntry };
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
-    state.resolveAgentDeliveryPlanMock.mockReturnValueOnce({
-      baseDelivery: {
-        mode: "explicit",
-        threadId: "thread-1",
-        threadIdSource: "explicit",
+  it("recomputes a model-derived thinking default for each fallback candidate", async () => {
+    const policyModule = await import("./model-visibility-policy.js");
+    const { createModelVisibilityPolicyWithFallbacks } =
+      await import("./model-selection-shared.js");
+    vi.spyOn(policyModule, "createModelVisibilityPolicy").mockImplementation((params) =>
+      createModelVisibilityPolicyWithFallbacks({ ...params, fallbackModels: [] }),
+    );
+    setupStoredSession();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          modelPolicy: { allow: ["openai/manual-only"] },
+          models: {
+            "openai/gpt-5.6-sol": {
+              agentRuntime: { id: "codex" },
+              params: { thinking: "off" },
+            },
+            "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
+          },
+        },
       },
-      resolvedChannel: "discord",
-      resolvedTo: "discord:channel:general",
-      resolvedAccountId: "main",
-      resolvedThreadId: "thread-1",
-      deliveryTargetMode: "explicit",
-    });
-
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:channel:general/thread:thread-1",
-      accountId: "main",
-      deliver: true,
-    });
-
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:channel:general",
-      accountId: "main",
-      threadId: "thread-1",
-    });
-  });
-
-  it("does not inherit a stale thread when restart recovery uses an explicit target", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      lastThreadId: "stale-thread",
     };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = { "agent:main:main": sessionEntry };
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+    state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
+      const { model, catalog } = args as {
+        model?: string;
+        catalog?: Array<{ provider: string; id: string; reasoning?: boolean }>;
+      };
+      if (model === "gpt-5.6-terra") {
+        expect(catalog).toEqual([
+          expect.objectContaining({
+            provider: "openai",
+            id: "gpt-5.6-terra",
+            reasoning: true,
+          }),
+        ]);
+        return "medium";
+      }
+      return "low";
+    });
+    state.loadProviderScopedThinkingCatalogMock.mockResolvedValue([
+      {
+        provider: "OpenAI",
+        id: "gpt-5.6-terra",
+        name: "GPT 5.6 Terra",
+        reasoning: true,
+      },
+    ]);
+    state.loadPreparedModelCatalogSnapshotMock.mockImplementation(async () => {
+      await state.loadFullModelCatalogMock();
+      return { entries: [], routeVariants: [] };
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(
+        params,
+        "openai",
+        "gpt-5.6-terra",
+        "unknown",
+      );
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "off",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      modelOverride: "gpt-5.6-terra",
+      resolvedThinkLevel: "medium",
+    });
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: state.runtimeConfigMock,
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        agentId: "default",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(state.loadPreparedModelCatalogSnapshotMock).not.toHaveBeenCalled();
+    expect(state.loadFullModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps later provider capability metadata after hydrating a Codex primary", async () => {
+    const nativeModel = {
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      name: "GPT 5.6 Sol",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["max", "ultra"] },
+    };
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "gmn/gpt-5.4": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([
+      { ...nativeModel, compat: { supportedReasoningEfforts: ["max"] } },
+      {
+        provider: "gmn",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ]);
+    state.loadProviderScopedThinkingCatalogMock.mockImplementation(async (params: unknown) => {
+      const { provider } = params as { provider?: string };
+      if (provider !== "openai") {
+        throw new Error(`unexpected scoped thinking hydration for ${provider}`);
+      }
+      return [structuredClone(nativeModel)];
+    });
+    state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
+      const { provider, catalog } = args as {
+        provider?: string;
+        catalog?: Array<{ provider: string; id: string }>;
+      };
+      if (provider === "gmn") {
+        expect(catalog).toContainEqual(expect.objectContaining({ provider: "gmn", id: "gpt-5.4" }));
+        return "xhigh";
+      }
+      return "ultra";
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(params, "gmn", "gpt-5.4", "unknown");
+      return { result, provider: "gmn", model: "gpt-5.4", attempts: [] };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "ultra",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      providerOverride: "gmn",
+      modelOverride: "gpt-5.4",
+      resolvedThinkLevel: "xhigh",
+    });
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledTimes(2);
+    for (const [scope] of state.loadProviderScopedThinkingCatalogMock.mock.calls) {
+      expectRecordFields(scope, {
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        agentRuntime: "codex",
+      });
+    }
+  });
+
+  registerAgentCommandRecoveryCases(getAgentCommandRecoveryFixture);
+
+  it("records generated-media delivery runs as durable terminal sources", async () => {
+    setupSuccessfulAttempt();
+    setupBareStoredSession();
+    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
+      const onDeliveryResult = (params as { onDeliveryResult?: (result: unknown) => void })
+        .onDeliveryResult;
+      const deliveryResult = {
+        payloads: [{ isReasoning: true }, { text: "ready", mediaUrls: ["/tmp/payload.png"] }],
+        meta: {},
+        deliverySucceeded: true,
+        deliveryStatus: {
+          status: "partial_failed",
+          payloadOutcomes: [
+            { index: 0, status: "suppressed" },
+            { index: 1, status: "failed", sentBeforeError: false },
+          ],
+        },
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "discord:dm:123",
+            threadId: 42,
+            mediaUrls: ["/tmp/proof.png"],
+          },
+        ],
+      };
+      onDeliveryResult?.(deliveryResult);
+      return deliveryResult;
+    });
 
     await agentCommand({
-      message: "hello",
+      message: "generated image ready",
       channel: "discord",
       to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
+      deliver: false,
+      runId: "image:task-1:agent-loop",
+      sourceReplyDeliveryMode: "automatic",
+      disableMessageTool: true,
+      forceRestartSafeTools: true,
+      internalDeliveryMediaUrls: ["/tmp/payload.png"],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceChannel: "internal",
+        sourceTool: "image_generate",
+      },
     });
 
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
+    const persistedSourceRunIds = state.persistSessionEntryMock.mock.calls.map((call) => {
       const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
+      return params.entry?.restartRecoveryDeliverySourceRunId;
     });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
+    expect(persistedSourceRunIds).toContain("image:task-1:agent-loop");
+    expect(
+      state.persistSessionEntryMock.mock.calls.some((call) => {
+        const params = call[0] as { entry?: SessionEntry };
+        return params.entry?.restartRecoverySourceReplyDeliveryMode === "automatic";
+      }),
+    ).toBe(true);
+    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
+      | { sessionStore?: Record<string, SessionEntry> }
+      | undefined;
+    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
+    expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored?.restartRecoverySourceReplyDeliveryMode).toBeUndefined();
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["image:task-1:agent-loop"]);
+    expect(stored?.restartRecoveryTerminalDeliveryEvidence).toEqual([
+      {
+        runId: "image:task-1:agent-loop",
+        transcriptRunId: "image:task-1:agent-loop",
+        captured: true,
+        payloads: [{ visible: false }, { mediaUrls: ["/tmp/payload.png"], visible: true }],
+        deliveryStatus: {
+          status: "partial_failed",
+          payloadOutcomes: [
+            { index: 0, status: "suppressed" },
+            { index: 1, status: "failed", sentBeforeError: false },
+          ],
+        },
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "discord:dm:123",
+            threadId: "42",
+            mediaUrls: ["/tmp/proof.png"],
+            visible: true,
+          },
+        ],
+        restartUnsafeSideEffectsDetected: true,
+      },
+    ]);
+  });
+
+  it("does not make an unconstrained message-tool completion replayable", async () => {
+    setupSuccessfulAttempt();
+    setupBareStoredSession();
+
+    await agentCommand({
+      message: "generated image ready",
+      sessionKey: "agent:main:main",
+      deliver: false,
+      runId: "image:unsafe-message-tool:agent-loop",
+      sourceReplyDeliveryMode: "message_tool_only",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceChannel: "internal",
+        sourceTool: "image_generate",
+      },
+    });
+
+    expect(
+      state.persistSessionEntryMock.mock.calls.some((call) => {
+        const params = call[0] as { entry?: SessionEntry };
+        return params.entry?.restartRecoveryDeliverySourceRunId !== undefined;
+      }),
+    ).toBe(false);
+  });
+
+  it("constrains recovery delivery to host-owned media before persistence and send", async () => {
+    await withStoredAgentCommandRecoverySession(getAgentCommandRecoveryFixture(), async () => {
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue({
+        ...makeSuccessResult("openai", "gpt-5.4"),
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/already-delivered.png"] }],
+      });
+
+      await agentCommand({
+        message: "deliver only missing generated media",
+        channel: "discord",
+        to: "channel:123",
+        deliver: true,
+        sourceReplyDeliveryMode: "automatic",
+        disableMessageTool: true,
+        forceRestartSafeTools: true,
+        internalDeliveryMediaUrls: ["/tmp/missing.png"],
+        runId: "image:task-policy:agent-loop",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "internal",
+          sourceTool: "image_generate",
+        },
+      });
+
+      const deliveryParams = requireRecord(
+        mockCallArg(state.deliverAgentCommandResultMock),
+        "delivery params",
+      );
+      const expectedRecoveryPayloads = [
+        {
+          text: "ready",
+          mediaUrl: "/tmp/missing.png",
+          mediaUrls: ["/tmp/missing.png"],
+          audioAsVoice: undefined,
+          trustedLocalMedia: true,
+        },
+      ];
+      expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual(
+        expectedRecoveryPayloads,
+      );
+      expect(deliveryParams.payloads).toEqual(expectedRecoveryPayloads);
+      expect(
+        state.persistSessionEntryMock.mock.calls.some((call) => {
+          const params = call[0] as { entry?: SessionEntry };
+          return (
+            params.entry?.restartRecoveryDeliveryMediaUrls?.[0] === "/tmp/missing.png" &&
+            params.entry.restartRecoveryDisableMessageTool === true &&
+            params.entry.restartRecoveryForceSafeTools === true
+          );
+        }),
+      ).toBe(true);
     });
   });
 
-  it("persists implicit session delivery route for restart recovery", async () => {
+  it("restores the exact generated-media policy for a preclaimed recovery run", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      deliveryContext: {
+    state.runAgentAttemptMock.mockResolvedValue({
+      ...makeSuccessResult("openai", "gpt-5.4"),
+      payloads: [{ text: "ready", mediaUrls: ["/tmp/model-selected.png"] }],
+    });
+    setupBareStoredSession({
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "image:task-policy:agent-loop",
+      restartRecoveryDeliveryContext: { channel: "discord", to: "channel:123" },
+      restartRecoveryDeliveryMediaUrls: ["/tmp/missing.png"],
+      restartRecoveryDisableMessageTool: true,
+      restartRecoverySuppressTextDelivery: true,
+      restartRecoverySourceReplyDeliveryMode: "automatic",
+      restartRecoveryForceSafeTools: true,
+    });
+
+    await agentCommand({
+      message: "continue generated media delivery",
+      sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "channel:123",
+      deliver: true,
+      runId: "recovery-run",
+    });
+
+    const deliveryParams = requireRecord(
+      mockCallArg(state.deliverAgentCommandResultMock),
+      "delivery params",
+    );
+    expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual([
+      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
+    ]);
+    const persistedPolicies = state.persistSessionEntryMock.mock.calls.map((call) => {
+      const params = call[0] as { entry?: SessionEntry };
+      return {
+        mediaUrls: params.entry?.restartRecoveryDeliveryMediaUrls,
+        disableMessageTool: params.entry?.restartRecoveryDisableMessageTool,
+        forceSafeTools: params.entry?.restartRecoveryForceSafeTools,
+        suppressText: params.entry?.restartRecoverySuppressTextDelivery,
+      };
+    });
+    expect(persistedPolicies).toContainEqual({
+      mediaUrls: undefined,
+      disableMessageTool: undefined,
+      forceSafeTools: undefined,
+      suppressText: undefined,
+    });
+  });
+
+  it("rejects host-owned media constraints without the scoped recovery policy", async () => {
+    await expect(
+      agentCommand({
+        message: "unsafe delivery constraint",
+        sessionKey: "agent:main:main",
+        internalDeliveryMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow(
+      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
+    );
+
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the recovery cycle when a preclaimed transcript-only recovery run completes", async () => {
+    setupSuccessfulAttempt();
+    setupBareStoredSession({
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoveryRuns: [
+        { runId: "older-recovery", lifecycleGeneration: "pre-restart" },
+        { runId: "recovery-run", lifecycleGeneration: "test-generation" },
+      ],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 5,
+        chargedAttempts: 2,
+      },
+    });
+
+    await agentCommand({
+      message: "continue after restart",
+      sessionKey: "agent:main:main",
+      deliver: false,
+      runId: "recovery-run",
+      preserveUserFacingSessionModelState: true,
+    });
+
+    const persistedClaims = state.persistSessionEntryMock.mock.calls.map((call) => {
+      const params = call[0] as { entry?: SessionEntry };
+      return {
+        context: params.entry?.restartRecoveryDeliveryContext,
+        runId: params.entry?.restartRecoveryDeliveryRunId,
+        sourceRunId: params.entry?.restartRecoveryDeliverySourceRunId,
+      };
+    });
+    expect(persistedClaims).toContainEqual({
+      context: undefined,
+      runId: "recovery-run",
+      sourceRunId: "control-ui-run",
+    });
+    expect(persistedClaims.at(-1)).toEqual({
+      context: undefined,
+      runId: undefined,
+      sourceRunId: undefined,
+    });
+    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
+      | {
+          sessionStore?: Record<string, SessionEntry>;
+        }
+      | undefined;
+    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
+    expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run", "recovery-run"]);
+    expect(stored?.restartRecoveryRuns).toBeUndefined();
+    expect(
+      (stored as SessionEntry & { mainRestartRecovery?: unknown }).mainRestartRecovery,
+    ).toBeUndefined();
+  });
+
+  it.each(["explicit", "session", "default"] as const)(
+    "persists the %s delivery route for restart recovery",
+    async (source) => {
+      setupSuccessfulAttempt();
+      const context = {
         channel: "discord",
         to: "discord:channel:general",
         accountId: "main",
         threadId: "thread-1",
-      },
-    };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = { "agent:main:main": sessionEntry };
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+      };
+      setupBareStoredSession(
+        source === "session"
+          ? { delivery: normalizeSessionDeliveryState({ context: { ...context } }) }
+          : {},
+      );
+      state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+      if (source === "explicit") {
+        state.resolveAgentDeliveryPlanMock.mockReturnValueOnce({
+          baseDelivery: { mode: "explicit", threadId: "thread-1", threadIdSource: "explicit" },
+          resolvedChannel: "discord",
+          resolvedTo: "discord:channel:general",
+          resolvedAccountId: "main",
+          resolvedThreadId: "thread-1",
+          deliveryTargetMode: "explicit",
+        });
+      } else if (source === "default") {
+        state.resolveMessageChannelSelectionMock.mockResolvedValue({
+          channel: "discord",
+          configured: ["discord"],
+          source: "single-configured",
+        });
+        state.resolveAgentOutboundTargetMock.mockReturnValue({
+          resolvedTarget: { ok: true, to: "discord:channel:default" },
+          resolvedTo: "discord:channel:default",
+          targetMode: "implicit",
+        });
+      }
 
-    await agentCommand({
-      message: "hello",
-      sessionKey: "agent:main:main",
-      deliver: true,
-    });
+      if (source === "explicit") {
+        await runDiscordDelivery({ to: "discord:channel:general/thread:thread-1" });
+      } else {
+        await agentCommand({ message: "hello", sessionKey: "agent:main:main", deliver: true });
+      }
 
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:channel:general",
-      accountId: "main",
-      threadId: "thread-1",
-    });
-    expect(state.resolveAgentDeliveryPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        explicitTo: undefined,
-        requestedChannel: undefined,
-        sessionEntry: expect.objectContaining({
-          deliveryContext: expect.objectContaining({ to: "discord:channel:general" }),
-        }),
-        wantsDelivery: true,
-      }),
-    );
-  });
-
-  it("persists default target delivery route for restart recovery", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = { "agent:main:main": sessionEntry };
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
-    state.resolveMessageChannelSelectionMock.mockResolvedValue({
-      channel: "discord",
-      configured: ["discord"],
-      source: "single-configured",
-    });
-    state.resolveAgentOutboundTargetMock.mockReturnValue({
-      resolvedTarget: { ok: true, to: "discord:channel:default" },
-      resolvedTo: "discord:channel:default",
-      targetMode: "implicit",
-    });
-
-    await agentCommand({
-      message: "hello",
-      sessionKey: "agent:main:main",
-      deliver: true,
-    });
-
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:channel:default",
-    });
-  });
+      const contexts = state.persistSessionEntryMock.mock.calls.map(
+        ([params]) => (params as { entry?: SessionEntry }).entry?.restartRecoveryDeliveryContext,
+      );
+      expect(contexts).toContainEqual(
+        source === "default" ? { channel: "discord", to: "discord:channel:default" } : context,
+      );
+      if (source === "session") {
+        expect(state.resolveAgentDeliveryPlanMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            explicitTo: undefined,
+            requestedChannel: undefined,
+            wantsDelivery: true,
+            sessionEntry: expect.objectContaining({
+              delivery: expect.objectContaining({
+                context: expect.objectContaining({ to: "discord:channel:general" }),
+              }),
+            }),
+          }),
+        );
+      }
+    },
+  );
 
   it("does not overwrite another active run's restart recovery context", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    const staleEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    const laterRunEntry: SessionEntry = {
-      sessionId: "session-1",
+    const staleEntry = createCommandSessionEntry();
+    const laterRunEntry = createCommandSessionEntry({
       updatedAt: 2,
       restartRecoveryDeliveryContext: {
         channel: "discord",
@@ -2181,95 +2933,64 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         accountId: "main",
       },
       restartRecoveryDeliveryRunId: "later-run",
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "agent:main:main": laterRunEntry,
-    };
-    state.sessionEntryMock = staleEntry;
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-
-    await agentCommand({
-      message: "hello",
-      sessionKey: "agent:main:main",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-      runId: "stale-run",
-    });
-
-    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryContext).toEqual(
-      laterRunEntry.restartRecoveryDeliveryContext,
-    );
-    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("later-run");
-  });
-
-  it("does not clear another active run's restart recovery context", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    const staleEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    const laterRunEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 2,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:456",
-        accountId: "main",
+      restartRecoveryRuns: [{ runId: "later-run", lifecycleGeneration: "later-generation" }],
+      mainRestartRecovery: {
+        cycleId: "later-cycle",
+        revision: 1,
+        chargedAttempts: 0,
       },
-      restartRecoveryDeliveryRunId: "later-run",
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "agent:main:main": laterRunEntry,
-    };
+    });
+    const sessionStore = { "agent:main:main": laterRunEntry };
     state.sessionEntryMock = staleEntry;
     state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.storePathMock = commandPaths.sessions;
 
-    await agentCommand({
-      message: "hello",
-      sessionKey: "agent:main:main",
-      deliver: true,
-      runId: "stale-run",
-    });
+    await runDiscordDelivery({ sessionKey: "agent:main:main", runId: "stale-run" });
 
     expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryContext).toEqual(
       laterRunEntry.restartRecoveryDeliveryContext,
     );
     expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("later-run");
+    expect(sessionStore["agent:main:main"]?.restartRecoveryRuns).toEqual(
+      laterRunEntry.restartRecoveryRuns,
+    );
+    expect(sessionStore["agent:main:main"]?.mainRestartRecovery).toEqual(
+      laterRunEntry.mainRestartRecovery,
+    );
   });
 
-  it("keeps current run delivery context when restart marker wins the cleanup race", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
+  it("preserves a newly marked recovery cycle when restart wins the cleanup race", async () => {
+    setupSuccessfulAttempt();
+    const { store: sessionStore } = setupBareStoredSession();
+    const nextRecoveryRuns = [{ runId: "session-1", lifecycleGeneration: "next-generation" }];
+    const nextRecoveryCycle = {
+      cycleId: "next-cycle",
+      revision: 1,
+      chargedAttempts: 0,
     };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-sessions.json";
     state.deliverAgentCommandResultMock.mockImplementation(async () => {
-      const current = sessionStore["agent:main:main"];
+      const current = sessionStore["agent:main:main"] as
+        | (SessionEntry & { mainRestartRecovery?: typeof nextRecoveryCycle })
+        | undefined;
       if (current) {
         current.abortedLastRun = true;
+        current.restartRecoveryRuns = nextRecoveryRuns;
+        current.mainRestartRecovery = nextRecoveryCycle;
       }
       return { deliverySucceeded: false };
     });
 
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
+    await runDiscordDelivery();
 
     expect(sessionStore["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(sessionStore["agent:main:main"]?.restartRecoveryRuns).toEqual(nextRecoveryRuns);
+    expect(
+      (
+        sessionStore["agent:main:main"] as SessionEntry & {
+          mainRestartRecovery?: typeof nextRecoveryCycle;
+        }
+      ).mainRestartRecovery,
+    ).toEqual(nextRecoveryCycle);
     expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         entry: expect.objectContaining({
@@ -2278,187 +2999,130 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
             to: "discord:dm:123",
             accountId: "main",
           },
-          restartRecoveryDeliveryRunId: "session-1",
+          restartRecoveryRuns: [{ runId: "session-1", lifecycleGeneration: "test-generation" }],
+          restartRecoveryDeliveryRunId: undefined,
+          restartRecoveryDeliverySourceRunId: undefined,
         }),
       }),
     );
   });
 
-  it("does not recreate a deleted session entry during restart recovery cleanup", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockImplementation(async () => {
-      delete sessionStore["agent:main:main"];
-      return { deliverySucceeded: true };
-    });
+  it.each(["deleted", "rotated", "new-run"] as const)(
+    "leaves %s sessions untouched during restart recovery cleanup",
+    async (change) => {
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
+      const { store } = setupBareStoredSession();
+      const replacement =
+        change === "deleted"
+          ? undefined
+          : createCommandSessionEntry({
+              updatedAt: 2,
+              ...(change === "rotated"
+                ? { sessionId: "session-2" }
+                : { restartRecoveryDeliveryRunId: "later-run" }),
+              restartRecoveryDeliveryContext: {
+                channel: "discord",
+                to: "discord:dm:456",
+                accountId: "main",
+              },
+            });
+      state.deliverAgentCommandResultMock.mockImplementation(async () => {
+        if (replacement) {
+          store["agent:main:main"] = replacement;
+        } else {
+          delete store["agent:main:main"];
+        }
+        return { deliverySucceeded: change !== "new-run" };
+      });
 
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
+      await runDiscordDelivery();
 
-    expect(sessionStore["agent:main:main"]).toBeUndefined();
-  });
+      expect(store["agent:main:main"]).toEqual(replacement);
+    },
+  );
 
-  it("does not clear restart recovery context from a rotated session entry", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    const rotatedEntry: SessionEntry = {
-      sessionId: "session-2",
-      updatedAt: 2,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:456",
-        accountId: "main",
-      },
-    };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockImplementation(async () => {
-      sessionStore["agent:main:main"] = rotatedEntry;
-      return { deliverySucceeded: true };
-    });
+  it("stores and delivers with the prepared canonical current-run target", async () => {
+    await withStoredAgentCommandRecoverySession(getAgentCommandRecoveryFixture(), async (scope) => {
+      setupSuccessfulAttempt();
+      state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: false });
+      state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+        baseDelivery: {},
+        resolvedChannel: "discord",
+        resolvedTo: "channel:1524410080953634829",
+        resolvedAccountId: "main",
+        deliveryTargetMode: "explicit",
+      });
 
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
+      await runDiscordDelivery({ to: "channel:general" });
 
-    expect(sessionStore["agent:main:main"]).toEqual(rotatedEntry);
-  });
-
-  it("does not clear restart recovery context from another active run in the same session", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    const laterRunEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 2,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:456",
-        accountId: "main",
-      },
-      restartRecoveryDeliveryRunId: "later-run",
-    };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockImplementation(async () => {
-      sessionStore["agent:main:main"] = laterRunEntry;
-      return { deliverySucceeded: false };
-    });
-
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
-
-    expect(sessionStore["agent:main:main"]).toEqual(laterRunEntry);
-  });
-
-  it("stores pending final delivery with the current run delivery context", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-    };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = { "agent:main:main": sessionEntry };
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: false });
-
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
-
-    const pendingEntries = state.persistSessionEntryMock.mock.calls
-      .map((call) => (call[0] as { entry?: SessionEntry }).entry)
-      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery === true);
-    expect(pendingEntries).toContainEqual(
-      expect.objectContaining({
-        pendingFinalDeliveryText: "ok",
-        pendingFinalDeliveryContext: {
+      expect(sessionAccessor.loadSessionEntry(scope)?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        text: "ok",
+        context: {
           channel: "discord",
-          to: "discord:dm:123",
+          to: "channel:1524410080953634829",
           accountId: "main",
         },
-      }),
-    );
+      });
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          opts: expect.objectContaining({
+            replyChannel: "discord",
+            replyTo: "channel:1524410080953634829",
+            replyAccountId: "main",
+            deliveryTargetMode: "explicit",
+          }),
+        }),
+      );
+    });
   });
 
-  it("clears stale flag-only pending final delivery when there is no final payload", async () => {
+  it("rejects a strict delivery target before the model run", async () => {
+    setupSingleAttemptFallback();
+    const targetError = new Error('Unknown Discord target "channel:missing"');
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: targetError,
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+      }),
+    ).rejects.toBe(targetError);
+
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("empty-run marker custody (owned=%s)", async (owned) => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryCreatedAt: 2,
-      pendingFinalDeliveryLastAttemptAt: 3,
-      pendingFinalDeliveryAttemptCount: 4,
-      pendingFinalDeliveryLastError: "previous failure",
-      pendingFinalDeliveryContext: { channel: "tui" },
-      pendingFinalDeliveryIntentId: "intent-1",
+    const pending: NonNullable<SessionEntry["pendingFinalDelivery"]> = {
+      kind: "transport-only",
+      createdAt: 2,
+      context: { channel: "tui" },
+      intentId: "intent-1",
+      ...(owned ? { deliveries: [{ id: "delivery-1", state: "queued" as const }] } : {}),
     };
-    state.sessionEntryMock = sessionEntry;
-    state.sessionStoreMock = { "agent:main:main": sessionEntry };
-    state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
-
+    setupBareStoredSession({ pendingFinalDelivery: pending });
     await agentCommand({
       message: "hello",
+      channel: "whatsapp",
       to: "+1234567890",
       deliver: true,
     });
 
-    expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          pendingFinalDelivery: undefined,
-          pendingFinalDeliveryText: undefined,
-          pendingFinalDeliveryCreatedAt: undefined,
-          pendingFinalDeliveryLastAttemptAt: undefined,
-          pendingFinalDeliveryAttemptCount: undefined,
-          pendingFinalDeliveryLastError: undefined,
-          pendingFinalDeliveryContext: undefined,
-          pendingFinalDeliveryIntentId: undefined,
-        }),
-      }),
-    );
+    expect(state.persistSessionEntryMock.mock.lastCall?.[0]).toMatchObject({
+      entry: { pendingFinalDelivery: owned ? pending : undefined },
+    });
   });
 
   it("keeps internal session-effect CLI runs out of visible session state", async () => {
@@ -2475,7 +3139,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const sessionStore: Record<string, SessionEntry> = { "agent:main:main": visibleEntry };
     state.sessionEntryMock = visibleEntry;
     state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.storePathMock = commandPaths.internalStore;
+    state.loadSessionEntryMock.mockReturnValue(visibleEntry);
     const attemptCalls: Array<{ sessionFile?: string; sessionEntry?: SessionEntry }> = [];
     state.runAgentAttemptMock.mockImplementation(async (params) => {
       attemptCalls.push(params as { sessionFile?: string; sessionEntry?: SessionEntry });
@@ -2489,83 +3154,288 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       suppressPromptPersistence: true,
     });
 
-    expect(state.prepareInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith({
-      sessionFile: "/tmp/session.jsonl",
-      runId: expect.any(String),
+    expect(state.prepareInternalSessionEffectsSessionMock).toHaveBeenCalledWith({
+      agentId: "default",
+      cwd: "/tmp/workspace",
+      runId: "session-1",
+      source: {
+        agentId: "default",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: commandPaths.internalStore,
+      },
+      storePath: commandPaths.internalStore,
     });
     expect(attemptCalls).toHaveLength(1);
-    expect(attemptCalls[0]?.sessionFile).toBe("/tmp/openclaw-internal-run.jsonl");
+    expect(attemptCalls[0]?.sessionFile).toBe(
+      `sqlite:default:internal-session:${commandPaths.internalStore}`,
+    );
     expect(attemptCalls[0]?.sessionEntry).toStrictEqual(visibleEntry);
+    expect(state.trajectoryRecorderParamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: `sqlite:default:internal-session:${commandPaths.internalStore}`,
+      }),
+    );
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
     expect(sessionStore["agent:main:main"]).toBe(visibleEntry);
+    expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        isControlUiVisible: false,
+      }),
+    );
+    expect(state.applySessionEntryLifecycleMutationMock).not.toHaveBeenCalled();
   });
 
-  it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {
-    setupModelSwitchRetry({
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
-      state.emitAgentEventMock({
-        runId: "run-live-switch",
-        stream: "lifecycle",
-        data: { phase: "finishing" },
-      });
-      (attemptParams as { onAgentEvent?: (evt: unknown) => void }).onAgentEvent?.({
-        stream: "lifecycle",
-        data: { phase: "finishing" },
-      });
-      return makeSuccessResult("openai", "gpt-5.4");
+  it.each([
+    {
+      name: "rejects session-id-resolved model runs for harness-owned sessions",
+      sessionKey: "agent:main:harness:codex:supervision:native-thread",
+    },
+    {
+      name: "rejects one-shot model runs for locked harness sessions with ordinary keys",
+      sessionKey: "agent:main:plugin-owned",
+    },
+  ])("$name", async ({ sessionKey }) => {
+    state.resolvedSessionKeyMock = sessionKey;
+    state.sessionEntryMock = createCommandSessionEntry({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
     });
 
-    await runBasicAgentCommand();
+    await expect(
+      agentCommand({
+        message: "probe",
+        sessionId: "session-1",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("Agent harness-owned sessions cannot be used for one-shot model runs.");
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
 
-    const lifecycleFinishingCalls = state.emitAgentEventMock.mock.calls.filter(
-      (call: unknown[]) => {
-        const arg = call[0] as { stream?: string; data?: { phase?: string } };
-        return arg?.stream === "lifecycle" && arg?.data?.phase === "finishing";
+  it("rejects a locked harness row with the wrong owner before transcript or model work", async () => {
+    state.resolvedSessionKeyMock = "agent:main:harness:codex:supervision:native-thread";
+    state.sessionEntryMock = {
+      agentHarnessId: "other",
+      modelSelectionLocked: true,
+      sessionId: "session-1",
+      sessionFile: "/tmp/native-session.jsonl",
+      updatedAt: 1,
+    };
+
+    await expect(agentCommand({ message: "continue", sessionId: "session-1" })).rejects.toThrow(
+      "Session key namespace is reserved for agent harness-owned sessions.",
+    );
+    expect(state.prepareInternalSessionEffectsSessionMock).not.toHaveBeenCalled();
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("removes the one-shot internal model-run SQLite session after success", async () => {
+    setupSingleAttemptFallback();
+    const result = makeSuccessResult("openai", "gpt-5.4");
+    state.runAgentAttemptMock.mockImplementationOnce(
+      async (
+        params: Parameters<typeof import("./command/attempt-execution.js").runAgentAttempt>[0],
+      ) => {
+        const target = expectDefined(params.sessionTarget, "internal model-run target");
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          target: {
+            ...target,
+            sessionId: "rotated-model-run-session",
+            lifecycleRevision: undefined,
+            activeWriterRunId: undefined,
+          },
+        });
+        return {
+          ...result,
+          meta: {
+            ...result.meta,
+            executionTrace: {
+              runner: "embedded",
+              fallbackUsed: false,
+              winnerProvider: "openai",
+              winnerModel: "gpt-5.4",
+            },
+            finalAssistantVisibleText: "ok",
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+              sessionId: "rotated-model-run-session",
+              sessionFile: `sqlite:default:rotated-model-run-session:${commandPaths.internalStore}`,
+            },
+          },
+        };
       },
     );
-    expect(lifecycleFinishingCalls).toHaveLength(1);
+
+    const cleanupStarted = createDeferred();
+    const releaseCleanup = createDeferred();
+    state.applySessionEntryLifecycleMutationMock.mockImplementationOnce(async () => {
+      cleanupStarted.resolve();
+      await releaseCleanup.promise;
+    });
+    let settled = false;
+    const pending = runInternalModelCommand("model-run-success").finally(() => {
+      settled = true;
+    });
+    try {
+      await Promise.race([cleanupStarted.promise, pending]);
+      expect(settled).toBe(false);
+    } finally {
+      releaseCleanup.resolve();
+      await pending;
+    }
+
+    expect(state.createTrajectoryRuntimeRecorderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: `sqlite:default:internal-session:${commandPaths.internalStore}`,
+      }),
+    );
+    expect(state.persistCliTurnTranscriptMock).not.toHaveBeenCalled();
+    expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith({
+      agentId: "default",
+      storePath: commandPaths.internalStore,
+      env: expect.objectContaining({ OPENCLAW_STATE_DIR: expect.any(String) }),
+      removals: [
+        {
+          sessionKey: "agent:default:internal-session-effects:run",
+          expectedSessionId: "rotated-model-run-session",
+          archiveRemovedTranscript: false,
+        },
+      ],
+      skipMaintenance: true,
+    });
+    const deliveryOrder = state.deliverAgentCommandResultMock.mock.invocationCallOrder[0] ?? 0;
+    const cleanupOrder =
+      state.applySessionEntryLifecycleMutationMock.mock.invocationCallOrder[0] ?? 0;
+    expect(deliveryOrder).toBeLessThan(cleanupOrder);
   });
 
-  it("validates explicit thinking against configured model compat without an allowlist", async () => {
+  it.each(["prepare", "cleanup"] as const)(
+    "settles internal model runs despite %s failure",
+    async (phase) => {
+      state.storePathMock = commandPaths.internalStore;
+      state.loadSessionEntryMock.mockReturnValue({ sessionId: "session-1", updatedAt: 1 });
+      const runId = `model-run-${phase}-failure`;
+      if (phase === "prepare") {
+        state.prepareInternalSessionEffectsSessionMock.mockRejectedValueOnce(
+          new Error("session preparation failed"),
+        );
+        await expect(runInternalModelCommand(runId)).rejects.toThrow("session preparation failed");
+        const target = resolveInternalSessionEffectsIdentity({ agentId: "default", runId });
+        expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith({
+          agentId: "default",
+          storePath: commandPaths.internalStore,
+          env: expect.objectContaining({ OPENCLAW_STATE_DIR: expect.any(String) }),
+          removals: [
+            {
+              sessionKey: target.sessionKey,
+              expectedSessionId: target.sessionId,
+              archiveRemovedTranscript: false,
+            },
+          ],
+          skipMaintenance: true,
+        });
+      } else {
+        setupSuccessfulAttempt();
+        state.applySessionEntryLifecycleMutationMock.mockRejectedValue(
+          new Error("database is locked"),
+        );
+        await expect(runInternalModelCommand(runId)).resolves.toMatchObject({
+          payloads: [{ text: "ok" }],
+        });
+        expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("forwards harness-augmented GPT-5.6 thinking capability to the attempt", async () => {
+    const modelId = "gpt-5.6-sol";
+    const modelKey = `openai/${modelId}`;
+    const providerReasoningEfforts = ["low", "medium", "high", "xhigh", "max"];
+    const harnessReasoningEfforts = [...providerReasoningEfforts, "ultra"];
     state.runtimeConfigMock = {
       agents: {
         defaults: {
-          model: { primary: "gmn/gpt-5.4" },
+          model: { primary: modelKey },
+          models: { [modelKey]: { agentRuntime: { id: "codex" } } },
         },
       },
       models: {
         providers: {
-          gmn: {
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT 5.4 via GMN",
-                reasoning: true,
-                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-              },
-            ],
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
           },
         },
       },
     };
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("gmn", "gpt-5.4"));
+    state.loadManifestModelCatalogMock.mockReturnValue([
+      {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: providerReasoningEfforts,
+        },
+      },
+    ]);
+    state.loadProviderScopedThinkingCatalogMock.mockResolvedValue([
+      {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: harnessReasoningEfforts,
+        },
+      },
+    ]);
+    setupSuccessfulAttempt("openai", modelId);
 
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
+    await runBasicAgentCommand({ thinking: "ultra" });
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      modelOverride: modelId,
+      resolvedThinkLevel: "ultra",
+      modelThinkingCapability: {
+        provider: "openai",
+        modelId,
+        agentRuntime: "codex",
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: harnessReasoningEfforts,
+        },
+      },
+    });
+  });
+
+  it("retains automatic-primary thinking metadata outside the manual allowlist", async () => {
+    const policyModule = await import("./model-visibility-policy.js");
+    const { createModelVisibilityPolicyWithFallbacks } =
+      await import("./model-selection-shared.js");
+    vi.spyOn(policyModule, "createModelVisibilityPolicy").mockImplementation((params) =>
+      createModelVisibilityPolicyWithFallbacks({ ...params, fallbackModels: [] }),
+    );
+    state.runtimeConfigMock = createConfiguredModelCompatRuntimeConfig(true, true);
+    setupSuccessfulAttempt("gmn", "gpt-5.4");
+
+    await runBasicAgentCommand({
       thinking: "xhigh",
     });
 
@@ -2584,63 +3454,67 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("validates explicit thinking against allowlisted configured model compat when manifest catalog is empty", async () => {
+  it("hydrates live catalog metadata before validating an explicit thinking level", async () => {
     state.runtimeConfigMock = {
       agents: {
         defaults: {
-          model: { primary: "gmn/gpt-5.4" },
+          thinkingDefault: "low",
+          model: { primary: "openai/gpt-5.4" },
           models: {
-            "gmn/gpt-5.4": {},
-          },
-        },
-      },
-      models: {
-        providers: {
-          gmn: {
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT 5.4 via GMN",
-                reasoning: true,
-                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-              },
-            ],
+            "openai/*": {},
+            "ollama/*": {},
           },
         },
       },
     };
     state.loadManifestModelCatalogMock.mockReturnValue([]);
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [
+        {
+          provider: "OLLAMA",
+          id: "minimax-m3:cloud",
+          name: "minimax-m3:cloud",
+          reasoning: true,
+        },
+      ],
+      routeVariants: [],
+    });
+    state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
+      const { catalog, level } = args as {
+        catalog?: Array<{ reasoning?: boolean }>;
+        level?: string;
       };
+      return level === "off" || catalog?.some((entry) => entry.reasoning === true) === true;
     });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("gmn", "gpt-5.4"));
+    setupSuccessfulAttempt("ollama", "minimax-m3:cloud");
 
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      thinking: "xhigh",
+    await runBasicAgentCommand({
+      model: "ollama/minimax-m3:cloud",
+      thinking: "medium",
+      allowModelOverride: true,
     });
 
-    expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: state.runtimeConfigMock,
+        provider: "ollama",
+        model: "minimax-m3:cloud",
+        agentId: "default",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",
     );
-    expect(thinkingArgs.provider).toBe("gmn");
-    expect(thinkingArgs.model).toBe("gpt-5.4");
-    expect(thinkingArgs.level).toBe("xhigh");
-    const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
-    expectRecordFields(catalog[0], {
-      provider: "gmn",
-      id: "gpt-5.4",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-    });
+    expect(thinkingArgs.level).toBe("medium");
+    expect(thinkingArgs.catalog).toEqual([
+      expect.objectContaining({
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        reasoning: true,
+      }),
+    ]);
   });
 
   it("resolves explicit model aliases before thinking validation", async () => {
@@ -2672,20 +3546,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       },
     };
     state.loadManifestModelCatalogMock.mockReturnValue([]);
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
+    setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("codex", "gpt-5.5"));
 
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
+    await runBasicAgentCommand({
       model: "code",
       thinking: "xhigh",
       allowModelOverride: true,
@@ -2703,17 +3567,43 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(thinkingArgs.level).toBe("xhigh");
   });
 
-  it("records fallback steps to the session trajectory runtime", async () => {
+  it("keeps a legacy auto-fallback route ahead of a colliding model alias", async () => {
+    state.runtimeConfigMock = createLegacyAutoFallbackAliasCollisionConfig();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "cloudflare-ai-gateway",
+      modelOverride: "gemini-2.5-flash-lite",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    setupSuccessfulAttempt("cloudflare-ai-gateway", "gemini-2.5-flash-lite");
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runWithModelFallbackMock), {
+      provider: "cloudflare-ai-gateway",
+      model: "gemini-2.5-flash-lite",
+      requestedRouteResolution: "resolved",
+    });
+  });
+
+  it("records and publishes a run-scoped fallback step", async () => {
+    const step: ModelFallbackStepFields = {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "fixture-primary/primary-model",
+      fallbackStepToModel: "fixture-fallback/fallback-model",
+      fallbackStepFromFailureReason: "overloaded",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    };
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      await params.onFallbackStep?.({
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "ollama/llama3",
-        fallbackStepToModel: "openai/gpt-5.4",
-        fallbackStepFromFailureReason: "overloaded",
-        fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: "next_fallback",
-      });
-      const result = await params.run(params.provider, params.model);
+      await params.onFallbackStep?.(step);
+      const result = await runInitialFallbackAttempt(params);
       return {
         result,
         provider: params.provider,
@@ -2723,156 +3613,92 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
-    await runBasicAgentCommand();
+    await runBasicAgentCommand({ runId: "run-fallback-step" });
 
     expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
     expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
-    expectRecordFields(mockCallArg(state.trajectoryRecordEventMock, 0, 1), {
-      fallbackStepType: "fallback_step",
-      fallbackStepFromModel: "ollama/llama3",
-      fallbackStepToModel: "openai/gpt-5.4",
-      fallbackStepFromFailureReason: "overloaded",
-      fallbackStepChainPosition: 1,
-      fallbackStepFinalOutcome: "next_fallback",
-    });
+    expect(mockCallArg(state.trajectoryRecordEventMock, 0, 1)).toEqual(step);
+    const fallbackEvents = state.emitAgentEventMock.mock.calls
+      .map(([event]) => requireRecord(event, "agent event"))
+      .filter((event) => requireRecord(event.data, "agent event data").phase === "fallback_step");
+    expect(fallbackEvents).toEqual([
+      {
+        runId: "run-fallback-step",
+        lifecycleGeneration: "test-generation",
+        sessionKey: "agent:main:main",
+        stream: "lifecycle",
+        data: { phase: "fallback_step", ...step },
+      },
+    ]);
     expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses duplicate user persistence only after the current turn has flushed", async () => {
-    type AttemptCall = {
-      onUserMessagePersisted?: () => void;
-      suppressPromptPersistenceOnRetry?: boolean;
-    };
-    const attemptCalls: AttemptCall[] = [];
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const first = await params.run(params.provider, params.model);
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [first],
-      };
+  it.each([false, true])("preserves empty transcript text with media=%s", async (hasMedia) => {
+    setupSuccessfulAttempt();
+
+    await runBasicAgentCommand({
+      message: hasMedia ? "[media attached: media://inbound/image-1]" : "synthetic announce prompt",
+      transcriptMessage: "",
+      ...(hasMedia
+        ? {
+            transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+            images: [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }],
+          }
+        : {}),
     });
-    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
-      const firstAttempt = attemptCalls.length === 0;
-      attemptCalls.push(attemptParams);
-      if (firstAttempt) {
-        if (!attemptParams.onUserMessagePersisted) {
-          throw new Error("expected retry persistence callback on first attempt");
-        }
-        attemptParams.onUserMessagePersisted();
+
+    const attempt = mockCallArg(state.runAgentAttemptMock) as {
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: { message?: unknown };
+    };
+    expect(attempt.suppressPromptPersistenceOnRetry).toBe(!hasMedia);
+    if (hasMedia) {
+      expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
+        role: "user",
+        content: "",
+        __openclaw: {
+          media: [
+            expect.objectContaining({
+              path: "/media/inbound/image-1.png",
+              contentType: "image/png",
+            }),
+          ],
+        },
+      });
+    } else {
+      expect(attempt.userTurnTranscriptRecorder?.message).toBeUndefined();
+    }
+  });
+
+  it.each(["caller", "active-run"] as const)(
+    "marks lifecycle errors aborted for %s cancellation",
+    async (source) => {
+      const controller = new AbortController();
+      const direct = source === "active-run";
+      if (direct) {
+        state.runWithModelFallbackMock.mockRejectedValueOnce(createAgentRunDirectAbortError());
       } else {
-        attemptParams.onUserMessagePersisted?.();
+        state.runWithModelFallbackMock.mockImplementationOnce(async () => {
+          controller.abort();
+          throw new Error("request aborted");
+        });
       }
-      return makeSuccessResult("openai", "gpt-5.4");
-    });
 
-    await runBasicAgentCommand();
+      await expect(
+        runBasicAgentCommand(direct ? {} : { abortSignal: controller.signal }),
+      ).rejects.toThrow(direct ? "agent run aborted" : "request aborted");
 
-    expect(attemptCalls).toHaveLength(2);
-    expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).not.toBe(true);
-    expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
-  });
-
-  it("suppresses prompt persistence for internal handoffs on every fallback attempt", async () => {
-    type AttemptCall = {
-      suppressPromptPersistenceOnRetry?: boolean;
-    };
-    const attemptCalls: AttemptCall[] = [];
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const first = await params.run(params.provider, params.model);
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [first],
-      };
-    });
-    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
-      attemptCalls.push(attemptParams);
-      return makeSuccessResult("openai", "gpt-5.4");
-    });
-
-    await agentCommand({
-      message: "internal handoff",
-      to: "+1234567890",
-      suppressPromptPersistence: true,
-    });
-
-    expect(attemptCalls).toHaveLength(2);
-    expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).toBe(true);
-    expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
-  });
-
-  it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider down"));
-
-    await expect(
-      agentCommand({
-        message: "hello",
-        to: "+1234567890",
-      }),
-    ).rejects.toThrow("provider down");
-
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-
-    const lifecycleErrorCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
-      const arg = call[0] as { stream?: string; data?: { phase?: string } };
-      return arg?.stream === "lifecycle" && arg?.data?.phase === "error";
-    });
-    expect(lifecycleErrorCalls.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("marks lifecycle errors aborted when cancellation reaches post-turn handling", async () => {
-    const abortController = new AbortController();
-    abortController.abort();
-    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("request aborted"));
-
-    await expect(
-      agentCommand({
-        message: "hello",
-        to: "+1234567890",
-        abortSignal: abortController.signal,
-      }),
-    ).rejects.toThrow("request aborted");
-
-    expect(
-      state.emitAgentEventMock.mock.calls.some(([event]) => {
-        const candidate = event as {
-          stream?: string;
-          data?: { phase?: string; aborted?: boolean };
-        };
-        return (
-          candidate.stream === "lifecycle" &&
-          candidate.data?.phase === "error" &&
-          candidate.data.aborted === true
-        );
-      }),
-    ).toBe(true);
-  });
-
-  it("propagates authProfileId from the switch error to the retried session entry", async () => {
-    let capturedAuthProfileProvider: string | undefined;
-    setupModelSwitchRetry({
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: "profile-openai-prod",
-      authProfileIdSource: "user",
-    });
-
-    state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
-      const attemptParams = args[0] as { authProfileProvider?: string } | undefined;
-      capturedAuthProfileProvider = attemptParams?.authProfileProvider;
-      return makeSuccessResult("openai", "gpt-5.4");
-    });
-
-    await runBasicAgentCommand();
-
-    expect(capturedAuthProfileProvider).toBe("openai");
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
-  });
+      expect(agentLifecycleEvents()).toContainEqual(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            aborted: true,
+            ...(direct ? { stopReason: "aborted" } : {}),
+          }),
+        }),
+      );
+    },
+  );
 
   it("does not persist a user live switch as an auto fallback probe result", async () => {
     const sessionEntry: SessionEntry = {
@@ -2888,7 +3714,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = sessionEntry;
     const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
     state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.storePathMock = commandPaths.internalStore;
     setupModelSwitchRetry({
       provider: "openai",
       model: "gpt-5.4",
@@ -2915,157 +3741,126 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("does not overwrite a concurrent user model switch after a primary probe", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      providerOverride: "openai",
-      modelOverride: "claude",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "anthropic",
-      modelOverrideFallbackOriginModel: "claude",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    state.sessionEntryMock = sessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = "/tmp/openclaw-session-store.json";
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
-      sessionStore["agent:main:main"] = {
+  it.each(["user-switch", "locked"] as const)(
+    "does not overwrite a concurrent %s after a primary probe",
+    async (change) => {
+      const selection = {
+        providerOverride: "openai",
+        modelOverride: "claude",
+        modelOverrideSource: "auto" as const,
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude",
+      };
+      const { store } = setupStoredSession(
+        { updatedAt: Date.now(), ...selection },
+        commandPaths.internalStore,
+      );
+      const locked = change === "locked";
+      if (locked) {
+        state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue({
+          provider: "anthropic",
+          model: "claude",
+          fallbackProvider: "openai",
+          fallbackModel: "claude",
+        });
+      }
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => {
+          if (locked) {
+            state.persistSessionEntryMock.mockClear();
+          }
+          const result = locked
+            ? await runSubsequentFallbackAttempt(params, "openai", "claude", "unknown")
+            : await runInitialFallbackAttempt(params);
+          if (locked) {
+            expectDefined(store["agent:main:main"], "probe session").modelSelectionLocked = true;
+            state.isModelSelectionLockedMock.mockReturnValue(true);
+          } else {
+            store["agent:main:main"] = createCommandSessionFixture({
+              updatedAt: Date.now(),
+              providerOverride: "google",
+              modelOverride: "gemini-3-pro",
+              modelOverrideSource: "user",
+            }).entry;
+          }
+          return {
+            result,
+            provider: locked ? "openai" : params.provider,
+            model: locked ? "claude" : params.model,
+            attempts: [],
+          };
+        },
+      );
+      state.runAgentAttemptMock.mockResolvedValue(
+        makeSuccessResult(locked ? "openai" : "anthropic", "claude"),
+      );
+
+      await runBasicAgentCommand();
+
+      if (locked) {
+        const lockedSelection = { ...selection, modelSelectionLocked: true };
+        for (const [params] of state.persistSessionEntryMock.mock.calls) {
+          expectRecordFields(requireRecord(params, "post-probe write").entry, lockedSelection);
+        }
+        expectRecordFields(store["agent:main:main"], lockedSelection);
+        expect(store["agent:main:main"]?.restartRecoveryDeliveryRunId).toBeUndefined();
+      } else {
+        expectRecordFields(store["agent:main:main"], {
+          providerOverride: "google",
+          modelOverride: "gemini-3-pro",
+          modelOverrideSource: "user",
+        });
+      }
+    },
+  );
+
+  it.each([
+    { source: "user" as const, profileProvider: "openai", preserve: true },
+    { source: "auto" as const, profileProvider: "openai", preserve: false },
+    { source: "user" as const, profileProvider: "anthropic", preserve: false },
+  ])(
+    "handles removed $source $profileProvider selections without replacing explicit same-provider intent",
+    async ({ source, profileProvider, preserve }) => {
+      const profileId = `${profileProvider}:selected`;
+      state.sessionEntryMock = createCommandSessionEntry({
         sessionId: "session-1",
         updatedAt: Date.now(),
-        providerOverride: "google",
-        modelOverride: "gemini-3-pro",
-        modelOverrideSource: "user",
+        providerOverride: "openai",
+        modelOverride: "gpt-future",
+        authProfileOverride: profileId,
+        authProfileOverrideSource: source,
         skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      });
+      state.runtimeConfigMock = {
+        agents: { defaults: { models: { "openai/gpt-future": {} } } },
       };
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-future"));
+      state.authProfileStoreMock = {
+        profiles: { [profileId]: { type: "api_key", provider: profileProvider, key: "synthetic" } },
       };
-    });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+      await runBasicAgentCommand();
+      if (profileProvider === "openai") {
+        expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+      }
+      state.clearSessionAuthProfileOverrideMock.mockClear();
+      state.authProfileStoreMock = { profiles: {} };
 
-    await runBasicAgentCommand();
+      await runBasicAgentCommand();
 
-    expectRecordFields(sessionStore["agent:main:main"], {
-      providerOverride: "google",
-      modelOverride: "gemini-3-pro",
-      modelOverrideSource: "user",
-    });
-  });
-
-  it("keeps aliased session auth profiles for codex-cli runs", async () => {
-    let capturedAuthProfileProvider: string | undefined;
-    const sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      providerOverride: "codex-cli",
-      modelOverride: "gpt-5.4",
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user",
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    } satisfies SessionEntry;
-    state.sessionEntryMock = sessionEntry;
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          models: {
-            "codex-cli/gpt-5.4": {},
-          },
-        },
-      },
-    };
-    state.authProfileStoreMock = {
-      profiles: {
-        "openai:work": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
-      },
-    };
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-    state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
-      const attemptParams = args[0] as { authProfileProvider?: string } | undefined;
-      capturedAuthProfileProvider = attemptParams?.authProfileProvider;
-      return makeSuccessResult("codex-cli", "gpt-5.4");
-    });
-
-    await runBasicAgentCommand();
-
-    expect(capturedAuthProfileProvider).toBe("codex-cli");
-    expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
-  });
-
-  it("hydrates stripped persisted skill snapshots before running the CLI path", async () => {
-    const persistedSnapshot = {
-      prompt: "persisted prompt",
-      skills: [{ name: "cli-skill" }],
-      skillFilter: ["cli-skill"],
-      version: 0,
-    };
-    const rebuiltSkills = [
-      {
-        name: "cli-skill",
-        description: "CLI skill",
-        filePath: "/tmp/workspace/skills/cli-skill/SKILL.md",
-        baseDir: "/tmp/workspace/skills/cli-skill",
-        source: "# CLI skill",
-      },
-    ];
-    state.sessionEntryMock = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: persistedSnapshot,
-    };
-    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
-      prompt: "rebuilt prompt",
-      skills: [{ name: "different-skill" }],
-      resolvedSkills: rebuiltSkills,
-      version: 99,
-    });
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
-
-    await runBasicAgentCommand();
-
-    const attemptParams = mockCallArg(state.runAgentAttemptMock) as {
-      skillsSnapshot?: Record<string, unknown>;
-    };
-    expectRecordFields(attemptParams?.skillsSnapshot, {
-      prompt: "persisted prompt",
-      skills: [{ name: "cli-skill" }],
-      skillFilter: ["cli-skill"],
-      version: 0,
-      resolvedSkills: rebuiltSkills,
-    });
-    expect(state.buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-  });
+      expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
+      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
+      expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+        "/tmp/agent",
+        expect.objectContaining({ profileId, allowKeychainPrompt: false }),
+      );
+    },
+  );
 
   it("classifies empty embedded run results before model fallback accepts them", async () => {
     let observedClassification: unknown;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const primaryResult = await params.run(params.provider, params.model);
+      const primaryResult = await runInitialFallbackAttempt(params);
       observedClassification = await params.classifyResult?.({
         provider: params.provider,
         model: params.model,
@@ -3073,7 +3868,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         attempt: 1,
         total: 2,
       });
-      const fallbackResult = await params.run("openai", "gpt-5.4");
+      const fallbackResult = await runSubsequentFallbackAttempt(
+        params,
+        "openai",
+        "gpt-5.4",
+        "format",
+      );
       return {
         result: fallbackResult,
         provider: "openai",
@@ -3120,197 +3920,155 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("emits a failure lifecycle after delivering a preserved exhausted result", async () => {
-    const exhaustedResult = {
-      payloads: [{ text: "Terminal tool summary", isError: true }],
-      meta: {
-        durationMs: 100,
-        aborted: false,
-        stopReason: "end_turn",
-        error: {
-          kind: "incomplete_turn",
-          message: "All fallback candidates ended incomplete",
-          fallbackSafe: true,
-          terminalPresentation: true,
-        },
-        agentMeta: { provider: "anthropic", model: "claude" },
-      },
-    };
-    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
-      const params = attemptParams as {
-        deferTerminalLifecycle?: boolean;
-        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
-      };
-      expect(params.deferTerminalLifecycle).toBe(true);
-      params.onAgentEvent?.({
-        stream: "lifecycle",
-        data: {
-          phase: "finishing",
-          error: "All fallback candidates ended incomplete",
-        },
-      });
-      return exhaustedResult;
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "exhausted",
-      result: await params.run("anthropic", "claude"),
+  it("does not carry an earlier provider error observation into a CLI startup failure", async () => {
+    const primaryFailure = new FailoverError("Primary provider failed", {
+      reason: "server_error",
       provider: "anthropic",
       model: "claude",
-      attempts: [
-        {
+    });
+    const startupFailure = new Error("CLI process failed before starting");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await expect(runInitialFallbackAttempt(params)).rejects.toBe(primaryFailure);
+      return await runSubsequentFallbackAttempt(params, "claude-cli", "claude", "server_error");
+    });
+    state.runAgentAttemptMock
+      .mockImplementationOnce(
+        async (
+          params: Parameters<typeof import("./command/attempt-execution.js").runAgentAttempt>[0],
+        ) => {
+          await params.onAgentEvent({
+            stream: "lifecycle",
+            data: {
+              phase: "finishing",
+              error: primaryFailure.message,
+              errorObservation: {
+                provider: "anthropic",
+                model: "claude",
+                providerErrorType: "server_error",
+              },
+            },
+          });
+          throw primaryFailure;
+        },
+      )
+      .mockRejectedValueOnce(startupFailure);
+
+    await expect(runBasicAgentCommand()).rejects.toBe(startupFailure);
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+    const terminalErrors = agentLifecycleEvents().filter((event) => event.data?.phase === "error");
+    expect(terminalErrors).toHaveLength(1);
+    expect(terminalErrors[0]?.data).toMatchObject({
+      error: startupFailure.message,
+      executionSettled: true,
+    });
+    expect(terminalErrors[0]?.data).not.toHaveProperty("errorObservation");
+  });
+
+  it.each(["exhausted", "completed"] as const)(
+    "delivers %s error results with a failure lifecycle",
+    async (outcome) => {
+      const exhausted = outcome === "exhausted";
+      const message = exhausted
+        ? "All fallback candidates ended incomplete"
+        : "Command may have changed state";
+      const result = {
+        payloads: [{ text: exhausted ? "Terminal tool summary" : message, isError: true }],
+        meta: {
+          durationMs: 100,
+          aborted: false,
+          stopReason: "end_turn",
+          ...(!exhausted ? { replayInvalid: true } : {}),
+          error: {
+            kind: "incomplete_turn",
+            message: exhausted ? message : "raw provider detail should stay private",
+            fallbackSafe: exhausted,
+            ...(exhausted ? { terminalPresentation: true } : {}),
+          },
+          agentMeta: { provider: "anthropic", model: "claude" },
+        },
+      };
+      state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
+        const params = attemptParams as {
+          deferTerminalLifecycle?: boolean;
+          onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+        };
+        expect(params.deferTerminalLifecycle).toBe(true);
+        params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: {
+            phase: "finishing",
+            error: message,
+            ...(!exhausted ? { replayInvalid: true } : {}),
+          },
+        });
+        return result;
+      });
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          outcome,
+          result: await runInitialFallbackAttempt(params, "anthropic", "claude"),
           provider: "anthropic",
           model: "claude",
-          error: "All fallback candidates ended incomplete",
-          reason: "format",
-        },
-      ],
-    }));
+          attempts: exhausted
+            ? [{ provider: "anthropic", model: "claude", error: message, reason: "format" }]
+            : [],
+        }),
+      );
+      const onModelFallbackExhausted = vi.fn();
+      const onResultErrorPayload = vi.fn();
 
-    await runBasicAgentCommand();
+      await runBasicAgentCommand(
+        exhausted ? { onModelFallbackExhausted } : { onResultErrorPayload },
+      );
 
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
-    const lifecycleEvents = state.emitAgentEventMock.mock.calls
-      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
-      .filter((event) => event.stream === "lifecycle");
-    expect(lifecycleEvents.some((event) => event.data?.phase === "finishing")).toBe(false);
-    expect(lifecycleEvents.some((event) => event.data?.phase === "end")).toBe(false);
-    expect(lifecycleEvents).toEqual(
-      expect.arrayContaining([
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+      const lifecycleEvents = agentLifecycleEvents();
+      expect(lifecycleEvents).toContainEqual(
         expect.objectContaining({
           data: expect.objectContaining({
             phase: "error",
-            error: "All fallback candidates ended incomplete",
-            fallbackExhaustedFailure: true,
+            error: message,
+            executionSettled: true,
+            ...(!exhausted ? { replayInvalid: true } : {}),
           }),
         }),
-      ]),
-    );
-  });
-
-  it("emits a failure lifecycle for completed non-fallbackable error results", async () => {
-    const terminalErrorResult = {
-      payloads: [{ text: "Command may have changed state", isError: true }],
-      meta: {
-        durationMs: 100,
-        aborted: false,
-        stopReason: "end_turn",
-        replayInvalid: true,
-        error: {
-          kind: "incomplete_turn",
-          message: "raw provider detail should stay private",
-          fallbackSafe: false,
-        },
-        agentMeta: { provider: "anthropic", model: "claude" },
-      },
-    };
-    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
-      const params = attemptParams as {
-        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
-      };
-      params.onAgentEvent?.({
-        stream: "lifecycle",
-        data: {
-          phase: "finishing",
-          error: "Command may have changed state",
-          replayInvalid: true,
-        },
-      });
-      return terminalErrorResult;
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "completed",
-      result: await params.run("anthropic", "claude"),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
-
-    await runBasicAgentCommand();
-
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
-    const lifecycleEvents = state.emitAgentEventMock.mock.calls
-      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
-      .filter((event) => event.stream === "lifecycle");
-    expect(lifecycleEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          data: expect.objectContaining({
-            phase: "error",
-            error: "Command may have changed state",
-            replayInvalid: true,
-          }),
-        }),
-      ]),
-    );
-    expect(
-      lifecycleEvents.some(
-        (event) => event.data?.phase === "end" || event.data?.fallbackExhaustedFailure === true,
-      ),
-    ).toBe(false);
-    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
-  });
-
-  it("updates hasSessionModelOverride for fallback resolution after switch", async () => {
-    setupModelSwitchRetry({
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-
-    state.resolveEffectiveModelFallbacksMock.mockClear();
-
-    await runBasicAgentCommand();
-
-    expectFallbackOverrideCalls(false, true);
-  });
-
-  it("does not flip hasSessionModelOverride on auth-only switch with same model", async () => {
-    setupModelSwitchRetry({
-      provider: "anthropic",
-      model: "claude",
-      authProfileId: "profile-99",
-      authProfileIdSource: "user",
-    });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
-
-    state.resolveEffectiveModelFallbacksMock.mockClear();
-
-    await runBasicAgentCommand();
-
-    expectFallbackOverrideCalls(false, false);
-  });
+      );
+      expect(lifecycleEvents.some((event) => event.data?.phase === "end")).toBe(false);
+      if (exhausted) {
+        expect(onModelFallbackExhausted).toHaveBeenCalledTimes(1);
+        expect(lifecycleEvents.some((event) => event.data?.phase === "finishing")).toBe(false);
+      } else {
+        expect(onResultErrorPayload).toHaveBeenCalledWith(message);
+        expect(lifecycleEvents.some((event) => event.data?.fallbackExhaustedFailure === true)).toBe(
+          false,
+        );
+        expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
+      }
+    },
+  );
 
   it("sends internal completion wakes to ACP sessions as plain prompt text", async () => {
-    state.acpResolveSessionMock.mockReturnValue({
-      kind: "ready",
-      meta: {
-        agent: "claude",
-        cwd: "/tmp/workspace",
-      },
-    });
+    setupAcpSession();
 
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "inspect ACP delivery",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child output",
+        replyInstruction: "Summarize the result for the user.",
+      },
+    ];
     await agentCommand({
-      message: [
-        INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "OpenClaw runtime context (internal):",
-        "hidden task completion event",
-        INTERNAL_RUNTIME_CONTEXT_END,
-      ].join("\n"),
+      message: formatAgentInternalEventsForPrompt(internalEvents),
       sessionKey: "agent:main:main",
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "subagent",
-          childSessionKey: "agent:main:subagent:child",
-          childSessionId: "child-session-id",
-          announceType: "subagent task",
-          taskLabel: "inspect ACP delivery",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "child output",
-          replyInstruction: "Summarize the result for the user.",
-        },
-      ],
+      internalEvents,
     });
 
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
@@ -3332,37 +4090,162 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 
-  it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {
-    state.acpResolveSessionMock.mockReturnValue({
-      kind: "ready",
-      meta: {
-        agent: "claude",
-        cwd: "/tmp/workspace",
+  it("refuses a local installation target only when dispatching an ACP turn", async () => {
+    setupAcpSession();
+    await expect(
+      withInstallationTarget(
+        {
+          stateDir: "/fixture/diagnosed",
+          configPath: "/fixture/custom.json",
+          defaultWorkspaceDir: "/fixture/default-workspace",
+        },
+        runBasicAgentCommand,
+      ),
+    ).rejects.toThrow("saved prompt");
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    await runBasicAgentCommand();
+    expect(state.acpRunTurnMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "starts ACP only after accepted input reaches the transcript (blocked=%s)",
+    async (blocked) => {
+      setupAcpSession();
+      const recorder = blocked
+        ? createUserTurnTranscriptRecorder({
+            input: { text: "accepted ACP input", idempotencyKey: "acp-input:user" },
+            target: () => undefined,
+          })
+        : undefined;
+      const onExecutionStarted = vi.fn();
+      const submitPrompt = vi.fn();
+      state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+        const callbacks = params as {
+          onBeforePrompt?: () => Promise<void> | void;
+          onLifecycle?: (event: { type: string; at: number }) => void;
+          onEvent?: (event: unknown) => void;
+        };
+        expect(onExecutionStarted).not.toHaveBeenCalled();
+        await callbacks.onBeforePrompt?.();
+        expect(onExecutionStarted).toHaveBeenCalledOnce();
+        submitPrompt();
+        callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
+        callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
+      });
+
+      const pending = agentCommand({
+        message: blocked ? "accepted ACP input" : "ACP execution boundary",
+        sessionKey: "agent:main:main",
+        userTurnTranscriptRecorder: recorder,
+        onExecutionStarted,
+      });
+      if (blocked) {
+        await expect(pending).rejects.toThrow("ACP input could not enter the session transcript");
+        expect(onExecutionStarted).not.toHaveBeenCalled();
+        expect(submitPrompt).not.toHaveBeenCalled();
+        expect(state.persistAcpTurnTranscriptMock).not.toHaveBeenCalled();
+      } else {
+        await pending;
+        expect(onExecutionStarted).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it("keeps manual ACP elicitation owned by the child turn without channel delivery", async () => {
+    setupAcpSession();
+    const childSessionKey = "agent:codex:acp:child";
+    state.resolvedSessionKeyMock = childSessionKey;
+    let answerQuestion: ((value: unknown) => void) | undefined;
+    let questionRequest:
+      | { id: string; questions: Array<{ questionId: string }>; sessionKey?: string }
+      | undefined;
+    state.gatewayCallMock.mockImplementation(
+      async (method: string, _opts: unknown, rawParams: unknown) => {
+        const params = rawParams as { id: string; questions: Array<{ questionId: string }> };
+        if (method === "question.request") {
+          questionRequest = params;
+          return { id: params.id };
+        }
+        if (method === "question.waitAnswer") {
+          return await new Promise((resolve) => {
+            answerQuestion = resolve;
+          });
+        }
+        if (method === "question.resolve") {
+          return { status: "cancelled" };
+        }
+        throw new Error(`unexpected Gateway question method: ${method}`);
       },
-    });
-    state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(
-      new Error("ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`)."),
     );
+    state.acpRunTurnMock.mockImplementationOnce(async (rawTurn: unknown) => {
+      const turn = rawTurn as {
+        onElicitation?: (
+          request: Record<string, unknown>,
+          context: { requestId: string; signal: AbortSignal },
+        ) => Promise<{ action: string; content?: Record<string, unknown> }>;
+        onEvent?: (event: unknown) => void;
+      };
+      expect(turn.onElicitation).toBeTypeOf("function");
+      const response = turn.onElicitation!(
+        {
+          mode: "form",
+          sessionId: "acp-session",
+          message: "Choose a flavor",
+          requestedSchema: {
+            type: "object",
+            properties: {
+              flavor: { type: "string", enum: ["Vanilla", "Chocolate"] },
+            },
+            required: ["flavor"],
+          },
+        },
+        { requestId: "elicitation-1", signal: new AbortController().signal },
+      );
+      await vi.waitFor(() =>
+        expect(state.emitAcpRuntimeEventMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: childSessionKey,
+            event: expect.objectContaining({
+              type: "status",
+              text: expect.stringContaining("flavor"),
+            }),
+          }),
+        ),
+      );
+      const questionId = expectDefined(
+        questionRequest?.questions[0]?.questionId,
+        "manual ACP question id",
+      );
+      answerQuestion?.({
+        status: "answered",
+        answers: { answers: { [questionId]: ["Vanilla"] } },
+      });
+      const resolved = await response;
+      expect(resolved).toEqual({ action: "accept", content: { flavor: "Vanilla" } });
+      turn.onEvent?.({ type: "text_delta", stream: "output", text: "FLAVOR:Vanilla" });
+      turn.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
 
     await agentCommand({
       message: "bootstrap ACP child",
-      sessionKey: "agent:main:main",
+      sessionKey: childSessionKey,
       acpTurnSource: "manual_spawn",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:parent",
+        sourceTool: "sessions_spawn",
+      },
     });
 
-    expect(state.resolveAcpExplicitTurnPolicyErrorMock).toHaveBeenCalledTimes(1);
-    expect(state.resolveAcpDispatchPolicyErrorMock).not.toHaveBeenCalled();
-    expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
+    expect(questionRequest).toMatchObject({ sessionKey: childSessionKey });
+    expect(state.buildAcpResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloadText: "FLAVOR:Vanilla" }),
+    );
   });
 
   it("keeps ordinary ACP turns blocked when ACP dispatch is disabled", async () => {
-    state.acpResolveSessionMock.mockReturnValue({
-      kind: "ready",
-      meta: {
-        agent: "claude",
-        cwd: "/tmp/workspace",
-      },
-    });
+    setupAcpSession();
     state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(
       new Error("ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`)."),
     );
@@ -3377,19 +4260,49 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.resolveAcpExplicitTurnPolicyErrorMock).not.toHaveBeenCalled();
     expect(state.resolveAcpDispatchPolicyErrorMock).toHaveBeenCalledTimes(1);
     expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.emitAcpLifecycleErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
   });
 
-  it("flips hasSessionModelOverride on provider-only switch with same model", async () => {
-    setupModelSwitchRetry({
-      provider: "openai",
-      model: "claude",
+  it("preserves ACP cancelled results without a stop reason", async () => {
+    setupAcpSession();
+    state.resolveAcpLifecycleEndFieldsMock.mockReturnValueOnce({
+      aborted: true,
+      stopReason: "stop",
+      status: "cancelled",
     });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "claude"));
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      onEvent?.({ type: "done", status: "cancelled" });
+    });
 
-    state.resolveEffectiveModelFallbacksMock.mockClear();
+    await agentCommand({
+      message: "cancelled ACP turn",
+      sessionKey: "agent:main:main",
+    });
 
-    await runBasicAgentCommand();
-
-    expectFallbackOverrideCalls(false, true);
+    expect(state.emitAcpLifecycleEndMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endFields: { aborted: true, stopReason: "stop", status: "cancelled" },
+      }),
+    );
+    expect(state.buildAcpResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+    );
+    const signal = requireRecord(mockCallArg(state.acpRunTurnMock), "ACP turn").signal;
+    expect(signal).toHaveProperty("aborted", false);
+    expect(mockCallArg(state.resolveAcpLifecycleEndFieldsMock)).toBe(signal);
+    expect(state.resolveAcpLifecycleEndFieldsMock).toHaveBeenCalledWith(
+      signal,
+      undefined,
+      "cancelled",
+    );
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: expect.objectContaining({ reason: "cancelled", status: "error" }),
+      }),
+    );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

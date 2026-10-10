@@ -1,55 +1,143 @@
 // Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
-import { EventEmitter } from "node:events";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
+import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type SpawnCall = {
   command: string;
   args: string[];
+  containerId?: string;
 };
 
-const spawnCalls: SpawnCall[] = [];
+const spawnCalls = vi.hoisted(() => [] as SpawnCall[]);
+const mountInspectFormat = '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}';
 
-vi.mock("node:child_process", () => ({
-  execFile: (...args: unknown[]) => {
-    // Docker availability probes should succeed without invoking real Docker.
-    const callback = args.findLast(
-      (arg): arg is (error: null, stdout: string, stderr: string) => void =>
-        typeof arg === "function",
-    );
-    queueMicrotask(() => callback?.(null, "", ""));
-    return new EventEmitter();
-  },
-  spawn: (command: string, args: string[]) => {
-    spawnCalls.push({ command, args });
-    const child = new EventEmitter() as {
-      stdout?: Readable;
-      stderr?: Readable;
-      on: (event: string, cb: (...args: unknown[]) => void) => void;
-      emit: (event: string, ...args: unknown[]) => boolean;
-    };
-    child.stdout = new Readable({ read() {} });
-    child.stderr = new Readable({ read() {} });
+function inspectCreatedDockerMounts(containerName: string | undefined) {
+  const create = spawnCalls.findLast(
+    (call) =>
+      call.command === "docker" &&
+      call.args[0] === "create" &&
+      (call.args[call.args.indexOf("--name") + 1] === containerName ||
+        call.containerId === containerName),
+  );
+  if (!create?.containerId) {
+    throw new Error(`No recorded Docker create for ${containerName}`);
+  }
+  const mounts: { Type: "bind"; Source: string; Destination: string; RW: boolean }[] = [];
+  const tmpfs: Record<string, string> = {};
+  for (let index = 0; index < create.args.length; index += 1) {
+    const flag = create.args[index];
+    const value = create.args[index + 1];
+    if (flag === "-v") {
+      const bind = value && splitSandboxBindSpec(value);
+      if (!bind) {
+        throw new Error(`Invalid recorded Docker bind: ${value}`);
+      }
+      mounts.push({
+        Type: "bind",
+        Source: bind.host,
+        Destination: bind.container,
+        RW: !sandboxMountOptionsReadOnly(bind.options),
+      });
+    } else if (flag === "--tmpfs" && value) {
+      const separator = value.indexOf(":");
+      tmpfs[separator < 0 ? value : value.slice(0, separator)] =
+        separator < 0 ? "" : value.slice(separator + 1);
+    }
+  }
+  const entries = [
+    ...mounts.map((mount) => ({
+      destination: mount.Destination,
+      writable: mount.RW,
+      type: "bind",
+    })),
+    ...Object.entries(tmpfs).map(([destination, options]) => ({
+      destination,
+      writable: !sandboxMountOptionsReadOnly(options),
+      type: "tmpfs",
+    })),
+  ].map(({ destination, writable, type }, index) => ({
+    destination,
+    writable,
+    type,
+    id: index + 2,
+  }));
+  const escapePath = (value: string) =>
+    value.replace(/[\\ \t\n]/g, (char) => `\\${char.charCodeAt(0).toString(8).padStart(3, "0")}`);
+  const rootMode = create.args.includes("--read-only") ? "ro" : "rw";
+  // Model this fixture's ordinary, unstacked mounts from the actual create
+  // arguments so the real backend snapshot keeps the workspace visible.
+  const mountinfo = [
+    `1 1 0:1 / / ${rootMode} - overlay overlay ${rootMode}`,
+    ...entries.map((entry) => {
+      const parent = entries
+        .filter((other) => entry.destination.startsWith(`${other.destination}/`))
+        .toSorted((a, b) => b.destination.length - a.destination.length)[0];
+      const mode = entry.writable ? "rw" : "ro";
+      const backing = entry.type === "bind" ? `8:1 /bind-${entry.id}` : `0:${entry.id} /`;
+      const filesystem = entry.type === "bind" ? "ext4 /dev/test rw" : `tmpfs tmpfs ${mode}`;
+      return `${entry.id} ${parent?.id ?? 1} ${backing} ${escapePath(entry.destination)} ${mode} - ${filesystem}`;
+    }),
+  ].join("\n");
+  return { containerId: create.containerId, mounts, tmpfs, mountinfo };
+}
 
-    const dockerArgs = command === "docker" ? args : [];
-    const shouldFailContainerInspect =
-      dockerArgs[0] === "inspect" &&
-      dockerArgs[1] === "-f" &&
-      dockerArgs[2] === "{{.State.Running}}";
-    const shouldSucceedImageInspect = dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
+async function spawnDockerProcess(commandAndArgs: string[]) {
+  const [command = "", ...args] = commandAndArgs;
+  spawnCalls.push({
+    command,
+    args,
+    ...(command === "docker" && args[0] === "create"
+      ? { containerId: (spawnCalls.length + 1).toString(16).padStart(64, "0") }
+      : {}),
+  });
+  const shouldFailContainerInspect =
+    command === "docker" &&
+    args[0] === "inspect" &&
+    args[1] === "-f" &&
+    args[2] === "{{.State.Running}}";
+  const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
+  let stdout = "";
+  if (command === "docker" && args[0] === "create") {
+    stdout = inspectCreatedDockerMounts(args[args.indexOf("--name") + 1]).containerId;
+  } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
+    stdout = inspectCreatedDockerMounts(args[3]).containerId;
+  } else if (
+    command === "docker" &&
+    args[0] === "inspect" &&
+    args[1] === "--format" &&
+    args[2] === mountInspectFormat
+  ) {
+    const { mounts, tmpfs } = inspectCreatedDockerMounts(args[3]);
+    stdout = JSON.stringify({ Mounts: mounts, Tmpfs: tmpfs });
+  } else if (
+    command === "docker" &&
+    args[0] === "exec" &&
+    args[2] === "cat" &&
+    args[3] === "/proc/self/mountinfo"
+  ) {
+    stdout = inspectCreatedDockerMounts(args[1]).mountinfo;
+  }
+  return {
+    failed: code !== 0,
+    isCanceled: false,
+    exitCode: code,
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(code === 0 ? "" : "No such container"),
+  };
+}
 
-    queueMicrotask(() =>
-      child.emit("close", shouldFailContainerInspect && !shouldSucceedImageInspect ? 1 : 0),
-    );
-    return child;
-  },
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  spawnCommand: spawnDockerProcess,
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  syncSkillsToWorkspace: vi.fn(async () => undefined),
+vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
+  syncWorkspaceSkills: vi.fn(async () => undefined),
 }));
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
@@ -58,24 +146,46 @@ let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").re
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
   // Convenience wrapper keeps session-key specific sandbox context assertions compact.
-  return resolveSandboxContext({
+  const context = await resolveSandboxContext({
     config,
     sessionKey,
     workspaceDir,
   });
+  if (context) {
+    const { containerId } = inspectCreatedDockerMounts(context.containerName);
+    expect(
+      spawnCalls.filter(
+        (call) =>
+          call.command === "docker" &&
+          (call.args[2] === "{{.Id}}" ||
+            call.args[2] === mountInspectFormat ||
+            call.args[3] === "/proc/self/mountinfo"),
+      ),
+    ).toEqual([
+      {
+        command: "docker",
+        args: ["inspect", "--format", mountInspectFormat, containerId],
+      },
+      { command: "docker", args: ["exec", containerId, "cat", "/proc/self/mountinfo"] },
+    ]);
+    expect(spawnCalls).toContainEqual({ command: "docker", args: ["start", containerId] });
+    expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
+      path.join(context.workspaceDir, "marker.txt"),
+    );
+  }
+  return context;
 }
 
 function expectDockerSetupCommand(command: string) {
   // Setup commands are executed through docker exec in the resolved container.
-  expect(
-    spawnCalls.some(
-      (call) =>
-        call.command === "docker" &&
-        call.args[0] === "exec" &&
-        call.args.includes("-lc") &&
-        call.args.includes(command),
-    ),
-  ).toBe(true);
+  const matched = spawnCalls.some(
+    (call) =>
+      call.command === "docker" &&
+      call.args[0] === "exec" &&
+      call.args.includes("-lc") &&
+      call.args.includes(command),
+  );
+  expect(matched, `expected docker setup command; calls=${JSON.stringify(spawnCalls)}`).toBe(true);
 }
 
 function createDefaultsSandboxConfig(
@@ -105,9 +215,8 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
           },
         },
       },
-      list: [
-        {
-          id: "work",
+      entries: {
+        work: {
           workspace: "~/openclaw-work",
           sandbox: {
             mode: "all",
@@ -117,7 +226,7 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
             },
           },
         },
-      ],
+      },
     },
   };
 }
@@ -146,9 +255,8 @@ describe("Agent-specific sandbox config", () => {
             workspaceRoot: "~/.openclaw/sandboxes",
           },
         },
-        list: [
-          {
-            id: "isolated",
+        entries: {
+          isolated: {
             workspace: "~/openclaw-isolated",
             sandbox: {
               mode: "all",
@@ -156,7 +264,7 @@ describe("Agent-specific sandbox config", () => {
               workspaceRoot: "/tmp/isolated-sandboxes",
             },
           },
-        ],
+        },
       },
     };
 
@@ -177,23 +285,21 @@ describe("Agent-specific sandbox config", () => {
             scope: "session",
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
             sandbox: {
               mode: "off",
             },
           },
-          {
-            id: "family",
+          family: {
             workspace: "~/openclaw-family",
             sandbox: {
               mode: "all",
               scope: "agent",
             },
           },
-        ],
+        },
       },
     };
 
@@ -230,7 +336,7 @@ describe("Agent-specific sandbox config", () => {
 
     const sandbox = resolveSandboxConfigForAgent(cfg, "restricted");
     expect(sandbox.tools).toEqual({
-      allow: ["read", "write", "image"],
+      allow: ["read", "write", "view_image"],
       deny: ["edit"],
     });
   });
@@ -244,12 +350,11 @@ describe("Agent-specific sandbox config", () => {
             scope: "agent",
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
           },
-        ],
+        },
       },
     };
 
@@ -257,30 +362,24 @@ describe("Agent-specific sandbox config", () => {
     expect(sandbox.mode).toBe("all");
   });
 
-  it("should resolve setupCommand overrides based on sandbox scope", async () => {
-    for (const scenario of [
-      {
-        scope: "agent" as const,
-        expectedSetup: "echo work",
-        expectedContainerFragment: "agent-work",
-      },
-      {
-        scope: "shared" as const,
-        expectedSetup: "echo global",
-        expectedContainerFragment: "shared",
-      },
-    ]) {
-      const cfg = createWorkSetupCommandConfig(scenario.scope);
-      const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
+  it.each([
+    {
+      scope: "agent" as const,
+      expectedSetup: "echo work",
+    },
+    {
+      scope: "shared" as const,
+      expectedSetup: "echo global",
+    },
+  ])("should resolve $scope setupCommand overrides", async ({ scope, expectedSetup }) => {
+    const cfg = createWorkSetupCommandConfig(scope);
+    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
 
-      if (!context) {
-        throw new Error(`Expected sandbox context for ${scenario.scope} scoped setup`);
-      }
-      expect(context.docker?.setupCommand).toBe(scenario.expectedSetup);
-      expect(context.containerName).toContain(scenario.expectedContainerFragment);
-      expectDockerSetupCommand(scenario.expectedSetup);
-      spawnCalls.length = 0;
+    if (!context) {
+      throw new Error(`Expected sandbox context for ${scope} scoped setup`);
     }
+    expect(context.docker?.setupCommand).toBe(expectedSetup);
+    expectDockerSetupCommand(expectedSetup);
   });
 
   it("should allow agent-specific docker settings beyond setupCommand", () => {
@@ -296,9 +395,8 @@ describe("Agent-specific sandbox config", () => {
             },
           },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             sandbox: {
               mode: "all",
@@ -309,7 +407,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-        ],
+        },
       },
     };
 
@@ -319,7 +417,11 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should honor agent-specific sandbox mode overrides", () => {
-    for (const scenario of [
+    const scenarios: Array<{
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => void;
+    }> = [
       {
         cfg: {
           agents: {
@@ -329,15 +431,14 @@ describe("Agent-specific sandbox config", () => {
                 scope: "agent",
               },
             },
-            list: [
-              {
-                id: "main",
+            entries: {
+              main: {
                 workspace: "~/openclaw",
                 sandbox: {
                   mode: "off",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:main:main",
@@ -354,16 +455,15 @@ describe("Agent-specific sandbox config", () => {
                 mode: "off",
               },
             },
-            list: [
-              {
-                id: "family",
+            entries: {
+              family: {
                 workspace: "~/openclaw-family",
                 sandbox: {
                   mode: "all",
                   scope: "agent",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:family:whatsapp:group:123",
@@ -372,7 +472,8 @@ describe("Agent-specific sandbox config", () => {
           expect(runtime.sandboxed).toBe(true);
         },
       },
-    ]) {
+    ];
+    for (const scenario of scenarios) {
       const runtime = resolveSandboxRuntimeStatus({
         cfg: scenario.cfg,
         sessionKey: scenario.sessionKey,
@@ -390,16 +491,15 @@ describe("Agent-specific sandbox config", () => {
             scope: "session",
           },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             sandbox: {
               mode: "all",
               scope: "agent",
             },
           },
-        ],
+        },
       },
     };
 
@@ -411,7 +511,7 @@ describe("Agent-specific sandbox config", () => {
     for (const scenario of [
       {
         cfg: createDefaultsSandboxConfig(),
-        expected: ["session_status", "image"],
+        expected: ["session_status", "view_image"],
       },
       {
         cfg: {
@@ -432,7 +532,7 @@ describe("Agent-specific sandbox config", () => {
             },
           },
         } satisfies OpenClawConfig,
-        expected: ["image"],
+        expected: ["view_image"],
       },
     ]) {
       const sandbox = resolveSandboxConfigForAgent(scenario.cfg, "main");

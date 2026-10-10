@@ -1,27 +1,24 @@
-// Codex tests cover transport stdio plugin behavior.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
+  createStdioTransport,
   resolveCodexAppServerSpawnEnv,
-  resolveCodexAppServerSpawnInvocation,
+  withCodexAppServerGitConfig,
 } from "./transport-stdio.js";
 
-const tempDirs: string[] = [];
+const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
+const prepareRegistration = vi.hoisted(() => vi.fn(async () => async () => {}));
 
-async function createTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-spawn-"));
-  tempDirs.push(dir);
-  return dir;
-}
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("./transport-process-registration.js", () => ({
+  prepareCodexAppServerProcessRegistration: prepareRegistration,
+}));
 
-afterEach(async () => {
-  for (const dir of tempDirs.splice(0)) {
-    await rm(dir, { recursive: true, force: true });
-  }
+beforeEach(() => {
+  spawnMock.mockClear();
+  prepareRegistration.mockReset().mockResolvedValue(async () => {});
 });
+afterEach(() => vi.unstubAllEnvs());
 
 function startOptions(command: string): CodexAppServerStartOptions {
   return {
@@ -32,81 +29,188 @@ function startOptions(command: string): CodexAppServerStartOptions {
   };
 }
 
-describe("resolveCodexAppServerSpawnInvocation", () => {
-  it("keeps non-Windows Codex app-server invocation unchanged", () => {
-    const resolved = resolveCodexAppServerSpawnInvocation(startOptions("codex"), {
-      platform: "darwin",
-      env: {},
-      execPath: "/usr/local/bin/node",
+describe("createStdioTransport", () => {
+  it("does not let a missing working directory poison another launch of the same executable", async () => {
+    const options = startOptions("/installed/cwd-fixture/codex");
+    spawnMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error("spawn ENOENT"), { code: "ENOENT", syscall: "spawn" });
     });
-
-    expect(resolved).toEqual({
-      command: "codex",
-      args: ["app-server", "--listen", "stdio://"],
-      shell: undefined,
-      windowsHide: undefined,
-    });
-  });
-
-  it("requires managed Codex commands to be resolved before spawn", () => {
-    expect(() =>
-      resolveCodexAppServerSpawnInvocation(
-        {
-          ...startOptions("codex"),
-          commandSource: "managed",
-        },
-        {
-          platform: "darwin",
-          env: {},
-          execPath: "/usr/local/bin/node",
-        },
-      ),
-    ).toThrow("must be resolved before spawn");
-  });
-
-  it("resolves Windows npm .cmd Codex shims through Node instead of raw spawn", async () => {
-    const binDir = await createTempDir();
-    const entryPath = path.join(binDir, "node_modules", "@openai", "codex", "bin", "codex.js");
-    const shimPath = path.join(binDir, "codex.cmd");
-    await mkdir(path.dirname(entryPath), { recursive: true });
-    await writeFile(entryPath, "console.log('codex')\n", "utf8");
-    await writeFile(
-      shimPath,
-      '@ECHO off\r\n"%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n',
-      "utf8",
+    await expect(createStdioTransport({ ...options, cwd: "/missing" })).rejects.toThrow(
+      "working directory",
     );
-
-    const resolved = resolveCodexAppServerSpawnInvocation(startOptions("codex"), {
-      platform: "win32",
-      env: { PATH: binDir, PATHEXT: ".CMD;.EXE;.BAT" },
-      execPath: "C:\\node\\node.exe",
+    await expect(createStdioTransport({ ...options, cwd: "/available" })).resolves.toMatchObject({
+      pid: 1234,
     });
-
-    expect(resolved).toEqual({
-      command: "C:\\node\\node.exe",
-      args: [entryPath, "app-server", "--listen", "stdio://"],
-      shell: undefined,
-      windowsHide: true,
-    });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects Windows Codex app-server commands that include inline script arguments", () => {
-    expect(() =>
-      resolveCodexAppServerSpawnInvocation(
-        startOptions(
-          "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
-        ),
-        {
-          platform: "win32",
-          env: {},
-          execPath: "C:\\node\\node.exe",
-        },
-      ),
-    ).toThrow("Windows spawn command must be an executable path only");
+  it("runs the managed package launcher with the current interpreter, independent of PATH", async () => {
+    const command = "/installed/node_modules/@openai/codex/bin/codex.js";
+    await createStdioTransport(
+      { ...startOptions(command), commandSource: "resolved-managed" },
+      { PATH: "/wrong-architecture/bin" },
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [command, "app-server", "--listen", "stdio://"],
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    { errno: -86, code: "Unknown system error -86", reason: "is not runnable on this CPU" },
+    { code: "ENOENT", reason: "or its working directory was not found" },
+    { code: "EACCES", reason: "is not executable" },
+  ])(
+    "identifies a terminal $code spawn failure without exposing arguments",
+    async ({ reason, ...fields }) => {
+      const command = `/installed/${fields.code}/codex`;
+      const failure = Object.assign(new Error("spawn failed"), { ...fields, syscall: "spawn" });
+      spawnMock.mockImplementationOnce(() => {
+        throw failure;
+      });
+      await expect(createStdioTransport(startOptions(command))).rejects.toMatchObject({
+        message: expect.stringContaining(`${command} ${reason}`),
+        cause: failure,
+      });
+      vi.resetModules();
+      const reloaded = await import("./transport-stdio.js");
+      await expect(reloaded.createStdioTransport(startOptions(command))).rejects.toMatchObject({
+        cause: failure,
+      });
+      expect(spawnMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rechecks authority after orphan cleanup before spawning", async () => {
+    let active = true;
+    prepareRegistration.mockImplementationOnce(async () => {
+      active = false;
+      return async () => {};
+    });
+    await expect(
+      createStdioTransport(startOptions("codex"), {}, () => {
+        if (!active) {
+          throw new Error("owner closed");
+        }
+      }),
+    ).rejects.toThrow("owner closed");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+  it.each<{
+    lifeline?: string;
+    detached: boolean;
+    childOptions?: Pick<CodexAppServerStartOptions, "env" | "clearEnv">;
+  }>([
+    {
+      lifeline: " stdin ",
+      childOptions: { clearEnv: ["OPENCLAW_GATEWAY_HOST_LIFELINE"] },
+      detached: false,
+    },
+    {
+      childOptions: { env: { OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin" } },
+      detached: true,
+    },
+  ])(
+    "spawns an endpoint with host lifeline $lifeline and child overrides $childOptions",
+    async ({ lifeline, detached, childOptions }) => {
+      await createStdioTransport(
+        { ...startOptions("codex"), cwd: "/srv/codex-project", ...childOptions },
+        { OPENCLAW_GATEWAY_HOST_LIFELINE: lifeline },
+      );
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        "codex",
+        ["app-server", "--listen", "stdio://"],
+        expect.objectContaining({
+          cwd: "/srv/codex-project",
+          detached: process.platform !== "win32" && detached,
+        }),
+      );
+    },
+  );
+
+  it("preserves wrapper prefixes, root option values, and raw override ordering", async () => {
+    const overrides = ["-c", 'developer_instructions="app-server = literal"'];
+    const args = [
+      "/wrapper.js",
+      ...overrides,
+      "--profile",
+      "app-server",
+      "app-server",
+      "--listen",
+      "stdio://",
+      "--config=model_reasoning_effort=high",
+    ];
+    await createStdioTransport({ ...startOptions("node"), args });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "node",
+      [
+        "/wrapper.js",
+        ...overrides,
+        "--profile",
+        "app-server",
+        "--config=model_reasoning_effort=high",
+        "app-server",
+        "--listen",
+        "stdio://",
+      ],
+      expect.any(Object),
+    );
+    expect(args[1]).toBe("-c");
+  });
+
+  it("does not reinterpret a wrapper's positional arguments after --", async () => {
+    const args = ["/wrapper.js", "--", "-c", "opaque", "app-server"];
+    await createStdioTransport({ ...startOptions("node"), args });
+    expect(spawnMock).toHaveBeenCalledWith("node", args, expect.any(Object));
+  });
+
+  it("preserves a subcommand-shaped socket value", async () => {
+    await createStdioTransport({
+      ...startOptions("codex"),
+      args: ["app-server", "proxy", "--sock", "app-server", "-c", "model_reasoning_effort=high"],
+    });
+    expect(spawnMock.mock.calls[0]?.slice(0, 2)).toEqual([
+      "codex",
+      ["-c", "model_reasoning_effort=high", "app-server", "proxy", "--sock", "app-server"],
+    ]);
   });
 });
 
 describe("resolveCodexAppServerSpawnEnv", () => {
+  it.each([
+    { label: "configured", parameters: "'user.name=Process'", clear: false, preserve: true },
+    { label: "empty", parameters: "", clear: false, preserve: false },
+    { label: "cleared", parameters: "'user.name=Process'", clear: true, preserve: false },
+    {
+      label: "already prepared",
+      parameters: "'user.name=Process' 'maintenance.auto=false' 'gc.auto=0'",
+      clear: false,
+      preserve: true,
+    },
+  ])("preserves $label Git settings when preparing the private process", (fixture) => {
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", "'user.name=Ambient'");
+    const parameters = "'maintenance.auto=false' 'gc.auto=0'";
+    const original = {
+      ...startOptions("codex"),
+      env: {
+        GIT_CONFIG_PARAMETERS: fixture.parameters,
+        OPENCLAW_GIT_ENV_DROP: "fixture",
+      },
+      clearEnv: ["OPENCLAW_GIT_ENV_DROP", ...(fixture.clear ? ["GIT_CONFIG_PARAMETERS"] : [])],
+    };
+    const prepared = withCodexAppServerGitConfig(original, parameters);
+    const refreshed = withCodexAppServerGitConfig(prepared, parameters);
+    const env = resolveCodexAppServerSpawnEnv(refreshed);
+    expect(env.GIT_CONFIG_PARAMETERS).toBe(
+      fixture.preserve ? `'user.name=Process' ${parameters}` : parameters,
+    );
+    expect(env.OPENCLAW_GIT_ENV_DROP).toBeUndefined();
+    expect(original.env.GIT_CONFIG_PARAMETERS).toBe(fixture.parameters);
+  });
+
   it("applies configured env overrides before clearing denied env vars", () => {
     expect({
       ...resolveCodexAppServerSpawnEnv(
@@ -150,25 +254,32 @@ describe("resolveCodexAppServerSpawnEnv", () => {
     });
   });
 
+  it("strips inherited runtime loader injection before spawn", () => {
+    expect({
+      ...resolveCodexAppServerSpawnEnv(
+        {
+          env: {
+            NODE_PATH: "/configured/node_modules",
+            DYLD_INSERT_LIBRARIES: "/configured/inject.dylib",
+          },
+        },
+        {
+          NODE_PATH: "/ambient/node_modules",
+          LD_PRELOAD: "/ambient/inject.so",
+          KEEP: "safe",
+        },
+      ),
+    }).toEqual({ KEEP: "safe" });
+  });
+
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {
-    const overrides = Object.create(null) as Record<string, string | undefined>;
-    Object.defineProperty(overrides, "__proto__", {
-      value: "polluted",
-      enumerable: true,
-    });
-    Object.defineProperty(overrides, "constructor", {
-      value: "polluted",
-      enumerable: true,
-    });
-    Object.defineProperty(overrides, "prototype", {
-      value: "polluted",
-      enumerable: true,
-    });
-    overrides.SAFE = "1";
+    const overrides: Record<string, string> = JSON.parse(
+      '{"__proto__":"polluted","constructor":"polluted","prototype":"polluted","SAFE":"1"}',
+    );
 
     const env = resolveCodexAppServerSpawnEnv(
       {
-        env: overrides as Record<string, string>,
+        env: overrides,
       },
       {
         BASE: "1",

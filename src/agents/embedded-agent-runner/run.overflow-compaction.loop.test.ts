@@ -1,891 +1,494 @@
-// Coverage for the overflow compaction retry loop in runEmbeddedAgent.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
-  makeAttemptResult,
-  makeCompactionSuccess,
-  makeOverflowError,
-  mockOverflowRetrySuccess,
-  queueOverflowAttemptWithOversizedToolOutput,
-} from "./run.overflow-compaction.fixture.js";
+  prepareSystemAgentRunAdmission,
+  type AdmittedRunContext,
+} from "../admitted-run-context.js";
+import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
+import type { ExecSessionDefaults } from "../exec-defaults.js";
+import { createOpenClawTools } from "../openclaw-tools.js";
 import {
-  overflowBaseRunParams as baseParams,
-  loadRunOverflowCompactionHarness,
-  mockedCompactDirect,
-  mockedContextEngine,
-  mockedIsCompactionFailureError,
-  mockedIsLikelyContextOverflowError,
-  mockedLog,
-  mockedMarkAuthProfileSuccess,
-  mockedResolveModelAsync,
-  mockedRunEmbeddedAttempt,
-  mockedSessionLikelyHasOversizedToolResults,
-  mockedTruncateOversizedToolResultsInSession,
-  resetRunOverflowCompactionHarnessMocks,
-} from "./run.overflow-compaction.harness.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
+  createEmbeddedRunReplayState,
+  type EmbeddedRunReplayState,
+  observeReplayMetadata,
+} from "./replay-state.js";
+import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js";
+import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
+import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+const mocks = vi.hoisted(() => ({
+  runAttempt: vi.fn(),
+  settleRequesterAfterSessionSpawns: vi.fn(),
+  prepareGitHubPublicationAvailability: vi.fn(),
+}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+vi.mock("../../gateway/github-publication-availability.js", () => ({
+  prepareGitHubPublicationAvailability: mocks.prepareGitHubPublicationAvailability,
+}));
 
-function requireMockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  index: number,
-): Record<string, unknown> {
-  // Compaction tests inspect positional mock params from the runner loop; fail
-  // fast with a readable label when expected calls are missing.
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected mock call ${index}`);
-  }
-  return requireRecord(call[0], `mock call ${index} arg`);
-}
+vi.mock("../delegation-capability.js", () => ({
+  resolveDelegationCapability: vi.fn(() => undefined),
+}));
 
-function expectLogIncludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
-}
+// mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
+vi.mock("../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
+}));
 
-function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(fragment);
-}
+vi.mock("../model-auth.js", () => ({
+  applyAuthHeaderOverride: vi.fn((model: unknown) => model),
+  applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
+  // Catalog construction also probes media providers; this fixture has no credentials.
+  getCustomProviderApiKey: vi.fn(() => undefined),
+  resolveEnvApiKey: vi.fn(() => undefined),
+}));
 
-function expectRetryContinuesFromTranscript() {
-  // Once the inbound user message was persisted, retry must continue from the
-  // transcript instead of re-persisting the original prompt.
-  const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, 1);
-  expect(String(retryParams.prompt)).toContain("Continue from the current transcript");
-  expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
-  expect(retryParams.prompt).not.toBe(baseParams.prompt);
-}
+vi.mock("../tool-terminal-outcome.js", () => ({
+  createToolTerminalObserver: vi.fn(() => vi.fn()),
+}));
 
-describe("overflow compaction in run loop", () => {
-  beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+vi.mock("./run/attempt-exec-approval-continuation.js", () => ({
+  prepareExecApprovalContinuationForAttempt: vi.fn(({ prompt, transcriptPrompt }) => ({
+    prompt,
+    transcriptPrompt,
+  })),
+}));
+
+vi.mock("../harness/selection.js", () => ({
+  runAgentHarnessAttempt: mocks.runAttempt,
+  runAgentHarnessSettledTurnFinalization: vi.fn(),
+}));
+
+vi.mock("../runtime-plan/build.js", () => ({
+  buildAgentRuntimePlan: ({
+    provider,
+    modelId,
+    preparedAuthPlan,
+  }: {
+    provider: string;
+    modelId: string;
+    preparedAuthPlan: unknown;
+  }) => ({ resolvedRef: { provider, modelId }, auth: preparedAuthPlan }),
+}));
+
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
+  settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
+}));
+
+let admittedRunContext: AdmittedRunContext;
+
+function makeDispatchInput(
+  sessionManager: object,
+  replayState: EmbeddedRunReplayState,
+): Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0] {
+  const workspaceDir = tempDirs.make("openclaw-retry-dispatch-");
+  const params = {
+    admittedRunContext,
+    sessionId: "session-1",
+    sessionFile: "agent:main:session-1",
+    workspaceDir,
+    prompt: "hello",
+    runId: "run-1",
+    timeoutMs: 30_000,
+    config: {},
+    disableTrajectory: true,
+  };
+  let lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const laneController = createEmbeddedRunLaneController({
+    getLifecycleGeneration: () => lifecycleGeneration,
+    getParams: () => params,
+    globalLane: "retry-dispatch-global",
+    sessionLane: "retry-dispatch-session",
+    initialQueuedLifecycleGeneration: lifecycleGeneration,
+    setLifecycleGeneration: (value) => {
+      lifecycleGeneration = value;
+    },
+    setParams: () => {},
   });
-
-  beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
-    mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
-      if (!msg) {
-        return false;
-      }
-      const lower = msg.toLowerCase();
-      return lower.includes("request_too_large") && lower.includes("summarization failed");
-    });
-    mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-      if (!msg) {
-        return false;
-      }
-      const lower = msg.toLowerCase();
-      return (
-        lower.includes("request_too_large") ||
-        lower.includes("request size exceeds") ||
-        lower.includes("context window exceeded") ||
-        lower.includes("prompt too large")
-      );
-    });
-  });
-
-  it("retries after successful compaction on context overflow promptError", async () => {
-    mockOverflowRetrySuccess({
-      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
-      compactDirect: mockedCompactDirect,
-    });
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    const compactArg = requireMockCallArg(mockedCompactDirect, 0);
-    expect(requireRecord(compactArg.runtimeContext, "runtime context").authProfileId).toBe(
-      "test-profile",
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(
-      mockedLog.warn,
-      "context overflow detected (attempt 1/3); attempting auto-compaction",
-    );
-    expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
-    // Should not be an error result
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("keeps fallback unsafe when an overflow retry follows a mutating attempt", async () => {
-    const overflowError = makeOverflowError();
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: overflowError,
-          toolMetas: [{ toolName: "exec" }],
-          replayMetadata: {
-            hadPotentialSideEffects: true,
-            replaySafe: false,
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          assistantTexts: [],
-          toolMetas: [{ toolName: "web_fetch" }],
-          replayMetadata: {
-            hadPotentialSideEffects: false,
-            replaySafe: true,
-          },
-          lastAssistant: {
-            role: "assistant",
-            stopReason: "toolUse",
-            provider: "openai",
-            model: "gpt-5.4",
-            content: [],
-          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        }),
-      );
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 1).initialReplayState).toEqual({
-      replayInvalid: true,
-      hadPotentialSideEffects: true,
-    });
-    expect(result.meta.error?.fallbackSafe).toBe(false);
-  });
-
-  it("uses provider thinking policy for configless embedded MiniMax-M3 runs", async () => {
-    mockedResolveModelAsync.mockResolvedValueOnce({
-      model: {
-        id: "MiniMax-M3",
-        provider: "minimax",
-        contextWindow: 1_000_000,
-        api: "anthropic-messages",
-        reasoning: true,
+  const authProfileStore = { version: 1, profiles: {} };
+  const runtime = {
+    agentHarness: { id: "codex" },
+    pluginHarnessOwnsTransport: true,
+    effectiveModel: {
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      api: "openai-responses",
+      contextWindow: 200_000,
+    },
+    thinkLevel: "off",
+    apiKeyInfo: null,
+    runtimeAuthState: null,
+    activePreparedAuthPlan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+    },
+    providerRuntimeHandle: { provider: "openai" },
+  };
+  return {
+    runInput: {
+      runParams: {
+        ...params,
+        sessionManager,
+        contextEngineLogicalTurnLease: { owner: "logical-turn" },
+        onContextEngineTurnCandidate: vi.fn(),
       },
-      error: null,
-      authStorage: {
-        setRuntimeApiKey: vi.fn(),
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      workspaceResolution: { agentId: "main", workspaceDir },
+      workspaceDir,
+      isCanonicalWorkspace: false,
+      agentDir: workspaceDir,
+      resolvedSessionKey: "agent:main:session-1",
+      resolvedToolResultFormat: "markdown",
+      startedAtMs: Date.now(),
+      startupStages: { mark: vi.fn() },
+      emitStartupStageSummary: vi.fn(),
+      lifecycleGeneration,
+      laneController,
+      progressController: {
+        resolveAttemptFastModeParam: () => false,
+        maybeAnnounceFastModeAutoOff: vi.fn(),
+        notifyExecutionPhase: vi.fn(),
+        notifyRunProgress: vi.fn(),
+        notifyToolResult: vi.fn(),
+        notifyAgentEvent: vi.fn(),
       },
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      requestedModelId: "gpt-5.6-luna",
+      nativeModelOwned: true,
+      authStorage: {},
       modelRegistry: {},
-    });
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+      attemptAuthProfileStore: authProfileStore,
+      resolveRunAttemptAuthProfileStore: () => authProfileStore,
+      snapshot: () => runtime,
+    },
+    sessionPromptState: {
+      sessionId: "session-1",
+      sessionFile: "agent:main:session-1",
+      sessionTargetAdopted: true,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      },
+      activePrompt: { persisted: false, internal: false },
+      onUserMessagePersisted: vi.fn(),
+      settleOwnedTranscriptProjection: vi.fn(),
+      suppressNextUserMessagePersistence: false,
+    },
+    terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
+    replayState,
+    startupStagesEmitted: false,
+    bootstrapPromptWarningSignaturesSeen: [],
+    resolveRuntimeFallbackReason: () => null,
+    observeToolOutcome: vi.fn(),
+    isTurnTainted: vi.fn(() => false),
+    allocateToolOutcomeOrdinal: vi.fn(() => 1),
+    getPostCompactionAbortError: vi.fn(() => undefined),
+    setPostCompactionAbortController: vi.fn(),
+    clearPostCompactionAbortController: vi.fn(),
+  } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
+}
 
-    await runEmbeddedAgent({
-      ...baseParams,
-      config: undefined,
-      provider: "minimax",
-      model: "MiniMax-M3",
-      runId: "run-configless-minimax-m3-thinking-default",
-    });
+async function dispatchExecSession(execSession: ExecSessionDefaults) {
+  const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+  input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
+  input.runInput.runParams.execSession = execSession;
+  input.runInput.runParams.toolsAllow = ["exec", "process"];
+  if (execSession.sandbox === "required") {
+    input.runInput.runParams.config = { agents: { defaults: { sandbox: { mode: "all" } } } };
+  }
 
-    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).thinkLevel).toBe("adaptive");
+  const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+  return dispatchedAttempt;
+}
+
+describe("embedded run retry dispatch", () => {
+  let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
+  beforeEach(async () => {
+    mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
+    mocks.settleRequesterAfterSessionSpawns.mockReset();
+    mocks.prepareGitHubPublicationAvailability.mockReset().mockResolvedValue(true);
+    admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
+    admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });
+  afterEach(() => admission.close());
 
-  it("does not wait for post-run auth-profile success bookkeeping before returning", async () => {
-    let resolveSuccess!: () => void;
-    const successPromise = new Promise<void>((resolve) => {
-      resolveSuccess = resolve;
-    });
-    mockedMarkAuthProfileSuccess.mockReturnValueOnce(successPromise);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
+  it.each([
+    {
+      session: { execHost: "node", execNode: "session-node", execCwd: "/remote/default" },
+      expected: { host: "node", security: "full", ask: "off", node: "session-node", safeBins: [] },
+    },
+    {
+      session: { sandbox: "required" },
+      expected: { host: "sandbox", security: "deny", ask: "off", safeBins: [] },
+    },
+  ] satisfies Array<{
+    session: ExecSessionDefaults;
+    expected: Awaited<ReturnType<typeof resolveWorkerToolAuthority>>["exec"];
+  }>)(
+    "resolves a projected $expected.host session's execution authority",
+    async ({ session, expected }) => {
+      const result = await dispatchExecSession(session);
 
-    const result = await runEmbeddedAgent(baseParams);
+      const authority = await resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+        turn: {
+          ...result.preparedAttempt,
+          model: result.preparedAttempt.model.id,
+          fastMode: false,
+        },
+        placement: { agentId: "main", sessionKey: "agent:main:session-1" },
+        assertCurrent: () => {},
+      });
 
-    expect(result.meta.error).toBeUndefined();
-    expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
-    resolveSuccess();
-    await successPromise;
-  });
+      expect(authority.exec).toEqual(expected);
+    },
+  );
 
-  it("continues from transcript after compaction when the current inbound message was persisted", async () => {
-    const overflowError = makeOverflowError();
-
-    mockedRunEmbeddedAttempt
-      .mockImplementationOnce(async (attemptParams) => {
-        (
-          attemptParams as {
-            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
-          }
-        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
-        return makeAttemptResult({ promptError: overflowError });
-      })
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...baseParams,
-      currentMessageId: "telegram-msg-51024",
-    });
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("does not suppress the next user turn when precheck overflow never persisted it", async () => {
-    // Precheck overflow happens before the inbound message enters the transcript,
-    // so the retry should still persist the original prompt.
-    const overflowError = makeOverflowError(
-      "Context overflow: prompt too large for the model (precheck).",
-    );
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: overflowError,
-          promptErrorSource: "precheck",
-          preflightRecovery: { route: "compact_only" },
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted before prompt submission",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...baseParams,
-      currentMessageId: "telegram-msg-51025",
-    });
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, 1);
-    expect(retryParams.prompt).toBe(baseParams.prompt);
-    expect(retryParams.suppressNextUserMessagePersistence).toBe(false);
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("retries after successful compaction on likely-overflow promptError variants", async () => {
-    const overflowHintError = new Error("Context window exceeded: requested 12000 tokens");
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowHintError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-6",
-        tokensBefore: 140000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(mockedLog.warn, "source=promptError");
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("returns error if compaction fails", async () => {
-    const overflowError = makeOverflowError();
-
-    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
-
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.meta.error?.kind).toBe("context_overflow");
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expectLogIncludes(mockedLog.warn, "auto-compaction failed");
-  });
-
-  it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
-    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
-      truncated: true,
-      truncatedCount: 1,
-    });
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(
-      requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0).contextWindowTokens,
-    ).toBe(200000);
-    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
-      "/tmp/session.json",
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(mockedLog.info, "Truncated 1 tool result(s)");
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("retries after fallback truncation for a mixed oversized-plus-aggregate tool tail", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: makeOverflowError(),
-          messagesSnapshot: [
-            {
-              role: "toolResult",
-              content: [{ type: "text", text: "x".repeat(80_000) }],
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-            {
-              role: "toolResult",
-              content: [{ type: "text", text: "alpha beta gamma delta ".repeat(800) }],
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-            {
-              role: "toolResult",
-              content: [{ type: "text", text: "alpha beta gamma delta ".repeat(800) }],
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
-      truncated: true,
-      truncatedCount: 2,
-    });
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    const oversizedArgs = requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0);
-    const messages = oversizedArgs.messages as Array<{ role?: string }>;
-    expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
-    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
-      "/tmp/session.json",
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(mockedLog.info, "Truncated 2 tool result(s)");
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("retries without hitting compaction when attempt-level preflight truncation already handled the overflow", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: null,
-          preflightRecovery: {
-            route: "truncate_tool_results_only",
-            handled: true,
-            truncatedCount: 2,
+  it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
+    const flushStarted = createDeferred();
+    const flush = createDeferred();
+    const afterTurnError = new Error("after-turn cleanup failed");
+    const onContextAccountingEvent = vi.fn();
+    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    input.preparedRuntime.snapshot().agentHarness.id = "openclaw";
+    input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
+    Object.assign(input.runInput.runParams, { onContextAccountingEvent });
+    let subscription: ReturnType<typeof createSubscribedSessionHarness>["subscription"] | undefined;
+    mocks.runAttempt.mockImplementationOnce(async (attempt: EmbeddedRunAttemptInternalParams) => {
+      const harness = createSubscribedSessionHarness({
+        runId: attempt.runId,
+        sessionExtras: { messages: [] },
+        blockReplyBreak: "message_end",
+        onBlockReplyFlush: () => {
+          flushStarted.resolve();
+          return flush.promise;
+        },
+        onContextAccountingEvent: attempt.onContextAccountingEvent,
+      });
+      subscription = harness.subscription;
+      try {
+        harness.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Completed answer" }],
+            stopReason: "stop",
           },
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(mockedLog.info, "early recovery route=truncate_tool_results_only");
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("continues from the transcript after mid-turn precheck truncation handled the overflow", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: null,
-          preflightRecovery: {
-            route: "truncate_tool_results_only",
-            source: "mid-turn",
-            handled: true,
-            truncatedCount: 2,
-          },
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expectLogIncludes(mockedLog.info, "retrying from current transcript");
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("falls back to compaction when early truncate-only recovery does not help", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: makeOverflowError(
-            "Context overflow: prompt too large for the model (precheck).",
-          ),
-          preflightRecovery: { route: "compact_only" },
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted after failed early truncation",
-        firstKeptEntryId: "entry-7",
-        tokensBefore: 155000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(
-      mockedLog.warn,
-      "context overflow detected (attempt 1/3); attempting auto-compaction",
-    );
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("continues from the transcript after mid-turn precheck compaction", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: makeOverflowError(
-            "Context overflow: prompt too large for the model (mid-turn precheck).",
-          ),
-          promptErrorSource: "precheck",
-          preflightRecovery: { route: "compact_only", source: "mid-turn" },
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted after mid-turn precheck",
-        firstKeptEntryId: "entry-8",
-        tokensBefore: 155000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("runs post-compaction tool-result truncation before retry for mixed precheck routes", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: makeOverflowError(
-            "Context overflow: prompt too large for the model (precheck).",
-          ),
-          preflightRecovery: { route: "compact_then_truncate" },
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
-      truncated: true,
-      truncatedCount: 2,
+        });
+        await flushStarted.promise;
+        // The mocked attempt reports its replacement hook before the public notice.
+        attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter: 40 });
+        harness.emit({
+          type: "compaction_end",
+          reason: "threshold",
+          outcome: { status: "completed", tokensBefore: 100, tokensAfter: 40, willRetry: false },
+        });
+        expect(subscription.getCompactionCount()).toBe(0);
+        throw afterTurnError;
+      } finally {
+        subscription.unsubscribe();
+      }
     });
 
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
-      "/tmp/session.json",
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(mockedLog.info, "post-compaction tool-result truncation succeeded");
-    expect(result.meta.error).toBeUndefined();
+    try {
+      await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
+      expect(onContextAccountingEvent.mock.calls).toEqual([
+        [{ kind: "model", contextTokens: undefined, successful: false }],
+        [{ kind: "compaction", tokensAfter: 40 }],
+      ]);
+    } finally {
+      flush.resolve();
+      await subscription?.waitForPendingEvents();
+      subscription?.unsubscribe();
+    }
   });
 
-  it("retries compaction up to 3 times before giving up", async () => {
-    const overflowError = makeOverflowError();
+  it("preserves caller-owned turn facts and unsafe replay state on the next attempt", async () => {
+    const sessionManager = { owner: "caller" };
+    const replayState = observeReplayMetadata(
+      observeReplayMetadata(createEmbeddedRunReplayState(), {
+        replaySafe: false,
+        hadPotentialSideEffects: true,
+      }),
+      { replaySafe: true, hadPotentialSideEffects: false },
+    );
 
-    // 4 overflow errors: 3 compaction retries + final failure
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
+    const input = makeDispatchInput(sessionManager, replayState);
+    const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
 
-    mockedCompactDirect
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 1",
-          firstKeptEntryId: "entry-3",
-          tokensBefore: 180000,
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 2",
-          firstKeptEntryId: "entry-5",
-          tokensBefore: 160000,
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 3",
-          firstKeptEntryId: "entry-7",
-          tokensBefore: 140000,
-        }),
+    expect(result.preparedAttempt.sessionManager).toBe(sessionManager);
+    expect(result.preparedAttempt.sessionTarget).toBeUndefined();
+    expect(result.preparedAttempt.contextEngineLogicalTurnLease).toBeUndefined();
+    expect(result.preparedAttempt.onContextEngineTurnCandidate).toBe(
+      input.runInput.runParams.onContextEngineTurnCandidate,
+    );
+    expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
+    expect(result.preparedAttempt.initialReplayState).toBe(replayState);
+    expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
+    expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
+    expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
+    expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
+  });
+
+  it("forwards effective and authored context facts without a context engine (#124702)", async () => {
+    const cappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    cappedInput.preparedRuntime.snapshot().contextTokenBudget = 272_000;
+    cappedInput.preparedRuntime.snapshot().authoredContextTokenCap = 32_000;
+    const { dispatchedAttempt: capped } = await prepareAndDispatchEmbeddedRunAttempt(cappedInput);
+
+    expect(capped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(capped.preparedAttempt.authoredContextTokenCap).toBe(32_000);
+
+    const uncappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    uncappedInput.preparedRuntime.snapshot().contextTokenBudget = 272_000;
+    const { dispatchedAttempt: uncapped } =
+      await prepareAndDispatchEmbeddedRunAttempt(uncappedInput);
+
+    expect(uncapped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
+  });
+
+  it.each(["openclaw"])(
+    "prepares GitHub tools for each admitted run and continuation (%s)",
+    async (harness) => {
+      const gateway = {} as GatewayRequestContext;
+      for (const continuation of [false, true]) {
+        if (continuation) {
+          admission.close();
+          admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
+          admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
+        }
+        bindGatewayContextResolver(admittedRunContext, () => gateway);
+        const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+        input.preparedRuntime.snapshot().agentHarness.id = harness;
+        input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = harness !== "openclaw";
+        input.sessionPromptState.activePrompt.internal = continuation;
+        const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+        const names = createOpenClawTools({
+          githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
+        }).map((tool) => tool.name);
+
+        expect(names).toContain("github_identity_status");
+        expect(names).toContain("github_publish");
+      }
+      expect(mocks.prepareGitHubPublicationAvailability).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("rechecks the adopted session and retains identity help when publication becomes unavailable", async () => {
+    const gateway = {} as GatewayRequestContext;
+    bindGatewayContextResolver(admittedRunContext, () => gateway);
+    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    await prepareAndDispatchEmbeddedRunAttempt(input);
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "rotated-session",
+      sessionKey: "agent:main:session-1",
+      storePath: `${tempDirs.make("publication-adopted-")}/openclaw-agent.sqlite`,
+    };
+    input.sessionPromptState = {
+      ...input.sessionPromptState,
+      sessionId: "rotated-session",
+      sessionTarget,
+    };
+    mocks.prepareGitHubPublicationAvailability.mockResolvedValue(false);
+
+    const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+    const names = createOpenClawTools({
+      githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
+    }).map((tool) => tool.name);
+
+    expect(names).toContain("github_identity_status");
+    expect(names).not.toContain("github_publish");
+    expect(mocks.prepareGitHubPublicationAvailability).toHaveBeenLastCalledWith({
+      agentId: "main",
+      sessionId: "rotated-session",
+      sessionKey: "agent:main:session-1",
+      sessionTarget,
+      assertCurrent: expect.any(Function),
+    });
+  });
+
+  it.each(["closed", "replaced", "attempt-replaced"])(
+    "does not dispatch when GitHub preparation outlives a %s owner",
+    async (kind) => {
+      let gateway = {} as GatewayRequestContext;
+      bindGatewayContextResolver(admittedRunContext, () => gateway);
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      const started = createDeferred();
+      const release = createDeferred<boolean>();
+      mocks.prepareGitHubPublicationAvailability.mockImplementation(async ({ assertCurrent }) => {
+        expect(assertCurrent()).toBe(true);
+        started.resolve();
+        await release.promise;
+        expect(assertCurrent()).toBe(false);
+        return false;
+      });
+      const dispatch = prepareAndDispatchEmbeddedRunAttempt(input);
+      const rejected = expect(dispatch).rejects.toThrow("outlived its admitted Gateway run");
+      await started.promise;
+      const replacement =
+        kind === "attempt-replaced"
+          ? input.runInput.laneController.createAttemptControls({ admittedRunContext })
+          : undefined;
+      if (kind === "closed") {
+        admission.close();
+      } else if (kind === "replaced") {
+        gateway = {} as GatewayRequestContext;
+      }
+      release.resolve(true);
+      try {
+        await rejected;
+      } finally {
+        replacement?.close();
+      }
+
+      expect(mocks.runAttempt).not.toHaveBeenCalled();
+      expect(input.clearPostCompactionAbortController).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([true])(
+    "retains accepted spawns for the logical owner after a late post-compaction abort (yielded: %s)",
+    async (yieldDetected) => {
+      const postCompactionAbortError = new Error("post-compaction loop detected");
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
+      const acceptedSessionSpawns = [
+        {
+          runId: "child-run",
+          childSessionKey: "agent:main:subagent:child",
+          expectsCompletionMessage: true,
+        },
+      ];
+      mocks.runAttempt.mockResolvedValueOnce({
+        terminal: { kind: "ok" },
+        agentHarnessId: "codex",
+        yieldDetected,
+        acceptedSessionSpawns,
+      });
+
+      await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(
+        postCompactionAbortError,
       );
 
-    const result = await runEmbeddedAgent(baseParams);
-
-    // Compaction attempted 3 times (max)
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
-    // 4 attempts: 3 overflow+compact+retry cycles + final overflow → error
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
-    expect(result.meta.error?.kind).toBe("context_overflow");
-    expect(result.payloads?.[0]?.isError).toBe(true);
-  });
-
-  it("succeeds after second compaction attempt", async () => {
-    const overflowError = makeOverflowError();
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 1",
-          firstKeptEntryId: "entry-3",
-          tokensBefore: 180000,
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 2",
-          firstKeptEntryId: "entry-5",
-          tokensBefore: 160000,
-        }),
+      expect(mergeAcceptedSessionSpawnsForRun(admittedRunContext.operationalRunInstance)).toEqual(
+        acceptedSessionSpawns,
       );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("does not attempt compaction for compaction_failure errors", async () => {
-    const compactionFailureError = new Error(
-      "request_too_large: summarization failed - Request size exceeds model context window",
-    );
-
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({ promptError: compactionFailureError }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.meta.error?.kind).toBe("compaction_failure");
-  });
-
-  it("retries after successful compaction on assistant context overflow errors", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: null,
-          lastAssistant: {
-            stopReason: "error",
-            errorMessage: "request_too_large: Request size exceeds model context window",
-          } as EmbeddedRunAttemptResult["lastAssistant"],
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(mockedLog.warn, "source=assistantError");
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("does not treat stale assistant overflow as current-attempt overflow when promptError is non-overflow", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        promptError: new Error("transport disconnected"),
-        lastAssistant: {
-          stopReason: "error",
-          errorMessage: "request_too_large: Request size exceeds model context window",
-        } as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
-
-    await expect(runEmbeddedAgent(baseParams)).rejects.toThrow("transport disconnected");
-
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expectLogExcludes(mockedLog.warn, "source=assistantError");
-  });
-
-  it("returns an explicit timeout payload when the run times out before producing any reply", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        aborted: true,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        assistantTexts: [],
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("timed out");
-  });
-
-  it("uses harness-provided prompt timeout outcome metadata", async () => {
-    const setTerminalLifecycleMeta = vi.fn();
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        aborted: true,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        assistantTexts: [],
-        promptTimeoutOutcome: {
-          message: "Harness stopped after completed work without terminal confirmation.",
-          replayInvalid: true,
-          livenessState: "abandoned",
-        },
-        setTerminalLifecycleMeta,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(result.payloads).toEqual([
-      {
-        text: "Harness stopped after completed work without terminal confirmation.",
-        isError: true,
-      },
-    ]);
-    expect(result.meta?.replayInvalid).toBe(true);
-    expect(result.meta?.livenessState).toBe("abandoned");
-    expect(result.meta?.timeoutPhase).toBe("provider");
-    expect(result.meta?.providerStarted).toBe(true);
-    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
-      replayInvalid: true,
-      livenessState: "abandoned",
-      timeoutPhase: "provider",
-      providerStarted: true,
-      aborted: true,
-    });
-  });
-
-  it("does not emit a generic timeout payload after messaging-tool delivery", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        aborted: true,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        assistantTexts: [],
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["already delivered"],
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(result.payloads).toBeUndefined();
-    expect(result.didSendViaMessagingTool).toBe(true);
-    expect(result.messagingToolSentTexts).toEqual(["already delivered"]);
-  });
-
-  it("propagates deterministic approval prompt delivery from attempts", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        assistantTexts: [],
-        didSendDeterministicApprovalPrompt: true,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(result.payloads).toBeUndefined();
-    expect(result.didSendDeterministicApprovalPrompt).toBe(true);
-  });
-
-  it("returns a timeout payload instead of a partial assistant fragment after stream timeout", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        aborted: true,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        assistantTexts: ["# Current Tasks\n\nLast updated:"],
-        lastAssistant: undefined,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("timed out");
-    expect(
-      result.payloads?.some((payload) => (payload.text ?? "").includes("# Current Tasks")),
-    ).toBe(false);
-  });
-
-  it("preserves tool media payloads and appends an explicit timeout error", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        aborted: true,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        assistantTexts: [],
-        toolMediaUrls: ["https://example.test/tool-output.png"],
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(
-      result.payloads?.map((payload) => ({
-        isError: payload.isError,
-        textIncludesTimedOut: payload.text?.includes("timed out") ?? false,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-      })),
-    ).toEqual([
-      {
-        isError: undefined,
-        textIncludesTimedOut: false,
-        mediaUrl: "https://example.test/tool-output.png",
-        mediaUrls: ["https://example.test/tool-output.png"],
-      },
-      {
-        isError: true,
-        textIncludesTimedOut: true,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-      },
-    ]);
-  });
-
-  it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        attemptUsage: {
-          input: 4_000,
-          cacheRead: 120_000,
-          cacheWrite: 0,
-          total: 124_000,
-        },
-        lastAssistant: {
-          stopReason: "end_turn",
-          usage: {
-            input: 900,
-            cacheRead: 1_100,
-            cacheWrite: 0,
-            total: 2_000,
-          },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
-    expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
-  });
-
-  it("recovers from real model overflow when ownsCompaction context engine skips precheck", async () => {
-    mockedContextEngine.info.ownsCompaction = true;
-    mockOverflowRetrySuccess({
-      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
-      compactDirect: mockedCompactDirect,
-    });
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("still handles precheck overflow when ownsCompaction engine uses preassembly_may_overflow", async () => {
-    mockedContextEngine.info.ownsCompaction = true;
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: makeOverflowError(
-            "Context overflow: prompt too large for the model (precheck).",
-          ),
-          promptErrorSource: "precheck",
-          preflightRecovery: { route: "compact_only" },
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted via preassembly overflow guard",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.meta.error).toBeUndefined();
-  });
+      expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -4,10 +4,13 @@ import {
   buildNativeResetContext,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
+  registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+
+registerGetReplyBaselineBypass();
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -18,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./commands-core.js", () => ({
   emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),
 }));
-vi.mock("./commands-core.runtime.js", () => ({
+vi.mock("./commands-reset-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands-reset-hooks.js")>()),
   emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),
 }));
 registerGetReplyRuntimeOverrides(mocks);
@@ -29,7 +33,7 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
-function createContinueDirectivesResult(resetHookTriggered: boolean) {
+function createContinueDirectivesResult() {
   return createGetReplyContinueDirectivesResult({
     body: "/new",
     abortKey: "telegram:slash:123",
@@ -38,7 +42,7 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
     senderId: "123",
     commandSource: "/new",
     senderIsOwner: true,
-    resetHookTriggered,
+    resetHookTriggered: false,
   });
 }
 
@@ -66,7 +70,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
       }),
     );
 
-    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false));
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult());
   });
 
   afterEach(() => {
@@ -75,23 +79,17 @@ describe("getReplyFromConfig reset-hook fallback", () => {
 
   it("emits reset hooks when inline actions return early without marking resetHookTriggered", async () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    const onObservedReplyDelivery = vi.fn();
 
-    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+    await getReplyFromConfig(buildNativeResetContext(), { onObservedReplyDelivery }, {});
 
     expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
-    const [[hookParams]] = mocks.emitResetCommandHooks.mock.calls as unknown as Array<
-      [{ action?: string; sessionKey?: string }]
-    >;
-    expect(hookParams.action).toBe("new");
-    expect(hookParams.sessionKey).toBe("agent:main:telegram:direct:123");
-  });
-
-  it("does not emit fallback hooks when resetHookTriggered is already set", async () => {
-    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
-    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
-
-    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
-
-    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "new",
+        onObservedReplyDelivery,
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
   });
 });

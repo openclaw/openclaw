@@ -8,15 +8,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
-  DEFAULT_LIVE_VIDEO_MODELS,
-  canRunBufferBackedImageToVideoLiveLane,
-  canRunBufferBackedVideoToVideoLiveLane,
-  collectProviderApiKeys,
-  encodePngRgba,
-  fillPixel,
-  getShellEnvAppliedKeys,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isLiveProfileKeyModeEnabled,
@@ -26,6 +18,15 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
   isTruthyEnvValue,
+  readLiveTestConfig,
+} from "openclaw/plugin-sdk/test-live";
+import { collectProviderApiKeys, getShellEnvAppliedKeys } from "openclaw/plugin-sdk/test-live-auth";
+import {
+  DEFAULT_LIVE_VIDEO_MODELS,
+  canRunBufferBackedImageToVideoLiveLane,
+  canRunBufferBackedVideoToVideoLiveLane,
+  encodePngRgba,
+  fillPixel,
   normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
@@ -34,22 +35,23 @@ import {
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-generation";
 import type {
   GeneratedVideoAsset,
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
-} from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+} from "openclaw/plugin-sdk/test-media-generation";
+import { describe, expect, it, vi } from "vitest";
 import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
 import deepinfraPlugin from "./deepinfra/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
+import kiePlugin from "./kie/index.js";
 import minimaxPlugin from "./minimax/index.js";
-import openaiPlugin from "./openai/index.js";
+import novitaPlugin from "./novita/index.js";
 import openrouterPlugin from "./openrouter/index.js";
 import pixversePlugin from "./pixverse/index.js";
 import qwenPlugin from "./qwen/index.js";
@@ -58,6 +60,7 @@ import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generati
 import togetherPlugin from "./together/index.js";
 import vydraPlugin from "./vydra/index.js";
 import xaiPlugin from "./xai/index.js";
+import zaiPlugin from "./zai/index.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -116,13 +119,14 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   { plugin: googlePlugin, pluginId: "google", pluginName: "Google Provider", providerId: "google" },
+  { plugin: kiePlugin, pluginId: "kie", pluginName: "Kie AI Provider", providerId: "kie" },
   {
     plugin: minimaxPlugin,
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
   },
-  { plugin: openaiPlugin, pluginId: "openai", pluginName: "OpenAI Provider", providerId: "openai" },
+  { plugin: novitaPlugin, pluginId: "novita", pluginName: "NovitaAI", providerId: "novita" },
   {
     plugin: openrouterPlugin,
     pluginId: "openrouter",
@@ -145,6 +149,7 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: vydraPlugin, pluginId: "vydra", pluginName: "Vydra Provider", providerId: "vydra" },
   { plugin: xaiPlugin, pluginId: "xai", pluginName: "xAI Plugin", providerId: "xai" },
+  { plugin: zaiPlugin, pluginId: "zai", pluginName: "Z.AI Provider", providerId: "zai" },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
   .filter((entry) =>
@@ -167,9 +172,9 @@ function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function createEditReferencePng(params?: { width?: number; height?: number }): Buffer {
-  const width = params?.width ?? 384;
-  const height = params?.height ?? 384;
+function createEditReferencePng(): Buffer {
+  const width = 384;
+  const height = 384;
   const buf = Buffer.alloc(width * height * 4, 255);
 
   for (let y = 0; y < height; y += 1) {
@@ -228,11 +233,9 @@ function expectGeneratedVideo(video: GeneratedVideoAsset | undefined): LiveGener
 function buildLiveCapabilityOverrides(params: {
   caps: VideoGenerationModeCapabilities | undefined;
   liveResolution: VideoGenerationRequest["resolution"];
-  liveSize: string | undefined;
-}): Pick<VideoGenerationRequest, "size" | "aspectRatio" | "resolution" | "audio" | "watermark"> {
-  const { caps, liveResolution, liveSize } = params;
+}): Pick<VideoGenerationRequest, "aspectRatio" | "resolution" | "audio" | "watermark"> {
+  const { caps, liveResolution } = params;
   return {
-    ...(caps?.supportsSize && liveSize ? { size: liveSize } : undefined),
     ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : undefined),
     ...(caps?.supportsResolution ? { resolution: liveResolution } : undefined),
     ...(caps?.supportsAudio ? { audio: false } : undefined),
@@ -364,6 +367,7 @@ function expectLiveVideoCasePassed(
     attempted: string[];
     failures: string[];
     providerId: string;
+    skip: (note: string) => void;
     skipped: string[];
   },
   activeProviderFilter = providerFilter,
@@ -376,7 +380,9 @@ function expectLiveVideoCasePassed(
         `[live:video-generation] requested provider produced no live attempts: ${params.providerId}; skipped=${params.skipped.join(", ") || "none"}`,
       );
     }
-    console.warn("[live:video-generation] no live video attempt completed; skipping assertions");
+    params.skip(
+      `[live:video-generation] no live video attempt completed for ${params.providerId}; skipped=${params.skipped.join(", ") || "none"}`,
+    );
     return;
   }
   expect(params.failures).toStrictEqual([]);
@@ -399,14 +405,17 @@ function resolveLiveSmokeDurationSeconds(params: {
   );
 }
 
-async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
-  const cfg = withPluginsEnabled(getRuntimeConfig());
+async function runLiveVideoProviderCase(
+  testCase: LiveProviderCase,
+  skip: (note: string) => void,
+): Promise<void> {
+  const cfg = withPluginsEnabled(await readLiveTestConfig());
   const configuredModels = resolveConfiguredLiveVideoModels(cfg);
   const agentDir = resolveDefaultAgentDir(cfg as never);
   const attempted: string[] = [];
   const skipped: string[] = [];
   const failures: string[] = [];
-  const summaryParams = { attempted, failures, providerId: testCase.providerId, skipped };
+  const summaryParams = { attempted, failures, providerId: testCase.providerId, skip, skipped };
 
   maybeLoadShellEnvForVideoProviders([testCase.providerId]);
 
@@ -458,7 +467,6 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     providerId: testCase.providerId,
     modelRef,
   });
-  const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
   const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
 
   const generateAttempt = await runLiveVideoAttempt({
@@ -479,7 +487,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
       authStore,
       timeoutMs: LIVE_VIDEO_OPERATION_TIMEOUT_MS,
       durationSeconds,
-      ...buildLiveCapabilityOverrides({ caps: generateCaps, liveResolution, liveSize }),
+      ...buildLiveCapabilityOverrides({ caps: generateCaps, liveResolution }),
     },
     skipped,
   });
@@ -509,10 +517,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     return;
   }
 
-  const referenceImage =
-    testCase.providerId === "openai"
-      ? createEditReferencePng({ width: 1280, height: 720 })
-      : createEditReferencePng();
+  const referenceImage = createEditReferencePng();
   const imageAttempt = await runLiveVideoAttempt({
     authLabel,
     attempted,
@@ -545,7 +550,6 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
       ...buildLiveCapabilityOverrides({
         caps: imageToVideoCaps,
         liveResolution,
-        liveSize,
       }),
     },
     skipped,
@@ -601,7 +605,6 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
       ...buildLiveCapabilityOverrides({
         caps: videoToVideoCaps,
         liveResolution,
-        liveSize: undefined,
       }),
     },
     skipped,
@@ -626,8 +629,8 @@ describeLive("video generation provider live", () => {
     // One provider per test keeps cumulative suite runtime from tripping a single timeout cap.
     it(
       `covers declared video-generation modes with shell/profile auth (${testCase.providerId})`,
-      async () => {
-        await runLiveVideoProviderCase(testCase);
+      async ({ skip }) => {
+        await runLiveVideoProviderCase(testCase, skip);
       },
       LIVE_VIDEO_TEST_TIMEOUT_MS,
     );
@@ -641,26 +644,39 @@ describe("video generation live provider filter coverage", () => {
     );
   });
 
-  it("keeps unfiltered zero-attempt provider cases advisory", () => {
-    expectLiveVideoCasePassed({
-      attempted: [],
-      failures: [],
-      providerId: "local-only",
-      skipped: ["local-only: no usable auth"],
-    });
+  it("skips unfiltered zero-attempt provider cases", () => {
+    const skip = vi.fn();
+    expect(() =>
+      expectLiveVideoCasePassed(
+        {
+          attempted: [],
+          failures: [],
+          providerId: "local-only",
+          skip,
+          skipped: ["local-only: no usable auth"],
+        },
+        null,
+      ),
+    ).not.toThrow();
+    expect(skip).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("local-only: no usable auth"),
+    );
   });
 
   it("fails filtered provider cases when the requested provider is not attempted", () => {
+    const skip = vi.fn();
     expect(() =>
       expectLiveVideoCasePassed(
         {
           attempted: [],
           failures: [],
           providerId: "minimax",
+          skip,
           skipped: ["minimax: no usable auth"],
         },
         new Set(["minimax"]),
       ),
     ).toThrow(/requested provider produced no live attempts: minimax/u);
+    expect(skip).not.toHaveBeenCalled();
   });
 });

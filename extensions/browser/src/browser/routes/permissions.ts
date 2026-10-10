@@ -1,55 +1,21 @@
-/**
- * Browser permission routes.
- *
- * Grants required and optional browser permissions for an origin, preferring
- * Playwright context APIs when available and falling back to raw CDP.
- */
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../../infra/errors.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
-import { getChromeWebSocketUrl } from "../chrome.js";
+import { getChromeWebSocketEndpoint, type ChromeWebSocketEndpoint } from "../chrome.js";
+import { BrowserProfileUnavailableError } from "../errors.js";
 import { getPwAiModule } from "../pw-ai-module.js";
-import type { BrowserRouteContext } from "../server-context.js";
-import type { ProfileContext } from "../server-context.js";
+import {
+  assertInteractionCurrent,
+  BrowserInteractionAuthorityError,
+  type InteractionTargetOptions,
+} from "../pw-tools-core.interactions.navigation.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { handleRouteError, readBody, resolveProfileContext } from "./agent.shared.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
-
-const permissionRouteDeps = {
-  getPwAiModule,
-};
-
-/** Test hook for replacing optional Playwright permission dependencies. */
-export const testing = {
-  setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
-    permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
-  },
-};
-
-type GrantPermissionsBody = {
-  origin?: unknown;
-  permissions?: unknown;
-  optionalPermissions?: unknown;
-  timeoutMs?: unknown;
-  targetId?: unknown;
-};
-
-function readOrigin(raw: unknown): string | null {
-  const value = toStringOrEmpty(raw);
-  if (!value) {
-    return null;
-  }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return null;
-    }
-    return parsed.origin;
-  } catch {
-    return null;
-  }
-}
+import { jsonError, readHttpOrigin, runProfileRouteOperation, toStringOrEmpty } from "./utils.js";
 
 function readPermissions(raw: unknown): string[] | null {
   if (!Array.isArray(raw)) {
@@ -72,8 +38,12 @@ async function grantPermissions(params: {
   requiredPermissions: string[];
   optionalPermissions: string[];
   timeoutMs: number;
+  wsLookup?: ChromeWebSocketEndpoint["lookup"];
   ssrfPolicy?: SsrFPolicy;
+  signal: AbortSignal;
+  assertCurrent?: InteractionTargetOptions["assertCurrent"];
 }) {
+  params.signal.throwIfAborted();
   const allPermissions = [
     ...new Set([...params.requiredPermissions, ...params.optionalPermissions]),
   ];
@@ -82,7 +52,7 @@ async function grantPermissions(params: {
     playwrightRequiredPermissions.every((value): value is string => Boolean(value)) &&
     params.requiredPermissions.length > 0;
   if (canUsePlaywright) {
-    const pw = await permissionRouteDeps.getPwAiModule({ mode: "soft" });
+    const pw = await getPwAiModule({ mode: "soft" });
     if (pw) {
       try {
         const page = await pw.getPageForTargetId({
@@ -90,6 +60,10 @@ async function grantPermissions(params: {
           targetId: params.targetId,
           ssrfPolicy: params.ssrfPolicy,
         });
+        if (params.assertCurrent) {
+          await assertInteractionCurrent(params);
+          params.signal.throwIfAborted();
+        }
         await page.context().grantPermissions(playwrightRequiredPermissions, {
           origin: params.origin,
         });
@@ -98,35 +72,40 @@ async function grantPermissions(params: {
           unsupportedPermissions: params.optionalPermissions,
           grantMethod: "playwright",
         };
-      } catch {
+      } catch (error) {
+        if (error instanceof BrowserInteractionAuthorityError) {
+          throw error;
+        }
+        params.signal.throwIfAborted();
         // Fall back to the raw CDP browser command below. Some routes call this
         // before a page exists, while attached browser profiles need Playwright.
       }
     }
   }
+  params.signal.throwIfAborted();
   let unsupportedPermissions: string[] = [];
   await withCdpSocket(
     params.wsUrl,
     async (send) => {
-      try {
-        await send("Browser.grantPermissions", {
-          origin: params.origin,
-          permissions: allPermissions,
-        });
-        return;
-      } catch (error) {
-        if (params.optionalPermissions.length === 0) {
-          throw error;
+      for (const permissions of [allPermissions, params.requiredPermissions]) {
+        if (params.assertCurrent) {
+          await assertInteractionCurrent(params);
+          params.signal.throwIfAborted();
+        }
+        try {
+          await send("Browser.grantPermissions", { origin: params.origin, permissions });
+          unsupportedPermissions = permissions === allPermissions ? [] : params.optionalPermissions;
+          return;
+        } catch (error) {
+          if (permissions !== allPermissions || params.optionalPermissions.length === 0) {
+            throw error;
+          }
         }
       }
-      await send("Browser.grantPermissions", {
-        origin: params.origin,
-        permissions: params.requiredPermissions,
-      });
-      unsupportedPermissions = params.optionalPermissions;
     },
-    { commandTimeoutMs: params.timeoutMs },
+    { commandTimeoutMs: params.timeoutMs, lookup: params.wsLookup, signal: params.signal },
   );
+  params.signal.throwIfAborted();
   return {
     grantedPermissions: allPermissions.filter((value) => !unsupportedPermissions.includes(value)),
     unsupportedPermissions,
@@ -145,62 +124,78 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
-/** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
-  app.post(
-    "/permissions/grant",
-    asyncBrowserRoute(async (req, res) => {
-      const profileCtx = getProfileContext(req, ctx);
-      if ("error" in profileCtx) {
-        return jsonError(res, profileCtx.status, profileCtx.error);
-      }
+  app.post("/permissions/grant", async (req, res) => {
+    const body = readBody(req);
+    const origin = readHttpOrigin(body.origin);
+    if (!origin) {
+      return jsonError(res, 400, "origin must be an http(s) origin");
+    }
+    const requiredPermissions = readPermissions(body.permissions);
+    if (!requiredPermissions || requiredPermissions.length === 0) {
+      return jsonError(res, 400, "permissions must be a non-empty string array");
+    }
+    const optionalPermissions = readPermissions(body.optionalPermissions ?? []) ?? [];
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    let timeoutMs: number;
+    try {
+      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs, "timeoutMs", { minMs: 1_000 }) ?? 5_000;
+    } catch (err) {
+      return jsonError(res, 400, formatErrorMessage(err));
+    }
 
-      const body = (req.body ?? {}) as GrantPermissionsBody;
-      const origin = readOrigin(body.origin);
-      if (!origin) {
-        return jsonError(res, 400, "origin must be an http(s) origin");
-      }
-      const requiredPermissions = readPermissions(body.permissions);
-      if (!requiredPermissions || requiredPermissions.length === 0) {
-        return jsonError(res, 400, "permissions must be a non-empty string array");
-      }
-      const optionalPermissions = readPermissions(body.optionalPermissions ?? []) ?? [];
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      let timeoutMs: number;
-      try {
-        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs, "timeoutMs", { minMs: 1_000 }) ?? 5_000;
-      } catch (err) {
-        return jsonError(res, 400, formatErrorMessage(err));
-      }
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    const requestAssertCurrent = req.assertCurrent;
+    const assertCurrent = requestAssertCurrent
+      ? () => requestAssertCurrent(profileCtx.profile)
+      : undefined;
 
-      try {
-        await profileCtx.ensureBrowserAvailable();
-        const wsUrl = await getChromeWebSocketUrl(
-          profileCtx.profile.cdpUrl,
-          timeoutMs,
-          ctx.state().resolved.ssrfPolicy,
-        );
-        if (!wsUrl) {
-          return jsonError(res, 409, "browser CDP WebSocket unavailable");
-        }
-        const granted = await grantPermissions({
-          profileCtx,
-          targetId,
-          wsUrl,
-          origin,
-          requiredPermissions,
-          optionalPermissions,
-          timeoutMs,
-          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-        });
-        return res.json({ ok: true, origin, ...granted });
-      } catch (error) {
-        return jsonError(res, 500, error instanceof Error ? error.message : String(error));
-      }
-    }),
-  );
+    try {
+      const granted = await runProfileRouteOperation({
+        profileCtx,
+        signal: req.signal,
+        assertCurrent: req.assertCurrent,
+        run: async (signal) => {
+          await profileCtx.ensureBrowserAvailable({ signal });
+          const cdpPolicy = resolveCdpControlPolicy(
+            profileCtx.profile,
+            ctx.state().resolved.ssrfPolicy,
+          );
+          const endpoint = await getChromeWebSocketEndpoint(
+            profileCtx.profile.cdpUrl,
+            timeoutMs,
+            cdpPolicy,
+          );
+          signal.throwIfAborted();
+          if (!endpoint) {
+            throw new BrowserProfileUnavailableError("browser CDP WebSocket unavailable");
+          }
+          return await grantPermissions({
+            profileCtx,
+            targetId,
+            wsUrl: endpoint.url,
+            wsLookup: endpoint.lookup,
+            origin,
+            requiredPermissions,
+            optionalPermissions,
+            timeoutMs,
+            ssrfPolicy: cdpPolicy,
+            signal,
+            ...(assertCurrent ? { assertCurrent } : {}),
+          });
+        },
+      });
+      return res.json({ ok: true, origin, ...granted });
+    } catch (error) {
+      return handleRouteError(res, error, {
+        formatMessage: (err) => (err instanceof Error ? err.message : String(err)),
+      });
+    }
+  });
 }
-export { testing as __testing };

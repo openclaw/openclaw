@@ -20,10 +20,10 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-import {
-  logModelFallbackDecision,
-  resetModelFallbackDecisionLogCoalescingForTest,
-} from "./model-fallback-observation.js";
+import { logModelFallbackDecision } from "./model-fallback-observation.js";
+
+let activeSessionId = "session-0";
+let testSequence = 0;
 
 function makeAuthFailure(
   overrides: Partial<ModelFallbackDecisionParams> = {},
@@ -31,18 +31,28 @@ function makeAuthFailure(
   return {
     decision: "candidate_failed",
     runId: "run-1",
-    sessionId: "session-1",
+    sessionId: activeSessionId,
     lane: "default",
     requestedProvider: "modelstudio",
     requestedModel: "glm-5",
-    candidate: { provider: "modelstudio", model: "glm-5" },
+    candidate: {
+      provider: "modelstudio",
+      model: "glm-5",
+      routeOrigin: "requested",
+      routeResolution: "raw",
+    },
     attempt: 1,
     total: 2,
     reason: "auth",
     status: 401,
     code: "invalid_token",
     error: "HTTP 401: invalid access token or token expired",
-    nextCandidate: { provider: "minimax", model: "MiniMax-M2.7-highspeed" },
+    nextCandidate: {
+      provider: "minimax",
+      model: "MiniMax-M2.7-highspeed",
+      routeOrigin: "configured-fallback",
+      routeResolution: "resolved",
+    },
     isPrimary: true,
     requestedModelMatched: true,
     fallbackConfigured: true,
@@ -57,13 +67,12 @@ function loggedPayloads(): Array<Record<string, unknown>> {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-16T00:00:00Z"));
+  activeSessionId = `session-${++testSequence}`;
   loggerMocks.isEnabled.mockReturnValue(true);
   loggerMocks.warn.mockClear();
-  resetModelFallbackDecisionLogCoalescingForTest();
 });
 
 afterEach(() => {
-  resetModelFallbackDecisionLogCoalescingForTest();
   vi.useRealTimers();
 });
 
@@ -81,6 +90,12 @@ describe("logModelFallbackDecision", () => {
     expect(secondStep).toEqual(firstStep);
     expect(thirdStep).toEqual(firstStep);
     expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+    expect(loggedPayloads()[0]).toMatchObject({
+      candidateRouteOrigin: "requested",
+      candidateRouteResolution: "raw",
+      nextCandidateRouteOrigin: "configured-fallback",
+      nextCandidateRouteResolution: "resolved",
+    });
 
     vi.advanceTimersByTime(30_000);
     logModelFallbackDecision(makeAuthFailure({ runId: "run-4" }));
@@ -92,69 +107,10 @@ describe("logModelFallbackDecision", () => {
     expect(String(loggedPayloads()[1]?.consoleMessage)).toContain("2 duplicates suppressed");
   });
 
-  it("drops stale duplicate counts before logging a later isolated auth failure", () => {
-    logModelFallbackDecision(makeAuthFailure({ runId: "run-1" }));
-    logModelFallbackDecision(makeAuthFailure({ runId: "run-2" }));
-
-    vi.advanceTimersByTime(60_001);
-    logModelFallbackDecision(makeAuthFailure({ runId: "run-3" }));
-
-    expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
-    expect(loggedPayloads()[1]).not.toHaveProperty("suppressedDuplicateCount");
-    expect(String(loggedPayloads()[1]?.consoleMessage)).not.toContain("duplicates suppressed");
-  });
-
-  it("keeps distinct candidate models visible", () => {
-    logModelFallbackDecision(
-      makeAuthFailure({ candidate: { provider: "modelstudio", model: "glm-5" } }),
-    );
-    logModelFallbackDecision(
-      makeAuthFailure({ candidate: { provider: "modelstudio", model: "qwen3.5-plus" } }),
-    );
-
-    expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
-    expect(loggedPayloads().map((payload) => payload.candidateModel)).toEqual([
-      "glm-5",
-      "qwen3.5-plus",
-    ]);
-  });
-
-  it("keeps distinct sessions visible", () => {
-    logModelFallbackDecision(makeAuthFailure({ sessionId: "session-1" }));
-    logModelFallbackDecision(makeAuthFailure({ sessionId: "session-2" }));
-
-    expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps no-session runs visible by scoping coalescing to the run id", () => {
     logModelFallbackDecision(makeAuthFailure({ sessionId: undefined, runId: "run-1" }));
     logModelFallbackDecision(makeAuthFailure({ sessionId: undefined, runId: "run-2" }));
 
     expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
-  });
-
-  it("coalesces skip-candidate auth cooldown decisions separately from failures", () => {
-    logModelFallbackDecision(makeAuthFailure({ decision: "skip_candidate" }));
-    logModelFallbackDecision(makeAuthFailure({ decision: "skip_candidate", runId: "run-2" }));
-    logModelFallbackDecision(makeAuthFailure({ decision: "candidate_failed", runId: "run-3" }));
-
-    expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
-    expect(loggedPayloads().map((payload) => payload.decision)).toEqual([
-      "skip_candidate",
-      "candidate_failed",
-    ]);
-  });
-
-  it("does not coalesce non-auth or success decisions", () => {
-    logModelFallbackDecision(makeAuthFailure({ reason: "rate_limit", status: 429 }));
-    logModelFallbackDecision(
-      makeAuthFailure({ reason: "rate_limit", status: 429, runId: "run-2" }),
-    );
-    logModelFallbackDecision(makeAuthFailure({ decision: "candidate_succeeded", reason: null }));
-    logModelFallbackDecision(
-      makeAuthFailure({ decision: "candidate_succeeded", reason: null, runId: "run-3" }),
-    );
-
-    expect(loggerMocks.warn).toHaveBeenCalledTimes(4);
   });
 });

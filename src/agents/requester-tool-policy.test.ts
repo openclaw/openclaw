@@ -1,0 +1,678 @@
+import path from "node:path";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  consumeSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "../gateway/subagent-completion-tool-handoff.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { resolvePluginHarnessToolPolicies } from "./harness/execution-environment.js";
+import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import { attachToolAllowlistIntersection } from "./tool-policy.js";
+import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
+
+describe("resolveRequesterToolPolicies", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-requester-policy-");
+  let tempDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tempDir = sessionDirs.make();
+    storePath = path.join(tempDir, "sessions.json");
+  });
+
+  async function writeSession(sessionKey: string, patch: Partial<SessionEntry>) {
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: `${sessionKey}-session`,
+      updatedAt: Date.now(),
+      ...patch,
+    } as SessionEntry);
+  }
+
+  function config(overrides: OpenClawConfig = {}): OpenClawConfig {
+    return {
+      ...overrides,
+      session: { ...overrides.session, store: storePath },
+      tools: {
+        ...overrides.tools,
+        toolsBySender: {
+          "*": { deny: ["group:runtime", "group:fs"] },
+          "id:alice": {},
+          ...overrides.tools?.toolsBySender,
+        },
+      },
+    };
+  }
+
+  it("retains dashboard delegation and revocation fallback without an injected capability store", async () => {
+    const root = "agent:front:main";
+    const visible = "agent:worker:dashboard:coding";
+    const helper = "agent:worker:subagent:helper";
+    const cfg = config({
+      tools: { toolsBySender: { "*": {} } },
+      agents: {
+        entries: {
+          front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
+          worker: {},
+        },
+      },
+    });
+    const visibleEntry: SessionEntry = {
+      sessionId: `${visible}-session`,
+      updatedAt: 1,
+      spawnDepth: 1,
+      spawnedBy: root,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec"],
+      delegatedToolPolicy: {
+        requesterSessionKey: root,
+        targetAgentId: "worker",
+        deny: [],
+        requesterDeny: ["exec"],
+      },
+    };
+    await writeSession(visible, visibleEntry);
+    await writeSession(helper, {
+      spawnDepth: 2,
+      spawnedBy: visible,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec"],
+      delegatedToolPolicy: {
+        requesterSessionKey: root,
+        targetAgentId: "worker",
+        deny: [],
+        requesterDeny: [],
+      },
+    });
+    const resolve = () =>
+      resolveRequesterToolPolicies({
+        config: cfg,
+        sessionKey: visible,
+        preparedSessionEntry: { sessionKey: visible, entry: visibleEntry },
+        ...completionHandoffFacts(helper, visible),
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: helper,
+          sourceTool: "subagent_announce",
+        },
+      });
+    expect(resolve().delegatedToolPolicy).toMatchObject({
+      requesterSessionKey: root,
+      targetAgentId: "worker",
+    });
+    expect(resolve().inheritedToolPolicy?.deny ?? []).not.toContain("exec");
+    expect(
+      resolvePluginHarnessToolPolicies(
+        {
+          config: cfg,
+          agentId: "worker",
+          sessionKey: visible,
+          provider: "fixture",
+          modelId: "fixture",
+        },
+        resolve().subagentPolicy?.deny,
+      ).toolPolicyRestricted,
+    ).toBe(true);
+    cfg.agents!.entries!.front!.subagents!.delegateToolsTo = [];
+    expect(resolve().inheritedToolPolicy?.deny).toContain("exec");
+  });
+
+  function completionHandoffFacts(sourceSessionKey: string, targetSessionKey: string) {
+    const targetSessionId = `${targetSessionKey}-session`;
+    return {
+      trustedInternalHandoff: {
+        kind: "subagent-completion" as const,
+        sourceSessionKey,
+        targetSessionKey,
+        targetSessionId,
+        provider: "openai",
+        model: "gpt-test",
+      },
+      sessionId: targetSessionId,
+      modelProvider: "openai",
+      modelId: "gpt-test",
+    };
+  }
+
+  it.each([{ policy: { allow: ["read", "sessions_spawn"] }, restricted: true }])(
+    "classifies sender/channel restriction provenance for $policy",
+    ({ policy, restricted }) => {
+      for (const source of ["sender", "conversation"] as const) {
+        const result = resolveRequesterToolPolicies({
+          config: config({
+            tools: {
+              allow: ["read", "sessions_spawn"],
+              toolsBySender: { "id:alice": source === "sender" ? policy : {} },
+            },
+          }),
+          sessionKey: "agent:main:discord:direct:alice",
+          senderId: "alice",
+          ...(source === "conversation" ? { conversationPolicy: policy } : {}),
+        });
+        expect(result.inheritedToolPolicySource).toBe(restricted ? "sender" : undefined);
+      }
+    },
+  );
+
+  it.each([
+    "current",
+    "revoked",
+    "stale requester",
+    "external sender",
+    "different allow",
+    "different deny",
+    "different source",
+    "missing lineage",
+  ])("resolves a settled batch with %s authority", async (authority) => {
+    const targetSessionKey = "agent:main:main";
+    const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;
+    for (const [index, sessionKey] of sourceSessionKeys.entries()) {
+      await writeSession(sessionKey, {
+        spawnedBy: targetSessionKey,
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: index === 1 && authority === "missing lineage" ? undefined : 1,
+        inheritedToolAllow:
+          index === 0
+            ? ["read", "exec"]
+            : authority === "different allow"
+              ? ["read"]
+              : ["exec", "read"],
+        inheritedToolDeny:
+          index === 1 && authority === "different deny" ? ["exec", "write"] : ["write"],
+        inheritedToolPolicySource:
+          index === 1 && authority === "different source" ? undefined : "sender",
+      });
+    }
+    let current = true;
+    const registration = {
+      sourceSessionKey: sourceSessionKeys[0],
+      targetSessionKey,
+      targetSessionId: "requester-session",
+      idempotencyKey: "settled-batch",
+      settleBatch: { sourceSessionKeys, isCurrent: () => current },
+    };
+    const consumption = {
+      ...registration,
+      handoffId: registerSubagentCompletionToolHandoff(registration),
+      sourceTool: "subagent_settle",
+      provider: "openai",
+      model: "gpt-test",
+    };
+    const trustedInternalHandoff = consumeSubagentCompletionToolHandoff(consumption);
+    expect(trustedInternalHandoff).toBeDefined();
+    current = authority !== "revoked";
+    const resolve = () =>
+      resolveRequesterToolPolicies({
+        config: config(),
+        sessionKey: targetSessionKey,
+        sessionId:
+          authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
+        ...(authority === "external sender" ? { senderId: "mallory" } : {}),
+        modelProvider: consumption.provider,
+        modelId: consumption.model,
+        inputProvenance: {
+          kind: authority === "external sender" ? "external_user" : "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: registration.sourceSessionKey,
+        },
+        trustedInternalHandoff,
+      });
+    const result = resolve();
+    if (authority !== "current") {
+      expect(result.delegated).toBe(false);
+      expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+      return;
+    }
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.groupPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"], deny: ["write"] });
+    expect(result.inheritedToolPolicySource).toBe("sender");
+
+    const snapshot = prepareReplyToolAuthority({
+      run: {
+        config: config(),
+        sessionKey: targetSessionKey,
+        sessionId: registration.targetSessionId,
+        sessionFile: path.join(tempDir, "requester.jsonl"),
+        workspaceDir: tempDir,
+        provider: consumption.provider,
+        model: consumption.model,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: registration.sourceSessionKey,
+        },
+        trustedInternalHandoff,
+      },
+    });
+    const currentFingerprint = snapshot.fingerprint();
+    current = false;
+    expect(snapshot.fingerprint()).not.toBe(currentFingerprint);
+  });
+
+  it("uses a persisted projection for a spawn-owned dashboard child", async () => {
+    const parentSessionKey = "agent:main:main";
+    const childSessionKey = "agent:main:dashboard:visible-child";
+    await writeSession(childSessionKey, {
+      spawnedBy: parentSessionKey,
+      parentSessionKey,
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+      spawnedBy: parentSessionKey,
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("persisted-child");
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.groupPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({
+      allow: ["read", "sessions_spawn"],
+      deny: ["exec"],
+    });
+    expect(result.subagentPolicy).toBeDefined();
+  });
+
+  it("keeps the sender snapshot while applying current non-sender restrictions", async () => {
+    const childSessionKey = "agent:main:subagent:web-search";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+    });
+    const cfg = config({
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["web_search"] },
+          "id:alice": {},
+        },
+      },
+    });
+
+    expect(
+      resolveWebSearchToolPolicy({
+        config: cfg,
+        agentId: "main",
+        sessionKey: childSessionKey,
+      }),
+    ).toEqual({ allowed: true, persistentAllowed: true });
+    expect(
+      resolveWebSearchToolPolicy({
+        config: config({
+          tools: {
+            deny: ["web_search"],
+            toolsBySender: {
+              "*": { deny: ["web_search"] },
+              "id:alice": {},
+            },
+          },
+        }),
+        agentId: "main",
+        sessionKey: childSessionKey,
+      }),
+    ).toEqual({ allowed: false, persistentAllowed: false });
+    expect(
+      resolveWebSearchToolPolicy({
+        config: cfg,
+        agentId: "main",
+        sessionKey: "agent:main:subagent:forged",
+      }),
+    ).toEqual({ allowed: false, persistentAllowed: false });
+  });
+
+  it.each([
+    { label: "no tools", runtimeToolAllowlist: [], allowed: false },
+    {
+      label: "intersected wildcard",
+      runtimeToolAllowlist: attachToolAllowlistIntersection(["*", "message"], [["*"], ["message"]]),
+      allowed: false,
+    },
+  ])(
+    "enforces $label web-search authority for the current turn",
+    ({ runtimeToolAllowlist, allowed }) => {
+      expect(resolveWebSearchToolPolicy({ runtimeToolAllowlist })).toEqual({
+        allowed,
+        persistentAllowed: true,
+      });
+    },
+  );
+
+  it("does not re-resolve group sender policy for a verified child", async () => {
+    const parentSessionKey = "agent:main:telegram:group:dev";
+    const childSessionKey = "agent:main:subagent:group-child";
+    await writeSession(childSessionKey, {
+      spawnedBy: parentSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+    });
+    const cfg = config({
+      channels: {
+        telegram: {
+          groups: {
+            dev: {
+              toolsBySender: {
+                "*": { deny: ["read"] },
+                "id:alice": {},
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const child = resolveRequesterToolPolicies({
+      config: cfg,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      spawnedBy: parentSessionKey,
+      messageProvider: "telegram",
+      groupId: "dev",
+    });
+    const forged = resolveRequesterToolPolicies({
+      config: cfg,
+      agentId: "main",
+      sessionKey: "agent:main:subagent:forged",
+      spawnedBy: parentSessionKey,
+      messageProvider: "telegram",
+      groupId: "dev",
+    });
+
+    expect(child.delegated).toBe(true);
+    expect(child.groupPolicy).toBeUndefined();
+    expect(forged.delegated).toBe(false);
+    expect(forged.groupPolicy).toEqual({ deny: ["read"] });
+  });
+
+  it("does not trust partial persisted lineage as an authority envelope", async () => {
+    const childSessionKey = "agent:main:subagent:partial";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+  });
+
+  it("re-resolves sender policy for an unversioned legacy child envelope", async () => {
+    const childSessionKey = "agent:main:subagent:legacy";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolDeny: ["message"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+  });
+
+  it.each([
+    ["sender identity", { senderId: "bob" }],
+    ["external provenance", { inputProvenance: { kind: "external_user" as const } }],
+  ])("applies current policy to an existing child with %s", async (_label, externalFacts) => {
+    const childSessionKey = "agent:main:subagent:external-turn";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["message"],
+      inheritedToolPolicySource: "sender",
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+      messageProvider: "discord",
+      ...externalFacts,
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+    expect(result.senderPolicy).toEqual(
+      _label === "allowlisted sender identity"
+        ? undefined
+        : { deny: ["group:runtime", "group:fs"] },
+    );
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+    expect(result.inheritedToolPolicySource).toBe("sender");
+  });
+
+  it("fails closed when a trusted internal handoff has no configuration", () => {
+    expect(() =>
+      resolveRequesterToolPolicies({
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        ...completionHandoffFacts("agent:ops:subagent:child", "agent:ops:main"),
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:ops:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+      }),
+    ).toThrow("Trusted internal handoff policy resolution requires configuration.");
+  });
+
+  it("restores a verified completion handoff to a distinct immutable completion owner", async () => {
+    const controllerSessionKey = "agent:main:discord:direct:alice";
+    const completionOwnerSessionKey = "agent:main:main";
+    const childSessionKey = "agent:main:subagent:child";
+    await writeSession(childSessionKey, {
+      spawnedBy: controllerSessionKey,
+      completionOwnerSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "exec"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: completionOwnerSessionKey,
+      ...completionHandoffFacts(childSessionKey, completionOwnerSessionKey),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"] });
+
+    const controllerResult = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: controllerSessionKey,
+      ...completionHandoffFacts(childSessionKey, completionOwnerSessionKey),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+    expect(controllerResult.delegated).toBe(false);
+    expect(controllerResult.requesterPolicySource).toBe("current-request");
+  });
+
+  it("does not treat an ordinary dashboard key as a completion authority", async () => {
+    const childSessionKey = "agent:main:dashboard:operator-thread";
+    await writeSession(childSessionKey, { spawnDepth: 0 });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      ...completionHandoffFacts(childSessionKey, "agent:main:main"),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+  });
+
+  it("walks nested lineage to the projection captured from the target requester", async () => {
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const parentChildSessionKey = "agent:main:subagent:parent-child";
+    const leafSessionKey = "agent:main:subagent:leaf";
+    await writeSession(parentChildSessionKey, {
+      spawnedBy: requesterSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec"],
+    });
+    await writeSession(leafSessionKey, {
+      spawnedBy: parentChildSessionKey,
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec", "read"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      ...completionHandoffFacts(leafSessionKey, requesterSessionKey),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: leafSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["exec"] });
+  });
+
+  it("prioritizes a verified nested completion over the target subagent resume envelope", async () => {
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const parentChildSessionKey = "agent:main:subagent:parent-child";
+    const leafSessionKey = "agent:main:subagent:leaf";
+    await writeSession(parentChildSessionKey, {
+      spawnedBy: requesterSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec"],
+    });
+    await writeSession(leafSessionKey, {
+      spawnedBy: parentChildSessionKey,
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec", "read"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: parentChildSessionKey,
+      subagentSessionKey: parentChildSessionKey,
+      ...completionHandoffFacts(leafSessionKey, parentChildSessionKey),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: leafSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["exec", "read"] });
+  });
+
+  it("fails closed for untrusted or mismatched completion handoffs", async () => {
+    const childSessionKey = "agent:main:subagent:child";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+    });
+    const provenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: childSessionKey,
+      sourceTool: "subagent_announce",
+    };
+
+    const untrusted = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:alice",
+      inputProvenance: provenance,
+    });
+    const mismatched = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:bob",
+      ...completionHandoffFacts(childSessionKey, "agent:main:discord:direct:alice"),
+      inputProvenance: provenance,
+    });
+    const mismatchedCompletionOwner = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      ...completionHandoffFacts(childSessionKey, "agent:main:discord:direct:alice"),
+      inputProvenance: provenance,
+    });
+
+    expect(untrusted.delegated).toBe(false);
+    expect(untrusted.requesterPolicySource).toBe("current-request");
+    expect(untrusted.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(mismatched.delegated).toBe(false);
+    expect(mismatched.requesterPolicySource).toBe("current-request");
+    expect(mismatched.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(mismatchedCompletionOwner.delegated).toBe(false);
+    expect(mismatchedCompletionOwner.requesterPolicySource).toBe("current-request");
+  });
+});

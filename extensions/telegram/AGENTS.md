@@ -5,26 +5,48 @@ maintainer decisions and review-binding invariants, not incidental
 implementation details. Also read `extensions/AGENTS.md` for the plugin
 boundary rules.
 
-Verified against Telegram Bot API 10.1, July 1 2026.
+Verified against Telegram Bot API 10.3, August 24 2026.
 
 ## Reliability Invariants
 
-- Durable-before-ack on both transports. Polling: the ingress worker advances
-  its offset only after the parent's committed spool enqueue. Webhook: respond
-  200 only after the spool write; a spool-write failure returning non-200 is
-  the redelivery contract, not an error to fix.
-- Completed spool rows tombstone via `complete()`, never `delete`. Telegram can
-  refetch an update after dispatch, and callback side effects would rerun on a
-  plain delete.
-- One retry policy. `spooled-update-retry-policy.ts` is the sole owner of spool
-  backoff and dead-letter decisions; the polling and webhook drains both
-  consume it. The dead-letter age gate is a product decision: over-limit
-  updates keep retrying at the capped delay and only tombstone once older than
-  the minimum age. Do not dead-letter on raw attempt counts, and do not
-  "unstick" a lane by removing the gate.
-- Never swallow inbound processing errors. A transient store error on a
-  spooled replay must record a `failed-retryable` processing result; a
-  swallowed throw acks the update as completed and deletes the message.
+### Core drain contracts (do not re-implement in Telegram)
+
+Owned by `src/channels/message/ingress-drain.ts` (+ claim-owner, retry-policy).
+Proof: `src/channels/message/ingress-drain.test.ts`,
+`ingress-claim-owner.test.ts`, `ingress-retry-policy.test.ts`.
+
+- Completed rows tombstone via `complete()`, never `delete`.
+- Complete at turn adoption, not settle. Deferred holds the claim; watchdog
+  stays armed through deferral; watchdog timeouts use the shared retry disposition.
+- One retry policy: attempt floor **and** age gate (defaults 8 / 24h).
+- Claim refresh heartbeat while dispatching/deferred (`claimLeaseMs / 3`).
+- Never silently complete on transient failure — release/fail via disposition.
+- Pre-adoption supersede tombstones; post-adoption interruption is core-owned
+  (reply-run registry / queue interrupt).
+
+### Telegram-owned (transport + channel policy)
+
+- Album and forward buffers hold flushes while the same-lane backlog contains a matching member; quiet windows stay sized for Telegram delivery, not local load.
+- Durable-before-ack on both transports. Polling: ingress worker advances its
+  offset only after the parent's committed spool enqueue
+  (`writeTelegramSpooledUpdate`). Webhook: respond 200 only after the spool
+  write; non-200 on write failure is the redelivery contract.
+- `update_id`↔event-id encoding and per-chat/topic lane derivation stay in
+  `telegram-ingress-spool.ts` / sequential-key.
+- Polling and webhook both: enqueue then pump
+  `createTelegramTransportIngressDrain(...).drainOnce()` — no private claim
+  loops.
+- Stall timeout: `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS` →
+  `adoptionStallTimeoutMs` (default 5 min) via
+  `resolveTelegramAdoptionStallTimeoutMs`.
+- Non-retryable classifier: `telegram-ingress-non-retryable.ts`
+  (missing harness, dispatch-dedupe rollback).
+- Supersede predicate: `telegram-ingress-supersede.ts` — authorized abort text
+  and `/new` or `/reset` may supersede pre-adoption user work. Settings and
+  other commands queue behind pending input; command entities alone do not cancel it.
+- room_event ambient work shares the sequential lane so a later user turn can
+  supersede it pre-adoption; adopted user turns are never touched (core drain
+  supersede is pre-adoption only).
 - No per-message full-store writes. Hot-path SQLite writes are per-entry.
   Rewriting a cache on every send or read stalls the event loop, and that
   stall masquerades as a polling stall (the sent-message-cache regression).
@@ -39,9 +61,13 @@ Verified against Telegram Bot API 10.1, July 1 2026.
   400 falls back to a legacy reply. New recoveries go into the shared
   predicates (`send-error-predicates.ts`, `reply-parameters.ts`), never into
   one funnel only.
-- Outbound flood waits honor `retry_after` up to
-  `TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS`; do not re-clamp Telegram sends to the
-  generic channel retry ceiling.
+- Outbound flood waits have one owner: the per-token account limiter in
+  `account-throttler.ts`. A 429 pauses every call for that bot token until
+  `retry_after` (one fixed 1 s pause when it is missing; a shorter concurrent
+  429 never shortens an active pause).
+  Final replies wait and retry within `TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS`;
+  stream previews and typing run as replaceable requests and are skipped, not
+  queued. Send retry runners must not retry 429 themselves.
 - Webhook security ordering. The secret header is validated first
   (constant-time compare, single-header enforcement, connection close on 401);
   the request rate limit budgets only failed-auth attempts so Telegram's own
@@ -82,6 +108,13 @@ Verified against Telegram Bot API 10.1, July 1 2026.
   hydration path later.
 - Current local chat context must outrank stale reply ancestry in the prompt.
   Old replied-to messages should not look like the active conversation.
+- The group history window is always on for groups and bounded by
+  `historyLimit`. Do not reintroduce prompt-history gating modes; that
+  regression blinded ambient rooms.
+- The group history window is rolling. Use self-entry watermark selection for
+  "since your last reply" views; do not reintroduce destructive clears because
+  room events are not persisted to the session and cleared context is
+  unrecoverable.
 - Pairing is DM-only. Group and topic authorization need explicit config
   allowlists.
 - Telegram allowlists use numeric sender IDs. Usernames are optional, mutable,
@@ -106,3 +139,12 @@ Verified against Telegram Bot API 10.1, July 1 2026.
   validation.
 - Reliability PRs (spool, drain, retry, ack, offset paths) need crash-window
   or restart-replay test proof, not just happy-path tests.
+- Give each contract one primary test owner; another layer needs a distinct
+  Telegram transport or lifecycle risk. Extend a stronger existing case instead
+  of replaying shared retry policy or registering the same helper suite twice.
+- Require independent expected outcomes: do not derive them with the tested
+  helper, or let a mock implement the behavior being asserted. Capability proofs
+  must exercise delivery or acknowledgement rather than repeat declared flags.
+- Make negative controls discriminate their named guard; an unrelated denial
+  must not make them pass. Keep test access private when no production caller
+  needs it.

@@ -1,40 +1,93 @@
 // ACPX tests cover process reaper plugin behavior.
+import "./process-reaper.test-support.js";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 import {
+  cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
-  isOpenClawLeaseAwareAcpxProcessCommand,
-  isOpenClawOwnedAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
-  type AcpxProcessInfo,
 } from "./process-reaper.js";
+const { mockAcpxProcessSystem } = await import("./process-reaper.test-support.js");
+type AcpxProcessSystemFixture = import("./process-reaper.test-support.js").AcpxProcessSystemFixture;
 
-const WRAPPER_ROOT = "/tmp/openclaw-state/acpx";
+const WRAPPER_ROOT = "/tmp/owner's state/acpx";
 const CODEX_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/codex-acp-wrapper.mjs`;
-const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
+const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} --label owner's-choice ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
+const runExecMock = vi.mocked(runExec);
+
+it.each(["inspection", "grace"])(
+  "revalidates cleanup ownership after awaited %s",
+  async (phase) => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    let active = true;
+    const killProcess = vi.fn();
+    mockAcpxProcessSystem({
+      killProcess,
+      listProcesses: async () => {
+        if (phase === "inspection") {
+          entered.resolve();
+          await release.promise;
+        }
+        return [{ pid: 101, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE }];
+      },
+      sleep: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const pending = cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 101,
+      wrapperRoot: WRAPPER_ROOT,
+      assertCurrent: () => {
+        if (!active) {
+          throw new Error("cleanup owner closed");
+        }
+      },
+    });
+    const rejected = expect(pending).rejects.toThrow("cleanup owner closed");
+    await entered.promise;
+    active = false;
+    release.resolve();
+    await rejected;
+    expect(killProcess).toHaveBeenCalledTimes(phase === "grace" ? 1 : 0);
+    expect(killProcess).not.toHaveBeenCalledWith(101, "SIGKILL");
+  },
+);
 const CLAUDE_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/claude-agent-acp-wrapper.mjs`;
 const PLUGIN_DEPS_CODEX_COMMAND =
-  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js";
+  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@agentclientprotocol/codex-acp/dist/index.js";
+const PLUGIN_DEPS_CODEX_APP_SERVER_COMMAND =
+  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@openai/codex/bin/codex.js app-server";
+const PLUGIN_DEPS_CODEX_PLATFORM_COMMAND =
+  "/tmp/openclaw/plugin-runtime-deps/node_modules/@openai/codex-linux-x64/vendor/codex app-server";
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node ${path.resolve(
-  "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+  "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
 )}`;
+const LOCAL_CODEX_APP_SERVER_COMMAND = `node ${path.resolve(
+  "node_modules/@openai/codex/bin/codex.js",
+)} app-server`;
+// Legacy adapter subprocesses remain cleanup-owned during upgrades.
 const LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND = path.resolve(
   "node_modules/@zed-industries/codex-acp-linux-x64/bin/codex-acp",
 );
 
+type AcpxProcessInfo = Awaited<
+  ReturnType<NonNullable<AcpxProcessSystemFixture["listProcesses"]>>
+>[number];
+
 function cleanupDeps(processes: AcpxProcessInfo[]) {
   const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
-  return {
-    killed,
-    deps: {
-      listProcesses: vi.fn(async () => processes),
-      killProcess: vi.fn((pid: number, signal: NodeJS.Signals) => {
-        killed.push({ pid, signal });
-      }),
-      sleep: vi.fn(async () => {}),
-    },
-  };
+  mockAcpxProcessSystem({
+    listProcesses: vi.fn(async () => processes),
+    killProcess: vi.fn((pid: number, signal: NodeJS.Signals) => {
+      killed.push({ pid, signal });
+    }),
+  });
+  return { killed };
 }
 
 function collectMatching<T, U>(
@@ -52,62 +105,37 @@ function collectMatching<T, U>(
 }
 
 describe("process reaper", () => {
-  it("recognizes generated Codex and Claude wrappers only under the configured root", () => {
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: CODEX_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: CLAUDE_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: "node /tmp/other/codex-acp-wrapper.mjs",
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(false);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    runExecMock.mockReset();
   });
 
-  it("only treats generated wrappers as launch-lease aware", () => {
-    expect(
-      isOpenClawLeaseAwareAcpxProcessCommand({
-        command: CODEX_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawLeaseAwareAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND }),
-    ).toBe(false);
-    expect(isOpenClawLeaseAwareAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(
-      false,
-    );
-  });
+  it("bounds process inspection and fails closed on timeout", async () => {
+    runExecMock.mockRejectedValueOnce(new Error("process listing timed out"));
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const killSpy = vi.spyOn(process, "kill");
 
-  it("recognizes OpenClaw plugin-runtime-deps ACP adapter children", () => {
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(true);
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: "npx @zed-industries/codex-acp" })).toBe(
-      false,
-    );
-  });
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 200,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      wrapperRoot: WRAPPER_ROOT,
+    });
 
-  it("recognizes plugin-local ACP adapter package paths without trusting arbitrary installs", () => {
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND })).toBe(
-      true,
-    );
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: "node /tmp/other-project/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
-      }),
-    ).toBe(false);
+    expect(runExecMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
+      maxBuffer: 8 * 1024 * 1024,
+      timeoutMs: 2_000,
+    });
+    expect(result).toEqual({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    });
+    expect(killSpy).not.toHaveBeenCalled();
   });
 
   it("kills an owned recorded process tree children first", async () => {
-    const { deps, killed } = cleanupDeps([
+    const { killed } = cleanupDeps([
       { pid: 100, ppid: 1, command: CODEX_WRAPPER_COMMAND },
       { pid: 101, ppid: 100, command: PLUGIN_DEPS_CODEX_COMMAND },
       { pid: 102, ppid: 101, command: "node child.js" },
@@ -117,7 +145,6 @@ describe("process reaper", () => {
       rootPid: 100,
       rootCommand: CODEX_WRAPPER_COMMAND,
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result.skippedReason).toBeUndefined();
@@ -130,13 +157,12 @@ describe("process reaper", () => {
   });
 
   it("allows wrapper-root verification when stored wrapper commands are shell-quoted", async () => {
-    const { deps, killed } = cleanupDeps([{ pid: 110, ppid: 1, command: CODEX_WRAPPER_COMMAND }]);
+    const { killed } = cleanupDeps([{ pid: 110, ppid: 1, command: CODEX_WRAPPER_COMMAND }]);
 
     const result = await cleanupOpenClawOwnedAcpxProcessTree({
       rootPid: 110,
       rootCommand: `"/usr/local/bin/node" "${WRAPPER_ROOT}/codex-acp-wrapper.mjs"`,
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result.skippedReason).toBeUndefined();
@@ -144,7 +170,7 @@ describe("process reaper", () => {
   });
 
   it("requires matching lease identity before killing a leased process tree", async () => {
-    const { deps, killed } = cleanupDeps([
+    const { killed } = cleanupDeps([
       { pid: 112, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
     ]);
 
@@ -154,7 +180,6 @@ describe("process reaper", () => {
       expectedLeaseId: "lease-1",
       expectedGatewayInstanceId: "gateway-1",
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result.skippedReason).toBeUndefined();
@@ -162,7 +187,7 @@ describe("process reaper", () => {
   });
 
   it("does not kill a reused same-root wrapper pid with a different lease identity", async () => {
-    const { deps, killed } = cleanupDeps([
+    const { killed } = cleanupDeps([
       {
         pid: 113,
         ppid: 1,
@@ -176,7 +201,6 @@ describe("process reaper", () => {
       expectedLeaseId: "lease-1",
       expectedGatewayInstanceId: "gateway-1",
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result).toEqual({
@@ -187,39 +211,119 @@ describe("process reaper", () => {
     expect(killed).toStrictEqual([]);
   });
 
-  it("skips recorded pid cleanup when process listing is unavailable", async () => {
-    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: 200,
-      rootCommand: CODEX_WRAPPER_COMMAND,
-      wrapperRoot: WRAPPER_ROOT,
-      deps: {
-        listProcesses: vi.fn(async () => {
-          throw new Error("ps unavailable");
-        }),
-        killProcess: vi.fn((pid, signal) => {
-          killed.push({ pid, signal });
-        }),
-        sleep: vi.fn(async () => {}),
+  it("recovers a pending lease only from its exact wrapper and gateway identity", async () => {
+    const { killed } = cleanupDeps([
+      { pid: 119, ppid: 1, command: "node /tmp/owner's-unrelated-script.mjs" },
+      { pid: 120, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
+      {
+        pid: 121,
+        ppid: 1,
+        command: `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-foreign`,
       },
+      { pid: 122, ppid: 120, command: "node adapter-child.js" },
+    ]);
+
+    const result = await cleanupOpenClawOwnedAcpxPendingLease({
+      leaseId: "lease-1",
+      gatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({ inspectedPids: [120, 122] });
+    expect(killed.slice(0, 2)).toEqual([
+      { pid: 122, signal: "SIGTERM" },
+      { pid: 120, signal: "SIGTERM" },
+    ]);
+    expect(killed.some((entry) => entry.pid === 121)).toBe(false);
+  });
+
+  it("fails closed when pending lease evidence is ambiguous or unavailable", async () => {
+    const duplicateCommand = CODEX_WRAPPER_COMMAND_WITH_LEASE;
+    const { killed } = cleanupDeps([
+      { pid: 130, ppid: 1, command: duplicateCommand },
+      { pid: 131, ppid: 1, command: duplicateCommand },
+    ]);
+
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+      }),
+    ).resolves.toEqual({
+      inspectedPids: [130, 131],
+      terminatedPids: [],
+      skippedReason: "ambiguous-root",
+    });
+    expect(killed).toEqual([]);
+
+    runExecMock.mockRejectedValueOnce(new Error("ps unavailable"));
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+      }),
+    ).resolves.toMatchObject({ skippedReason: "process-list-unavailable" });
+  });
+
+  it("does not claim a pending wrapper leased by another gateway", async () => {
+    const { killed } = cleanupDeps([
+      {
+        pid: 135,
+        ppid: 1,
+        command: `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-foreign`,
+      },
+    ]);
+
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+      }),
+    ).resolves.toEqual({
       inspectedPids: [],
       terminatedPids: [],
-      skippedReason: "unverified-root",
+      skippedReason: "missing-root",
     });
-    expect(killed).toStrictEqual([]);
+    expect(killed).toEqual([]);
+  });
+
+  it("keeps pending leases untouched when process evidence is unsupported", async () => {
+    const listProcesses = vi.fn(async () => [
+      { pid: 140, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
+    ]);
+    const killProcess = vi.fn();
+    mockAcpxProcessSystem({ platform: "win32", listProcesses, killProcess });
+
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+      }),
+    ).resolves.toEqual({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "unsupported-platform",
+    });
+    expect(listProcesses).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
   });
 
   it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {
-    const { deps, killed } = cleanupDeps([{ pid: 250, ppid: 1, command: "node unrelated.js" }]);
+    const { killed } = cleanupDeps([{ pid: 250, ppid: 1, command: "node unrelated.js" }]);
 
     const result = await cleanupOpenClawOwnedAcpxProcessTree({
       rootPid: 250,
       rootCommand: CODEX_WRAPPER_COMMAND,
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result).toEqual({
@@ -231,7 +335,7 @@ describe("process reaper", () => {
   });
 
   it("does not kill a reused adapter pid when the stored root was a generated wrapper", async () => {
-    const { deps, killed } = cleanupDeps([
+    const { killed } = cleanupDeps([
       {
         pid: 260,
         ppid: 1,
@@ -243,7 +347,6 @@ describe("process reaper", () => {
       rootPid: 260,
       rootCommand: CODEX_WRAPPER_COMMAND,
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result).toEqual({
@@ -255,13 +358,12 @@ describe("process reaper", () => {
   });
 
   it("skips non-owned recorded process trees", async () => {
-    const { deps, killed } = cleanupDeps([{ pid: 300, ppid: 1, command: "node server.js" }]);
+    const { killed } = cleanupDeps([{ pid: 300, ppid: 1, command: "node server.js" }]);
 
     const result = await cleanupOpenClawOwnedAcpxProcessTree({
       rootPid: 300,
       rootCommand: "node server.js",
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result.skippedReason).toBe("not-openclaw-owned");
@@ -269,7 +371,7 @@ describe("process reaper", () => {
   });
 
   it("reaps stale OpenClaw-owned wrapper and adapter orphans on startup", async () => {
-    const { deps, killed } = cleanupDeps([
+    const { killed } = cleanupDeps([
       { pid: 400, ppid: 1, command: CODEX_WRAPPER_COMMAND },
       { pid: 401, ppid: 400, command: PLUGIN_DEPS_CODEX_COMMAND },
       { pid: 402, ppid: 401, command: "node child.js" },
@@ -277,11 +379,12 @@ describe("process reaper", () => {
       { pid: 404, ppid: 403, command: "node claude-child.js" },
       { pid: 405, ppid: 1, command: PLUGIN_DEPS_CODEX_COMMAND },
       { pid: 406, ppid: 1, command: "node /tmp/other/codex-acp-wrapper.mjs" },
+      { pid: 407, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
+      { pid: 408, ppid: 1, command: "node /tmp/owner's-unrelated-script.mjs" },
     ]);
 
     const result = await reapStaleOpenClawOwnedAcpxOrphans({
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result.skippedReason).toBeUndefined();
@@ -296,14 +399,13 @@ describe("process reaper", () => {
   });
 
   it("reaps plugin-local Codex ACP adapter orphans when the generated wrapper is already gone", async () => {
-    const { deps, killed } = cleanupDeps([
+    const { killed } = cleanupDeps([
       { pid: 500, ppid: 1, command: LOCAL_NODE_MODULES_CODEX_COMMAND },
       { pid: 501, ppid: 500, command: LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND },
     ]);
 
     const result = await reapStaleOpenClawOwnedAcpxOrphans({
       wrapperRoot: WRAPPER_ROOT,
-      deps,
     });
 
     expect(result.skippedReason).toBeUndefined();
@@ -317,15 +419,33 @@ describe("process reaper", () => {
     ).toEqual([501, 500]);
   });
 
-  it("keeps startup scans quiet when process listing is unavailable", async () => {
+  it("reaps packaged Codex app-server orphans without claiming native plugin processes", async () => {
+    const { killed } = cleanupDeps([
+      { pid: 510, ppid: 1, command: PLUGIN_DEPS_CODEX_APP_SERVER_COMMAND },
+      { pid: 511, ppid: 510, command: PLUGIN_DEPS_CODEX_PLATFORM_COMMAND },
+      { pid: 512, ppid: 1, command: LOCAL_CODEX_APP_SERVER_COMMAND },
+    ]);
+
     const result = await reapStaleOpenClawOwnedAcpxOrphans({
       wrapperRoot: WRAPPER_ROOT,
-      deps: {
-        listProcesses: vi.fn(async () => {
-          throw new Error("ps unavailable");
-        }),
-        sleep: vi.fn(async () => {}),
-      },
+    });
+
+    expect(result.skippedReason).toBeUndefined();
+    expect(result.inspectedPids).toEqual([510, 511]);
+    expect(
+      collectMatching(
+        killed,
+        (entry) => entry.signal === "SIGTERM",
+        (entry) => entry.pid,
+      ),
+    ).toEqual([511, 510]);
+  });
+
+  it("keeps startup scans quiet when process listing is unavailable", async () => {
+    mockAcpxProcessSystem();
+    runExecMock.mockRejectedValueOnce(new Error("ps unavailable"));
+    const result = await reapStaleOpenClawOwnedAcpxOrphans({
+      wrapperRoot: WRAPPER_ROOT,
     });
 
     expect(result).toEqual({

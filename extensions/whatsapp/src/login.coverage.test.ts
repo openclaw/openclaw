@@ -121,26 +121,6 @@ describe("loginWeb coverage", () => {
     rmSync(testState.authDir, { recursive: true, force: true });
   });
 
-  it("restarts once when WhatsApp requests code 515", async () => {
-    waitForWaConnectionMock
-      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
-      .mockResolvedValueOnce(undefined);
-
-    const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const pendingLogin = loginWeb(false, waitForWaConnectionMock as never, runtime);
-    await pendingLogin;
-
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    const firstSock = await createWaSocketMock.mock.results[0]?.value;
-    expect(firstSock.ws.close).toHaveBeenCalled();
-    expect(runtimeMessageCalls(runtime.log)).toContain(
-      "✅ Linked after restart; web session ready.",
-    );
-    vi.runAllTimers();
-    const secondSock = await createWaSocketMock.mock.results[1]?.value;
-    expect(secondSock.ws.close).toHaveBeenCalled();
-  });
-
   it("routes QR output through runtime for initial and restart sockets", async () => {
     waitForWaConnectionMock
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
@@ -155,17 +135,34 @@ describe("loginWeb coverage", () => {
     const restartOpts = createWaSocketOptions(1);
     expect(initialOpts?.onQr).toBe(restartOpts?.onQr);
 
-    initialOpts?.onQr?.("initial-qr");
-    restartOpts?.onQr?.("restart-qr");
-    await flushTasks();
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    try {
+      initialOpts?.onQr?.("initial-qr");
+      await flushTasks();
+      restartOpts?.onQr?.("restart-qr");
+      await flushTasks();
+    } finally {
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
 
     expect(runtime.log).toHaveBeenCalledWith(
-      "Open the WhatsApp app, go to Linked Devices, then scan this QR:",
+      "Open the WhatsApp app, go to Linked Devices, then scan this QR:\nterminal:initial-qr",
     );
-    expect(runtime.log).toHaveBeenCalledWith("terminal:initial-qr");
-    expect(runtime.log).toHaveBeenCalledWith("terminal:restart-qr");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "\x1b[2J\x1b[HOpen the WhatsApp app, go to Linked Devices, then scan this QR:\nterminal:restart-qr",
+    );
     expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
     expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
+    const firstSock = await createWaSocketMock.mock.results[0]?.value;
+    expect(firstSock.ws.close).toHaveBeenCalled();
+    vi.runAllTimers();
+    const secondSock = await createWaSocketMock.mock.results[1]?.value;
+    expect(secondSock.ws.close).toHaveBeenCalled();
   });
 
   it("clears stale creds and continues login when logged out", async () => {

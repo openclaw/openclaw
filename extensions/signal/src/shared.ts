@@ -1,4 +1,3 @@
-// Signal plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -15,32 +14,50 @@ import {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "./accounts.js";
+import { resolveSignalTarget } from "./aliases.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
+import { signalDoctor } from "./doctor.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
 
-async function loadSignalChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
 export const signalSetupWizard = createSignalSetupWizardProxy(
-  async () => (await loadSignalChannelRuntime()).signalSetupWizard,
+  async () => (await import("./setup-surface.js")).signalSetupWizard,
 );
 
-export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
+const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
-  listAccountIds: (cfg) => listSignalAccountIds(cfg),
-  resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
-  defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-  clearBaseFields: ["account", "configPath", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+  listAccountIds: listSignalAccountIds,
+  resolveAccount: adaptScopedAccountAccessor(resolveSignalAccount),
+  defaultAccountId: resolveDefaultSignalAccountId,
+  clearBaseFields: ["account", "accountUuid", "transport", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     normalizeStringifiedEntries(allowFrom)
       .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
       .filter(Boolean),
-  resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
 });
+
+export const signalConfigAdapter = {
+  ...signalConfigAdapterBase,
+  resolveDefaultTo({
+    cfg,
+    accountId,
+  }: {
+    cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+    accountId?: string | null;
+  }) {
+    const raw = resolveSignalAccount({ cfg, accountId }).config.defaultTo;
+    if (typeof raw !== "string" || !raw.trim()) {
+      return undefined;
+    }
+    try {
+      return resolveSignalTarget({ cfg, accountId, input: raw })?.to ?? raw.trim();
+    } catch {
+      return raw.trim();
+    }
+  },
+};
 
 export const signalSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedSignalAccount>({
   channelKey: SIGNAL_CHANNEL,
@@ -52,13 +69,14 @@ export const signalSecurityAdapter = createRestrictSendersChannelSecurity<Resolv
   groupPolicyPath: "channels.signal.groupPolicy",
   groupAllowFromPath: "channels.signal.groupAllowFrom",
   mentionGated: false,
+  findingTitle: "Signal security warning",
   policyPathSuffix: "dmPolicy",
   normalizeDmEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
 });
 
 export function createSignalPluginBase(params: {
   setupWizard?: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setup"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedSignalAccount>,
   | "id"
@@ -70,25 +88,35 @@ export function createSignalPluginBase(params: {
   | "configSchema"
   | "config"
   | "security"
-  | "setup"
+  | "setupContract"
   | "messaging"
+  | "doctor"
 > {
-  const base = createChannelPluginBase({
+  const base = createChannelPluginBase<ResolvedSignalAccount>({
     id: SIGNAL_CHANNEL,
     meta: {
       ...getChatChannelMeta(SIGNAL_CHANNEL),
     },
     setupWizard: params.setupWizard,
+    streaming: {
+      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+    },
+    reload: {
+      configPrefixes: ["channels.signal"],
+      noopPrefixes: ["messages.inbound", "messages.ackReactionScope"],
+    },
+    configSchema: SignalChannelConfigSchema,
+    doctor: signalDoctor,
+    security: signalSecurityAdapter,
+    setupContract: params.setupContract,
+  });
+  return {
+    ...base,
     capabilities: {
       chatTypes: ["direct", "group"],
       media: true,
       reactions: true,
     },
-    streaming: {
-      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-    },
-    reload: { configPrefixes: ["channels.signal"] },
-    configSchema: SignalChannelConfigSchema,
     config: {
       ...signalConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -101,26 +129,8 @@ export function createSignalPluginBase(params: {
           },
         }),
     },
-    security: signalSecurityAdapter,
-    setup: params.setup,
-  });
-  return {
-    ...base,
     messaging: {
       defaultMarkdownTableMode: "bullets",
     },
-  } as Pick<
-    ChannelPlugin<ResolvedSignalAccount>,
-    | "id"
-    | "meta"
-    | "setupWizard"
-    | "capabilities"
-    | "streaming"
-    | "reload"
-    | "configSchema"
-    | "config"
-    | "security"
-    | "setup"
-    | "messaging"
-  >;
+  };
 }

@@ -1,23 +1,13 @@
-/**
- * Chat target prefix parsers.
- *
- * Parses service-qualified chat ids, guids, identifiers, and sender allowlist targets.
- */
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { parseStrictInteger } from "../../infra/parse-finite-number.js";
+import { resolveAllowlistMatchByCandidates } from "../allowlist-match.js";
 
-/**
- * Prefix mapping for service-qualified target strings.
- */
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
-/**
- * Normalized input used by chat target prefix parsers.
- */
 export type ChatTargetPrefixesParams = {
   trimmed: string;
   lower: string;
@@ -26,22 +16,13 @@ export type ChatTargetPrefixesParams = {
   chatIdentifierPrefixes: string[];
 };
 
-/**
- * Parsed conversation target forms accepted by channel allowlists and target resolvers.
- */
 export type ParsedChatTarget =
   | { kind: "chat_id"; chatId: number }
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string };
 
-/**
- * Parsed allowlist target, including sender handles.
- */
 export type ParsedChatAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
-/**
- * Sender metadata used for chat-aware allowlist checks.
- */
 export type ChatSenderAllowParams = {
   allowFrom: Array<string | number>;
   sender: string;
@@ -51,27 +32,13 @@ export type ChatSenderAllowParams = {
   allowConversationTargets?: boolean | null;
 };
 
-/**
- * Checks whether a sender or current conversation matches an allowlist entry.
- */
-export function isAllowedParsedChatSender(params: {
-  allowFrom: Array<string | number>;
-  sender: string;
-  chatId?: number | null;
-  chatGuid?: string | null;
-  chatIdentifier?: string | null;
-  allowConversationTargets?: boolean | null;
-  normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
-}): boolean {
+export function isAllowedParsedChatSender(
+  params: ChatSenderAllowParams & {
+    normalizeSender: (sender: string) => string;
+    parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
+  },
+): boolean {
   const allowFrom = normalizeStringEntries(params.allowFrom);
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-
   const senderNormalized = params.normalizeSender(params.sender);
   const allowConversationTargets = params.allowConversationTargets === true;
   // Conversation ids are only considered when the channel opts in; otherwise
@@ -82,43 +49,40 @@ export function isAllowedParsedChatSender(params: {
     ? normalizeOptionalString(params.chatIdentifier)
     : undefined;
 
-  for (const entry of allowFrom) {
-    if (!entry) {
-      continue;
+  const normalizedAllowFrom = allowFrom.map((entry) => {
+    if (entry === "*") {
+      return entry;
     }
     const parsed = params.parseAllowTarget(entry);
-    if (parsed.kind === "chat_id" && chatId !== undefined) {
-      if (parsed.chatId === chatId) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_guid" && chatGuid) {
-      if (parsed.chatGuid === chatGuid) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
-      if (parsed.chatIdentifier === chatIdentifier) {
-        return true;
-      }
-    } else if (parsed.kind === "handle" && senderNormalized) {
-      if (parsed.handle === senderNormalized) {
-        return true;
-      }
+    if (parsed.kind === "chat_id") {
+      return `chat_id:${parsed.chatId}`;
     }
-  }
-  return false;
+    if (parsed.kind === "chat_guid") {
+      return `chat_guid:${parsed.chatGuid}`;
+    }
+    if (parsed.kind === "chat_identifier") {
+      return `chat_identifier:${parsed.chatIdentifier}`;
+    }
+    return `handle:${parsed.handle}`;
+  });
+  return resolveAllowlistMatchByCandidates({
+    allowList: normalizedAllowFrom,
+    candidates: [
+      { value: senderNormalized ? `handle:${senderNormalized}` : undefined, source: "handle" },
+      { value: chatId !== undefined ? `chat_id:${chatId}` : undefined, source: "chat_id" },
+      { value: chatGuid ? `chat_guid:${chatGuid}` : undefined, source: "chat_guid" },
+      {
+        value: chatIdentifier ? `chat_identifier:${chatIdentifier}` : undefined,
+        source: "chat_identifier",
+      },
+    ],
+  }).allowed;
 }
 
 function stripPrefix(value: string, prefix: string): string {
   return value.slice(prefix.length).trim();
 }
 
-function startsWithAnyPrefix(value: string, prefixes: readonly string[]): boolean {
-  return prefixes.some((prefix) => value.startsWith(prefix));
-}
-
-/**
- * Resolves service-prefixed handle targets, delegating chat-shaped remainders.
- */
 export function resolveServicePrefixedTarget<TService extends string, TTarget>(params: {
   trimmed: string;
   lower: string;
@@ -143,9 +107,6 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
   return null;
 }
 
-/**
- * Resolves service-prefixed targets where chat ids should bypass handle parsing.
- */
 export function resolveServicePrefixedChatTarget<TService extends string, TTarget>(params: {
   trimmed: string;
   lower: string;
@@ -163,57 +124,50 @@ export function resolveServicePrefixedChatTarget<TService extends string, TTarge
     ...(params.extraChatPrefixes ?? []),
   ];
   return resolveServicePrefixedTarget({
-    trimmed: params.trimmed,
-    lower: params.lower,
-    servicePrefixes: params.servicePrefixes,
-    isChatTarget: (remainderLower) => startsWithAnyPrefix(remainderLower, chatPrefixes),
-    parseTarget: params.parseTarget,
+    ...params,
+    isChatTarget: (remainderLower) =>
+      chatPrefixes.some((prefix) => remainderLower.startsWith(prefix)),
   });
 }
 
-/**
- * Parses chat target prefixes and throws for malformed prefixed values.
- */
+/** Reject malformed prefixed values instead of treating them as sender handles. */
 export function parseChatTargetPrefixesOrThrow(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {
-  for (const prefix of params.chatIdPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      const chatId = parseStrictInteger(value);
-      if (chatId === undefined) {
-        throw new Error(`Invalid chat_id: ${value}`);
-      }
-      return { kind: "chat_id", chatId };
-    }
-  }
+  return parseChatTargetPrefixes(params, true);
+}
 
-  for (const prefix of params.chatGuidPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      if (!value) {
-        throw new Error("chat_guid is required");
+function parseChatTargetPrefixes(
+  params: ChatTargetPrefixesParams,
+  throwOnInvalid: boolean,
+): ParsedChatTarget | null {
+  for (const [kind, prefixes] of [
+    ["chat_id", params.chatIdPrefixes],
+    ["chat_guid", params.chatGuidPrefixes],
+    ["chat_identifier", params.chatIdentifierPrefixes],
+  ] as const) {
+    for (const prefix of prefixes) {
+      if (!params.lower.startsWith(prefix)) {
+        continue;
       }
-      return { kind: "chat_guid", chatGuid: value };
-    }
-  }
-
-  for (const prefix of params.chatIdentifierPrefixes) {
-    if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      if (!value) {
-        throw new Error("chat_identifier is required");
+      if (kind === "chat_id") {
+        const chatId = parseStrictInteger(value);
+        if (chatId !== undefined) {
+          return { kind, chatId };
+        }
+      } else if (value) {
+        return kind === "chat_guid" ? { kind, chatGuid: value } : { kind, chatIdentifier: value };
       }
-      return { kind: "chat_identifier", chatIdentifier: value };
+      if (throwOnInvalid) {
+        throw new Error(kind === "chat_id" ? `Invalid chat_id: ${value}` : `${kind} is required`);
+      }
     }
   }
 
   return null;
 }
 
-/**
- * Resolves service-prefixed allowlist targets.
- */
 export function resolveServicePrefixedAllowTarget<TAllowTarget>(params: {
   trimmed: string;
   lower: string;
@@ -233,9 +187,6 @@ export function resolveServicePrefixedAllowTarget<TAllowTarget>(params: {
   return null;
 }
 
-/**
- * Resolves service-prefixed allow targets before falling back to chat prefixes.
- */
 export function resolveServicePrefixedOrChatAllowTarget<
   TAllowTarget extends ParsedChatAllowTarget,
 >(params: {
@@ -247,32 +198,14 @@ export function resolveServicePrefixedOrChatAllowTarget<
   chatGuidPrefixes: string[];
   chatIdentifierPrefixes: string[];
 }): TAllowTarget | null {
-  const servicePrefixed = resolveServicePrefixedAllowTarget({
-    trimmed: params.trimmed,
-    lower: params.lower,
-    servicePrefixes: params.servicePrefixes,
-    parseAllowTarget: params.parseAllowTarget,
-  });
+  const servicePrefixed = resolveServicePrefixedAllowTarget(params);
   if (servicePrefixed) {
     return servicePrefixed as TAllowTarget;
   }
 
-  const chatTarget = parseChatAllowTargetPrefixes({
-    trimmed: params.trimmed,
-    lower: params.lower,
-    chatIdPrefixes: params.chatIdPrefixes,
-    chatGuidPrefixes: params.chatGuidPrefixes,
-    chatIdentifierPrefixes: params.chatIdentifierPrefixes,
-  });
-  if (chatTarget) {
-    return chatTarget as TAllowTarget;
-  }
-  return null;
+  return parseChatAllowTargetPrefixes(params) as TAllowTarget | null;
 }
 
-/**
- * Creates a reusable sender matcher for chat-aware channel allowlists.
- */
 export function createAllowedChatSenderMatcher(params: {
   normalizeSender: (sender: string) => string;
   parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
@@ -280,11 +213,7 @@ export function createAllowedChatSenderMatcher(params: {
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
-      allowFrom: input.allowFrom,
-      sender: input.sender,
-      chatId: input.chatId,
-      chatGuid: input.chatGuid,
-      chatIdentifier: input.chatIdentifier,
+      ...input,
       allowConversationTargets:
         input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,
@@ -292,39 +221,26 @@ export function createAllowedChatSenderMatcher(params: {
     });
 }
 
-/**
- * Parses chat target prefixes for allowlist entries, ignoring malformed values.
- */
+/** Ignore malformed prefixes while checking allowlist entries. */
 export function parseChatAllowTargetPrefixes(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {
-  for (const prefix of params.chatIdPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      const chatId = parseStrictInteger(value);
-      if (chatId !== undefined) {
-        return { kind: "chat_id", chatId };
-      }
+  return parseChatTargetPrefixes(params, false);
+}
+
+/** Remove one of the known provider prefixes from a free-form target string. */
+export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
+  const trimmed = raw.trim();
+  for (const provider of providers) {
+    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
+      return trimmed.slice(prefix.length).trim();
     }
   }
+  return trimmed;
+}
 
-  for (const prefix of params.chatGuidPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      if (value) {
-        return { kind: "chat_guid", chatGuid: value };
-      }
-    }
-  }
-
-  for (const prefix of params.chatIdentifierPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      if (value) {
-        return { kind: "chat_identifier", chatIdentifier: value };
-      }
-    }
-  }
-
-  return null;
+/** Remove generic target-kind prefixes such as `user:` or `group:`. */
+export function stripTargetKindPrefix(raw: string): string {
+  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
 }

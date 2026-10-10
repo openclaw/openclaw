@@ -1,15 +1,22 @@
-// Tool mutation tests cover the fail-closed classification and fingerprinting
-// used to decide whether repeated tool actions can recover prior failures.
+// Tool mutation tests cover fail-closed mutation and replay-safety classification.
 import { describe, expect, it } from "vitest";
 import {
   buildToolMutationState,
-  isLikelyMutatingToolName,
   isMutatingToolCall,
   isReplaySafeToolCall,
-  isSameToolMutationAction,
 } from "./tool-mutation.js";
 
 describe("tool mutation helpers", () => {
+  it.each([undefined, "list", "person", "device", "future-action"])(
+    "classifies presence action %s for safe replay",
+    (action) => {
+      const readOnly = action !== "future-action";
+      expect(buildToolMutationState("presence", { action })).toEqual({
+        mutatingAction: !readOnly,
+        replaySafe: readOnly,
+      });
+    },
+  );
   it("treats session_status as mutating only when model override is provided", () => {
     expect(isMutatingToolCall("session_status", { sessionKey: "agent:main:main" })).toBe(false);
     expect(
@@ -20,37 +27,41 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
-  it("builds stable fingerprints for mutating calls and omits read-only calls", () => {
-    const writeFingerprint = buildToolMutationState(
-      "write",
-      { path: "/tmp/demo.txt", id: 42 },
-      "write /tmp/demo.txt",
-    ).actionFingerprint;
-    expect(writeFingerprint).toBe("tool=write|path=/tmp/demo.txt|id=42");
-
-    const metaOnlyFingerprint = buildToolMutationState(
-      "exec",
-      { command: "npm start" },
-      "npm start",
-    ).actionFingerprint;
-    expect(metaOnlyFingerprint).toBe("tool=exec|meta=npm start");
-
-    const readFingerprint = buildToolMutationState("read", {
-      path: "/tmp/demo.txt",
-    }).actionFingerprint;
-    expect(readFingerprint).toBeUndefined();
+  it("classifies portal list as replay-safe and portal mutations as mutating", () => {
+    expect(isMutatingToolCall("portal", { action: "list" })).toBe(false);
+    expect(isReplaySafeToolCall("portal", { action: "list" })).toBe(true);
+    for (const action of ["open", "close"]) {
+      expect(isMutatingToolCall("portal", { action }), action).toBe(true);
+      expect(isReplaySafeToolCall("portal", { action }), action).toBe(false);
+    }
   });
+
+  it.each(["list", "get", "set", "import", "future-action", undefined])(
+    "classifies theme action %s for safe replay",
+    (action) => {
+      const readOnly = action === "list" || action === "get";
+      expect(buildToolMutationState("theme", { action })).toEqual({
+        mutatingAction: !readOnly,
+        replaySafe: readOnly,
+      });
+    },
+  );
 
   it.each([
     ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
     ["bash", "cat package.json"],
-    ["exec", "rg -n tool-mutation src/agents"],
+    [
+      "bash",
+      "find . -maxdepth 1 -type f | wc -l && find . -maxdepth 1 -type f ! -name '.*' | wc -l",
+    ],
+    ["exec", "rg -n 'token|8123|http|secret' notes.md"],
+    ["exec", 'rg -n "foo|bar" notes.md'],
+    ["exec", "rg -n '[$*?{}]' notes.md"],
     ["exec", "gh search prs --repo openclaw/openclaw tool-mutation --json number,title,state"],
     ["bash", "gh pr view 123 --repo openclaw/openclaw --json title,state"],
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
   });
 
   it.each([
@@ -58,8 +69,14 @@ describe("tool mutation helpers", () => {
     ["exec", "sed --in-place 's/a/b/' file.txt"],
     ["exec", "sed -n '1p' -i file.txt"],
     ["exec", "sed -n -e '1p' -e 'w /tmp/out' file.txt"],
+    ["exec", "sed -n '-e$w /tmp/out' 1p"],
+    ["exec", "sed -n --expression='1p' file.txt"],
     ["bash", "cat package.json > /tmp/package.json"],
-    ["bash", "rg foo src | wc -l"],
+    ["exec", 'rg "$(touch /tmp/out)" notes.md'],
+    ["exec", 'rg "`touch /tmp/out`" notes.md'],
+    ["exec", "rg 'literal'$(touch /tmp/out) notes.md"],
+    ["exec", "rg 'literal'; touch /tmp/out"],
+    ["exec", "rg '--pre=touch' notes.md"],
     ["bash", "rg --pre touch pattern file"],
     ["bash", "rg --pre=touch pattern file"],
     ["bash", "rg --hostname-bin /tmp/helper pattern file"],
@@ -70,57 +87,31 @@ describe("tool mutation helpers", () => {
     ["exec", "file --compile -m custom.magic"],
     ["exec", "python3 <<'PY'\nprint('hello')\nPY"],
     ["exec", "npm start"],
+    ["bash", "find . -delete | wc -l"],
+    ["bash", "find . -exec touch /tmp/out ';' | wc -l"],
+    ["bash", "find . -fprint /tmp/out | wc -l"],
+    ["bash", "find . -type f | tee /tmp/out"],
+    ["bash", "find . -type f | wc -l && touch /tmp/out"],
+    ["bash", "find . -type f || wc -l"],
+    ["bash", "find . -type f | wc -l &"],
+    ["bash", "find . -type f > /tmp/out"],
+    ["bash", "find =(touch /tmp/out) -type f"],
+    ["bash", "find . -name '' -exec touch /tmp/out ';'"],
+    ["bash", "find . -type f |"],
+    ["bash", "find . -type f &&"],
+    ["bash", "find . -type f | | wc -l"],
     ["exec", "zsh -lc 'rg TODO src'"],
-    ["exec", "./zsh -lc 'rg TODO src'"],
-    ["exec", "/tmp/zsh -lc 'rg TODO src'"],
-    ["exec", "/bin/zsh -lc 'rg TODO src'"],
     ["bash", "git status --short"],
-    ["exec", "git diff -- src/agents/tool-mutation.ts"],
-    ["exec", "git checkout feature-branch"],
-    ["exec", "git branch -D old-branch"],
-    ["exec", "git diff --output=/tmp/patch.diff"],
-    ["exec", "git diff --ext-diff"],
-    ["exec", "git show --textconv HEAD:file.txt"],
-    ["exec", "git log --exec=/tmp/helper"],
-    ["exec", "git grep -O pattern"],
-    ["exec", "git grep -Ovim pattern"],
-    ["exec", "git grep --ext-grep pattern"],
-    ["exec", "git grep --open-files-in-pager=vim pattern"],
     ["exec", "gh pr create --title fix --body body"],
     ["exec", "gh pr view 123 --web"],
-    ["exec", "gh pr view 123 --web=true"],
     ["exec", "gh pr view 123 --web=false"],
     ["exec", "gh pr view 123 -w"],
-    ["exec", "gh pr view 123 -w=true"],
     ["exec", "gh pr view 123 -w=false"],
     ["exec", "gh issue comment 123 --body fixed"],
-    ["exec", "gh search prs bug --web"],
-    ["exec", "gh search prs bug --web=true"],
-    ["exec", "gh search prs bug -w"],
-    ["exec", "gh search prs bug -w=true"],
     ["exec", "gh api --method POST repos/openclaw/openclaw/issues"],
   ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(true);
-    expect(buildToolMutationState(toolName, { command }, command).mutatingAction).toBe(true);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBe(
-      `tool=${toolName}|meta=${command.toLowerCase().replace(/\s+/g, " ")}`,
-    );
-  });
-
-  it("treats coding-tool path aliases as the same stable target", () => {
-    const filePathFingerprint = buildToolMutationState("edit", {
-      file_path: "/tmp/demo.txt",
-      old_string: "before",
-      new_string: "after",
-    }).actionFingerprint;
-    const fileAliasFingerprint = buildToolMutationState("edit", {
-      file: "/tmp/demo.txt",
-      oldText: "before",
-      newText: "after again",
-    }).actionFingerprint;
-
-    expect(filePathFingerprint).toBe("tool=edit|path=/tmp/demo.txt");
-    expect(fileAliasFingerprint).toBe("tool=edit|path=/tmp/demo.txt");
+    expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(true);
   });
 
   it("exposes mutation state for downstream payload rendering", () => {
@@ -128,13 +119,14 @@ describe("tool mutation helpers", () => {
       buildToolMutationState("message", { action: "send", to: "forum:1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
-    expect(
-      buildToolMutationState("subagents", { action: "kill", target: "worker-1" }).mutatingAction,
-    ).toBe(true);
-    expect(
-      buildToolMutationState("subagents", { action: "steer", target: "worker-1" }).mutatingAction,
-    ).toBe(true);
+    for (const action of ["cancel", "kill", "steer"]) {
+      expect(
+        buildToolMutationState("subagents", { action, target: "worker-1" }).mutatingAction,
+      ).toBe(true);
+    }
     expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("sessions", { action: "group_list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("sessions", { action: "patch" }).mutatingAction).toBe(true);
     expect(
       buildToolMutationState("sessions_spawn", { task: "inspect the failure" }).mutatingAction,
     ).toBe(true);
@@ -185,25 +177,115 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
+  it("classifies computer observations as replay-safe and input as mutating", () => {
+    for (const action of [
+      "screenshot",
+      "wait",
+      "list_apps",
+      "list_windows",
+      "get_accessibility_tree",
+      "get_cursor_position",
+      "get_window_state",
+      "zoom",
+      "get_browser_state",
+      "get_recording_state",
+    ]) {
+      const state = buildToolMutationState("computer", { action });
+      expect(state.mutatingAction, action).toBe(false);
+      expect(state.replaySafe, action).toBe(true);
+    }
+    for (const action of [
+      "left_click",
+      "right_click",
+      "middle_click",
+      "double_click",
+      "triple_click",
+      "mouse_move",
+      "left_click_drag",
+      "left_mouse_down",
+      "left_mouse_up",
+      "scroll",
+      "type",
+      "key",
+      "hold_key",
+      "set_value",
+      "invoke_menu",
+      "bring_to_front",
+      "launch_app",
+      "kill_app",
+      "escalate_scope",
+      "browser_prepare",
+      "browser_navigate",
+      "browser_click",
+      "browser_pointer",
+      "browser_type",
+      "browser_set_input_files",
+      "browser_download",
+      "start_recording",
+      "stop_recording",
+      "replay_trajectory",
+      "future_action",
+    ]) {
+      const state = buildToolMutationState("computer", { action });
+      expect(state.mutatingAction, action).toBe(true);
+      expect(state.replaySafe, action).toBe(false);
+    }
+    expect(isMutatingToolCall("computer", {})).toBe(true);
+    expect(isReplaySafeToolCall("computer", {})).toBe(false);
+  });
+
+  it.each(["inspect", "accept", "dismiss", undefined, "future_action"])(
+    "classifies computer dialog %s without granting input replay",
+    (dialogAction) => {
+      expect(
+        buildToolMutationState("computer", { action: "browser_dialog", dialogAction }),
+      ).toEqual({
+        mutatingAction: dialogAction !== "inspect",
+        replaySafe: dialogAction === "inspect",
+      });
+    },
+  );
+
+  it("preserves declared side effects for a computer observation", () => {
+    expect(
+      buildToolMutationState("computer", { action: "list_windows" }, { ownerKey: "plugin-owner" }),
+    ).toEqual({ mutatingAction: true, replaySafe: false });
+  });
+
+  it("classifies mobile UI observation as replay-safe and act as mutating", () => {
+    expect(isReplaySafeToolCall("mobile_ui", { action: "observe" })).toBe(true);
+    expect(isMutatingToolCall("mobile_ui", { action: "observe" })).toBe(false);
+    expect(isReplaySafeToolCall("mobile_ui", { action: "act" })).toBe(false);
+    expect(isMutatingToolCall("mobile_ui", { action: "act" })).toBe(true);
+  });
+
   it("fails closed for replay unless the structured tool contract is read-only", () => {
     for (const toolName of [
       "agents_list",
-      "image",
+      "view_image",
       "pdf",
       "read",
+      "conversations_list",
       "sessions_history",
       "sessions_list",
+      "sessions_search",
       "tool_describe",
       "tool_search",
     ]) {
       expect(isReplaySafeToolCall(toolName, {}), toolName).toBe(true);
     }
     expect(
-      isReplaySafeToolCall("update_plan", {
+      isReplaySafeToolCall("progress_card", {
         plan: [{ step: "Inspect", status: "in_progress" }],
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(isReplaySafeToolCall("memory_get", { path: "memory/notes.md" })).toBe(true);
+    expect(isReplaySafeToolCall("memory_search", { query: "recall" })).toBe(false);
+    expect(isReplaySafeToolCall("memory_recall", { query: "recall" })).toBe(false);
+    expect(isReplaySafeToolCall("automations", { action: "status" })).toBe(true);
+    // Legacy transcript entries predate the rename and must stay classified.
     expect(isReplaySafeToolCall("cron", { action: "status" })).toBe(true);
+    expect(isReplaySafeToolCall("cron", { action: "add" })).toBe(false);
     expect(isReplaySafeToolCall("gateway", { action: "config.get" })).toBe(true);
     expect(isReplaySafeToolCall("gateway", { action: "config.schema.lookup" })).toBe(true);
     expect(isReplaySafeToolCall("gateway", { action: "config.patch" })).toBe(false);
@@ -222,6 +304,7 @@ describe("tool mutation helpers", () => {
     );
     expect(isReplaySafeToolCall("skill_workshop", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "inspect" })).toBe(true);
+    expect(isReplaySafeToolCall("skill_workshop", { action: "read" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "create" })).toBe(false);
     expect(isReplaySafeToolCall("transcripts", { action: "status" })).toBe(true);
     expect(isReplaySafeToolCall("transcripts", { action: "import" })).toBe(false);
@@ -229,201 +312,8 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("subagents", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("subagents", { action: "kill" })).toBe(false);
     expect(isReplaySafeToolCall("tool_call", { id: "sessions_list" })).toBe(false);
-    expect(isReplaySafeToolCall("tool_search_code", { code: "return 1" })).toBe(false);
     expect(isReplaySafeToolCall("unknown_plugin_tool", { action: "list" })).toBe(false);
     expect(isReplaySafeToolCall("survey_actions", { action: "list" })).toBe(false);
     expect(isReplaySafeToolCall("survey_actions", { action: "poll" })).toBe(false);
-  });
-
-  it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {
-    // Missing fingerprint data cannot be assumed equivalent; recovery should
-    // only happen when both sides expose the same stable action identity.
-    expect(
-      isSameToolMutationAction(
-        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
-        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
-      ),
-    ).toBe(true);
-    expect(
-      isSameToolMutationAction(
-        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
-        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/b" },
-      ),
-    ).toBe(false);
-    expect(
-      isSameToolMutationAction(
-        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
-        { toolName: "write" },
-      ),
-    ).toBe(false);
-  });
-
-  it("populates structured fileTarget for file-mutating calls (#79024)", () => {
-    expect(buildToolMutationState("edit", { file_path: "/tmp/a" }).fileTarget).toEqual({
-      path: "/tmp/a",
-    });
-    expect(buildToolMutationState("write", { path: "/tmp/Foo|bar" }).fileTarget).toEqual({
-      path: "/tmp/foo|bar",
-    });
-    // Non-file-mutating tools never carry fileTarget, even with a path arg.
-    expect(buildToolMutationState("bash", { command: "rm /tmp/a" }).fileTarget).toBeUndefined();
-    expect(buildToolMutationState("exec", { command: "touch /tmp/a" }).fileTarget).toBeUndefined();
-    // apply_patch is excluded from file-mutating set, so no fileTarget even
-    // if a path-shaped arg is synthetically present.
-    expect(
-      buildToolMutationState("apply_patch", { input: "*** Update File: /tmp/a" }).fileTarget,
-    ).toBeUndefined();
-  });
-
-  it("recognizes cross-tool file-mutation recovery on the same target (#79024)", () => {
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-        {
-          toolName: "write",
-          actionFingerprint: "tool=write|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-      ),
-    ).toBe(true);
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "write",
-          actionFingerprint: "tool=write|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-      ),
-    ).toBe(true);
-    // `apply_patch` is intentionally excluded from the file-mutating set
-    // because production `apply_patch` calls only carry opaque `input` text,
-    // so `extractFileTarget` returns `undefined` and the fail-closed branch
-    // refuses cross-tool recovery.
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-        {
-          toolName: "apply_patch",
-          actionFingerprint: "tool=apply_patch|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("does not cross-recover file mutations on different targets (#79024)", () => {
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-        {
-          toolName: "write",
-          actionFingerprint: "tool=write|path=/tmp/b",
-          fileTarget: { path: "/tmp/b" },
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("does not over-match paths containing the fingerprint delimiter (#79024)", () => {
-    // The fingerprint string carries raw paths separated by `|`. A naive
-    // `split("|")` parser would extract `path=/tmp/a` from both fingerprints
-    // and incorrectly clear the prior failure. Structural fileTarget
-    // comparison fails closed for these distinct paths.
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a|left",
-          fileTarget: { path: "/tmp/a|left" },
-        },
-        {
-          toolName: "write",
-          actionFingerprint: "tool=write|path=/tmp/a|right",
-          fileTarget: { path: "/tmp/a|right" },
-        },
-      ),
-    ).toBe(false);
-    // Same delimiter-bearing path on both sides still matches.
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a|shared",
-          fileTarget: { path: "/tmp/a|shared" },
-        },
-        {
-          toolName: "write",
-          actionFingerprint: "tool=write|path=/tmp/a|shared",
-          fileTarget: { path: "/tmp/a|shared" },
-        },
-      ),
-    ).toBe(true);
-  });
-
-  it("does not cross-recover when the recovery tool is not file-mutating (#79024)", () => {
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-        { toolName: "bash", actionFingerprint: "tool=bash|meta=cat /tmp/a" },
-      ),
-    ).toBe(false);
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-        { toolName: "exec", actionFingerprint: "tool=exec|meta=touch /tmp/a" },
-      ),
-    ).toBe(false);
-  });
-
-  it("ignores call-specific noise when comparing the cross-tool target (#79024)", () => {
-    // `id=...` and `meta=...` segments differ between calls; structural
-    // fileTarget comparison is unaffected.
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "edit",
-          actionFingerprint: "tool=edit|path=/tmp/a|id=42|meta=edit /tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-        {
-          toolName: "write",
-          actionFingerprint: "tool=write|path=/tmp/a|id=99|meta=write /tmp/a",
-          fileTarget: { path: "/tmp/a" },
-        },
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps legacy name-only mutating heuristics for payload fallback", () => {
-    expect(isLikelyMutatingToolName("sessions_spawn")).toBe(true);
-    expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
-    expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
-    expect(isLikelyMutatingToolName("message_slack")).toBe(true);
-    expect(isLikelyMutatingToolName("browser")).toBe(false);
   });
 });

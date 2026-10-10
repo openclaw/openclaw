@@ -1,12 +1,19 @@
-// Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
-// body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { z } from "zod";
+import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import {
+  clearHttpResponseRepresentationHeaders,
+  sendHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import type { GatewayAuthResult } from "./auth.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
+import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
 
 /**
  * Apply baseline security headers that are safe for all response types (API JSON,
@@ -16,14 +23,44 @@ import { readJsonBody } from "./hooks.js";
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
-  opts?: { strictTransportSecurity?: string },
+  opts?: { strictTransportSecurity?: string | false },
 ) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
-  const strictTransportSecurity = opts?.strictTransportSecurity;
+  const strictTransportSecurity =
+    typeof opts?.strictTransportSecurity === "string"
+      ? opts.strictTransportSecurity.trim()
+      : undefined;
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
+  }
+}
+
+/** Prepare an unsent error response; committed responses can only be closed. */
+export function prepareGatewayHttpErrorResponse(
+  res: ServerResponse,
+  statusMessage: string,
+): boolean {
+  if (res.destroyed || res.writableEnded) {
+    return false;
+  }
+  if (res.headersSent) {
+    // Ending would frame a partial chunked body as a complete successful response.
+    res.destroy();
+    return false;
+  }
+  clearHttpResponseRepresentationHeaders(res);
+  res.removeHeader("Content-Length");
+  res.setHeader("Cache-Control", "no-store");
+  res.statusMessage = statusMessage;
+  return true;
+}
+
+/** Finish a failed request without rewriting committed headers or orphaning its transport. */
+export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
+  if (prepareGatewayHttpErrorResponse(res, "Internal Server Error")) {
+    respondPlainText(res, 500, res.statusMessage);
   }
 }
 
@@ -33,18 +70,16 @@ export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-export function sendText(res: ServerResponse, status: number, body: string) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end(body);
-}
-
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
-  sendText(res, 405, "Method Not Allowed");
+  respondPlainText(res, 405, "Method Not Allowed");
 }
 
 export function sendUnauthorized(res: ServerResponse) {
+  if (!prepareGatewayHttpErrorResponse(res, "Unauthorized")) {
+    return;
+  }
+  res.removeHeader("Set-Cookie");
   sendJson(res, 401, {
     error: { message: "Unauthorized", type: "unauthorized" },
   });
@@ -67,6 +102,16 @@ export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayA
     sendRateLimited(res, authResult.retryAfterMs);
     return;
   }
+  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    sendJson(res, 403, {
+      error: {
+        message:
+          "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    return;
+  }
   sendUnauthorized(res);
 }
 
@@ -76,18 +121,39 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
-export function buildMissingScopeForbiddenBody(missingScope: string | undefined) {
-  return {
+export function parseGatewayJsonRequest<T extends z.ZodType>(
+  res: ServerResponse,
+  body: unknown,
+  schema: T,
+): z.output<T> | undefined {
+  const parsed = schema.safeParse(body);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const issue = parsed.error.issues[0];
+  sendInvalidRequest(
+    res,
+    issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body",
+  );
+  return undefined;
+}
+
+export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
+  const details =
+    typeof missingScope === "string" && missingScope.length > 0
+      ? buildMissingScopeErrorDetails({
+          missingScope,
+          requiredScopes: [missingScope],
+        })
+      : undefined;
+  sendJson(res, 403, {
     ok: false,
     error: {
       type: "forbidden",
       message: `missing scope: ${missingScope}`,
+      ...(details ? { details } : {}),
     },
-  };
-}
-
-export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
-  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope));
+  });
 }
 
 export async function readJsonBodyOrError(
@@ -105,15 +171,21 @@ export async function readJsonBodyOrError(
         reason: "json_body_limit",
         ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
-      sendJson(res, 413, {
-        error: { message: "Payload too large", type: "invalid_request_error" },
-      });
-      return undefined;
     }
-    if (body.error === "request body timeout") {
-      sendJson(res, 408, {
-        error: { message: "Request body timeout", type: "invalid_request_error" },
-      });
+    if (body.error === "payload too large" || body.error === "request body timeout") {
+      const tooLarge = body.error === "payload too large";
+      await sendHttpRequestRejection(
+        req,
+        res,
+        tooLarge ? 413 : 408,
+        JSON.stringify({
+          error: {
+            message: tooLarge ? "Payload too large" : "Request body timeout",
+            type: "invalid_request_error",
+          },
+        }),
+        "application/json; charset=utf-8",
+      );
       return undefined;
     }
     sendInvalidRequest(res, body.error);
@@ -126,12 +198,39 @@ export function writeDone(res: ServerResponse) {
   res.write("data: [DONE]\n\n");
 }
 
+export const SSE_CONTENT_TYPE = "text/event-stream; charset=utf-8";
+
 export function setSseHeaders(res: ServerResponse) {
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Content-Type", SSE_CONTENT_TYPE);
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
+}
+
+/** Deferred delivery retains request admission independently of agent settlement. */
+export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const release = () => {
+    res.off("finish", release);
+    res.off("close", release);
+    releaseRootWork?.();
+  };
+  res.once("finish", release);
+  res.once("close", release);
+  // Input preparation can outlive a response that already closed or finished.
+  if (res.destroyed || res.writableFinished) {
+    release();
+  }
+  return release;
+}
+
+/** Abort reason used when the HTTP client disconnects before delivery. */
+class ClientDisconnectError extends Error {
+  constructor() {
+    super("HTTP client disconnected");
+    this.name = "ClientDisconnectError";
+  }
 }
 
 export function watchClientDisconnect(
@@ -147,21 +246,53 @@ export function watchClientDisconnect(
       ),
     ),
   );
-  if (sockets.length === 0) {
-    return () => {};
-  }
-  const handleClose = () => {
-    onDisconnect?.();
-    if (!abortController.signal.aborted) {
-      abortController.abort();
-    }
-  };
-  for (const socket of sockets) {
-    socket.on("close", handleClose);
-  }
-  return () => {
+  const stopWatchingDisconnect = () => {
     for (const socket of sockets) {
       socket.off("close", handleClose);
     }
+    res.off("finish", stopWatchingDisconnect);
   };
+  const handleClose = () => {
+    stopWatchingDisconnect();
+    onDisconnect?.();
+    if (!abortController.signal.aborted) {
+      abortController.abort(new ClientDisconnectError());
+    }
+  };
+  const handleResponseClose = () => {
+    res.off("error", handleClose);
+    if (!res.writableFinished) {
+      handleClose();
+      return;
+    }
+    stopWatchingDisconnect();
+  };
+  // Completed responses release socket watchers; keep response errors handled
+  // until close so a failed flush cannot become process-fatal. Some compatible
+  // runtimes publish only the response close when a client disconnects.
+  res.on("error", handleClose);
+  res.once("close", handleResponseClose);
+  res.once("finish", stopWatchingDisconnect);
+  if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
+    handleClose();
+    return () => {};
+  }
+  for (const socket of sockets) {
+    socket.on("close", handleClose);
+  }
+  return stopWatchingDisconnect;
+}
+
+export function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
+  const headerContains = (value: string | readonly string[] | undefined, token: string) =>
+    (typeof value === "string" ? [value] : (value ?? [])).some((entry) =>
+      entry
+        .toLowerCase()
+        .split(",")
+        .some((part) => part.trim() === token),
+    );
+  return (
+    headerContains(req.headers.upgrade, "websocket") &&
+    headerContains(req.headers.connection, "upgrade")
+  );
 }

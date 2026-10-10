@@ -2,16 +2,9 @@
 type TraceDetails = Record<string, boolean | number | string | undefined>;
 
 /** Checks the opt-in plugin lifecycle tracing environment flag. */
-function isPluginLifecycleTraceEnabled(): boolean {
+export function isPluginLifecycleTraceEnabled(): boolean {
   const raw = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
-}
-
-function formatTraceValue(value: boolean | number | string): string {
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return JSON.stringify(value);
 }
 
 function emitPluginLifecycleTrace(params: {
@@ -23,7 +16,7 @@ function emitPluginLifecycleTrace(params: {
   const elapsedMs = Number(process.hrtime.bigint() - params.start) / 1_000_000;
   const detailText = Object.entries(params.details ?? {})
     .filter((entry): entry is [string, boolean | number | string] => entry[1] !== undefined)
-    .map(([key, value]) => `${key}=${formatTraceValue(value)}`)
+    .map(([key, value]) => `${key}=${typeof value === "string" ? JSON.stringify(value) : value}`)
     .join(" ");
   const suffix = detailText ? ` ${detailText}` : "";
   console.error(
@@ -41,16 +34,13 @@ export function tracePluginLifecyclePhase<T>(
     return fn();
   }
   const start = process.hrtime.bigint();
-  let status: "error" | "ok" | undefined;
+  let status: "error" | "ok" = "error";
   try {
     const result = fn();
     status = "ok";
     return result;
-  } catch (error) {
-    status = "error";
-    throw error;
   } finally {
-    emitPluginLifecycleTrace({ phase, start, status: status ?? "error", details });
+    emitPluginLifecycleTrace({ phase, start, status, details });
   }
 }
 
@@ -64,15 +54,12 @@ export async function tracePluginLifecyclePhaseAsync<T>(
     return fn();
   }
   const start = process.hrtime.bigint();
-  let status: "error" | "ok" | undefined;
+  let status: "error" | "ok" = "error";
   try {
     const result = await fn();
     status = "ok";
     return result;
-  } catch (error) {
-    status = "error";
-    throw error;
   } finally {
-    emitPluginLifecycleTrace({ phase, start, status: status ?? "error", details });
+    emitPluginLifecycleTrace({ phase, start, status, details });
   }
 }

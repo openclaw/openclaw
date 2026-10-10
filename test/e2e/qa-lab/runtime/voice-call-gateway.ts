@@ -1,0 +1,583 @@
+// QA Lab producer exercises Voice Call CLI, Gateway RPC/tool, webhook, and realtime consult.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { WebSocket } from "ws";
+import {
+  QA_EVIDENCE_FILENAME,
+  type QaEvidenceSummaryJson,
+} from "../../../../extensions/qa-lab/src/evidence-summary.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
+import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
+import { getFreePort } from "../../../../src/test-utils/ports.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../helpers/fixture-receipts.js";
+import { withinTest } from "../../../helpers/promise.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+
+const FIXTURE_PLUGIN_ID = "qa-voice-call-runtime";
+const FIXTURE_REALTIME_PROVIDER_ID = "qa-voice-call-realtime";
+const SOURCE_PATH = "test/e2e/qa-lab/runtime/voice-call-gateway.ts";
+
+type ProducerOptions = {
+  artifactBase: string;
+  repoRoot: string;
+};
+
+type ProofResult = {
+  details?: string;
+  durationMs: number;
+  status: QaScriptEvidenceStatus;
+};
+
+function parseOptions(argv: readonly string[]): ProducerOptions {
+  const readValue = (name: string) => {
+    const index = argv.indexOf(name);
+    return index >= 0 ? argv[index + 1] : undefined;
+  };
+  const artifactBase = readValue("--artifact-base");
+  if (!artifactBase) {
+    throw new Error("--artifact-base is required");
+  }
+  return {
+    artifactBase: path.resolve(artifactBase),
+    repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
+  };
+}
+
+async function createFixturePlugin(repoRoot: string, outputRoot: string, receiptEndpoint: string) {
+  const sourceDir = path.join(
+    repoRoot,
+    "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin",
+  );
+  const pluginDir = path.join(outputRoot, "plugin");
+  await fs.mkdir(pluginDir);
+  await Promise.all([
+    fs.copyFile(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      path.join(pluginDir, "openclaw.plugin.json"),
+    ),
+    fs.copyFile(path.join(sourceDir, "index.js"), path.join(pluginDir, "fixture.mjs")),
+    fs.writeFile(
+      path.join(pluginDir, "index.mjs"),
+      `import fixturePlugin from "./fixture.mjs";
+${fixtureReceiptClientSource(receiptEndpoint)}
+export default {
+  ...fixturePlugin,
+  register(api) { fixturePlugin.register(api, sendReceipt); },
+};\n`,
+    ),
+  ]);
+  return {
+    pluginDir,
+    bridgeCallsPath: path.join(outputRoot, "bridge-calls.jsonl"),
+    toolResultsPath: path.join(outputRoot, "tool-results.jsonl"),
+  };
+}
+
+function withVoiceCallConfig(params: {
+  config: OpenClawConfig;
+  pluginDir: string;
+  servePort: number;
+}): OpenClawConfig {
+  const config = params.config;
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      enabled: true,
+      allow: [...new Set([...(config.plugins?.allow ?? []), "voice-call", FIXTURE_PLUGIN_ID])],
+      load: {
+        ...config.plugins?.load,
+        paths: [...new Set([...(config.plugins?.load?.paths ?? []), params.pluginDir])],
+      },
+      entries: {
+        ...config.plugins?.entries,
+        "voice-call": {
+          enabled: true,
+          config: {
+            enabled: true,
+            provider: "mock",
+            responseModel: "mock-openai/gpt-5.6-luna",
+            inboundPolicy: "open",
+            maxConcurrentCalls: 4,
+            serve: { port: params.servePort, bind: "127.0.0.1", path: "/voice/webhook" },
+            realtime: {
+              enabled: true,
+              provider: FIXTURE_REALTIME_PROVIDER_ID,
+              streamPath: "/voice/stream/realtime",
+              toolPolicy: "safe-read-only",
+              consultPolicy: "auto",
+              providers: { [FIXTURE_REALTIME_PROVIDER_ID]: {} },
+            },
+          },
+        },
+        [FIXTURE_PLUGIN_ID]: { enabled: true },
+      },
+    },
+  };
+}
+
+function findStringByKey(value: unknown, key: string): string | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findStringByKey(entry, key);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record[key] === "string") {
+    return record[key];
+  }
+  for (const entry of Object.values(record)) {
+    const found = findStringByKey(entry, key);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+async function waitForFinalToolResult(params: {
+  filePath: string;
+  bridgeCallsPath: string;
+  streamUrl: string;
+  mediaStream: WebSocket;
+  signal: AbortSignal;
+  receipts: FixtureReceiptChannel;
+  gatewayLogs: () => string;
+}) {
+  let latestEntries: Array<Record<string, unknown>> = [];
+  for (let count = 1; ; count += 1) {
+    let ended = false;
+    try {
+      await withinTest(
+        params.receipts.waitFor(params.filePath, "tool result appended", count),
+        params.signal,
+      );
+    } catch (error) {
+      if (!params.signal.aborted) {
+        throw error;
+      }
+      ended = true;
+    }
+    // The fixture appends before reporting. Socket closure can overtake receipt delivery,
+    // so the durable record still decides whether the consult completed.
+    const raw = await fs.readFile(params.filePath, "utf8").catch(() => "");
+    const entries = raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    latestEntries = entries;
+    const final = entries.find(
+      (entry) =>
+        entry.callId === "qa-consult-call" &&
+        entry.options === undefined &&
+        entry.result &&
+        typeof entry.result === "object" &&
+        !Object.hasOwn(entry.result, "status"),
+    );
+    if (final) {
+      return { entries, final };
+    }
+    if (ended) {
+      break;
+    }
+  }
+  const bridgeCalls = await fs.readFile(params.bridgeCallsPath, "utf8").catch(() => "");
+  throw new Error(
+    `timed out waiting for final Voice Call consult tool result; streamUrl=${params.streamUrl}; websocketState=${params.mediaStream.readyState}; bridgeCalls=${bridgeCalls}; entries=${JSON.stringify(latestEntries)}\n${params.gatewayLogs()}`,
+  );
+}
+
+async function openRealtimeMediaStream(params: {
+  providerCallId: string;
+  servePort: number;
+  streamUrl: string;
+}) {
+  const issuedStreamUrl = new URL(params.streamUrl);
+  const streamPath = `${issuedStreamUrl.pathname}${issuedStreamUrl.search}`;
+  const ws = new WebSocket(`ws://127.0.0.1:${params.servePort}${streamPath}`);
+  const lifetime = new AbortController();
+  const onEnd = () => {
+    ws.off("close", onEnd);
+    ws.off("error", onEnd);
+    lifetime.abort(new Error("Voice Call realtime media stream ended"));
+  };
+  ws.once("close", onEnd);
+  ws.once("error", onEnd);
+  await new Promise<void>((resolve, reject) => {
+    ws.once("open", resolve);
+    ws.once("error", reject);
+  });
+  ws.send(
+    JSON.stringify({
+      event: "start",
+      start: { streamSid: "MZ-qa-voice-call", callSid: params.providerCallId },
+    }),
+  );
+  return { socket: ws, signal: lifetime.signal };
+}
+
+async function postMockVoiceEvents(
+  servePort: number,
+  events: Array<Record<string, unknown>>,
+): Promise<void> {
+  const response = await fetch(`http://127.0.0.1:${servePort}/voice/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ events }),
+  });
+  if (!response.ok) {
+    throw new Error(`mock voice webhook returned ${response.status}: ${await response.text()}`);
+  }
+}
+
+async function waitForMockRequest(
+  mockBaseUrl: string,
+  marker: string,
+  gatewayLogs: () => string,
+): Promise<{ allInputText: string; instructions: string; requestCount: number }> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const requests = (await fetch(`${mockBaseUrl}/debug/requests`).then((response) =>
+      response.json(),
+    )) as Array<{ allInputText?: string; instructions?: string }>;
+    const request = requests.findLast((entry) => entry.allInputText?.includes(marker));
+    if (request) {
+      return {
+        allInputText: request.allInputText ?? "",
+        instructions: request.instructions ?? "",
+        requestCount: requests.length,
+      };
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+  }
+  throw new Error(
+    `timed out waiting for mock provider request containing ${marker}\n${gatewayLogs()}`,
+  );
+}
+
+function countOccurrences(text: string, marker: string): number {
+  return text.split(marker).length - 1;
+}
+
+async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-gateway-"));
+  const mock = await startQaMockOpenAiServer();
+  const servePort = await getFreePort();
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
+  let mediaStream: WebSocket | undefined;
+  let receipts: FixtureReceiptChannel | undefined;
+  try {
+    receipts = await openFixtureReceiptChannel();
+    const fixture = await createFixturePlugin(options.repoRoot, fixtureRoot, receipts.endpoint);
+    gateway = await gatewayOwner.start({
+      repoRoot: options.repoRoot,
+      useRepoCli: true,
+      providerBaseUrl: `${mock.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      enabledPluginIds: ["voice-call"],
+      runtimeEnvPatch: {
+        OPENCLAW_QA_VOICE_BRIDGE_CALLS_PATH: fixture.bridgeCallsPath,
+        OPENCLAW_QA_VOICE_TOOL_RESULTS_PATH: fixture.toolResultsPath,
+      },
+      mutateConfig: (config) =>
+        withVoiceCallConfig({ config, pluginDir: fixture.pluginDir, servePort }),
+    });
+    const cliOutput = await gateway.runCli([
+      "voicecall",
+      "start",
+      "--to",
+      "+15550001111",
+      "--message",
+      "CLI fixture",
+      "--mode",
+      "conversation",
+    ]);
+    const cliCallId = findStringByKey(JSON.parse(cliOutput), "callId");
+    if (!cliCallId) {
+      throw new Error(`Voice Call CLI did not return a callId: ${cliOutput}`);
+    }
+    const rpc = await gateway.call("voicecall.initiate", {
+      to: "+15550002222",
+      message: "Gateway RPC fixture",
+      mode: "conversation",
+      sessionKey: "agent:qa:voice-rpc",
+    });
+    const rpcCallId = findStringByKey(rpc, "callId");
+    if (!rpcCallId) {
+      throw new Error(`voicecall.initiate did not return a callId: ${JSON.stringify(rpc)}`);
+    }
+    const tool = await gateway.call("tools.invoke", {
+      name: "voice_call",
+      sessionKey: "agent:qa:requester",
+      args: {
+        action: "initiate_call",
+        to: "+15550003333",
+        message: "Agent tool fixture",
+        mode: "conversation",
+        sessionKey: "agent:qa:voice-consult",
+      },
+    });
+    const toolCallId = findStringByKey(tool, "callId");
+    if (!toolCallId) {
+      throw new Error(`tools.invoke voice_call did not return a callId: ${JSON.stringify(tool)}`);
+    }
+    const status = (await gateway.call("voicecall.status", {})) as {
+      calls?: Array<{ providerCallId?: string }>;
+    };
+    if (!Array.isArray(status.calls) || status.calls.length !== 3) {
+      throw new Error(
+        `Voice Call status did not report all three calls: ${JSON.stringify(status)}`,
+      );
+    }
+    const providerCallIds = status.calls.map((call) => call.providerCallId);
+    if (providerCallIds.some((callId) => !callId?.startsWith("mock-"))) {
+      throw new Error(
+        `Voice Call entries did not use the mock provider: ${JSON.stringify(status)}`,
+      );
+    }
+    const stream = (await gateway.call("qa.voiceCall.streamSession", {
+      callId: toolCallId,
+    })) as { providerCallId?: string; streamUrl?: string };
+    if (!stream.providerCallId || !stream.streamUrl) {
+      throw new Error(`Voice Call stream issuer returned invalid data: ${JSON.stringify(stream)}`);
+    }
+    const classicCallId = providerCallIds[0];
+    if (!classicCallId) {
+      throw new Error("Voice Call status omitted the CLI-created provider call id");
+    }
+    const openingMarker = "VOICE-OPENING-CANARY-42";
+    const firstMarker = "VOICE-CLASSIC-FIRST-42";
+    const secondMarker = "VOICE-CLASSIC-SECOND-42";
+    await postMockVoiceEvents(servePort, [
+      {
+        id: "qa-classic-opening",
+        type: "call.assistant-speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now(),
+        transcript: `Welcome. Opening marker: ${openingMarker}`,
+      },
+      {
+        id: "qa-classic-first",
+        type: "call.speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now() + 1,
+        transcript: `Reply with exact marker: \`${firstMarker}\``,
+        isFinal: true,
+      },
+    ]);
+    const firstClassicRequest = await waitForMockRequest(mock.baseUrl, firstMarker, gateway.logs);
+    if (!firstClassicRequest.allInputText.includes("[Audible call-opening context]")) {
+      throw new Error("first classic turn omitted its audible opening context");
+    }
+    for (const marker of [openingMarker, firstMarker]) {
+      if (firstClassicRequest.instructions.includes(marker)) {
+        throw new Error(`classic voice data reached system instructions: ${marker}`);
+      }
+    }
+
+    await postMockVoiceEvents(servePort, [
+      {
+        id: "qa-classic-second",
+        type: "call.speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now() + 3,
+        transcript: `Reply with exact marker: \`${secondMarker}\``,
+        isFinal: true,
+      },
+    ]);
+    const secondClassicRequest = await waitForMockRequest(mock.baseUrl, secondMarker, gateway.logs);
+    if (countOccurrences(secondClassicRequest.allInputText, firstMarker) !== 1) {
+      throw new Error("classic voice history duplicated the first caller turn");
+    }
+    if (countOccurrences(secondClassicRequest.allInputText, secondMarker) !== 1) {
+      throw new Error("classic voice history duplicated the current caller turn");
+    }
+    if (secondClassicRequest.allInputText.includes("[Voice-call transcript context]")) {
+      throw new Error("classic voice replayed a cumulative transcript envelope");
+    }
+    for (const marker of [openingMarker, firstMarker, secondMarker]) {
+      if (secondClassicRequest.instructions.includes(marker)) {
+        throw new Error(`classic voice data reached system instructions: ${marker}`);
+      }
+    }
+
+    await postMockVoiceEvents(servePort, [
+      {
+        id: "qa-classic-blank",
+        type: "call.speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now() + 4,
+        transcript: "  \t\n",
+        isFinal: true,
+      },
+    ]);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
+    const requestCountAfterBlank = (
+      (await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
+        response.json(),
+      )) as unknown[]
+    ).length;
+    if (requestCountAfterBlank !== secondClassicRequest.requestCount) {
+      throw new Error("blank final speech created an agent turn");
+    }
+    const realtime = await openRealtimeMediaStream({
+      providerCallId: stream.providerCallId,
+      servePort,
+      streamUrl: stream.streamUrl,
+    });
+    mediaStream = realtime.socket;
+    const toolResults = await waitForFinalToolResult({
+      filePath: fixture.toolResultsPath,
+      bridgeCallsPath: fixture.bridgeCallsPath,
+      streamUrl: stream.streamUrl,
+      mediaStream,
+      signal: realtime.signal,
+      receipts,
+      gatewayLogs: gateway.logs,
+    });
+    const finalToolResult = toolResults.final.result as Record<string, unknown>;
+    if (typeof finalToolResult.error === "string") {
+      throw new Error(`embedded consult failed: ${finalToolResult.error}`);
+    }
+    const bridgeCalls = (await fs.readFile(fixture.bridgeCallsPath, "utf8"))
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { tools?: string[] });
+    if (!bridgeCalls.some((call) => call.tools?.includes("openclaw_agent_consult"))) {
+      throw new Error(
+        `realtime bridge did not expose embedded consult: ${JSON.stringify(bridgeCalls)}`,
+      );
+    }
+    const requests = (await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
+      response.json(),
+    )) as Array<{ allInputText?: string; instructions?: string }>;
+    const consultRequest = requests.find((request) =>
+      request.allInputText?.includes("VOICE-CONSULT-42"),
+    );
+    if (!consultRequest) {
+      throw new Error(
+        `embedded consult request did not include provider context: ${JSON.stringify(requests)}`,
+      );
+    }
+    const promptText = `${consultRequest.instructions ?? ""}\n${consultRequest.allInputText ?? ""}`;
+    for (const marker of [
+      "live phone call",
+      "Caller partial transcript context",
+      "VOICE-CONSULT-42",
+      "Use the embedded agent context",
+    ]) {
+      if (!promptText.includes(marker)) {
+        throw new Error(`embedded consult prompt missed ${marker}: ${promptText}`);
+      }
+    }
+    return `real CLI, voicecall.initiate, and tools.invoke created ${status.calls.length} mock-provider calls; classic two-turn webhook kept caller history exactly once and ignored blank speech; runtime-issued media stream invoked embedded consult with transcript/provider context; tool results=${toolResults.entries.length}`;
+  } finally {
+    if (mediaStream && mediaStream.readyState < WebSocket.CLOSING) {
+      mediaStream.close();
+    }
+    await receipts?.close();
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
+    await mock.stop();
+    await fs.rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
+async function produceProof(options: ProducerOptions): Promise<ProofResult> {
+  const startedAt = Date.now();
+  try {
+    return {
+      details: await runVoiceCallProof(options),
+      durationMs: Math.max(1, Date.now() - startedAt),
+      status: "pass",
+    };
+  } catch (error) {
+    return {
+      details: formatErrorMessage(error),
+      durationMs: Math.max(1, Date.now() - startedAt),
+      status: "fail",
+    };
+  }
+}
+
+async function runVoiceCallGatewayProducer(
+  options: ProducerOptions,
+): Promise<QaEvidenceSummaryJson> {
+  const writer = createQaScriptEvidenceWriter({
+    artifactBase: options.artifactBase,
+    logFileName: "voice-call-cli-rpc-agent-tool.log",
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    providerMode: "mock-openai",
+    repoRoot: options.repoRoot,
+    target: {
+      id: "voice-call-cli-rpc-agent-tool",
+      title: "Voice Call CLI, RPC, and agent tool flow",
+      sourcePath: "qa/scenarios/plugins/voice-call-cli-rpc-agent-tool.yaml",
+      docsRefs: ["docs/cli/voicecall.md", "docs/plugins/voice-call.md"],
+      codeRefs: [
+        SOURCE_PATH,
+        "extensions/voice-call/index.ts",
+        "extensions/voice-call/src/runtime.ts",
+        "extensions/voice-call/src/webhook/realtime-handler.ts",
+      ],
+    },
+  });
+  const result = await produceProof(options);
+  writer.appendLog(`${result.status}: ${result.details ?? "no details"}\n`);
+  return await writer.write(result);
+}
+
+async function main(argv: readonly string[]) {
+  const options = parseOptions(argv);
+  const evidence = await runVoiceCallGatewayProducer(options);
+  const status = evidence.entries[0]?.result.status;
+  console.log(`Voice Call Gateway evidence: ${QA_EVIDENCE_FILENAME}`);
+  console.log(`Voice Call Gateway status: ${status}`);
+  return status === "pass" ? 0 : 1;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main(process.argv.slice(2))
+    .then((exitCode) => {
+      process.exitCode = exitCode;
+    })
+    .catch((error: unknown) => {
+      console.error(formatErrorMessage(error));
+      process.exitCode = 1;
+    });
+}
+
+export const testing = {
+  withVoiceCallConfig,
+};

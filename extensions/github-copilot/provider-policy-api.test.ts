@@ -7,31 +7,9 @@ describe("github-copilot provider-policy-api", () => {
     expect(
       resolveThinkingProfile({
         provider: "github-copilot",
-        modelId: "claude-opus-4.6",
+        modelId: "claude-haiku-4.5",
       })?.levels.map((level) => level.id),
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
-  });
-
-  it("appends xhigh for current static GPT Copilot xhigh ids", () => {
-    for (const modelId of ["gpt-5.4", "gpt-5.3-codex"]) {
-      expect(
-        resolveThinkingProfile({
-          provider: "github-copilot",
-          modelId,
-        })?.levels.map((level) => level.id),
-        `model=${modelId}`,
-      ).toContain("xhigh");
-    }
-  });
-
-  it("appends xhigh when catalog compat advertises it", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "github-copilot",
-        modelId: "future-copilot-model",
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-      })?.levels.map((level) => level.id),
-    ).toContain("xhigh");
   });
 
   it("appends max when catalog compat advertises it", () => {
@@ -44,25 +22,44 @@ describe("github-copilot provider-policy-api", () => {
     ).toContain("max");
   });
 
-  it("does not expose max for non-Anthropic Copilot transports", () => {
+  it.each([undefined, null])("does not expose older Claude adaptive effort with api=%s", (api) => {
     expect(
       resolveThinkingProfile({
         provider: "github-copilot",
-        modelId: "future-copilot-model",
+        modelId: "claude-opus-4-5",
+        api,
         compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
       })?.levels.map((level) => level.id),
     ).not.toContain("max");
   });
 
-  it("does not expose adaptive effort for older Claude models", () => {
+  it.each([
+    { supportedReasoningEfforts: ["low", "medium", "high"] },
+    { supportedReasoningEfforts: [] },
+    { supportsReasoningEffort: false, supportedReasoningEfforts: ["xhigh", "max"] },
+  ])("honors explicit catalog limits before static GPT metadata: %j", (compat) => {
     expect(
       resolveThinkingProfile({
         provider: "github-copilot",
-        modelId: "claude-opus-4-5",
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
-      })?.levels.map((level) => level.id),
-    ).not.toContain("max");
+        modelId: "gpt-5.6-luna",
+        compat,
+      })?.levels.map(({ id }) => id),
+    ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });
+
+  it.each(["openai-completions", undefined, null])(
+    "does not expose Gemini max with api=%s",
+    (api) => {
+      expect(
+        resolveThinkingProfile({
+          provider: "github-copilot",
+          modelId: "gemini-3.6-flash",
+          api,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+        })?.levels.map(({ id }) => id),
+      ).not.toContain("max");
+    },
+  );
 
   it("appends xhigh for static Copilot metadata overrides", () => {
     expect(

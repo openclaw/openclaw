@@ -6,6 +6,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuProbeResult } from "./types.js";
 
@@ -41,34 +42,11 @@ vi.mock("./app-registration.js", () => ({
 }));
 
 import { feishuPlugin } from "./channel.js";
+import { setFeishuNamedAccountEnabled } from "./setup-core.js";
 
 const baseStatusContext = {
   accountOverrides: {},
 };
-
-async function withEnvVars(values: Record<string, string | undefined>, run: () => Promise<void>) {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(values)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-
-  try {
-    await run();
-  } finally {
-    for (const [key, prior] of previous.entries()) {
-      if (prior === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = prior;
-      }
-    }
-  }
-}
 
 async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: string }) {
   return await feishuGetStatus({
@@ -94,6 +72,39 @@ afterAll(() => {
 });
 
 describe("feishu setup wizard", () => {
+  it.each(["", " Alert Account ", "default"])(
+    "preserves the exact named-account key %j without enabling the channel",
+    (accountId) => {
+      const result = setFeishuNamedAccountEnabled(
+        {
+          channels: {
+            feishu: {
+              enabled: false,
+              accounts: {
+                [accountId]: { appId: "kept", enabled: false },
+                sibling: { enabled: false },
+              },
+            },
+          },
+        },
+        accountId,
+        true,
+      );
+
+      expect(result).toEqual({
+        channels: {
+          feishu: {
+            enabled: false,
+            accounts: {
+              [accountId]: { appId: "kept", enabled: true },
+              sibling: { enabled: false },
+            },
+          },
+        },
+      });
+    },
+  );
+
   beforeEach(() => {
     probeFeishuMock.mockReset();
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
@@ -152,16 +163,22 @@ describe("feishu setup wizard", () => {
         .mockResolvedValueOnce("lark")
         .mockResolvedValueOnce("open") as never,
     });
+    const beforePersistentEffect = vi.fn(async () => {});
 
     const result = await runSetupWizardConfigure({
       configure: feishuConfigure,
       cfg: {} as never,
       prompter,
       runtime: createNonExitingRuntimeEnv(),
+      options: { beforePersistentEffect },
     });
 
     expect(initAppRegistrationMock).toHaveBeenCalledWith("lark");
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
     expect(beginAppRegistrationMock).toHaveBeenCalledWith("lark");
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      beginAppRegistrationMock.mock.invocationCallOrder[0]!,
+    );
     const [pollOptions] = pollAppRegistrationMock.mock.calls.at(0) ?? [];
     expect(pollOptions?.deviceCode).toBe("device-code");
     expect(pollOptions?.initialDomain).toBe("lark");
@@ -172,6 +189,32 @@ describe("feishu setup wizard", () => {
     expect(feishuConfig?.domain).toBe("lark");
     expect(feishuConfig?.groupPolicy).toBe("open");
     expect(feishuConfig?.requireMention).toBe(true);
+  });
+
+  it("propagates the persistent-effect guard before scan-to-create begins", async () => {
+    initAppRegistrationMock.mockResolvedValueOnce(undefined);
+    const guardError = new Error("verified inference changed");
+    const beforePersistentEffect = vi.fn(async () => {
+      throw guardError;
+    });
+    const prompter = createTestWizardPrompter({
+      select: vi.fn().mockResolvedValueOnce("scan").mockResolvedValueOnce("feishu") as never,
+    });
+
+    await expect(
+      runSetupWizardConfigure({
+        configure: feishuConfigure,
+        cfg: {} as never,
+        prompter,
+        runtime: createNonExitingRuntimeEnv(),
+        options: { beforePersistentEffect },
+      }),
+    ).rejects.toBe(guardError);
+
+    expect(initAppRegistrationMock).toHaveBeenCalledWith("feishu");
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(beginAppRegistrationMock).not.toHaveBeenCalled();
+    expect(pollAppRegistrationMock).not.toHaveBeenCalled();
   });
 
   it("falls back to manual credentials when selected scan-to-create is unavailable", async () => {
@@ -312,16 +355,14 @@ describe("feishu setup wizard status", () => {
   });
 
   it("localizes existing bot setup prompts and status lines", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
-    const confirm = vi.fn(async () => true);
-    const note = vi.fn(async () => {});
-    const prompter = createTestWizardPrompter({
-      confirm,
-      note,
-    });
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
+      const confirm = vi.fn(async () => true);
+      const note = vi.fn(async () => {});
+      const prompter = createTestWizardPrompter({
+        confirm,
+        note,
+      });
 
-    try {
       await runSetupWizardConfigure({
         configure: feishuConfigure,
         cfg: {
@@ -342,45 +383,37 @@ describe("feishu setup wizard status", () => {
         }),
       );
       expect(note).toHaveBeenCalledWith("Bot 已配置。", "");
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("localizes new bot setup prompts and progress", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
-    const note = vi.fn(async () => {});
-    const stop = vi.fn();
-    const progress = vi.fn(() => ({ update: vi.fn(), stop }));
-    const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "你想如何连接 Feishu？") {
-        return "manual";
-      }
-      if (message === "选择 Feishu 域名？") {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
+      const note = vi.fn(async () => {});
+      const stop = vi.fn();
+      const progress = vi.fn(() => ({ update: vi.fn(), stop }));
+      const select = vi.fn(async ({ message }: { message: string }) => {
+        if (message === "你想如何连接 Feishu？") {
+          return "manual";
+        }
+        if (message === "选择 Feishu 域名？") {
+          return "feishu";
+        }
+        if (message === "群聊策略") {
+          return "allowlist";
+        }
         return "feishu";
-      }
-      if (message === "群聊策略") {
-        return "allowlist";
-      }
-      return "feishu";
-    });
-    const text = vi
-      .fn()
-      .mockResolvedValueOnce("cli_from_prompt")
-      .mockResolvedValueOnce("secret_from_prompt");
-    const prompter = createTestWizardPrompter({
-      note,
-      progress,
-      select: select as never,
-      text,
-    });
+      });
+      const text = vi
+        .fn()
+        .mockResolvedValueOnce("cli_from_prompt")
+        .mockResolvedValueOnce("secret_from_prompt");
+      const prompter = createTestWizardPrompter({
+        note,
+        progress,
+        select: select as never,
+        text,
+      });
 
-    try {
       await runSetupWizardConfigure({
         configure: feishuConfigure,
         cfg: {} as never,
@@ -423,13 +456,7 @@ describe("feishu setup wizard status", () => {
       );
       expect(progress).toHaveBeenCalledWith("正在配置...");
       expect(stop).toHaveBeenCalledWith("Bot 已配置。");
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
@@ -456,7 +483,7 @@ describe("feishu setup wizard status", () => {
   it("treats env SecretRef appId as not configured when env var is missing", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
     const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_MISSING_TEST"; // pragma: allowlist secret
-    await withEnvVars(
+    await withEnvAsync(
       {
         [appIdKey]: undefined,
         [appSecretKey]: "env-credential-456", // pragma: allowlist secret
@@ -471,7 +498,7 @@ describe("feishu setup wizard status", () => {
   it("treats env SecretRef appId/appSecret as configured in status", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_TEST";
     const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_TEST"; // pragma: allowlist secret
-    await withEnvVars(
+    await withEnvAsync(
       {
         [appIdKey]: "cli_env_123",
         [appSecretKey]: "env-credential-456", // pragma: allowlist secret

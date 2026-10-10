@@ -1,0 +1,717 @@
+import type { ChildProcess } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
+import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
+
+const PROCESS_BOUNDARY_VERSION = 1;
+const PROCESS_BOUNDARY_START_TIMEOUT_MS = 30_000;
+const PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS = 10_000;
+const PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS = 45_000;
+const PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS = 1_000;
+const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
+const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
+
+export type QaGatewayProcessBoundaryConfig = {
+  kind: "linux-proc-v1";
+  evidenceDir: string;
+  expectedGid: number;
+  expectedUid: number;
+  forwardedEnvKeys: readonly string[];
+  runtimeArgsPrefix: readonly string[];
+  runtimeExecutablePath: string;
+  terminationRetryTimeoutMs: number;
+};
+
+type QaGatewayProcessCommand = {
+  version: 1;
+  generation: string;
+  executable: string;
+  argv: string[];
+  cwdRelative: string;
+  envKeys: string[];
+};
+
+export type QaGatewayVerifiedProcessIdentity = {
+  generation: string;
+  pid: number;
+  procStartTicks: string;
+  pgrp: number;
+  cwd: string;
+  executablePath: string;
+  commandSha256: string;
+  commandFilePath: string;
+  identityFilePath: string;
+  sandboxFilePath: string;
+  preEntryCmdlineSha256: string;
+};
+
+type QaGatewayProcessBoundaryPreparedSpawn = {
+  command: QaGatewayProcessCommand;
+  commandFilePath: string;
+  commandSha256: string;
+  env: NodeJS.ProcessEnv;
+  generation: string;
+  identityFilePath: string;
+  sandboxFilePath: string;
+};
+
+type QaGatewayProcessBoundaryEvidenceLaunch = {
+  generation: string;
+  pid: number;
+  procStartTicks: string;
+  pgrp: number;
+  executablePath: string;
+  preEntryCmdlineSha256: string;
+  commandFile: {
+    path: string;
+    sha256: string;
+  };
+  identityFile: string;
+  sandboxFile: string;
+  acceptedAt: string;
+  readyAt?: string;
+  exitedAt?: string;
+  quiescedAt?: string;
+  terminalState?: "failed-before-ready" | "ready-exited";
+};
+
+function sha256(value: Buffer | string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function compareStrings(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function normalizeEnvKeys(keys: readonly string[]) {
+  const normalized = [...new Set(keys)];
+  for (const key of normalized) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) {
+      throw new Error(`invalid process-boundary environment key: ${key}`);
+    }
+  }
+  return normalized.toSorted();
+}
+
+function parseInteger(value: unknown, label: string, minimum: number) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`invalid ${label}`);
+  }
+  return value;
+}
+
+function parseNonEmptyString(value: unknown, label: string) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`invalid ${label}`);
+  }
+  return value;
+}
+
+function parseSha256(value: unknown, label: string) {
+  const digest = parseNonEmptyString(value, label);
+  if (!/^[a-f0-9]{64}$/.test(digest)) {
+    throw new Error(`invalid ${label}`);
+  }
+  return digest;
+}
+
+function parseQaGatewayProcessHandoff(value: unknown) {
+  if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION) {
+    throw new Error("invalid process-boundary identity");
+  }
+  const commandFile = value.commandFile;
+  if (!isRecord(commandFile)) {
+    throw new Error("invalid process-boundary command file identity");
+  }
+  return {
+    version: PROCESS_BOUNDARY_VERSION,
+    generation: parseNonEmptyString(value.generation, "process-boundary generation"),
+    pid: parseInteger(value.pid, "process-boundary pid", 2),
+    uid: parseInteger(value.uid, "process-boundary uid", 0),
+    gid: parseInteger(value.gid, "process-boundary gid", 0),
+    procStartTicks: parseNonEmptyString(
+      value.procStartTicks,
+      "process-boundary process start ticks",
+    ),
+    pgrp: parseInteger(value.pgrp, "process-boundary process group", 2),
+    commandFile: {
+      path: parseNonEmptyString(commandFile.path, "process-boundary command path"),
+      sha256: parseSha256(commandFile.sha256, "process-boundary command digest"),
+    },
+  };
+}
+
+function parseQaGatewayProcessSandboxProof(value: unknown) {
+  if (
+    !isRecord(value) ||
+    value.version !== PROCESS_BOUNDARY_VERSION ||
+    value.status !== "pass" ||
+    !Array.isArray(value.envKeys) ||
+    !value.envKeys.every((key) => typeof key === "string")
+  ) {
+    throw new Error("invalid process-boundary sandbox proof");
+  }
+  return {
+    version: PROCESS_BOUNDARY_VERSION,
+    generation: parseNonEmptyString(value.generation, "sandbox generation"),
+    status: "pass",
+    envKeys: normalizeEnvKeys(value.envKeys),
+  };
+}
+
+function parseQaGatewayProcessRuntimeProof(value: unknown) {
+  if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION || value.status !== "pass") {
+    throw new Error("invalid process-boundary runtime proof");
+  }
+  const state = parseNonEmptyString(value.state, "runtime state");
+  if (!/^[A-Za-z]$/u.test(state)) {
+    throw new Error("invalid process-boundary runtime state");
+  }
+  return {
+    version: PROCESS_BOUNDARY_VERSION,
+    generation: parseNonEmptyString(value.generation, "runtime generation"),
+    status: "pass",
+    pid: parseInteger(value.pid, "runtime pid", 2),
+    uid: parseInteger(value.uid, "runtime uid", 0),
+    gid: parseInteger(value.gid, "runtime gid", 0),
+    procStartTicks: parseNonEmptyString(value.procStartTicks, "runtime process start ticks"),
+    pgrp: parseInteger(value.pgrp, "runtime process group", 2),
+    state,
+    cwd: parseNonEmptyString(value.cwd, "runtime cwd"),
+    executablePath: parseNonEmptyString(value.executablePath, "runtime executable path"),
+    cmdlineSha256: parseSha256(value.cmdlineSha256, "runtime command line digest"),
+  };
+}
+
+async function assertContainedPath(root: string, target: string, label: string) {
+  const rootPath = await fs.realpath(root);
+  const targetPath = await fs.realpath(target);
+  if (!isPathInside(rootPath, targetPath)) {
+    throw new Error(`${label} escaped its trusted root`);
+  }
+  return targetPath;
+}
+
+async function writeAtomicFile(pathName: string, contents: Buffer | string) {
+  const dirMode = (await fs.stat(path.dirname(pathName))).mode & 0o7777;
+  await replaceFileAtomic({
+    filePath: pathName,
+    content: contents,
+    dirMode,
+    mode: 0o600,
+    tempPrefix: `${path.basename(pathName)}.qa-boundary`,
+    syncParentDir: true,
+    syncTempFile: true,
+  });
+}
+
+async function waitForJsonFile(params: {
+  child: ChildProcess;
+  pathName: string;
+  timeoutMs?: number;
+}) {
+  const deadline = Date.now() + (params.timeoutMs ?? PROCESS_BOUNDARY_START_TIMEOUT_MS);
+  let lastError: unknown;
+  while (Date.now() <= deadline) {
+    if (params.child.exitCode !== null || params.child.signalCode !== null) {
+      throw new Error("process-boundary launcher exited before writing its identity");
+    }
+    try {
+      return JSON.parse(await fs.readFile(params.pathName, "utf8")) as unknown;
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for process-boundary identity: ${String(lastError)}`);
+}
+
+function commandLineBytes(executable: string, argv: readonly string[]) {
+  return Buffer.from(`${[executable, ...argv].join("\0")}\0`);
+}
+
+export async function createQaGatewayProcessBoundaryController(params: {
+  config: QaGatewayProcessBoundaryConfig;
+  launcherPath: string;
+  tempRoot: string;
+}) {
+  if (process.platform !== "linux") {
+    throw new Error("verified QA gateway process boundaries require Linux");
+  }
+  const tempRoot = await fs.realpath(params.tempRoot);
+  const controlDir = path.join(tempRoot, "process-boundary");
+  await fs.mkdir(controlDir, { recursive: true, mode: 0o700 });
+  const evidenceDir = await fs.realpath(params.config.evidenceDir);
+  const evidenceStats = await fs.lstat(evidenceDir);
+  if (!evidenceStats.isDirectory() || evidenceStats.isSymbolicLink()) {
+    throw new Error("process-boundary evidence path is not a trusted directory");
+  }
+  const forwardedEnvKeys = normalizeEnvKeys(params.config.forwardedEnvKeys);
+  const controllerId = randomUUID();
+  const evidencePath = path.join(evidenceDir, `runtime-boundary-${randomUUID()}.json`);
+  const retainCredentialLeasePath = path.join(
+    evidenceDir,
+    `${QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX}${controllerId}.json`,
+  );
+  const launches: QaGatewayProcessBoundaryEvidenceLaunch[] = [];
+  if (
+    !Number.isSafeInteger(params.config.terminationRetryTimeoutMs) ||
+    params.config.terminationRetryTimeoutMs < PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS
+  ) {
+    throw new Error("invalid process-boundary termination retry timeout");
+  }
+
+  async function assertRegularFile(pathName: string, mode: number, label: string) {
+    const stats = await fs.lstat(pathName);
+    if (!stats.isFile() || stats.isSymbolicLink() || (stats.mode & 0o777) !== mode) {
+      throw new Error(`${label} is not a regular mode ${mode.toString(8)} file`);
+    }
+    return await assertContainedPath(controlDir, pathName, label);
+  }
+
+  async function runBoundaryLauncherCommand(
+    args: readonly string[],
+    label: string,
+    timeoutMs: number,
+  ) {
+    // The proxy gets its own process group; the verified SUT identity and its
+    // UID-quiescence checks remain owned by the launcher, never this cleanup.
+    const result = await runQaScenarioCommandLifecycle({
+      command: params.launcherPath,
+      args: [...args],
+      cwd: process.cwd(),
+      timeoutMs,
+      env: {
+        HOME: process.env.HOME,
+        LANG: process.env.LANG ?? "C.UTF-8",
+        PATH: process.env.PATH,
+      },
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `process-boundary ${label} proxy exited ${result.exitCode}${result.stderrTruncated ? " (stderr truncated)" : ""}: ${result.failureMessage ?? result.stderr.trim()}`,
+      );
+    }
+    if (result.stdoutTruncated) {
+      throw new Error(
+        `process-boundary ${label} proxy stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes`,
+      );
+    }
+    return result.stdout;
+  }
+
+  async function runBoundaryVerification(identityFilePath: string, mode: "preentry" | "live") {
+    const output = await runBoundaryLauncherCommand(
+      ["--verify", mode, identityFilePath],
+      `${mode} verification`,
+      PROCESS_BOUNDARY_START_TIMEOUT_MS,
+    );
+    return parseQaGatewayProcessRuntimeProof(JSON.parse(output) as unknown);
+  }
+
+  const writeEvidence = async () => {
+    await writeAtomicFile(
+      evidencePath,
+      `${JSON.stringify(
+        {
+          version: PROCESS_BOUNDARY_VERSION,
+          kind: "qa-gateway-process-boundary",
+          launches,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  };
+
+  const findLaunch = (generation: string) => {
+    const launch = launches.find((candidate) => candidate.generation === generation);
+    if (!launch) {
+      throw new Error(`unknown process-boundary generation: ${generation}`);
+    }
+    return launch;
+  };
+
+  const retainCredentialLease = async () => {
+    await writeAtomicFile(
+      retainCredentialLeasePath,
+      `${JSON.stringify({
+        version: PROCESS_BOUNDARY_VERSION,
+        kind: "qa-gateway-process-boundary-retain-credential-lease",
+        recordedAt: new Date().toISOString(),
+      })}\n`,
+    );
+  };
+
+  const clearCredentialLeaseRetention = async () => {
+    await fs.rm(retainCredentialLeasePath, { force: true });
+  };
+
+  const terminateUidUntilQuiescent = async () => {
+    for (;;) {
+      try {
+        await runBoundaryLauncherCommand(
+          ["--terminate-uid"],
+          "UID termination",
+          PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
+        );
+        return;
+      } catch {
+        await sleep(PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS);
+      }
+    }
+  };
+
+  const terminateWithRetry = async (identityFilePath: string) => {
+    const deadline = Date.now() + params.config.terminationRetryTimeoutMs;
+    let lastError: unknown;
+    while (Date.now() <= deadline) {
+      try {
+        await runBoundaryLauncherCommand(
+          ["--terminate", identityFilePath],
+          "termination",
+          PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
+        );
+        return undefined;
+      } catch (error) {
+        lastError = error;
+      }
+      await sleep(
+        Math.min(PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS, Math.max(0, deadline - Date.now())),
+      );
+    }
+    await terminateUidUntilQuiescent();
+    return new Error("process-boundary cleanup used the isolated UID fallback", {
+      cause: lastError,
+    });
+  };
+
+  const prepare = async (spawnParams: {
+    args: readonly string[];
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+  }): Promise<QaGatewayProcessBoundaryPreparedSpawn> => {
+    const cwd = await fs.realpath(spawnParams.cwd);
+    const cwdRelative = path.relative(tempRoot, cwd) || ".";
+    if (cwdRelative.startsWith("..") || path.isAbsolute(cwdRelative)) {
+      throw new Error("process-boundary runtime cwd escaped the gateway temp root");
+    }
+    const generation = randomUUID();
+    const commandFilePath = path.join(controlDir, `command-${generation}.json`);
+    const identityFilePath = path.join(controlDir, `identity-${generation}.json`);
+    const sandboxFilePath = path.join(controlDir, `sandbox-${generation}.json`);
+    const envKeys = normalizeEnvKeys([
+      ...forwardedEnvKeys.filter((key) => spawnParams.env[key] !== undefined),
+      "OPENCLAW_QA_SUT_PREENTRY_STOP",
+    ]);
+    const command: QaGatewayProcessCommand = {
+      version: PROCESS_BOUNDARY_VERSION,
+      generation,
+      executable: params.config.runtimeExecutablePath,
+      argv: [...params.config.runtimeArgsPrefix, ...spawnParams.args],
+      cwdRelative,
+      envKeys,
+    };
+    const commandBytes = Buffer.from(`${JSON.stringify(command)}\n`);
+    const commandSha256 = sha256(commandBytes);
+    await writeAtomicFile(commandFilePath, commandBytes);
+    await retainCredentialLease();
+    return {
+      command,
+      commandFilePath,
+      commandSha256,
+      env: {
+        ...spawnParams.env,
+        OPENCLAW_QA_SUT_BOUNDARY_COMMAND_FILE: commandFilePath,
+        OPENCLAW_QA_SUT_BOUNDARY_COMMAND_SHA256: commandSha256,
+        OPENCLAW_QA_SUT_BOUNDARY_GENERATION: generation,
+        OPENCLAW_QA_SUT_BOUNDARY_IDENTITY_FILE: identityFilePath,
+        OPENCLAW_QA_SUT_BOUNDARY_SANDBOX_FILE: sandboxFilePath,
+      },
+      generation,
+      identityFilePath,
+      sandboxFilePath,
+    };
+  };
+
+  const accept = async (acceptParams: {
+    child: ChildProcess;
+    prepared: QaGatewayProcessBoundaryPreparedSpawn;
+  }): Promise<QaGatewayVerifiedProcessIdentity> => {
+    const launcherPid = acceptParams.child.pid;
+    if (!launcherPid || launcherPid <= 1) {
+      throw new Error("process-boundary launcher has no valid pid");
+    }
+    const handoff = parseQaGatewayProcessHandoff(
+      await waitForJsonFile({
+        child: acceptParams.child,
+        pathName: acceptParams.prepared.identityFilePath,
+      }),
+    );
+    const sandbox = parseQaGatewayProcessSandboxProof(
+      await waitForJsonFile({
+        child: acceptParams.child,
+        pathName: acceptParams.prepared.sandboxFilePath,
+      }),
+    );
+    if (
+      handoff.generation !== acceptParams.prepared.generation ||
+      sandbox.generation !== acceptParams.prepared.generation
+    ) {
+      throw new Error("process-boundary generation mismatch");
+    }
+    if (handoff.uid !== params.config.expectedUid || handoff.gid !== params.config.expectedGid) {
+      throw new Error("process-boundary runtime uid/gid mismatch");
+    }
+    if (handoff.pgrp !== launcherPid) {
+      throw new Error("process-boundary runtime escaped the launcher process group");
+    }
+    const commandPath = await assertRegularFile(
+      acceptParams.prepared.commandFilePath,
+      0o600,
+      "process-boundary command file",
+    );
+    await assertRegularFile(
+      acceptParams.prepared.identityFilePath,
+      0o640,
+      "process-boundary identity file",
+    );
+    await assertRegularFile(
+      acceptParams.prepared.sandboxFilePath,
+      0o640,
+      "process-boundary sandbox proof",
+    );
+    if (
+      handoff.commandFile.path !== commandPath ||
+      handoff.commandFile.sha256 !== acceptParams.prepared.commandSha256 ||
+      sha256(await fs.readFile(commandPath)) !== acceptParams.prepared.commandSha256
+    ) {
+      throw new Error("process-boundary command digest mismatch");
+    }
+    if (!compareStrings(sandbox.envKeys, acceptParams.prepared.command.envKeys)) {
+      throw new Error("process-boundary runtime environment mismatch");
+    }
+
+    const runtimeProof = await runBoundaryVerification(
+      acceptParams.prepared.identityFilePath,
+      "preentry",
+    );
+    const expectedCwd = path.resolve(tempRoot, acceptParams.prepared.command.cwdRelative);
+    const expectedExecutablePath = await fs.realpath(acceptParams.prepared.command.executable);
+    const expectedCmdlineSha256 = sha256(
+      commandLineBytes(
+        acceptParams.prepared.command.executable,
+        acceptParams.prepared.command.argv,
+      ),
+    );
+    if (
+      runtimeProof.generation !== handoff.generation ||
+      runtimeProof.pid !== handoff.pid ||
+      runtimeProof.uid !== handoff.uid ||
+      runtimeProof.gid !== handoff.gid ||
+      runtimeProof.procStartTicks !== handoff.procStartTicks ||
+      runtimeProof.pgrp !== handoff.pgrp ||
+      (runtimeProof.state !== "T" && runtimeProof.state !== "t")
+    ) {
+      throw new Error("process-boundary root verification changed runtime identity");
+    }
+    if (
+      runtimeProof.cwd !== expectedCwd ||
+      runtimeProof.executablePath !== expectedExecutablePath ||
+      runtimeProof.cmdlineSha256 !== expectedCmdlineSha256
+    ) {
+      throw new Error("process-boundary root verification changed runtime command");
+    }
+    const preEntryCmdlineSha256 = runtimeProof.cmdlineSha256;
+
+    const copyEvidenceFile = async (sourcePath: string, targetName: string) => {
+      const launchDir = path.join(evidenceDir, `launch-${handoff.generation}`);
+      await fs.mkdir(launchDir, { recursive: true, mode: 0o700 });
+      const targetPath = path.join(launchDir, targetName);
+      await fs.copyFile(sourcePath, targetPath, fsConstants.COPYFILE_EXCL);
+      await fs.chmod(targetPath, 0o600);
+      return path.relative(evidenceDir, targetPath);
+    };
+    const evidenceCommandFile = await copyEvidenceFile(
+      acceptParams.prepared.commandFilePath,
+      "command.json",
+    );
+    const evidenceIdentityFile = await copyEvidenceFile(
+      acceptParams.prepared.identityFilePath,
+      "identity.json",
+    );
+    const evidenceSandboxFile = await copyEvidenceFile(
+      acceptParams.prepared.sandboxFilePath,
+      "sandbox.json",
+    );
+    launches.push({
+      generation: handoff.generation,
+      pid: handoff.pid,
+      procStartTicks: handoff.procStartTicks,
+      pgrp: handoff.pgrp,
+      executablePath: expectedExecutablePath,
+      preEntryCmdlineSha256,
+      commandFile: {
+        path: evidenceCommandFile,
+        sha256: acceptParams.prepared.commandSha256,
+      },
+      identityFile: evidenceIdentityFile,
+      sandboxFile: evidenceSandboxFile,
+      acceptedAt: new Date().toISOString(),
+    });
+    await writeEvidence();
+    return {
+      generation: handoff.generation,
+      pid: handoff.pid,
+      procStartTicks: handoff.procStartTicks,
+      pgrp: handoff.pgrp,
+      cwd: expectedCwd,
+      executablePath: expectedExecutablePath,
+      commandSha256: acceptParams.prepared.commandSha256,
+      commandFilePath: acceptParams.prepared.commandFilePath,
+      identityFilePath: acceptParams.prepared.identityFilePath,
+      sandboxFilePath: acceptParams.prepared.sandboxFilePath,
+      preEntryCmdlineSha256,
+    };
+  };
+
+  const abort = async (abortParams: {
+    child: ChildProcess;
+    prepared: QaGatewayProcessBoundaryPreparedSpawn;
+  }) => {
+    try {
+      const handoff = parseQaGatewayProcessHandoff(
+        await waitForJsonFile({
+          child: abortParams.child,
+          pathName: abortParams.prepared.identityFilePath,
+        }),
+      );
+      if (handoff.generation !== abortParams.prepared.generation) {
+        throw new Error("process-boundary abort generation mismatch");
+      }
+      const termination = await terminateWithRetry(abortParams.prepared.identityFilePath);
+      await clearCredentialLeaseRetention();
+      if (termination) {
+        throw termination;
+      }
+    } catch (error) {
+      await terminateUidUntilQuiescent();
+      // The unique SUT UID is the terminal isolation boundary. The fallback only
+      // returns after repeated empty UID probes, so lease quarantine can end.
+      await clearCredentialLeaseRetention();
+      throw error;
+    }
+  };
+
+  const signal = async (
+    identity: QaGatewayVerifiedProcessIdentity,
+    signalName: "SIGCONT" | "SIGUSR2" | "SIGQUIT",
+  ) => {
+    await runBoundaryLauncherCommand(
+      ["--signal", signalName, identity.identityFilePath],
+      "signal",
+      PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
+    );
+  };
+
+  const markReady = async (identity: QaGatewayVerifiedProcessIdentity) => {
+    const runtimeProof = await runBoundaryVerification(identity.identityFilePath, "live");
+    // The SUT invokes dist/index.js through the gateway fast path, which preserves
+    // argv. A changed digest means it exec'd or retitled before readiness.
+    if (
+      runtimeProof.generation !== identity.generation ||
+      runtimeProof.pid !== identity.pid ||
+      runtimeProof.uid !== params.config.expectedUid ||
+      runtimeProof.gid !== params.config.expectedGid ||
+      runtimeProof.procStartTicks !== identity.procStartTicks ||
+      runtimeProof.pgrp !== identity.pgrp ||
+      runtimeProof.cwd !== identity.cwd ||
+      runtimeProof.executablePath !== identity.executablePath ||
+      runtimeProof.cmdlineSha256 !== identity.preEntryCmdlineSha256
+    ) {
+      throw new Error("process-boundary runtime identity changed before readiness");
+    }
+    findLaunch(identity.generation).readyAt = new Date().toISOString();
+    await writeEvidence();
+  };
+
+  const markExited = async (identity: QaGatewayVerifiedProcessIdentity) => {
+    const termination = await terminateWithRetry(identity.identityFilePath);
+    if (termination) {
+      // Identity evidence degraded, but the unique SUT UID reached verified
+      // quiescence before this fallback result was returned.
+      await clearCredentialLeaseRetention();
+      throw termination;
+    }
+    const launch = findLaunch(identity.generation);
+    launch.exitedAt = new Date().toISOString();
+    launch.quiescedAt = launch.exitedAt;
+    launch.terminalState = launch.readyAt ? "ready-exited" : "failed-before-ready";
+    await writeEvidence();
+    await clearCredentialLeaseRetention();
+  };
+
+  return {
+    prepare,
+    accept,
+    abort,
+    signal,
+    markReady,
+    markExited,
+    cleanupTempRoot: () =>
+      runBoundaryLauncherCommand(
+        ["--cleanup-temp-root", tempRoot],
+        "temp-root cleanup",
+        PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
+      ),
+    evidencePath,
+    retainCredentialLeasePath,
+    retainCredentialLease,
+  };
+}
+
+export function assertQaGatewayCredentialLeaseQuarantine(
+  lease: { leaseTtlMs: number; source: string },
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (!env.OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR?.trim() || lease.source !== "convex") {
+    return;
+  }
+  if (lease.leaseTtlMs < QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS) {
+    throw new Error(
+      `verified Telegram SUT isolation requires a credential lease TTL of at least ${QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS}ms`,
+    );
+  }
+}
+
+export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEnv = process.env) {
+  const evidenceDir = env.OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR?.trim();
+  if (!evidenceDir || !path.isAbsolute(evidenceDir)) {
+    return false;
+  }
+  try {
+    const markerNames = (await fs.readdir(evidenceDir)).filter(
+      (name) =>
+        name.startsWith(QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX) && name.endsWith(".json"),
+    );
+    for (const markerName of markerNames) {
+      const stats = await fs.lstat(path.join(evidenceDir, markerName));
+      if (stats.isFile() && !stats.isSymbolicLink()) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    return true;
+  }
+}

@@ -1,22 +1,116 @@
 // Control UI config module wires vite behavior.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Plugin, UserConfig } from "vite";
-import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import solid from "@solidjs/vite-plugin";
+import { gzip } from "pako";
+import {
+  runnerImport,
+  type Plugin,
+  type ResolveModulePreloadDependenciesFn,
+  type UserConfig,
+} from "vite";
+import type { ViteUserConfig } from "vitest/config";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
+import {
+  CONTROL_UI_BUILD_ID_ATTRIBUTE,
+  isControlUiVersionedPublicAsset,
+} from "../src/gateway/control-ui-root-assets.ts";
+import {
+  collectControlUiBootAssets,
+  controlUiBootPreloadsPlugin,
+} from "./config/control-ui-boot-preloads.ts";
+import {
+  controlUiCodeSplitting,
+  controlUiIsolatedDesktopRuntimePlugin,
+  controlUiLocaleConfigHintsChunkPrefix,
+} from "./config/control-ui-chunking.ts";
+import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
+import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
+import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
+import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
+import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const outDir = path.resolve(here, "../dist/control-ui");
+const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+
+export function controlUiSolidPlugin(): Plugin[] {
+  let testMode = false;
+  return [
+    ...solid({
+      include: /\.[jt]sx$/u,
+      // Skip automatic page-wide Chrome performance tracks; keep Solid's dev runtime.
+      performanceTracks: false,
+    }),
+    {
+      name: "openclaw:solid-test-runtime",
+      enforce: "post",
+      apply(config, env) {
+        return env.command === "serve" && env.mode === "test" && config.test !== undefined;
+      },
+      config(_config, env): ViteUserConfig | undefined {
+        testMode = env.mode === "test";
+        if (!testMode) {
+          return undefined;
+        }
+        return {
+          resolve: {
+            alias: [
+              {
+                find: /^solid-js$/u,
+                replacement: path.join(path.dirname(require.resolve("solid-js")), "solid.dev.js"),
+              },
+              {
+                find: /^@solidjs\/web$/u,
+                replacement: path.join(path.dirname(require.resolve("@solidjs/web")), "web.dev.js"),
+              },
+            ],
+          },
+          test: {
+            server: {
+              deps: {
+                // Native imports and optimized browser imports must share one owner graph.
+                inline: [
+                  "solid-js",
+                  "@solidjs/signals",
+                  "@solidjs/web",
+                  "@solidjs/testing-library",
+                ],
+              },
+            },
+          },
+        };
+      },
+      configEnvironment(name, config) {
+        if (testMode && (name === "ssr" || config.consumer === "server") && config.resolve) {
+          // Node-pragmas share this server; only Solid should use its browser runtime.
+          config.resolve.conditions = config.resolve.conditions?.filter(
+            (condition) => condition !== "browser",
+          );
+          config.resolve.externalConditions = config.resolve.externalConditions?.filter(
+            (condition) => condition !== "browser",
+          );
+        }
+      },
+    },
+  ];
+}
 type ControlUiViteAlias = {
   find: string | RegExp;
   replacement: string;
 };
-const commonJsOptimizeDeps = [
+export const commonJsOptimizeDeps = [
   "highlight.js/lib/core",
   "highlight.js/lib/languages/bash",
   "highlight.js/lib/languages/cpp",
@@ -33,6 +127,84 @@ const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
 ] as const;
+// npm excludes dist/**/*.map; sidecars would bypass that rule and ship source
+// maps that the browser never needs during normal runtime.
+const controlUiPrecompressedAssetExtensions = new Set([
+  ".css",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function createControlUiPrecompressedAssetVariants(
+  fileName: string,
+  source: string | Uint8Array,
+): Array<{ fileName: string; source: Buffer }> {
+  if (
+    !fileName.startsWith("assets/") ||
+    !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
+  ) {
+    return [];
+  }
+  const body = typeof source === "string" ? Buffer.from(source) : Buffer.from(source);
+  return [
+    {
+      fileName: `${fileName}.br`,
+      source: brotliCompressSync(body, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+      }),
+    },
+    {
+      fileName: `${fileName}.gz`,
+      // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
+      // Smaller deflate blocks reduce startup JavaScript size and encoder memory.
+      source: Buffer.from(gzip(body, { level: 9, legacyHash: true, memLevel: 6 })),
+    },
+  ];
+}
+
+function escapeControlUiAssetRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+const controlUiLocaleAssetPatterns = CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => ({
+  locale,
+  base: new RegExp(`^assets/${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`, "u"),
+  configHints: new RegExp(
+    `^assets/${controlUiLocaleConfigHintsChunkPrefix}${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`,
+    "u",
+  ),
+}));
+
+function controlUiLocaleFromAssetPath(file: string, kind: "base" | "configHints"): string | null {
+  return (
+    controlUiLocaleAssetPatterns.find(({ [kind]: pattern }) => pattern.test(file))?.locale ?? null
+  );
+}
+
+export const resolveControlUiModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
+  filename,
+  deps,
+  context,
+) => {
+  if (context.hostType !== "js") {
+    return deps;
+  }
+  const locale = controlUiLocaleFromAssetPath(filename, "base");
+  if (!locale) {
+    return deps;
+  }
+  const matchingHint = deps.find(
+    (dep) => controlUiLocaleFromAssetPath(dep, "configHints") === locale,
+  );
+  if (!matchingHint) {
+    return deps;
+  }
+  return deps.filter((dep) => dep !== filename && dep !== matchingHint);
+};
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -48,44 +220,154 @@ function normalizeBase(input: string): string {
   return `${trimmed}/`;
 }
 
-function normalizeBuildId(input: string): string {
-  const normalized = input.trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
-  return normalized.slice(0, 96) || "dev";
-}
-
-function readPackageVersion(): string {
+function readPackageVersion(): string | null {
   try {
     const raw = fs.readFileSync(path.join(repoRoot, "package.json"), "utf8");
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" && parsed.version.trim()
       ? parsed.version.trim()
-      : "dev";
+      : null;
   } catch {
-    return "dev";
+    return null;
   }
 }
 
-function readGitShortSha(): string | null {
+function readGit(args: string[]): string {
+  return execFileSync("git", ["--no-optional-locks", "-C", repoRoot, ...args], {
+    encoding: "utf8",
+    // Metadata reads need no index lock; disabling it makes the hard startup deadline safe.
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
+  });
+}
+
+function readGitCommit(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--short=12", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["rev-parse", "HEAD"]);
     return raw.trim() || null;
   } catch {
     return null;
   }
 }
 
-function resolveControlUiBuildId(): string {
-  const explicit =
-    process.env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim() || process.env.OPENCLAW_VERSION?.trim();
-  if (explicit) {
-    return normalizeBuildId(explicit);
+function readGitBranch(): string | null {
+  try {
+    const raw = readGit(["rev-parse", "--abbrev-ref", "HEAD"]);
+    return raw.trim() || null;
+  } catch {
+    return null;
   }
-  const version = readPackageVersion();
-  const gitSha = readGitShortSha();
-  return normalizeBuildId(gitSha ? `${version}-${gitSha}` : version);
+}
+
+function readGitCommitTimestamp(commit: string): string | null {
+  try {
+    const raw = readGit(["show", "-s", "--format=%ct", commit]);
+    const seconds = Number.parseInt(raw.trim(), 10);
+    const date = new Date(seconds * 1000);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function readGitDirty(): boolean | null {
+  try {
+    const raw = readGit(["status", "--porcelain"]);
+    return Boolean(raw.trim());
+  } catch {
+    return null;
+  }
+}
+
+type ControlUiBuildInfoSources = {
+  env?: NodeJS.ProcessEnv;
+  readPackageVersion?: () => string | null;
+  readGitCommit?: () => string | null;
+  readGitCommitTimestamp?: (commit: string) => string | null;
+  readGitBranch?: () => string | null;
+  readGitDirty?: () => boolean | null;
+};
+
+function normalizeBuildTimestamp(value: string | undefined): string | null {
+  const explicit = value?.trim();
+  if (!explicit) {
+    return null;
+  }
+  const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
+  if (!timestamp) {
+    throw new Error("OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z");
+  }
+  return timestamp;
+}
+
+export function resolveControlUiBuildInfo(
+  sources: ControlUiBuildInfoSources = {},
+): ControlUiBuildInfo {
+  const env = sources.env ?? process.env;
+  const version = (sources.readPackageVersion ?? readPackageVersion)();
+  const explicitCommitSource = [
+    { name: "GIT_COMMIT", value: env.GIT_COMMIT?.trim() },
+    { name: "GIT_SHA", value: env.GIT_SHA?.trim() },
+  ].find((source) => source.value);
+  const explicitCommit = explicitCommitSource?.value;
+  const envCommit = explicitCommit
+    ? normalizeControlUiBuildInfo({ commit: explicitCommit }).commit
+    : null;
+  if (explicitCommitSource && !envCommit) {
+    throw new Error(`${explicitCommitSource.name} must be a full 40-character hexadecimal SHA`);
+  }
+  const gitCommit = explicitCommit ? null : (sources.readGitCommit ?? readGitCommit)();
+  const normalizedGitCommit = normalizeControlUiBuildInfo({ commit: gitCommit }).commit;
+  if (gitCommit?.trim() && !normalizedGitCommit) {
+    throw new Error("git rev-parse HEAD must return a full 40-character hexadecimal SHA");
+  }
+  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
+  const githubCommit = explicitCommit || gitCommit?.trim() ? null : env.GITHUB_SHA?.trim();
+  const normalizedGithubCommit = normalizeControlUiBuildInfo({ commit: githubCommit }).commit;
+  if (githubCommit && !normalizedGithubCommit) {
+    throw new Error("GITHUB_SHA must be a full 40-character hexadecimal SHA");
+  }
+  const commit = envCommit ?? normalizedGitCommit ?? normalizedGithubCommit;
+  // Commit time is advisory identity like branch/dirty: read from the local
+  // object store for the exact embedded commit, null when no checkout has it
+  // (e.g. GITHUB_SHA-only builds). It must never block a build.
+  const readCommitTimestamp =
+    sources.readGitCommitTimestamp ??
+    // A caller-provided commit reader can return synthetic or remote identity.
+    // Do not combine it with a filesystem-bound reader from this checkout.
+    (sources.readGitCommit ? () => null : readGitCommitTimestamp);
+  const commitAt = commit
+    ? normalizeControlUiBuildInfo({
+        commitAt: readCommitTimestamp(commit),
+      }).commitAt
+    : null;
+  const builtAt = normalizeBuildTimestamp(env.OPENCLAW_BUILD_TIMESTAMP);
+  // Branch/dirty identity is advisory: the readers return null instead of
+  // throwing, so malformed environment or Git state never blocks a build.
+  // Tags must not be presented as branches in GitHub-built artifacts.
+  const githubBranch = env.GITHUB_REF_TYPE === "branch" ? env.GITHUB_REF_NAME : null;
+  const branch =
+    normalizeControlUiBuildInfo({ branch: env.GIT_BRANCH }).branch ??
+    normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
+    normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
+  const dirty = (sources.readGitDirty ?? readGitDirty)();
+  const releaseFlag = env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim();
+  if (releaseFlag && releaseFlag !== "1") {
+    throw new Error("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
+  }
+  const release = releaseFlag === "1";
+  const metadata = { version, commit, builtAt, release };
+  const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
+  return {
+    ...metadata,
+    commitAt,
+    branch,
+    dirty,
+    buildId: normalizeControlUiBuildInfo(
+      explicitBuildId ? { ...metadata, buildId: explicitBuildId } : metadata,
+    ).buildId,
+  };
 }
 
 function escapeRegExp(input: string): string {
@@ -152,11 +434,45 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    sourcePackageAlias("normalization-core", "agent-id"),
+    sourcePackageAlias("normalization-core", "code-points"),
+    sourcePackageAlias("normalization-core", "grapheme"),
+    sourcePackageAlias("normalization-core", "json-coercion"),
+    sourcePackageAlias("normalization-core", "json-schema"),
+    sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
+    sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
+    sourcePackageAlias("normalization-core", "result"),
+    sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core", "utf16-slice"),
+    sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract", "session-key-normalization"),
+    sourcePackageAlias("session-url-contract", "share-build"),
+    sourcePackageAlias("session-url-contract", "public-share"),
+    sourcePackageAlias("session-url-contract"),
+    sourcePackageAlias("workboard-contract"),
+  ];
+}
+
+export function resolveExternalPackageAliasesForVite(
+  resolvePackage: (specifier: string) => string = require.resolve,
+): ControlUiViteAlias[] {
+  const packageRoot = (specifier: string) =>
+    path.dirname(resolvePackage(`${specifier}/package.json`));
+  return [
+    {
+      find: "@openclaw/libterminal/browser",
+      replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),
+    },
+    {
+      find: "@openclaw/uirouter",
+      replacement: path.join(packageRoot("@openclaw/uirouter"), "dist/index.js"),
+    },
   ];
 }
 
@@ -184,7 +500,7 @@ function normalizeViteImporterPath(importer: string): string {
 }
 
 export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
-  const browserRedactPath = path.join(here, "src/ui/browser-redact.ts");
+  const browserRedactPath = path.join(here, "src/lib/browser-redact.ts");
   const sharedRedactImporters = new Set([
     path.join(repoRoot, "src/agents/tool-display-common.ts"),
     path.join(repoRoot, "src/agents/tool-display-exec.ts"),
@@ -206,74 +522,294 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   };
 }
 
-function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
+function controlUiBuildOutputPlugin(buildId: string): Plugin {
+  let publicAssets: string[] = [];
+  let cacheId: string | undefined;
   return {
-    name: "control-ui-service-worker-build-id",
+    name: "control-ui-build-output",
     apply: "build",
-    closeBundle() {
-      const swPath = path.join(outDir, "sw.js");
-      const publicSwPath = path.join(here, "public/sw.js");
-      const source = fs.readFileSync(fs.existsSync(swPath) ? swPath : publicSwPath, "utf8");
-      const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
-      const updated = source.replace(placeholder, JSON.stringify(buildId));
-      if (updated === source) {
-        throw new Error(`Control UI service worker build id placeholder missing in ${swPath}`);
+    configResolved(config) {
+      const publicDir = config.build.copyPublicDir && config.publicDir;
+      const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
+      publicAssets = publicContent?.paths ?? [];
+      // Public bytes can change during same-commit source rebuilds; the runtime
+      // build identity stays separate from this immutable URL namespace.
+      cacheId = publicContent ? `${buildId}-${publicContent.hash}` : undefined;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
+        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
+        const marked = html.replace(
+          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
+          '<script data-cfasync="false"',
+        );
+        return cacheId
+          ? marked.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
+          : marked;
+      },
+    },
+    async writeBundle({ dir: buildOutDir }, bundle) {
+      if (!buildOutDir) {
+        this.error("Control UI build requires an output directory");
       }
-      fs.mkdirSync(outDir, { recursive: true });
+      const logger = this.environment.logger;
+      let completed = 0;
+      let sidecars = 0;
+      let lastProgressAt = performance.now();
+      logger.info("Control UI precompression: starting");
+      for (const output of Object.values(bundle)) {
+        // Vite's post-build import analysis rewrites lazy preload markers in a
+        // later generateBundle hook. Read from disk here so sidecars always
+        // encode the exact final bytes that the identity response serves.
+        const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
+        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
+        if (variants.length === 0) {
+          continue;
+        }
+        for (const variant of variants) {
+          fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
+        }
+        // Only completed writes renew activity; a blocked compression/write must
+        // remain silent so the caller's existing watchdog can still terminate it.
+        completed++;
+        sidecars += variants.length;
+        const now = performance.now();
+        if (now - lastProgressAt >= 10_000) {
+          logger.info(
+            `Control UI precompression: ${completed} assets (${sidecars} sidecars) written`,
+          );
+          lastProgressAt = now;
+        }
+      }
+      logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
+      for (const asset of publicAssets) {
+        const fontStylesheet = asset.startsWith("fonts/") && asset.endsWith(".css");
+        if (!fontStylesheet && asset !== "manifest.webmanifest") {
+          continue;
+        }
+        const filePath = path.join(buildOutDir, asset);
+        const assetSource = fs.readFileSync(filePath, "utf8");
+        if (fontStylesheet) {
+          // Relative CSS URLs do not inherit their parent stylesheet's query.
+          const versioned = assetSource.replace(
+            /url\("([^"/?#]+\.woff2)"\)/gu,
+            `url("$1?v=${cacheId}")`,
+          );
+          fs.writeFileSync(filePath, versioned);
+        } else {
+          const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
+          for (const icon of manifest.icons) {
+            icon.src += `?v=${cacheId}`;
+          }
+          fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+        }
+      }
+      const swPath = path.join(buildOutDir, "sw.js");
+      const publicSwPath = path.join(here, "public/sw.js");
+      const source = fs.readFileSync(publicSwPath, "utf8");
+      const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
+      // Embed only build-owned HTML, never a fetched Gateway document (which may
+      // contain identity, route metadata, or an HTTP login response). The measured
+      // route graph also warms assets loaded before the first worker controls a tab.
+      const bootAssets = collectControlUiBootAssets(bundle);
+      const offlineShell = {
+        html: fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
+        // Public fonts and theme styles are selected at runtime by preferences.
+        // Keep this bounded build inventory, not all lazy pages, locales, or plugins.
+        assets: [
+          ...new Set([
+            ...bootAssets.chat,
+            ...bootAssets.new,
+            ...bootAssets.login,
+            ...publicAssets.filter(
+              (asset) => /\.(?:css|woff2)$/u.test(asset) && isControlUiVersionedPublicAsset(asset),
+            ),
+          ]),
+        ]
+          .toSorted()
+          .map((file) => ({
+            path: file.startsWith("assets/")
+              ? file
+              : `${file}?v=${encodeURIComponent(cacheId ?? "")}`,
+            integrity:
+              "sha256-" +
+              createHash("sha256")
+                .update(fs.readFileSync(path.join(buildOutDir, file)))
+                .digest("base64"),
+          })),
+      };
+      // Same-commit source rebuilds must not pair a new document with an old shell.
+      const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
+        path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
+        { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
+      );
+      const offlineBuild = {
+        ...offlineShell,
+        csp: csp.buildControlUiCspHeader({
+          inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
+        }),
+        publicAssetVersion: cacheId,
+        publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
+        id: createHash("sha256").update(JSON.stringify(offlineShell)).digest("hex").slice(0, 16),
+      };
+      const offlinePlaceholder = "const OFFLINE_BOOT = null;";
+      if (!source.includes(placeholder) || !source.includes(offlinePlaceholder)) {
+        throw new Error(`Control UI service worker build placeholders missing in ${swPath}`);
+      }
+      const updated = source
+        .replace(placeholder, JSON.stringify(buildId))
+        .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
+      fs.mkdirSync(buildOutDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
     },
   };
 }
 
-export default function controlUiViteConfig(): UserConfig {
+function collectControlUiPublicAssets(publicDir: string): { paths: string[]; hash: string } {
+  const paths: string[] = [];
+  const hash = createHash("sha256");
+  const visit = (directory: string) => {
+    for (const entry of fs
+      .readdirSync(directory, { withFileTypes: true })
+      .toSorted((a, b) => a.name.localeCompare(b.name))) {
+      const filePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(filePath);
+        continue;
+      }
+      // Source maps are diagnostics, not runtime dependencies of an open document.
+      const assetPath = path.relative(publicDir, filePath).split(path.sep).join("/");
+      if (entry.name.endsWith(".map") || assetPath === "sw.js") {
+        continue;
+      }
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error(`Unsafe Control UI build asset: ${filePath}`);
+      }
+      const source = fs.readFileSync(filePath);
+      paths.push(assetPath);
+      const digest = createHash("sha256").update(source).digest("hex");
+      hash.update(`${assetPath}\0${source.byteLength}\0${digest}\n`);
+    }
+  };
+  visit(publicDir);
+  return { paths, hash: hash.digest("hex") };
+}
+
+export default function controlUiViteConfig(
+  options: { outDir?: string; command?: "serve" | "build" } = {},
+): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
-  const bootstrapConfigPath = base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
-  const controlUiBuildId = resolveControlUiBuildId();
+  const bootstrapConfigPath =
+    base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
+  const buildInfo = resolveControlUiBuildInfo();
+  const devGateway =
+    options.command === "serve"
+      ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
+      : undefined;
+  const staticImports = new Map<string, readonly string[]>();
+  const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
+    filename,
+    deps,
+    context,
+  ) => {
+    const pending = resolveControlUiModulePreloadDependencies(filename, deps, context);
+    if (context.hostType !== "js") {
+      return pending;
+    }
+    // The executing importer has already loaded its direct static JS imports.
+    // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
+    const loaded = staticImports.get(context.hostId);
+    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+  };
   return {
     base,
+    worker: {
+      format: "iife",
+      plugins: () => [mermaidClassicBundlePlugin()],
+      rolldownOptions: {
+        output: { codeSplitting: false },
+      },
+    },
     define: {
-      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify(controlUiBuildId),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
+      "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
+        ? JSON.stringify(devGateway.gateway)
+        : "undefined",
     },
     publicDir: path.resolve(here, "public"),
+    css: {
+      postcss: {
+        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
+      },
+    },
     optimizeDeps: {
-      include: [
-        "ipaddr.js",
-        "lit/directives/repeat.js",
-        "markdown-it-task-lists",
-        ...commonJsOptimizeDeps,
-      ],
+      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
     },
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
         ...resolveSourcePackageAliasesForVite(),
         ...resolveTsconfigPathAliasesForVite(),
       ],
     },
     build: {
-      outDir,
+      outDir: options.outDir ?? outDir,
       emptyOutDir: true,
-      sourcemap: true,
-      rollupOptions: {
+      // Release packages omit maps; keep generating them without advertising dead URLs.
+      // Source builds retain automatic debugger discovery.
+      sourcemap: buildInfo.release ? "hidden" : true,
+      modulePreload: {
+        polyfill: true,
+        resolveDependencies: resolveModulePreloadDependencies,
+      },
+      rolldownOptions: {
+        // Explicit groups do not absorb each other's dependencies. These settings
+        // preserve execution order while keeping the startup chunks bounded.
+        preserveEntrySignatures: "allow-extension",
         output: {
-          manualChunks: controlUiManualChunk,
+          codeSplitting: controlUiCodeSplitting,
+          strictExecutionOrder: true,
         },
       },
       // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.
       chunkSizeWarningLimit: 1024,
     },
     server: {
-      host: true,
+      host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
+      ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      controlUiSolidPlugin(),
+      mermaidClassicBundlePlugin(),
+      controlUiIsolatedDesktopRuntimePlugin(),
+      {
+        name: "control-ui-static-import-preloads",
+        generateBundle(_options, bundle) {
+          staticImports.clear();
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              staticImports.set(chunk.fileName, chunk.imports);
+            }
+          }
+        },
+      },
+      controlUiSocialCardPlugin(),
+      controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
-      controlUiServiceWorkerBuildIdPlugin(controlUiBuildId),
+      controlUiBootPreloadsPlugin(),
+      controlUiBuildOutputPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {
+          if (devGateway) {
+            return;
+          }
           server.middlewares.use(bootstrapConfigPath, (_req, res) => {
             res.setHeader("Content-Type", "application/json");
             res.end(

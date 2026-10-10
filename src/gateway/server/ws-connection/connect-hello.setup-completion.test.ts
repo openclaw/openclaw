@@ -1,0 +1,413 @@
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  issueDeviceBootstrapToken,
+  issueDevicePairSetupBootstrapToken,
+  readDevicePairSetupCompletion,
+  verifyDeviceBootstrapToken,
+} from "../../../infra/device-bootstrap.js";
+import { persistDevicePairingStoreState } from "../../../infra/device-pairing-store.js";
+import type { PairedDevice } from "../../../infra/device-pairing.types.js";
+import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../../shared/device-bootstrap-profile.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createPresencePublisher } from "../presence-events.js";
+
+vi.mock("../health-state.js", () => ({
+  buildGatewaySnapshot: vi.fn(() => ({
+    presence: [],
+    health: {},
+    stateVersion: { presence: 1, health: 1 },
+    uptimeMs: 1,
+    sessionDefaults: {
+      defaultAgentId: "main",
+      mainKey: "main",
+      mainSessionKey: "main",
+      scope: "per-sender",
+    },
+  })),
+  getHealthCache: vi.fn(() => null),
+  getHealthVersion: vi.fn(() => 1),
+}));
+
+vi.mock("../../../state/user-profiles.js", () => ({
+  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+}));
+
+vi.mock("../../control-ui-plugin-tabs.js", () => ({
+  listControlUiLinkReaders: vi.fn(() => []),
+  listControlUiPluginTabs: vi.fn(() => []),
+  listControlUiPluginWidgetKinds: vi.fn(() => []),
+}));
+
+vi.mock("./connect-auth-security.js", () => ({
+  emitGatewayAuthSecurityEvent: vi.fn(),
+}));
+
+import { sendGatewayHello } from "./connect-hello.js";
+
+function createBootstrapState(paired: PairedDevice, bootstrapTokenCandidate: string) {
+  return {
+    resolvedAuth: { mode: "none" },
+    role: "operator",
+    scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+    device: { id: paired.deviceId },
+    devicePublicKey: paired.publicKey,
+    hasTokenAuth: false,
+    hasPasswordAuth: false,
+    bootstrapTokenCandidate,
+    authResult: { ok: true, method: "bootstrap-token" },
+    authMethod: "bootstrap-token",
+    issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    deviceToken: null,
+    bootstrapDeviceTokens: [],
+  };
+}
+
+function createFailedHelloContext(
+  name: string,
+  sendFrame: () => Promise<void>,
+  broadcast?: ReturnType<typeof vi.fn>,
+) {
+  return {
+    handler: {
+      getClient: () => null,
+      connId: `conn-${name}`,
+      gatewayMethods: [],
+      events: [],
+      buildRequestContext: () => ({
+        broadcast: broadcast ?? vi.fn(),
+        publishPresence: vi.fn(),
+        nodeRegistry: { get: vi.fn() },
+      }),
+      refreshHealthSnapshot: vi.fn(async () => ({})),
+      close: vi.fn(),
+      advanceHandshakePhase: vi.fn(),
+      setCloseCause: vi.fn(),
+      logGateway: { warn: vi.fn() },
+      logHealth: { error: vi.fn() },
+    },
+    frame: { id: `hello-${name}` },
+    connectParams: {
+      client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
+      role: "operator",
+      scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+    },
+    configSnapshot: {},
+    sendFrame: vi.fn(sendFrame),
+    onHelloDelivered: vi.fn(),
+    pendingNodePairingCleanup: {},
+    releasePendingNodePairingCleanup: vi.fn(async () => undefined),
+  };
+}
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("sendGatewayHello setup completion ordering", () => {
+  it.each([false, true])(
+    "confirms setup status before queued presence delivery (failure=%s)",
+    async (presenceFails) => {
+      await withOpenClawTestState(
+        { label: "ws-setup-completion-order", layout: "state-only" },
+        async () => {
+          const paired: PairedDevice = {
+            deviceId: "device-setup-order",
+            publicKey: "public-key-setup-order",
+            displayName: "Test phone",
+            createdAtMs: 1,
+            approvedAtMs: 2,
+          };
+          persistDevicePairingStoreState(
+            { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+            undefined,
+            "paired",
+          );
+          const issued = await issueDevicePairSetupBootstrapToken({
+            profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          });
+          await expect(
+            verifyDeviceBootstrapToken({
+              token: issued.token,
+              deviceId: paired.deviceId,
+              publicKey: paired.publicKey,
+              role: "operator",
+              scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+            }),
+          ).resolves.toEqual({ ok: true });
+
+          const handoffStarted = createDeferred();
+          const releaseHandoff = createDeferred();
+          const onHelloDelivered = vi.fn();
+          const broadcast = vi.fn((event: string) => {
+            if (presenceFails && event === "presence") {
+              throw new Error("test presence publication failure");
+            }
+          });
+          const clock = createGatewaySchedulerClock();
+          const scheduler = createTestGatewayScheduler(clock.clock);
+          const presence = createPresencePublisher({
+            scheduler,
+            broadcast,
+            incrementPresenceVersion: () => 2,
+            getHealthVersion: () => 1,
+            prepare: () => undefined,
+          });
+          onTestFinished(async () => {
+            presence.stop();
+            await scheduler.stop();
+          });
+          const context = {
+            handler: {
+              getClient: () => ({ presenceKey: "conn-setup-order", socket: { readyState: 1 } }),
+              isClosed: () => false,
+              connId: "conn-setup-order",
+              gatewayMethods: [],
+              events: [],
+              buildRequestContext: () => ({
+                broadcast,
+                publishPresence: presence.publish,
+                nodeRegistry: { get: () => undefined },
+              }),
+              refreshHealthSnapshot: vi.fn(async () => ({})),
+              close: vi.fn(),
+              advanceHandshakePhase: vi.fn(),
+              setCloseCause: vi.fn(),
+              logGateway: { warn: vi.fn() },
+              logHealth: { error: vi.fn() },
+            },
+            frame: { id: "hello-setup-order" },
+            connectParams: {
+              client: {
+                id: "openclaw-ios",
+                version: "dev",
+                platform: "test",
+                mode: "backend",
+              },
+              role: "operator",
+              scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+            },
+            configSnapshot: {},
+            sendFrame: vi.fn(async () => {
+              handoffStarted.resolve();
+              await releaseHandoff.promise;
+            }),
+            onHelloDelivered,
+            pendingNodePairingCleanup: {},
+            releasePendingNodePairingCleanup: vi.fn(async () => undefined),
+          };
+          const state = createBootstrapState(paired, issued.token);
+
+          const hello = sendGatewayHello(context as never, state as never, {});
+          await handoffStarted.promise;
+          const completionAtHandoff = await readDevicePairSetupCompletion({
+            setupId: issued.setupId,
+          });
+          releaseHandoff.resolve();
+          await hello;
+          expect(broadcast.mock.calls.some(([event]) => event === "presence")).toBe(false);
+          await clock.advanceBy(200);
+          const completionAfterHandoff = await readDevicePairSetupCompletion({
+            setupId: issued.setupId,
+          });
+
+          expect(completionAtHandoff).toMatchObject({
+            setupId: issued.setupId,
+            deviceId: paired.deviceId,
+            deviceName: paired.displayName,
+            access: "limited",
+            deliveryState: "uncertain",
+          });
+          expect(completionAfterHandoff).toMatchObject({ deliveryState: "confirmed" });
+          expect(onHelloDelivered).toHaveBeenCalledOnce();
+          expect(onHelloDelivered.mock.invocationCallOrder[0]).toBeLessThan(
+            broadcast.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+          );
+          expect(broadcast).toHaveBeenCalledWith(
+            "device.pair.setup.completed",
+            expect.objectContaining({ setupId: issued.setupId }),
+            { dropIfSlow: true },
+          );
+          const publications = broadcast.mock.calls.map(([event]) => event);
+          expect(publications.indexOf("device.pair.setup.completed")).toBeLessThan(
+            publications.indexOf("presence"),
+          );
+        },
+      );
+    },
+  );
+
+  it("keeps correlated setup completion uncertain when hello delivery fails", async () => {
+    await withOpenClawTestState(
+      { label: "ws-setup-completion-send-failure", layout: "state-only" },
+      async () => {
+        const paired: PairedDevice = {
+          deviceId: "device-setup-send-failure",
+          publicKey: "public-key-setup-send-failure",
+          displayName: "Test phone",
+          createdAtMs: 1,
+          approvedAtMs: 2,
+        };
+        persistDevicePairingStoreState(
+          { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+          undefined,
+          "paired",
+        );
+        const issued = await issueDevicePairSetupBootstrapToken({
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        const verifyParams = {
+          token: issued.token,
+          deviceId: paired.deviceId,
+          publicKey: paired.publicKey,
+          role: "operator" as const,
+          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+        };
+        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+
+        const broadcast = vi.fn();
+        const context = createFailedHelloContext(
+          "setup-send-failure",
+          async () => {
+            throw new Error("socket closed");
+          },
+          broadcast,
+        );
+        const { onHelloDelivered } = context;
+        const { close } = context.handler;
+        const state = createBootstrapState(paired, issued.token);
+
+        await sendGatewayHello(context as never, state as never, {});
+
+        expect(close).toHaveBeenCalled();
+        expect(onHelloDelivered).not.toHaveBeenCalled();
+        expect(broadcast).toHaveBeenCalledWith(
+          "device.pair.setup.deliveryUncertain",
+          expect.objectContaining({ setupId: issued.setupId, deviceId: paired.deviceId }),
+          { dropIfSlow: true },
+        );
+        expect(
+          broadcast.mock.calls.some(([event]) => event === "device.pair.setup.completed"),
+        ).toBe(false);
+        await expect(
+          readDevicePairSetupCompletion({ setupId: issued.setupId }),
+        ).resolves.toMatchObject({
+          setupId: issued.setupId,
+          deviceId: paired.deviceId,
+          deliveryState: "uncertain",
+        });
+        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({
+          ok: false,
+          reason: "bootstrap_token_invalid",
+        });
+      },
+    );
+  });
+
+  it("does not consume a setup bearer after the paired public key is replaced", async () => {
+    await withOpenClawTestState(
+      { label: "ws-setup-completion-replaced-key", layout: "state-only" },
+      async () => {
+        const paired: PairedDevice = {
+          deviceId: "device-setup-replaced",
+          publicKey: "public-key-original",
+          createdAtMs: 1,
+          approvedAtMs: 2,
+        };
+        persistDevicePairingStoreState(
+          { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+          undefined,
+          "paired",
+        );
+        const issued = await issueDevicePairSetupBootstrapToken({
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        await expect(
+          verifyDeviceBootstrapToken({
+            token: issued.token,
+            deviceId: paired.deviceId,
+            publicKey: paired.publicKey,
+            role: "operator",
+            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          }),
+        ).resolves.toEqual({ ok: true });
+        persistDevicePairingStoreState(
+          {
+            pendingById: {},
+            pairedByDeviceId: {
+              [paired.deviceId]: { ...paired, publicKey: "public-key-replacement" },
+            },
+          },
+          undefined,
+          "paired",
+        );
+        const context = createFailedHelloContext("setup-replaced", async () => undefined);
+        const { close } = context.handler;
+        const state = createBootstrapState(paired, issued.token);
+
+        await sendGatewayHello(context as never, state as never, {});
+
+        expect(close).toHaveBeenCalled();
+        expect(context.sendFrame).not.toHaveBeenCalled();
+        await expect(
+          readDevicePairSetupCompletion({ setupId: issued.setupId }),
+        ).resolves.toBeNull();
+        await expect(
+          verifyDeviceBootstrapToken({
+            token: issued.token,
+            deviceId: paired.deviceId,
+            publicKey: paired.publicKey,
+            role: "operator",
+            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          }),
+        ).resolves.toEqual({ ok: true });
+      },
+    );
+  });
+
+  it("restores an uncorrelated bootstrap token when hello delivery fails", async () => {
+    await withOpenClawTestState(
+      { label: "ws-generic-bootstrap-send-failure", layout: "state-only" },
+      async () => {
+        const paired: PairedDevice = {
+          deviceId: "device-generic-send-failure",
+          publicKey: "public-key-generic-send-failure",
+          createdAtMs: 1,
+          approvedAtMs: 2,
+        };
+        persistDevicePairingStoreState(
+          { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+          undefined,
+          "paired",
+        );
+        const issued = await issueDeviceBootstrapToken({
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        const verifyParams = {
+          token: issued.token,
+          deviceId: paired.deviceId,
+          publicKey: paired.publicKey,
+          role: "operator",
+          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+        };
+        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+
+        const context = createFailedHelloContext("generic-send-failure", async () => {
+          throw new Error("socket closed");
+        });
+        const { close } = context.handler;
+        const state = createBootstrapState(paired, issued.token);
+
+        await sendGatewayHello(context as never, state as never, {});
+
+        expect(close).toHaveBeenCalled();
+        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+      },
+    );
+  });
+});

@@ -1,10 +1,10 @@
 // Slack tests cover threading plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveSlackThreadContext, resolveSlackThreadTargets } from "./threading.js";
+import { resolveSlackThreadContext } from "./threading.js";
 
-describe("resolveSlackThreadTargets", () => {
+describe("resolveSlackThreadContext", () => {
   function expectAutoCreatedTopLevelThreadTsBehavior(replyToMode: "off" | "first" | "batched") {
-    const { replyThreadTs, statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
+    const { messageThreadId, isThreadReply } = resolveSlackThreadContext({
       replyToMode,
       message: {
         type: "message",
@@ -15,12 +15,11 @@ describe("resolveSlackThreadTargets", () => {
     });
 
     expect(isThreadReply).toBe(false);
-    expect(replyThreadTs).toBeUndefined();
-    expect(statusThreadTs).toBeUndefined();
+    expect(messageThreadId).toBeUndefined();
   }
 
   it("threads replies when message is already threaded", () => {
-    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+    const { messageThreadId } = resolveSlackThreadContext({
       replyToMode: "off",
       message: {
         type: "message",
@@ -30,12 +29,11 @@ describe("resolveSlackThreadTargets", () => {
       },
     });
 
-    expect(replyThreadTs).toBe("456");
-    expect(statusThreadTs).toBe("456");
+    expect(messageThreadId).toBe("456");
   });
 
   it("threads top-level replies when mode is all", () => {
-    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+    const { messageThreadId } = resolveSlackThreadContext({
       replyToMode: "all",
       message: {
         type: "message",
@@ -44,12 +42,11 @@ describe("resolveSlackThreadTargets", () => {
       },
     });
 
-    expect(replyThreadTs).toBe("123");
-    expect(statusThreadTs).toBe("123");
+    expect(messageThreadId).toBe("123");
   });
 
   it("does not thread status indicator when reply threading is off", () => {
-    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+    const { messageThreadId } = resolveSlackThreadContext({
       replyToMode: "off",
       message: {
         type: "message",
@@ -58,20 +55,11 @@ describe("resolveSlackThreadTargets", () => {
       },
     });
 
-    expect(replyThreadTs).toBeUndefined();
-    expect(statusThreadTs).toBeUndefined();
+    expect(messageThreadId).toBeUndefined();
   });
 
   it("does not treat auto-created top-level thread_ts as a real thread when mode is off", () => {
     expectAutoCreatedTopLevelThreadTsBehavior("off");
-  });
-
-  it("keeps first-mode behavior for auto-created top-level thread_ts", () => {
-    expectAutoCreatedTopLevelThreadTsBehavior("first");
-  });
-
-  it("keeps batched-mode behavior for auto-created top-level thread_ts", () => {
-    expectAutoCreatedTopLevelThreadTsBehavior("batched");
   });
 
   it("sets messageThreadId for top-level messages when replyToMode is all", () => {
@@ -86,7 +74,7 @@ describe("resolveSlackThreadTargets", () => {
 
     expect(context.isThreadReply).toBe(false);
     expect(context.messageThreadId).toBe("123");
-    expect(context.replyToId).toBe("123");
+    expect(context.replyToId).toBeUndefined();
   });
 
   it("sets messageThreadId for DM assistant thread-root messages regardless of replyToMode", () => {
@@ -107,7 +95,7 @@ describe("resolveSlackThreadTargets", () => {
       // thread_ts == ts in a DM: Agents & Assistants root — preserve thread
       // context so tool calls (subagent results) thread correctly.
       expect(context.messageThreadId).toBe("123");
-      expect(context.replyToId).toBe("123");
+      expect(context.replyToId).toBeUndefined();
     }
   });
 
@@ -129,7 +117,7 @@ describe("resolveSlackThreadTargets", () => {
 
       expect(context.isThreadReply).toBe(false);
       expect(context.messageThreadId).toBe("123");
-      expect(context.replyToId).toBe("123");
+      expect(context.replyToId).toBeUndefined();
     }
   });
 
@@ -151,7 +139,7 @@ describe("resolveSlackThreadTargets", () => {
       // thread_ts == ts in a channel: auto-created top-level thread_ts should
       // NOT force threaded mode — only DM assistant threads get the override.
       expect(context.messageThreadId).toBeUndefined();
-      expect(context.replyToId).toBe("123");
+      expect(context.replyToId).toBeUndefined();
     }
   });
 

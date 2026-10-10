@@ -1,28 +1,62 @@
-// Msteams plugin module implements doctor behavior.
-import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import type {
+  ChannelDoctorAdapter,
+  ChannelDoctorSequenceResult,
+} from "openclaw/plugin-sdk/channel-contract";
+import {
+  buildMutableAllowEntryDetector,
+  collectStandardAllowlistLists,
+  createDangerousNameMatchingMutableAllowlistWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+import { resolveMSTeamsLegacyWebhook, resolveMSTeamsWebhookPathIssue } from "./webhook-route.js";
 
-function isMSTeamsMutableAllowEntry(raw: string): boolean {
-  const text = raw.trim();
-  if (!text || text === "*") {
-    return false;
-  }
+const isMSTeamsMutableAllowEntry = buildMutableAllowEntryDetector({
+  prefixes: ["msteams:", "user:"],
+  stableIdPattern: /^[^\s@]+$/,
+});
 
-  const withoutPrefix = text.replace(/^(msteams|user):/i, "").trim();
-  return /\s/.test(withoutPrefix) || withoutPrefix.includes("@");
-}
-
-export const collectMSTeamsMutableAllowlistWarnings =
+const collectMSTeamsMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "msteams",
     detector: isMSTeamsMutableAllowEntry,
-    collectLists: (scope) => [
-      {
-        pathLabel: `${scope.prefix}.allowFrom`,
-        list: scope.account.allowFrom,
-      },
-      {
-        pathLabel: `${scope.prefix}.groupAllowFrom`,
-        list: scope.account.groupAllowFrom,
-      },
-    ],
+    collectLists: collectStandardAllowlistLists,
   });
+
+function runMSTeamsWebhookDoctorSequence({
+  cfg,
+  env,
+}: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): ChannelDoctorSequenceResult {
+  const channel = cfg.channels?.msteams;
+  if (!channel || channel.enabled === false) {
+    return { changeNotes: [], warningNotes: [], infoNotes: [] };
+  }
+  const pathIssue = resolveMSTeamsWebhookPathIssue({ cfg, env });
+  if (pathIssue) {
+    return { changeNotes: [], warningNotes: [pathIssue], infoNotes: [] };
+  }
+  const path = channel.webhook?.path || "/api/messages";
+  const port = resolveGatewayPort(cfg, env);
+  const legacy = resolveMSTeamsLegacyWebhook(channel);
+  return {
+    changeNotes: [],
+    warningNotes: [],
+    infoNotes: [
+      legacy
+        ? `Microsoft Teams: compatibility port ${legacy.port} continues forwarding to Gateway route ${path}. To use only the Gateway listener, update the Azure Bot messaging endpoint or reverse-proxy upstream to Gateway port ${port}${path}, verify delivery, then remove the channels.msteams.legacyWebhook pin to close the old port.`
+        : `Microsoft Teams webhooks use Gateway port ${port}${path}; no compatibility listener is configured. Point the Azure Bot messaging endpoint or reverse-proxy upstream to this route.`,
+    ],
+  };
+}
+
+export const msteamsDoctor = {
+  dmAllowFromMode: "topOnly",
+  groupModel: "hybrid",
+  groupAllowFromFallbackToAllowFrom: true,
+  warnOnEmptyGroupSenderAllowlist: true,
+  collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
+  runConfigSequence: runMSTeamsWebhookDoctorSequence,
+} satisfies ChannelDoctorAdapter;

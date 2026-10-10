@@ -1,0 +1,332 @@
+import { createServer } from "node:http";
+import {
+  createAzureOpenAIResponsesTransportStreamFn,
+  createOpenAICompletionsTransportStreamFn,
+  createOpenAIResponsesTransportStreamFn,
+} from "@openclaw/ai/transports";
+import type { Model } from "openclaw/plugin-sdk/llm";
+import { describe, expect, it, vi } from "vitest";
+import {
+  classifyAssistantFailoverReason,
+  formatUserFacingAssistantErrorText,
+} from "./embedded-agent-helpers.js";
+import {
+  type CapturedStreamEvent,
+  makeCompletionsModel,
+  createResponsesAssistantOutput,
+  createAzureResponsesModel,
+  streamChunks,
+} from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
+
+// Loaded hosted runners can delay the first real loopback request well beyond
+// the shared test timeout even when this file runs in its isolated project.
+const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
+
+describe("openai transport stream", () => {
+  it.each([
+    {
+      api: "openai-responses" as const,
+      provider: "custom-openai",
+      createStream: createOpenAIResponsesTransportStreamFn,
+    },
+    {
+      api: "azure-openai-responses" as const,
+      provider: "azure-openai-responses-devdiv",
+      createStream: createAzureOpenAIResponsesTransportStreamFn,
+    },
+  ])(
+    "honors turn timeout and zero retries over real $api HTTP",
+    async (transport) => {
+      const capturedTimeouts: Array<string | undefined> = [];
+      const server = createServer((request, response) => {
+        const timeout = request.headers["x-stainless-timeout"];
+        capturedTimeouts.push(Array.isArray(timeout) ? timeout[0] : timeout);
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              error: { type: "server_error", message: "turn retry regression" },
+            }),
+          );
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+
+        const model = {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          api: transport.api,
+          provider: transport.provider,
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 4_096,
+          requestTimeoutMs: 900_000,
+        } satisfies Model & { requestTimeoutMs: number };
+
+        const stream = await transport.createStream()(
+          model,
+          {
+            messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+            tools: [],
+          },
+          { apiKey: "test-key", timeoutMs: 1_234 },
+        );
+
+        const eventTypes: string[] = [];
+        for await (const event of stream) {
+          eventTypes.push(event.type);
+        }
+
+        expect(eventTypes).toContain("error");
+        // The SDK advertises request timeouts in whole seconds on the wire.
+        expect(capturedTimeouts).toEqual(["1"]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+    COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  );
+
+  it("classifies OpenAI-compatible unsupported-model detail from failed chat requests", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(400, {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": "req_not_supported_model",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              code: "400",
+              message: "Param Incorrect",
+              param: "Not supported model some-model-id",
+            },
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = makeCompletionsModel({
+        id: "some-model-id",
+        name: "Some Model",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      });
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
+
+      expect(errorPayload).toMatchObject({
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+      });
+      expect(String(errorPayload?.errorBody)).toContain("Not supported model some-model-id");
+      expect(classifyAssistantFailoverReason(errorPayload as never)).toBe("model_not_found");
+      expect(formatUserFacingAssistantErrorText(errorPayload as never)).toBe(
+        "This model was not found. Choose another model in the Control UI.",
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("yields to aborts during bursty Responses streams", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const abort = new AbortController();
+    const stream = { push: vi.fn() };
+    let yieldedToTimer = false;
+
+    async function* mockStream() {
+      yield { type: "response.output_item.added", item: { type: "message" } };
+      for (let index = 0; index < 512; index += 1) {
+        yield { type: "response.output_text.delta", delta: "x" };
+      }
+    }
+
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    await expect(
+      testing.processResponsesStream(mockStream(), output, stream, model, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
+  it("omits accumulated partial snapshots from Responses text deltas", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        { type: "response.output_item.added", item: { type: "message" } },
+        { type: "response.output_text.delta", delta: "a" },
+        { type: "response.output_text.delta", delta: "b" },
+        { type: "response.completed", response: { id: "resp_text", status: "completed" } },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas).toHaveLength(2);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
+  });
+
+  it("materializes one stable tool call for a done-only idless Responses item", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const item = {
+      type: "function_call",
+      name: "computer",
+      arguments: '{"action":"screenshot"}',
+      status: "completed",
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 0,
+          item,
+        },
+        {
+          type: "response.completed",
+          sequence_number: 1,
+          response: {
+            id: "resp_done_only_idless",
+            status: "completed",
+            output: [item],
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
+        name: "computer",
+        arguments: { action: "screenshot" },
+      },
+    ]);
+    const toolEvents = events.filter((event) => event.type?.startsWith("toolcall_")) as Array<{
+      type: string;
+      contentIndex: number;
+      toolCall?: { id?: string };
+    }>;
+    expect(toolEvents.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["toolcall_start", 0],
+      ["toolcall_end", 0],
+    ]);
+    expect(toolEvents[1]?.toolCall?.id).toBe((output.content[0] as { id?: string }).id);
+  });
+
+  it("reconciles an idless added Responses item to its canonical done identity", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const doneItem = {
+      type: "function_call",
+      id: "fc_canonical",
+      call_id: "call_canonical",
+      name: "computer",
+      arguments: '{"action":"screenshot"}',
+      status: "completed",
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          sequence_number: 0,
+          item: { type: "function_call", name: "computer", arguments: "" },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 1,
+          item: doneItem,
+        },
+        {
+          type: "response.completed",
+          sequence_number: 2,
+          response: {
+            id: "resp_canonical_tool_identity",
+            status: "completed",
+            output: [doneItem],
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_canonical|fc_canonical", name: "computer" },
+    ]);
+    const end = events.find((event) => event.type === "toolcall_end") as
+      | { toolCall?: { id?: string } }
+      | undefined;
+    expect(end?.toolCall?.id).toBe("call_canonical|fc_canonical");
+  });
+});

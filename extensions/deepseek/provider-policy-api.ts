@@ -1,24 +1,36 @@
-// Deepseek API module exposes the plugin public contract.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
 import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
-type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
-  Pick<ModelDefinitionConfig, "id" | "name">;
+type CatalogMetadataSnapshot = Pick<ModelDefinitionConfig, "contextWindow" | "cost" | "maxTokens">;
 
-/**
- * Build a lookup from the bundled DeepSeek model catalog so we can hydrate
- * missing metadata (contextWindow, cost, maxTokens) into user-configured
- * model rows without overwriting explicit overrides.
- */
-function buildCatalogIndex(): Map<string, ModelDefinitionConfig> {
-  const index = new Map<string, ModelDefinitionConfig>();
-  for (const model of DEEPSEEK_MODEL_CATALOG) {
-    index.set(model.id, model);
-  }
-  return index;
-}
+// Onboarding wrote these catalog-owned values into user config in prior releases.
+// Refresh only exact matches; any other values remain explicit user overrides.
+const PREVIOUS_BUNDLED_METADATA: Record<string, CatalogMetadataSnapshot> = {
+  "deepseek-v4-flash": {
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+    cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+  },
+  "deepseek-v4-pro": {
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+    cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+  },
+  "deepseek-chat": {
+    contextWindow: 131_072,
+    maxTokens: 8_192,
+    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
+  },
+  "deepseek-reasoner": {
+    contextWindow: 131_072,
+    maxTokens: 65_536,
+    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
+  },
+};
+
+const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -37,6 +49,48 @@ function hasCostValues(cost: unknown): cost is ModelDefinitionConfig["cost"] {
   );
 }
 
+function hasSameCost(left: unknown, right: ModelDefinitionConfig["cost"] | undefined): boolean {
+  if (!left || typeof left !== "object" || !right) {
+    return false;
+  }
+  const cost = left as Record<string, unknown>;
+  if (Object.hasOwn(cost, "tieredPricing")) {
+    return false;
+  }
+  return (
+    cost.input === right.input &&
+    cost.output === right.output &&
+    cost.cacheRead === right.cacheRead &&
+    cost.cacheWrite === right.cacheWrite
+  );
+}
+
+function isShippedZeroCostAliasSnapshot(
+  raw: ModelDefinitionConfig,
+  previous: CatalogMetadataSnapshot | undefined,
+): boolean {
+  return (
+    (raw.id === "deepseek-chat" || raw.id === "deepseek-reasoner") &&
+    raw.contextWindow === previous?.contextWindow &&
+    raw.maxTokens === previous?.maxTokens &&
+    hasSameCost(raw.cost, ZERO_COST)
+  );
+}
+
+function isPreviousBundledMetadataSnapshot(
+  raw: ModelDefinitionConfig,
+  previous: CatalogMetadataSnapshot | undefined,
+): boolean {
+  if (!previous) {
+    return false;
+  }
+  return (
+    raw.contextWindow === previous.contextWindow &&
+    raw.maxTokens === previous.maxTokens &&
+    (hasSameCost(raw.cost, previous.cost) || isShippedZeroCostAliasSnapshot(raw, previous))
+  );
+}
+
 /**
  * Provider policy surface for DeepSeek.
  *
@@ -52,50 +106,53 @@ export function normalizeConfig(params: {
     return providerConfig;
   }
 
-  const catalog = buildCatalogIndex();
+  const catalog = new Map(DEEPSEEK_MODEL_CATALOG.map((model) => [model.id, model]));
   let mutated = false;
 
   const nextModels = providerConfig.models.map((model) => {
-    const raw = model as ModelDefinitionDraft;
-    const catalogEntry = catalog.get(raw.id);
+    const catalogEntry = catalog.get(model.id);
     if (!catalogEntry) {
       return model;
     }
+    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(
+      model,
+      PREVIOUS_BUNDLED_METADATA[model.id],
+    );
+    const patched: Partial<ModelDefinitionConfig> = {};
 
-    let modelMutated = false;
-    const patched: Record<string, unknown> = {};
-
-    // Hydrate contextWindow from catalog when missing or not a positive number.
-    if (!isPositiveNumber(raw.contextWindow) && isPositiveNumber(catalogEntry.contextWindow)) {
-      patched.contextWindow = catalogEntry.contextWindow;
-      modelMutated = true;
+    // Refresh only whole snapshots written by prior releases. A partial match can
+    // be an intentional user cap, so per-field refresh would silently erase it.
+    for (const key of ["contextWindow", "maxTokens"] as const) {
+      if (
+        (!isPositiveNumber(model[key]) ||
+          (hasPreviousBundledMetadata && model[key] !== catalogEntry[key])) &&
+        isPositiveNumber(catalogEntry[key])
+      ) {
+        patched[key] = catalogEntry[key];
+      }
     }
 
-    // Hydrate maxTokens from catalog when missing or not a positive number.
-    if (!isPositiveNumber(raw.maxTokens) && isPositiveNumber(catalogEntry.maxTokens)) {
-      patched.maxTokens = catalogEntry.maxTokens;
-      modelMutated = true;
-    }
-
-    // Hydrate cost from catalog when missing or when all fields are zero/absent.
-    if (!hasCostValues(raw.cost) && hasCostValues(catalogEntry.cost)) {
+    if (
+      (!hasCostValues(model.cost) || hasPreviousBundledMetadata) &&
+      hasCostValues(catalogEntry.cost) &&
+      !hasSameCost(model.cost, catalogEntry.cost)
+    ) {
       patched.cost = catalogEntry.cost;
-      modelMutated = true;
     }
 
-    if (!modelMutated) {
+    if (Object.keys(patched).length === 0) {
       return model;
     }
 
     mutated = true;
-    return { ...raw, ...patched };
+    return { ...model, ...patched };
   });
 
   if (!mutated) {
     return providerConfig;
   }
 
-  return { ...providerConfig, models: nextModels as ModelDefinitionConfig[] };
+  return { ...providerConfig, models: nextModels };
 }
 
 export function resolveThinkingProfile(params: { provider: string; modelId: string }) {

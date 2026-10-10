@@ -1,263 +1,97 @@
-// Coverage for prompt helper decisions used before embedded attempts.
-import { describe, expect, it, vi } from "vitest";
-
-const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
-  // Media task modules are mocked so prompt helper tests can assert trigger and
-  // session-key routing without real task stores.
-  buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
-  buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildMusicGenerationTaskStatusText: vi.fn(() => "Music generation task status"),
-  findActiveMusicGenerationTaskForSession: vi.fn(),
-  MUSIC_GENERATION_TASK_KIND: "music_generation",
-}));
-
-const imageGenerationTaskStatusMocks = vi.hoisted(() => ({
-  buildActiveImageGenerationTaskPromptContextForSession: vi.fn(),
-  buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildImageGenerationTaskStatusText: vi.fn(() => "Image generation task status"),
-  findActiveImageGenerationTaskForSession: vi.fn(),
-  IMAGE_GENERATION_TASK_KIND: "image_generation",
-}));
-
-const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
-  buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(),
-  buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
-  findActiveVideoGenerationTaskForSession: vi.fn(),
-  VIDEO_GENERATION_TASK_KIND: "video_generation",
-}));
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
-vi.mock("../../image-generation-task-status.js", () => imageGenerationTaskStatusMocks);
-vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
-vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
-  resolvePromptSubmissionSkipReason,
-  resolveAttemptMediaTaskSystemPromptAddition,
+  mergeOrphanedTrailingUserPrompt,
   resolvePromptBuildHookResult,
-  shouldInjectHeartbeatPrompt,
-} from "./attempt.prompt-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 
-describe("shouldInjectHeartbeatPrompt", () => {
-  it("keeps global heartbeat guidance out of commitment-only runs", () => {
-    const heartbeatParams = {
-      config: {},
-      agentId: "main",
-      defaultAgentId: "main",
-      isDefaultAgent: true,
-      trigger: "heartbeat" as const,
-    };
-
-    expect(shouldInjectHeartbeatPrompt(heartbeatParams)).toBe(true);
-    expect(
-      shouldInjectHeartbeatPrompt({
-        ...heartbeatParams,
-        bootstrapContextRunKind: "commitment-only",
-      }),
-    ).toBe(false);
+it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
+  const result = mergeOrphanedTrailingUserPrompt({
+    prompt: "Continue.",
+    leafMessage: {
+      content: [
+        { type: "image_url", image_url: { url: `${"u".repeat(299)}😀tail` } },
+        { type: "custom", value: `${"v".repeat(299)}😀tail` },
+        { [`${"k".repeat(997)}😀tail`]: 1 },
+      ],
+    },
   });
-});
-
-describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
-  it("joins active media task guidance for user triggers", () => {
-    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
-      "Image task hint",
-    );
-    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
-      "Active task hint",
-    );
-    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
-      "Music task hint",
-    );
-
-    const result = resolveAttemptMediaTaskSystemPromptAddition({
-      sessionKey: "agent:main:discord:direct:123",
-      trigger: "user",
-    });
-
-    expect(
-      imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
-    expect(
-      videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
-    expect(
-      musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
-    expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
-  });
-
-  it("returns undefined (no media guidance) for non-user/manual triggers", () => {
-    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
-    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
-      "Should not be used",
-    );
-    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReset();
-    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
-      "Should not be used",
-    );
-    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReset();
-    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
-      "Should not be used",
-    );
-
-    const result = resolveAttemptMediaTaskSystemPromptAddition({
-      sessionKey: "agent:main:discord:direct:123",
-      trigger: "heartbeat",
-    });
-
-    expect(
-      imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).not.toHaveBeenCalled();
-    expect(
-      videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).not.toHaveBeenCalled();
-    expect(
-      musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).not.toHaveBeenCalled();
-    expect(result).toBeUndefined();
-  });
+  expect(result.merged).toBe(true);
+  expect(result.prompt.isWellFormed()).toBe(true);
+  expect(result.prompt).not.toContain("\\ud83d");
+  expect(result.prompt).toContain("[image_url]");
+  expect(result.prompt).toContain("chars)");
 });
 
 describe("resolvePromptSubmissionSkipReason", () => {
-  it("skips empty prompt submissions without history or images", () => {
-    // Empty visible prompt plus no useful replay context should not start a
-    // model request.
+  const skip = (messages: unknown[] = [], prompt = "   ", imageCount = 0) =>
+    resolvePromptSubmissionSkipReason({ prompt, messages, imageCount });
+
+  it("treats runtime messages and empty conversation placeholders as empty history", () => {
     expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "   ",
-        messages: [],
-        imageCount: 0,
-      }),
+      skip([
+        { role: "system", content: "runtime-only policy" },
+        { role: "toolResult", content: "old tool output", toolCallId: "call-1" },
+        { role: "user", content: "   " },
+        { role: "assistant", content: [] },
+      ]),
     ).toBe("empty_prompt_history_images");
   });
 
-  it("skips blank visible user prompt submissions even when replay history exists", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "   ",
-        messages: [{ role: "user", content: "previous turn", timestamp: 1 }],
-        imageCount: 0,
-      }),
-    ).toBe("blank_user_prompt");
+  it("skips a blank current prompt even with visible replay history", () => {
+    expect(skip([{ role: "user", content: "previous turn", timestamp: 1 }])).toBe(
+      "blank_user_prompt",
+    );
   });
 
-  it("treats system/tool-only replay as empty history for blank submissions", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "   ",
-        messages: [
-          { role: "system", content: "runtime-only policy" },
-          { role: "toolResult", content: "old tool output", toolCallId: "call-1" },
-        ],
-        imageCount: 0,
-      }),
-    ).toBe("empty_prompt_history_images");
-  });
-
-  it("treats empty user and assistant placeholders as empty history", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "   ",
-        messages: [
-          { role: "user", content: "   " },
-          { role: "assistant", content: [] },
-        ],
-        imageCount: 0,
-      }),
-    ).toBe("empty_prompt_history_images");
-  });
-
-  it("allows text or image prompt submissions", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "hello",
-        messages: [],
-        imageCount: 0,
-      }),
-    ).toBeNull();
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "   ",
-        messages: [],
-        imageCount: 1,
-      }),
-    ).toBeNull();
-  });
-
-  it("skips blank prompt on runtimeOnly turns", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "",
-        messages: [],
-        runtimeOnly: true,
-        imageCount: 0,
-      }),
-    ).toBe("empty_prompt_history_images");
-  });
-
-  it("treats undefined runtimeOnly as a visible user submission", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "",
-        messages: [],
-        runtimeOnly: undefined,
-        imageCount: 0,
-      }),
-    ).toBe("empty_prompt_history_images");
+  it("admits current text or images without replay history", () => {
+    expect(skip([], "hello")).toBeNull();
+    expect(skip([], "   ", 1)).toBeNull();
   });
 });
 
 describe("resolvePromptBuildHookResult drain cache", () => {
-  it("does not drain global injections or heartbeat contributions for commitment-only runs", async () => {
+  beforeEach(() => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
-    const runAgentTurnPrepare = vi.fn(async () => ({ prependContext: "turn policy" }));
-    const runHeartbeatPromptContribution = vi.fn(async () => ({
-      prependContext: "global heartbeat policy",
-    }));
-    const hookRunner = {
-      hasHooks: vi.fn(
-        (hookName: string) =>
-          hookName === "agent_turn_prepare" || hookName === "heartbeat_prompt_contribution",
-      ),
-      runAgentTurnPrepare,
-      runHeartbeatPromptContribution,
-      runBeforePromptBuild: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(async () => undefined),
-    };
-
-    const result = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "due commitment",
-      messages: [],
-      hookCtx: {
-        runId: "commitment-only-run",
-        trigger: "heartbeat",
-        sessionKey: "agent:main:telegram:direct:123",
-      },
-      hookRunner,
-      bootstrapContextRunKind: "commitment-only",
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
     });
-
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).not.toHaveBeenCalled();
-    expect(runAgentTurnPrepare).toHaveBeenCalledWith(
-      expect.objectContaining({ queuedInjections: [] }),
-      expect.any(Object),
-    );
-    expect(runHeartbeatPromptContribution).not.toHaveBeenCalled();
-    expect(result.prependContext).toBe("turn policy");
   });
 
-  it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {
-    // Retry attempts reuse the first drain result so plugin-provided next-turn
-    // context is not consumed or duplicated multiple times.
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+  function build(runId?: string) {
+    return resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: { runId, sessionKey: "global", agentId: "qa" },
+    });
+  }
+
+  it("preserves an explicit empty per-turn tool allowlist", async () => {
+    const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: [] }));
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "answer without tools",
+      messages: [],
+      hookCtx: { sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: (hookName) => hookName === "before_prompt_build",
+        runBeforePromptBuild,
+      },
+    });
+    expect(result.toolsAllow).toEqual([]);
+    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
+  });
+
+  it("reuses drained injections across retries and releases them when the run ends", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
       queuedInjections: [
         {
@@ -270,72 +104,18 @@ describe("resolvePromptBuildHookResult drain cache", () => {
       ],
       prependContext: "first attempt context",
     });
-    forgetPromptBuildDrainCacheForRun("run-cache-test");
-
-    const hookCtx = { runId: "run-cache-test", sessionKey: "agent:main:main" };
-
-    const first = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hi",
-      messages: [],
-      hookCtx,
-    });
-    const second = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hi",
-      messages: [],
-      hookCtx,
-    });
-
+    const runId = "run-cache-test";
+    expect((await build(runId)).prependContext).toBe("first attempt context");
+    expect((await build(runId)).prependContext).toBe("first attempt context");
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
-    expect(first.prependContext).toBe("first attempt context");
-    expect(second.prependContext).toBe("first attempt context");
-
-    forgetPromptBuildDrainCacheForRun("run-cache-test");
-  });
-
-  it("re-drains after the run-scoped cache is forgotten", async () => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValueOnce({
-      queuedInjections: [],
-      prependContext: undefined,
+    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledWith({
+      cfg: {},
+      sessionKey: "global",
+      agentId: "qa",
     });
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValueOnce({
-      queuedInjections: [],
-      prependContext: undefined,
-    });
-
-    const hookCtx = { runId: "run-evict-test", sessionKey: "agent:main:main" };
-
-    await resolvePromptBuildHookResult({ config: {}, prompt: "hi", messages: [], hookCtx });
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
-
-    forgetPromptBuildDrainCacheForRun("run-evict-test");
-
-    await resolvePromptBuildHookResult({ config: {}, prompt: "hi", messages: [], hookCtx });
+    forgetPromptBuildDrainCacheForRun(runId);
+    await build(runId);
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
-  });
-
-  it("drains every call when no runId is provided (no caching key)", async () => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
-      queuedInjections: [],
-      prependContext: undefined,
-    });
-
-    await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hi",
-      messages: [],
-      hookCtx: { sessionKey: "agent:main:main" },
-    });
-    await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hi",
-      messages: [],
-      hookCtx: { sessionKey: "agent:main:main" },
-    });
-
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+    forgetPromptBuildDrainCacheForRun(runId);
   });
 });

@@ -6,13 +6,17 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
-import {
-  resolveThreadBindingSpawnPolicy,
-  supportsAutomaticThreadBindingSpawn,
-} from "../channels/thread-bindings-policy.js";
+import { supportsThreadBindingSpawn } from "../channels/conversation-resolution.js";
+import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveChannelPromptCapabilities } from "./channel-tools.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
+import {
+  resolveChannelMessageToolHints,
+  resolveChannelPromptCapabilities,
+  resolveChannelReactionGuidance,
+} from "./channel-tools.js";
 
 const THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY = "threadbound-subagent-spawn";
 const THREAD_BOUND_ACP_SPAWN_CAPABILITY = "threadbound-acp-spawn";
@@ -45,8 +49,12 @@ export function collectRuntimeChannelCapabilities(params: {
   if (!params.channel) {
     return undefined;
   }
+  // Control UI renders disclosures natively in its markdown pipeline.
+  // This capability is core-owned because webchat has no channel plugin.
+  const internalChannelCapabilities =
+    params.channel === INTERNAL_MESSAGE_CHANNEL ? ["markdownDetails"] : [];
   const threadSpawnCapabilities: string[] = [];
-  if (params.cfg && supportsAutomaticThreadBindingSpawn(params.channel)) {
+  if (params.cfg && supportsThreadBindingSpawn(params.channel)) {
     for (const [kind, capability] of [
       ["subagent", THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY],
       ["acp", THREAD_BOUND_ACP_SPAWN_CAPABILITY],
@@ -63,10 +71,26 @@ export function collectRuntimeChannelCapabilities(params: {
       }
     }
   }
-  return mergeRuntimeCapabilities(
-    resolveChannelCapabilities(params),
-    params.cfg
-      ? [...resolveChannelPromptCapabilities(params), ...threadSpawnCapabilities]
-      : threadSpawnCapabilities,
-  );
+  const channelPromptCapabilities = params.cfg ? resolveChannelPromptCapabilities(params) : [];
+  return mergeRuntimeCapabilities(resolveChannelCapabilities(params), [
+    ...channelPromptCapabilities,
+    ...internalChannelCapabilities,
+    ...threadSpawnCapabilities,
+  ]);
+}
+
+/** Shared channel facts for ordinary and compaction system prompts. */
+export function resolveRuntimeChannelPromptContext(
+  params: Parameters<typeof collectRuntimeChannelCapabilities>[0],
+) {
+  const runtimeChannel = normalizeMessageChannel(params.channel);
+  const context = { cfg: params.cfg, channel: runtimeChannel, accountId: params.accountId };
+  const runtimeCapabilities = collectRuntimeChannelCapabilities(context);
+  return {
+    runtimeChannel,
+    runtimeCapabilities,
+    reactionGuidance:
+      runtimeChannel && params.cfg ? resolveChannelReactionGuidance(context) : undefined,
+    messageToolHints: runtimeChannel ? resolveChannelMessageToolHints(context) : undefined,
+  };
 }

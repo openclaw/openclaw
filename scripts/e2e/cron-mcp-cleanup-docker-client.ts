@@ -1,4 +1,3 @@
-// Cron Mcp Cleanup Docker Client script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -148,21 +147,13 @@ async function waitForAllProbeExits(params: {
   );
 }
 
-async function resetProbeFiles(params: {
-  pidPath: string;
-  pidsPath: string;
-  exitPath: string;
-}): Promise<void> {
-  await fs.rm(params.pidPath, { force: true });
-  await fs.rm(params.pidsPath, { force: true });
-  await fs.rm(params.exitPath, { force: true });
-}
-
 async function runCronCleanupScenario(params: {
   gateway: GatewayRpcClient;
   pidPath: string;
 }): Promise<{ jobId: string; runId?: string; pid: number; status?: unknown }> {
-  const { assert, waitFor } = await loadMcpChannelsHarness();
+  const harness = await loadMcpChannelsHarness();
+  const assert: McpChannelsHarness["assert"] = harness.assert;
+  const { waitFor } = harness;
   const { gateway, pidPath } = params;
   const job = await gateway.request<CronJob>("cron.add", {
     name: "cron mcp cleanup docker e2e",
@@ -245,9 +236,12 @@ async function runSubagentCleanupScenario(params: {
   pidsPath: string;
   exitPath: string;
 }): Promise<{ runId: string; exitedPids: number[]; pids: number[] }> {
-  const { assert } = await loadMcpChannelsHarness();
+  const harness = await loadMcpChannelsHarness();
+  const assert: McpChannelsHarness["assert"] = harness.assert;
   const { gateway, pidPath, pidsPath, exitPath } = params;
-  await resetProbeFiles({ pidPath, pidsPath, exitPath });
+  await fs.rm(pidPath, { force: true });
+  await fs.rm(pidsPath, { force: true });
+  await fs.rm(exitPath, { force: true });
 
   const run = await gateway.request<AgentRunResult>(
     "agent",
@@ -295,7 +289,9 @@ async function runSubagentCleanupScenario(params: {
 }
 
 async function main() {
-  const { assert, connectGateway } = await loadMcpChannelsHarness();
+  const harness = await loadMcpChannelsHarness();
+  const assert: McpChannelsHarness["assert"] = harness.assert;
+  const { connectGateway } = harness;
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
@@ -305,7 +301,11 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
-  const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  const gateway = await connectGateway({
+    url: gatewayUrl,
+    token: gatewayToken,
+    bindFreshDevice: true,
+  });
   try {
     const cron = await runCronCleanupScenario({ gateway, pidPath });
     const subagent = await runSubagentCleanupScenario({ gateway, pidPath, pidsPath, exitPath });

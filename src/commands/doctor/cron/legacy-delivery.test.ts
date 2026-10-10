@@ -1,45 +1,36 @@
 // Legacy delivery tests cover cron doctor repair of old delivery state.
 import { describe, expect, it } from "vitest";
-import {
-  buildDeliveryFromLegacyPayload,
-  buildDeliveryPatchFromLegacyPayload,
-  hasLegacyDeliveryHints,
-  mergeLegacyDeliveryInto,
-  normalizeLegacyDeliveryInput,
-} from "./legacy-delivery.js";
+import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 
 describe("legacy delivery threadId support", () => {
-  it("treats threadId as a legacy delivery hint", () => {
-    expect(hasLegacyDeliveryHints({ threadId: "42" })).toBe(true);
-    expect(hasLegacyDeliveryHints({ threadId: 42 })).toBe(true);
-  });
-
-  it("hydrates threadId into new delivery payloads", () => {
+  it("preserves false and zero legacy delivery hints", () => {
     expect(
-      buildDeliveryFromLegacyPayload({
-        channel: "telegram",
-        to: "-100123:topic:42",
-        threadId: 42,
+      normalizeLegacyDeliveryInput({
+        payload: { deliver: false, bestEffortDeliver: false, threadId: 0 },
       }),
     ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "-100123:topic:42",
-      threadId: "42",
+      delivery: { mode: "none", threadId: "0", bestEffort: false },
+      mutated: true,
+    });
+  });
+
+  it("treats threadId as a legacy delivery hint", () => {
+    expect(normalizeLegacyDeliveryInput({ payload: { threadId: "42" } })).toEqual({
+      delivery: { mode: "announce", threadId: "42" },
+      mutated: true,
+    });
+    expect(normalizeLegacyDeliveryInput({ payload: { threadId: 42 } })).toEqual({
+      delivery: { mode: "announce", threadId: "42" },
+      mutated: true,
     });
   });
 
   it("patches and merges threadId into existing deliveries", () => {
-    expect(buildDeliveryPatchFromLegacyPayload({ threadId: "77" })).toEqual({
-      mode: "announce",
-      threadId: "77",
-    });
-
     expect(
-      mergeLegacyDeliveryInto(
-        { mode: "announce", channel: "telegram", to: "-100123", threadId: "1" },
-        { threadId: 77 },
-      ),
+      normalizeLegacyDeliveryInput({
+        delivery: { mode: "announce", channel: "telegram", to: "-100123", threadId: "1" },
+        payload: { threadId: 77 },
+      }),
     ).toEqual({
       delivery: { mode: "announce", channel: "telegram", to: "-100123", threadId: "77" },
       mutated: true,

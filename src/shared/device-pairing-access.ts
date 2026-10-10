@@ -16,7 +16,7 @@ export type PendingDeviceApprovalKind =
   | "scope-upgrade"
   | "re-approval";
 
-export type PendingDeviceApprovalState = {
+type PendingDeviceApprovalState = {
   kind: PendingDeviceApprovalKind;
   /** Access requested by the pending pairing attempt. */
   requested: DevicePairingAccessSummary;
@@ -49,15 +49,8 @@ type PairedLike = {
 };
 
 function normalizeRoleList(...items: Array<string | string[] | undefined>): string[] {
-  const roles = new Set<string>();
-  for (const item of items) {
-    // On-disk pairing records are blind-cast, so roles/role may be non-strings; the shared
-    // normalizer drops them instead of crashing on .trim() (matches the scopes path + mergeRoles).
-    for (const role of normalizeUniqueSingleOrTrimmedStringList(item)) {
-      roles.add(role);
-    }
-  }
-  return [...roles].toSorted();
+  // Persisted pairing records can contain non-string roles; the shared normalizer drops them.
+  return [...new Set(items.flatMap(normalizeUniqueSingleOrTrimmedStringList))].toSorted();
 }
 
 function includesAll(allowed: readonly string[], requested: readonly string[]): boolean {
@@ -66,7 +59,7 @@ function includesAll(allowed: readonly string[], requested: readonly string[]): 
 }
 
 /** Normalizes requested roles/scopes from pending pairing records, including legacy singular role. */
-export function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccessSummary {
+function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccessSummary {
   return {
     roles: normalizeRoleList(request.roles, request.role),
     scopes: normalizeDeviceAuthScopes(request.scopes),
@@ -74,7 +67,7 @@ export function summarizePendingDeviceAccess(request: PendingLike): DevicePairin
 }
 
 /** Summarizes currently approved device access, excluding roles whose tokens are revoked. */
-export function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessSummary {
+function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessSummary {
   const approvedRoles = normalizeRoleList(device.roles, device.role);
   const tokenList = Array.isArray(device.tokens)
     ? device.tokens

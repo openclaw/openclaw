@@ -2,15 +2,56 @@
 summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate)"
 read_when:
   - You want to read or edit config non-interactively
+  - You manage config externally and want OpenClaw to leave it unchanged
 title: "Config"
 sidebarTitle: "Config"
 ---
 
-Config helpers for non-interactive edits in `openclaw.json`: get/set/patch/unset/file/schema/validate values by path and print the active config file. Run without a subcommand to open the configure wizard (same as `openclaw configure`).
+Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
 <Note>
-When `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands such as `config get`, `config file`, `config schema`, and `config validate` still work, but config writers refuse. Agents should edit the Nix source for the install instead; for the first-party nix-openclaw distribution, use [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) and set values under `programs.openclaw.config` or `instances.<name>.config`.
+When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
 </Note>
+
+## Externally managed config
+
+Set `OPENCLAW_CONFIG_READONLY=1` in the environment of both the Gateway and any
+OpenClaw CLI processes when a deployment system manages your config:
+
+```bash
+export OPENCLAW_CONFIG_READONLY=1
+openclaw config validate
+openclaw gateway run
+```
+
+For a service or container, set the variable in its service environment or
+container definition. This is a host-environment switch, not an `openclaw.json`
+field. Do not set `OPENCLAW_CONFIG_READONLY` in config `env` or `env.vars`.
+Entries in `env.vars` are ignored, including differently cased spellings; flat
+`env` keys are not valid configuration. Config reload cannot enable, disable,
+or change the host-selected read-only mode. Only the host value `1` enables
+this switch. Existing `OPENCLAW_NIX_MODE` behavior is unchanged.
+
+Config writes are blocked, including setup, onboarding, Doctor config repairs, plugin
+install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
+Startup-derived defaults stay runtime-only. Change the config through your
+external deployment system, then let the Gateway reload it or restart the Gateway
+as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.
+
+Doctor's `--fix --non-interactive` pass, including the official Docker image's
+startup pass, still repairs writable SQLite, session, and plugin state in this
+mode. Pending config repairs are printed as a redacted merge patch to apply in
+your external deployment source; the mounted config and its includes stay
+unchanged. Valid config permits Gateway startup even with optional repairs
+pending. If legacy or invalid config prevents startup, Doctor exits nonzero and
+names the required edits. State schema migration runs before config repair so
+plugin and session migrations can use the current schema; keep a matched
+pre-upgrade state backup when reverting to an older image.
+
+`OPENCLAW_CONFIG_READONLY=1` uses generic externally managed config messages and
+does not enable Nix-specific installation or service behavior. `OPENCLAW_NIX_MODE=1`
+continues to imply immutable config, even if `OPENCLAW_CONFIG_READONLY` is unset or
+`0`. For Nix installs, edit the Nix source instead; see [Nix](/install/nix).
 
 ## Root options
 
@@ -18,20 +59,23 @@ When `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-o
   Repeatable guided-setup section filter when you run `openclaw config` without a subcommand.
 </ParamField>
 
-Supported guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`.
+Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`.
 
 ## Examples
 
 ```bash
 openclaw config file
+openclaw config file --json
 openclaw config --section model
 openclaw config --section gateway --section daemon
 openclaw config schema
+openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
-openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+openclaw config set browser.profiles.work '{"cdpPort":18801,"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}' --strict-json --merge
 openclaw config set agents.defaults.heartbeat.every "2h"
-openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
+openclaw config set logging.audit.executionIdentity true
+openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
@@ -42,16 +86,87 @@ openclaw config validate
 openclaw config validate --json
 ```
 
+### Paths
+
+Dot or bracket notation. Quote bracket paths in shell examples so zsh does not glob-expand `[0]`:
+
+```bash
+openclaw config get agents.defaults.workspace
+openclaw config get agents.entries.main
+openclaw config get agents.entries
+openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
+```
+
+Prefer `agents.entries.<id>` paths for agent edits. The legacy `agents.list[0]`
+syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
+persist the canonical keyed roster. Indexed edits use the current roster order.
+Within a batch, a submitted list keeps its order across subsequent keyed edits,
+including when agent IDs are numeric strings. Existing roster-deletion and
+`$include` ownership protections still apply.
+
+When a legacy roster expands a single-agent installation in the root config file,
+writes retire its `default` marker and preserve the existing agent's responsibilities
+with explicit owners. An explicitly authored `ownership: "explicit"` cannot be
+combined with a legacy `default: true` marker.
+
+For root-file writes, changing `session.store` clears a copied
+`agents.defaults.sessionStore.agentId` because that owner belongs to the previous
+store. To assign the destination store's owner, set that owner path explicitly in
+the same batch. Unrelated writes preserve the owner, including when `session.store`
+is unset and per-agent default stores apply. A committed write that clears the
+owner prints a warning naming the key and the store change.
+
+If an older version already removed the owner, Doctor checks the retained config
+backups and offers to restore the most recent owner with the same authored
+`session.store` value. Restoration
+requires interactive confirmation because the removal might have been intentional;
+unattended Doctor runs show the recovery command instead. If no usable backup
+remains, the legacy-session finding names `agents.defaults.sessionStore.agentId`
+so you can assign the owner explicitly.
+
+### `config get`
+
+Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
+
+Pass exactly one config path. Extra arguments, including an empty quoted argument (`""`),
+are rejected; they do not suppress validation of later options.
+
+A schema-valid but unset authorable path explains that the runtime default applies and suggests
+`openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
+`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+instead explains that OpenClaw manages the values on config writes. Reading their unset parent
+paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
+An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
+the standard [CLI JSON failure envelope](/cli#json-failures) on stdout and exit with status 1.
+Without `--json`, diagnostics remain on stderr.
+
+Nested paths inside open-ended parameter bags, such as `agents.defaults.params.custom.nested`,
+are schema-valid even before they are set. This does not confirm that a provider supports the parameter.
+
+Explicit `null`, `false`, `0`, and empty strings remain readable values in both modes;
+`--json` preserves their types. Optional fields with no runtime value are reported as unset.
+
+```bash
+openclaw config get browser.executablePath
+openclaw config get agents.defaults.model --json
+```
+
+### `config file`
+
+Prints the active config file path, resolved from `OPENCLAW_CONFIG_PATH` or the default location. The path names a regular file, not a symlink; see [Write safety](#write-safety).
+
+With `--json`, stdout contains an object with the resolved path under `path`.
+
 ### `config schema`
 
-Print the generated JSON schema for `openclaw.json` to stdout as JSON.
+Prints the generated JSON schema for `openclaw.json` to stdout.
 
 <AccordionGroup>
   <Accordion title="What it includes">
     - The current root config schema, plus a root `$schema` string field for editor tooling.
-    - Field `title` and `description` docs metadata used by the Control UI.
-    - Nested object, wildcard (`*`), and array-item (`[]`) nodes inherit the same `title` / `description` metadata when matching field documentation exists.
-    - `anyOf` / `oneOf` / `allOf` branches inherit the same docs metadata too when matching field documentation exists.
+    - Field `title` / `description` docs metadata used by the Control UI.
+    - Nested object, wildcard (`*`), and array-item (`[]`) nodes inherit the same `title` / `description` metadata when matching field docs exist.
+    - `anyOf` / `oneOf` / `allOf` branches inherit the same docs metadata too.
     - Best-effort live plugin + channel schema metadata when runtime manifests can be loaded.
     - A clean fallback schema even when the current config is invalid.
 
@@ -63,46 +178,70 @@ Print the generated JSON schema for `openclaw.json` to stdout as JSON.
 
 ```bash
 openclaw config schema
-```
-
-Pipe it into a file when you want to inspect or validate it with other tools:
-
-```bash
+openclaw config schema --json
 openclaw config schema > openclaw.schema.json
 ```
 
-### Paths
+The schema is JSON in both modes. `--json` is accepted as the explicit
+machine-output spelling and keeps stdout reserved for the schema document.
 
-Paths use dot or bracket notation. Quote bracket-notation paths in shell examples so shells such as zsh do not expand `[0]` as a glob before OpenClaw receives the path:
+### `config validate`
+
+Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
+
+Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
+
+Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
+
+Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
+
+After schema validation, it checks every configured manual exec provider's command path using the same non-executing trust checks as startup: file presence, symlinks, trusted directories, permissions, ownership, and Windows ACL availability. `config set`, `config patch`, and `config unset` apply these checks only to providers changed or referenced by the operation, including during dry runs. Replacing the `secrets` or `secrets.providers` collection checks every remaining provider. An unrelated inactive provider does not block targeted repairs or removal of that provider.
+
+Path validation does not execute providers or verify their output. Passing it does not guarantee successful secret resolution; exec dry runs require `--allow-exec` to test that separately.
 
 ```bash
-openclaw config get agents.defaults.workspace
-openclaw config get 'agents.list[0].id'
+openclaw config validate
+openclaw config validate --json
 ```
 
-Use the agent list index to target a specific agent:
+<Note>
+The exec-provider checks inspect the filesystem of the host where the CLI
+runs. Run `config validate` on the gateway host itself (or on a host with
+matching command paths, ownership, and ACLs). Paths and permissions can change
+after validation; startup checks them again before execution.
+</Note>
 
-```bash
-openclaw config get agents.list
-openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
-```
+<Note>
+If validation is already failing, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.
+</Note>
+
+Provider and runtime `params` bags are intentionally typed as
+`Record<string, unknown>` because their owners define the supported keys and
+values. `openclaw config validate` can validate the container and overall
+config shape, but it cannot type-check provider-specific parameter names or
+values. Passing validation does not prove that a param is supported; consult
+the provider docs and verify behavior on the selected runtime and provider.
 
 ## Values
 
-Values are parsed as JSON5 when possible; otherwise they are treated as strings. Use `--strict-json` to require standard JSON parsing with no string fallback. `--json` remains supported as a legacy alias for `--strict-json`.
+Values parse as JSON5 when possible; otherwise they are treated as raw strings. Use `--strict-json` to require standard JSON with no string fallback (JSON5-only syntax such as comments, trailing commas, or unquoted keys is then rejected). `--json` is a legacy alias for `--strict-json` on `config set`.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
 openclaw config set gateway.port 19001 --strict-json
-openclaw config set channels.whatsapp.groups '["*"]' --strict-json
+openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --strict-json
 ```
 
-When `--strict-json` is enabled, JSON5-only syntax such as comments, trailing commas, or unquoted object keys is rejected. Omit `--strict-json` for JSON5 value parsing with raw-string fallback.
+For structured values that are awkward to quote in your shell, put a config-shaped JSON5 object in a file and use [`config patch --file <path> --dry-run`](/cli/config#config-patch). The file contains config keys and their values, not a bare array.
 
-`config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
+`config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
+
+When a model uses string shorthand, setting its `fallbacks` or a supported tool-model `timeoutMs` preserves that string as `primary`. This also applies to chat `/config set`. Setting `primary` explicitly replaces the primary, and setting the whole model still replaces the whole value.
+
+When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Refusals for newly authored per-agent references include the entered value and resolver reason; inherited values and environment-expanded details remain redacted. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model. [`openclaw models set`](/cli/models#common-commands) is deliberately more permissive for the same setting: it saves a model the local catalog cannot confirm and prints a warning instead of rejecting the write.
 
 <Note>
-Object assignment replaces the target path by default. Protected map/list paths that commonly hold user-added entries, such as `agents.defaults.models`, `models.providers`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`, refuse replacements that would remove existing entries unless you pass `--replace`.
+Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.entries`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
 </Note>
 
 Use `--merge` when adding entries to those maps:
@@ -112,11 +251,36 @@ openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json
 openclaw config set models.providers.ollama.models '[{"id":"llama3.2","name":"Llama 3.2"}]' --strict-json --merge
 ```
 
-Use `--replace` only when you intentionally want the provided value to become the complete target value.
+Use `--replace` only when the provided value should intentionally become the complete target value.
+
+### Conditional writes
+
+Use a conditional expectation when automation must update one authored path only if it has not
+changed since the caller last observed it:
+
+```bash
+openclaw config set gateway.port 19001 --strict-json --expect-current-json 18789
+openclaw config set gateway.port 19001 --strict-json --expect-current-absent
+```
+
+`--expect-current-json <json>` uses strict JSON and compares the value by JSON type and structure.
+`null` is an authored value, so it does not satisfy `--expect-current-absent`. The comparison uses
+the effective authored config after includes and environment substitution, before runtime defaults
+are applied.
+
+If the expectation does not match, no settings are saved. Read the current config and
+review the expected value before retrying; repeating the same mismatched expectation
+will not succeed.
+
+The two expectation flags are mutually exclusive. They apply only to a single `config set`
+operation, require a direct non-redirected config path, and cannot be combined with batch mode or
+`--dry-run`. If input or roster resolution would write a different path than the caller requested,
+such as a sibling `*Ref` path, the command exits with status 1 instead of retargeting the
+expectation. A mismatch exits with status 1, writes nothing, and does not print either the expected
+or current value. OpenClaw's config snapshot guard still rejects a later race between the
+expectation check and the final file replacement.
 
 ## `config set` modes
-
-`openclaw config set` supports four assignment styles:
 
 <Tabs>
   <Tab title="Value mode">
@@ -133,7 +297,7 @@ Use `--replace` only when you intentionally want the provided value to become th
     ```
   </Tab>
   <Tab title="Provider builder mode">
-    Provider builder mode targets `secrets.providers.<alias>` paths only:
+    Targets `secrets.providers.<alias>` paths only:
 
     ```bash
     openclaw config set secrets.providers.vault \
@@ -163,29 +327,98 @@ Use `--replace` only when you intentionally want the provided value to become th
     openclaw config set --batch-file ./config-set.batch.json --dry-run
     ```
 
+    Batch files are limited to 8 MiB.
+
   </Tab>
 </Tabs>
 
 <Warning>
-SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for example `hooks.token`, `commands.ownerDisplaySecret`, Discord thread-binding webhook tokens, and WhatsApp creds JSON). See [SecretRef Credential Surface](/reference/secretref-credential-surface).
+SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for example `hooks.token`, Discord thread-binding webhook tokens, and WhatsApp creds JSON). See [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Warning>
 
-Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth. `--strict-json` / `--json` do not change batch parsing behavior.
+Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth; `--strict-json` / `--json` do not change batch parsing behavior.
+
+Supplying either batch option selects batch mode. Empty or whitespace-only values are rejected; omit both options to use positional `<path> <value>` mode.
+
+`--batch-file` and `config patch --file` use the exact file path you provide, including leading or trailing spaces. Quote paths that contain spaces in your shell.
+
+Batch assignments apply in order, then validation checks the final config. A SecretRef replaced by a later assignment is not resolved or counted in dry-run output, even with `--allow-exec`. Providers that remain in a changed provider collection still receive command-path trust checks.
+
+JSON path/value mode also works for SecretRefs and providers directly:
+
+```bash
+openclaw config set channels.discord.token \
+  '{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}' \
+  --strict-json
+
+openclaw config set secrets.providers.vaultfile \
+  '{"source":"file","path":"/etc/openclaw/secrets.json","mode":"json"}' \
+  --strict-json
+```
+
+### Provider builder flags
+
+Provider builder targets must use `secrets.providers.<alias>` as the path.
+
+<AccordionGroup>
+  <Accordion title="Common flags">
+    - `--provider-source <env|file|exec|store>`
+    - `--provider-timeout-ms <ms>` (`file`, `exec`)
+
+  </Accordion>
+  <Accordion title="Env provider (--provider-source env)">
+    - `--provider-allowlist <ENV_VAR>` (repeatable)
+
+  </Accordion>
+  <Accordion title="File provider (--provider-source file)">
+    - `--provider-path <path>` (required)
+    - `--provider-mode <singleValue|json>`
+    - `--provider-max-bytes <bytes>`
+
+  </Accordion>
+  <Accordion title="Exec provider (--provider-source exec)">
+    - `--provider-command <path>` (required)
+    - `--provider-arg <arg>` (repeatable); each occurrence preserves one literal argument, including an empty string or surrounding whitespace. Quote these values in your shell.
+    - `--provider-no-output-timeout-ms <ms>`
+    - `--provider-max-output-bytes <bytes>`
+    - `--provider-json-only`
+    - `--provider-env <KEY=VALUE>` (repeatable)
+    - `--provider-pass-env <ENV_VAR>` (repeatable)
+    - `--provider-trusted-dir <path>` (repeatable)
+
+  </Accordion>
+</AccordionGroup>
+
+Hardened exec provider example:
+
+```bash
+openclaw config set secrets.providers.vault \
+  --provider-source exec \
+  --provider-command /usr/local/bin/openclaw-vault \
+  --provider-arg read \
+  --provider-arg openai/api-key \
+  --provider-json-only \
+  --provider-pass-env VAULT_TOKEN \
+  --provider-trusted-dir /usr/local/bin \
+  --provider-timeout-ms 5000
+```
 
 ## `config patch`
 
-Use `config patch` when you want to paste or pipe a config-shaped patch instead of running many path-based `config set` commands. The input is a JSON5 object. Objects merge recursively, arrays and scalar values replace the target value, and `null` deletes the target path.
+Paste or pipe a config-shaped JSON5 patch instead of running many path-based `config set` commands. Objects merge recursively; arrays and scalar values replace the target; `null` deletes the target path.
 
 ```bash
 openclaw config patch --file ./openclaw.patch.json5 --dry-run
 openclaw config patch --file ./openclaw.patch.json5
 ```
 
-You can also pipe a patch over stdin, which is useful for remote setup scripts:
+Patch files are limited to 8 MiB. Piped `--stdin` patches are limited to 1 MiB.
+
+Pipe a patch over stdin for remote setup scripts:
 
 ```bash
-ssh openclaw-host 'openclaw config patch --stdin --dry-run' < ./openclaw.patch.json5
-ssh openclaw-host 'openclaw config patch --stdin' < ./openclaw.patch.json5
+ssh user@gateway-host 'openclaw config patch --stdin --dry-run' < ./openclaw.patch.json5
+ssh user@gateway-host 'openclaw config patch --stdin' < ./openclaw.patch.json5
 ```
 
 Example patch:
@@ -211,14 +444,21 @@ Example patch:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.5" },
+      model: { primary: "openai/gpt-6-astra" },
       models: {
-        "openai/gpt-5.5": { params: { fastMode: true } },
+        "openai/gpt-6-astra": {
+          agentRuntime: { id: "openclaw" },
+          params: { fastMode: true },
+        },
       },
     },
   },
 }
 ```
+
+The runtime pin makes this an embedded OpenClaw recipe. A valid `fastMode`
+value is a portable typed runtime control and does not choose OpenClaw by
+itself.
 
 Use `--replace-path <path>` when one object or array must become exactly the provided value instead of being recursively patched:
 
@@ -228,79 +468,13 @@ openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.disc
 
 `--dry-run` runs schema and SecretRef resolvability checks without writing. Exec-backed SecretRefs are skipped by default during dry-run; add `--allow-exec` when you intentionally want dry-run to execute provider commands.
 
-JSON path/value mode remains supported for both SecretRefs and providers:
-
-```bash
-openclaw config set channels.discord.token \
-  '{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}' \
-  --strict-json
-
-openclaw config set secrets.providers.vaultfile \
-  '{"source":"file","path":"/etc/openclaw/secrets.json","mode":"json"}' \
-  --strict-json
-```
-
-## Provider builder flags
-
-Provider builder targets must use `secrets.providers.<alias>` as the path.
-
-<AccordionGroup>
-  <Accordion title="Common flags">
-    - `--provider-source <env|file|exec>`
-    - `--provider-timeout-ms <ms>` (`file`, `exec`)
-
-  </Accordion>
-  <Accordion title="Env provider (--provider-source env)">
-    - `--provider-allowlist <ENV_VAR>` (repeatable)
-
-  </Accordion>
-  <Accordion title="File provider (--provider-source file)">
-    - `--provider-path <path>` (required)
-    - `--provider-mode <singleValue|json>`
-    - `--provider-max-bytes <bytes>`
-    - `--provider-allow-insecure-path`
-
-  </Accordion>
-  <Accordion title="Exec provider (--provider-source exec)">
-    - `--provider-command <path>` (required)
-    - `--provider-arg <arg>` (repeatable)
-    - `--provider-no-output-timeout-ms <ms>`
-    - `--provider-max-output-bytes <bytes>`
-    - `--provider-json-only`
-    - `--provider-env <KEY=VALUE>` (repeatable)
-    - `--provider-pass-env <ENV_VAR>` (repeatable)
-    - `--provider-trusted-dir <path>` (repeatable)
-    - `--provider-allow-insecure-path`
-    - `--provider-allow-symlink-command`
-
-  </Accordion>
-</AccordionGroup>
-
-Hardened exec provider example:
-
-```bash
-openclaw config set secrets.providers.vault \
-  --provider-source exec \
-  --provider-command /usr/local/bin/openclaw-vault \
-  --provider-arg read \
-  --provider-arg openai/api-key \
-  --provider-json-only \
-  --provider-pass-env VAULT_TOKEN \
-  --provider-trusted-dir /usr/local/bin \
-  --provider-timeout-ms 5000
-```
-
 ## Dry run
 
-Use `--dry-run` to validate changes without writing `openclaw.json`.
+`--dry-run` simulates a change without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`. Which checks run depends on the input mode. Value mode (`config set <path> <value>` without `--strict-json`) skips the full schema pass and the ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, value mode reports `Dry run successful` even for a value the real write rejects. Use `--strict-json` (or `config patch --file --dry-run`) when you need schema validation.
+
+For `config patch` and `config unset`, `--json` requires `--dry-run`. Using `--json` without `--dry-run` returns the standard [CLI JSON failure envelope](/cli#json-failures) on stdout, keeps diagnostics on stderr, and exits with status 1.
 
 ```bash
-openclaw config set channels.discord.token \
-  --ref-provider default \
-  --ref-source env \
-  --ref-id DISCORD_BOT_TOKEN \
-  --dry-run
-
 openclaw config set channels.discord.token \
   --ref-provider default \
   --ref-source env \
@@ -318,25 +492,21 @@ openclaw config set channels.discord.token \
 
 <AccordionGroup>
   <Accordion title="Dry-run behavior">
-    - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
+    - Value mode (a plain `<value>` without `--strict-json`): skips the full schema pass and ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, the CLI prints `Dry run note: value mode does not run schema/resolvability checks` and can succeed even when the real write would fail schema validation.
+    - Builder mode: runs SecretRef resolvability checks for changed refs/providers. A SecretRef builder target outside the registered config secret paths also runs full schema validation, so an unsupported path fails instead of reporting a successful preview.
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
-    - Policy validation also runs for known unsupported SecretRef target surfaces.
-    - Policy checks evaluate the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
-    - Exec SecretRef checks are skipped by default during dry-run to avoid command side effects.
-    - Use `--allow-exec` with `--dry-run` to opt in to exec SecretRef checks (this may execute provider commands).
-    - `--allow-exec` is dry-run only and errors if used without `--dry-run`.
+    - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
+    - Exec command-path trust checks run without executing providers. Exec SecretRef resolvability checks are skipped by default to avoid command side effects; pass `--allow-exec` to opt in (this may execute provider commands). `--allow-exec` is dry-run only and errors without `--dry-run`.
 
   </Accordion>
   <Accordion title="--dry-run --json fields">
-    `--dry-run --json` prints a machine-readable report:
-
     - `ok`: whether dry-run passed
     - `operations`: number of assignments evaluated
     - `checks`: whether schema/resolvability checks ran
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured missing-path, schema, or resolvability failures when `ok=false`
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the write was declined because its config snapshot, target, or conditional expectation no longer matched; follow the message before retrying)
 
   </Accordion>
 </AccordionGroup>
@@ -358,7 +528,7 @@ openclaw config set channels.discord.token \
   skippedExecRefs: number,
   errors?: [
     {
-      kind: "missing-path" | "schema" | "resolvability",
+      kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict",
       message: string,
       ref?: string, // present for resolvability errors
     },
@@ -372,7 +542,7 @@ openclaw config set channels.discord.token \
     {
       "ok": true,
       "operations": 1,
-      "configPath": "~/.openclaw/openclaw.json",
+      "configPath": "/home/user/.openclaw/openclaw.json",
       "inputModes": ["builder"],
       "checks": {
         "schema": false,
@@ -389,7 +559,7 @@ openclaw config set channels.discord.token \
     {
       "ok": false,
       "operations": 1,
-      "configPath": "~/.openclaw/openclaw.json",
+      "configPath": "/home/user/.openclaw/openclaw.json",
       "inputModes": ["builder"],
       "checks": {
         "schema": false,
@@ -412,18 +582,51 @@ openclaw config set channels.discord.token \
 
 <AccordionGroup>
   <Accordion title="If dry-run fails">
-    - `config schema validation failed`: your post-change config shape is invalid; fix path/value or provider/ref object shape.
-    - `Config policy validation failed: unsupported SecretRef usage`: move that credential back to plaintext/string input and keep SecretRefs on supported surfaces only.
-    - `SecretRef assignment(s) could not be resolved`: referenced provider/ref currently cannot resolve (missing env var, invalid file pointer, exec provider failure, or provider/source mismatch).
-    - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: dry-run skipped exec refs; rerun with `--allow-exec` if you need exec resolvability validation.
+    - `config schema validation failed`: your post-change config shape is invalid; fix the path/value or provider/ref object shape.
+    - `Config policy validation failed: unsupported SecretRef usage`: move that credential back to plaintext/string input; keep SecretRefs on supported surfaces only.
+    - `SecretRef assignment(s) could not be resolved`: the referenced provider/ref cannot currently resolve (missing env/store name, invalid file pointer, exec provider failure, or provider/source mismatch).
+    - `model reference validation failed`: a changed text-model primary or fallback is unknown; run `openclaw models list` and choose an available model.
+    - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: rerun with `--allow-exec` if you need exec resolvability validation.
     - For batch mode, fix failing entries and rerun `--dry-run` before writing.
 
   </Accordion>
 </AccordionGroup>
 
+## Applying changes
+
+After every successful `config set` / `config patch` / `config unset`, the CLI prints one of three hints so you know whether the gateway needs a restart:
+
+| Hint                                                | Meaning                                                               |
+| --------------------------------------------------- | --------------------------------------------------------------------- |
+| `Restart the gateway to apply.`                     | The changed path needs a full restart, or passive reload is disabled. |
+| `Change will apply without restarting the gateway.` | Hot reload picks it up automatically.                                 |
+| `No gateway restart needed.`                        | Nothing runtime-relevant changed.                                     |
+
+Plugin entry changes use the same reload planner as other settings. In the default
+`hybrid` mode, ordinary `plugins.entries.<id>` edits replace the affected plugin
+instance automatically. A plugin's narrower restart policy or
+`gateway.reload.mode: "off"` can still require a Gateway restart. The CLI hint
+describes expected application; it is not a receipt from a running Gateway.
+See [Config hot reload](/gateway/configuration/hot-reload).
+
+Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
+
 ## Write safety
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+
+If staging a config save fails, the existing root or include backup ring is left
+untouched. OpenClaw prepares backup contents without blocking unrelated Gateway
+requests. If a copy fallback removes the file before a conflict, OpenClaw restores
+the original when it still owns the missing destination. Otherwise, the error
+reports partial publication and the backup location to inspect before another save.
+
+If the file is saved but later processing fails, the error names the written file
+and reports whether the write was rolled back. This can name an included file
+when that file owns the edited setting. If rollback did not happen or could not
+be confirmed, inspect the named file and the active config before retrying.
+
+OpenClaw-owned writes that change config reserialize JSON5 as standard JSON. When the source contains comments, the writer warns immediately before removing them; use a direct editor when preserving comments matters.
 
 <Warning>
 The active config path must be a regular file. Symlinked `openclaw.json` layouts are unsupported for writes; use `OPENCLAW_CONFIG_PATH` to point directly at the real file instead.
@@ -432,8 +635,8 @@ The active config path must be a regular file. Symlinked `openclaw.json` layouts
 Prefer CLI writes for small edits:
 
 ```bash
-openclaw config set gateway.reload.mode hybrid --dry-run
-openclaw config set gateway.reload.mode hybrid
+openclaw config set gateway.reload.mode '"hybrid"' --strict-json --dry-run
+openclaw config set gateway.reload.mode '"hybrid"' --strict-json
 openclaw config validate
 ```
 
@@ -445,36 +648,19 @@ ls -lt "$CONFIG".rejected.* 2>/dev/null | head
 openclaw config validate
 ```
 
-Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. Invalid direct edits fail startup or are skipped by hot reload; Gateway does not rewrite `openclaw.json`. Run `openclaw doctor --fix` to repair prefixed/clobbered config or restore the last-known-good copy. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
+Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. Startup validates config without rewriting legacy keys. Invalid direct edits stop startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` for legacy-key repair, prefixed/clobbered config, or last-known-good recovery. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
 
-Whole-file recovery is reserved for doctor repair. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
+Ordinary recovery can restore an eligible, valid current backup verbatim. Backups that need legacy transformations must be recovered through Doctor. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
 
-## Subcommands
+## Repair loop
 
-- `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location). The path should name a regular file, not a symlink.
-
-Restart the gateway after edits.
-
-## Validate
-
-Validate the current config against the active schema without starting the gateway.
-
-```bash
-openclaw config validate
-openclaw config validate --json
-```
-
-After `openclaw config validate` is passing, you can use the local TUI to have an embedded agent compare the active config against the docs while you validate each change from the same terminal:
-
-<Note>
-If validation is already failing, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.
-</Note>
+After `openclaw config validate` passes, use the local TUI to have an embedded agent compare the active config against the docs while you validate each change from the same terminal:
 
 ```bash
 openclaw chat
 ```
 
-Then inside the TUI:
+Inside the TUI, a leading `!` runs a literal local shell command (after a one-time per-session confirmation prompt):
 
 ```text
 !openclaw config file
@@ -482,8 +668,6 @@ Then inside the TUI:
 !openclaw config validate
 !openclaw doctor
 ```
-
-Typical repair loop:
 
 <Steps>
   <Step title="Compare with docs">
@@ -504,3 +688,4 @@ Typical repair loop:
 
 - [CLI reference](/cli)
 - [Configuration](/gateway/configuration)
+- [`openclaw configure`](/cli/configure) — guided editor for the same settings

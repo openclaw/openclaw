@@ -1,4 +1,3 @@
-// Network Policy module implements ipv4 behavior.
 import { isCanonicalDottedDecimalIPv4 } from "./ip.js";
 
 /** Validates the custom-bind IPv4 input and returns the user-facing error text. */
@@ -10,9 +9,4 @@ export function validateDottedDecimalIPv4Input(value: string | undefined): strin
     return undefined;
   }
   return "Invalid IPv4 address (e.g., 192.168.1.100)";
-}
-
-/** @deprecated Use validateDottedDecimalIPv4Input. */
-export function validateIPv4AddressInput(value: string | undefined): string | undefined {
-  return validateDottedDecimalIPv4Input(value);
 }

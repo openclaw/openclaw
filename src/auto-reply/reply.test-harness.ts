@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 
 type ReplyRuntimeMocks = {
   runEmbeddedAgent: Mock;
@@ -27,19 +27,20 @@ const replyRuntimeMockState = vi.hoisted(() => ({
 vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: (...args: unknown[]) => replyRuntimeMockState.mocks.runEmbeddedAgent(...args),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("../agents/model-catalog.runtime.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => replyRuntimeMockState.mocks.loadModelCatalog(...args),
+  loadProviderScopedThinkingCatalog: async () => [],
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    replyRuntimeMockState.mocks.loadModelCatalog(...args),
 }));
 
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(),
-  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+  resolveSessionAuthSelection: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../commands-registry.runtime.js", () => ({
@@ -47,7 +48,7 @@ vi.mock("../commands-registry.runtime.js", () => ({
 }));
 
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
-  listSkillCommandsForWorkspace: () => [],
+  prepareSkillCommandsForWorkspace: () => [],
 }));
 
 vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
@@ -65,7 +66,8 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn(async () => undefined),
 }));
 
-vi.mock("./reply/agent-runner.runtime.js", () => ({
+vi.mock("./reply/agent-runner-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/agent-runner-run.js")>()),
   runReplyAgent: async (params: {
     commandBody: string;
     followupRun: {

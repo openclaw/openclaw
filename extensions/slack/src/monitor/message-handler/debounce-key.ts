@@ -1,35 +1,28 @@
-// Slack plugin module implements debounce key behavior.
 import type { SlackMessageEvent } from "../../types.js";
 
 function resolveSlackSenderId(message: SlackMessageEvent): string | null {
   return message.user ?? message.bot_id ?? null;
 }
 
-function isSlackDirectMessageChannel(channelId: string): boolean {
-  return channelId.startsWith("D");
-}
-
-function isTopLevelSlackMessage(message: SlackMessageEvent): boolean {
-  return !message.thread_ts && !message.parent_user_id;
-}
-
 export function buildTopLevelSlackConversationKey(
   message: SlackMessageEvent,
   accountId: string,
+  teamId?: string,
 ): string | null {
-  if (!isTopLevelSlackMessage(message)) {
+  if (message.thread_ts || message.parent_user_id) {
     return null;
   }
   const senderId = resolveSlackSenderId(message);
   if (!senderId) {
     return null;
   }
-  return `slack:${accountId}:${message.channel}:${senderId}`;
+  return `slack:${accountId}:${teamId ? `${teamId}:` : ""}${message.channel}:${senderId}`;
 }
 
 export function buildSlackDebounceKey(
   message: SlackMessageEvent,
   accountId: string,
+  teamId?: string,
 ): string | null {
   const senderId = resolveSlackSenderId(message);
   if (!senderId) {
@@ -40,8 +33,8 @@ export function buildSlackDebounceKey(
     ? `${message.channel}:${message.thread_ts}`
     : message.parent_user_id && messageTs
       ? `${message.channel}:maybe-thread:${messageTs}`
-      : messageTs && !isSlackDirectMessageChannel(message.channel)
+      : messageTs && !message.channel.startsWith("D")
         ? `${message.channel}:${messageTs}`
         : message.channel;
-  return `slack:${accountId}:${threadKey}:${senderId}`;
+  return `slack:${accountId}:${teamId ? `${teamId}:` : ""}${threadKey}:${senderId}`;
 }

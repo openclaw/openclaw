@@ -1,7 +1,7 @@
 /**
  * Tests provider selection runtime helper behavior.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveConfiguredCapabilityProvider,
   resolveProviderRawConfig,
@@ -18,6 +18,18 @@ describe("plugin-sdk provider-selection-runtime", () => {
     { id: "first", autoSelectOrder: 1 },
     { id: "second", autoSelectOrder: 2, configured: true },
   ];
+
+  it("preserves JSON config keys without invoking prototype setters", () => {
+    const rawConfig = JSON.parse('{"__proto__":{"marker":"config-value"},"constructor":"literal"}');
+    const resolved = resolveProviderRawConfig({
+      providerId: "canonical",
+      providerConfigs: { canonical: rawConfig },
+    });
+
+    expect(Object.getPrototypeOf(resolved)).toBe(Object.prototype);
+    expect(Object.hasOwn(resolved, "__proto__")).toBe(true);
+    expect(resolved).toEqual(rawConfig);
+  });
 
   it("selects an explicit provider when it exists", () => {
     const selection = selectConfiguredOrAutoProvider({
@@ -72,19 +84,46 @@ describe("plugin-sdk provider-selection-runtime", () => {
     expect(resolution.providerConfig).toEqual({ providerId: "second" });
   });
 
-  it("merges canonical and selected provider config", () => {
-    expect(
-      resolveProviderRawConfig({
-        providerId: "canonical",
-        configuredProviderId: "alias",
-        providerConfigs: {
-          canonical: { apiKey: "default", model: "base" },
-          alias: { model: "alias-model" },
-        },
-      }),
-    ).toEqual({
-      apiKey: "default",
-      model: "alias-model",
+  it("retains the first unavailable provider when no auto candidate is available", () => {
+    const resolveProviderConfig = vi.fn();
+    const resolution = resolveConfiguredCapabilityProvider({
+      cfg: {},
+      cfgForResolve: {},
+      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
+      listProviders: () => providers,
+      isProviderAvailable: () => false,
+      resolveProviderConfig,
+      isProviderConfigured: () => true,
     });
+
+    expect(resolution).toEqual({
+      ok: false,
+      code: "provider-unavailable",
+      provider: providers[0],
+    });
+    expect(resolveProviderConfig).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      configuredProviderId: "other-alias",
+      expected: { apiKey: "default", model: "other-model", voice: "second", language: "en" },
+    },
+  ])(
+    "merges provider config with explicit selection $configuredProviderId",
+    ({ configuredProviderId, expected }) => {
+      expect(
+        resolveProviderRawConfig({
+          providerId: "canonical",
+          providerAliases: ["alias", "other-alias"],
+          configuredProviderId,
+          providerConfigs: {
+            canonical: { apiKey: "default", model: "base" },
+            "other-alias": { model: "other-model", voice: "second", language: "en" },
+            alias: { model: "alias-model", voice: "first" },
+          },
+        }),
+      ).toEqual(expected);
+    },
+  );
 });

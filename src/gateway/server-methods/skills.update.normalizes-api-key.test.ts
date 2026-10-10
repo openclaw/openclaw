@@ -1,5 +1,7 @@
 // Skill update tests protect API-key normalization so redacted config sentinels
 // do not overwrite existing secret values.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
@@ -67,38 +69,6 @@ function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
 }
 
 describe("skills.update", () => {
-  it("strips embedded CR/LF from apiKey", async () => {
-    writtenConfig = null;
-    loadedConfig = {
-      skills: {
-        entries: {},
-      },
-    };
-
-    let ok: boolean | null = null;
-    let error: unknown = null;
-    await skillsHandlers["skills.update"]({
-      params: {
-        skillKey: "brave-search",
-        apiKey: "abc\r\ndef",
-      },
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-      context: { getRuntimeConfig: () => ({ skills: { entries: {} } }) } as never,
-      respond: (success, _result, err) => {
-        ok = success;
-        error = err;
-      },
-    });
-
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
-    expectWrittenSkillEntry("brave-search", {
-      apiKey: "abcdef",
-    });
-  });
-
   it("redacts apiKey and secret env values from the response but writes full values to config", async () => {
     writtenConfig = null;
     loadedConfig = {
@@ -108,10 +78,13 @@ describe("skills.update", () => {
     };
 
     let responseResult: unknown = null;
-    await skillsHandlers["skills.update"]({
+    await expectDefined(
+      skillsHandlers["skills.update"],
+      'skillsHandlers["skills.update"] test invariant',
+    )({
       params: {
         skillKey: "demo-skill",
-        apiKey: "secret-api-key-123",
+        apiKey: "secret-api-\r\nkey-123",
         env: {
           GEMINI_API_KEY: "secret-env-key-456",
           BRAVE_REGION: "us",
@@ -160,7 +133,10 @@ describe("skills.update", () => {
       },
     };
 
-    await skillsHandlers["skills.update"]({
+    await expectDefined(
+      skillsHandlers["skills.update"],
+      'skillsHandlers["skills.update"] test invariant',
+    )({
       params: {
         skillKey: "demo-skill",
         apiKey: REDACTED_SENTINEL,

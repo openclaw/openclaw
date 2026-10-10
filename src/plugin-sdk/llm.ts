@@ -1,22 +1,43 @@
 /**
- * Public SDK subpath for LLM provider registration, streaming, model utils, and validation.
+ * Public SDK subpath for LLM streaming, model utils, and validation.
  */
+export type { ApiProvider } from "@openclaw/ai";
+export { resolveProviderContext } from "../../packages/ai/src/provider-types.js";
+export { resolveOpenAIRequestReasoning } from "../../packages/ai/src/providers/openai-request-reasoning.js";
 export {
+  resolveOpenAIModelReasoningEfforts,
+  resolveOpenAIReasoningEffortMapping,
+} from "../../packages/ai/src/providers/openai-reasoning-effort.js";
+export { resolveOpenAIReasoningEffortMap } from "../../packages/ai/src/transports/openai-reasoning-compat.js";
+export type {
+  ProviderContext,
+  ProviderModel,
+  ProviderStreamFunction,
+  ProviderStreamOptions as ProviderCallStreamOptions,
+  VideoContent,
+} from "../../packages/ai/src/provider-types.js";
+export {
+  calculateCost,
+  clampThinkingLevel,
+  createToolArgumentPreviewSchedule,
   getApiProvider,
   getApiProviders,
-  registerApiProvider,
-  unregisterApiProviders,
-  type ApiProvider,
-} from "../llm/api-registry.js";
-export { getEnvApiKey } from "../llm/env-api-keys.js";
-export { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
+  getEnvApiKey,
+  parseStreamingJson,
+  sanitizeSurrogates,
+} from "@openclaw/ai/internal/runtime";
 export {
   adjustMaxTokensForThinking,
   buildBaseOptions,
   clampReasoning,
-} from "../llm/providers/simple-options.js";
-export { transformMessages } from "../llm/providers/transform-messages.js";
+} from "@openclaw/ai/internal/shared";
+export { transformMessages } from "@openclaw/ai/internal/shared";
 export { complete, completeSimple, stream, streamSimple } from "../llm/stream.js";
+export {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  runtimeContextContentToText,
+} from "../llm/types.js";
 export type {
   Api,
   AssistantMessage,
@@ -30,6 +51,7 @@ export type {
   ModelThinkingLevel,
   ProviderResponse,
   ProviderStreamOptions,
+  RuntimeContextMessage,
   SimpleStreamOptions,
   StopReason,
   StreamFunction,
@@ -48,7 +70,5 @@ export {
   AssistantMessageEventStream,
   createAssistantMessageEventStream,
 } from "../../packages/llm-core/src/utils/event-stream.js";
-export { parseStreamingJson } from "../llm/utils/json-parse.js";
 export { createHttpProxyAgentsForTarget } from "../llm/utils/node-http-proxy.js";
-export { sanitizeSurrogates } from "../llm/utils/sanitize-unicode.js";
 export { validateToolArguments, validateToolCall } from "../../packages/llm-core/src/validation.js";

@@ -1,11 +1,41 @@
-// Codex plugin module implements command rpc behavior.
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
+import { prepareAgentRuntimeAuth } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveAgentDir,
+  resolveSessionAgentIdsStrict,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  captureSessionEntryCurrentCheck,
+  composeSessionEntryCommitGuards,
+} from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
+import { prepareCodexAppServerAuthBinding } from "./app-server/auth-binding.js";
+import { resolveCodexAppServerPreparedAuthHandoff } from "./app-server/auth-bridge.js";
+import {
+  resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileStore,
+  type resolveCodexAppServerAuthProfileIdForAgent,
+} from "./app-server/auth-profile.js";
 import {
   CODEX_CONTROL_METHODS,
   describeControlFailure,
   type CodexControlMethod,
 } from "./app-server/capabilities.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerIndeterminateTransportError,
+  isCodexAppServerOverloadError,
+  type CodexAppServerClient,
+} from "./app-server/client.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexAppServerStartOptions,
+} from "./app-server/config.js";
 import { listCodexAppServerModels } from "./app-server/models.js";
 import type {
   CodexAppServerRequestMethod,
@@ -13,9 +43,25 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./app-server/protocol.js";
-import { requestCodexAppServerJson } from "./app-server/request.js";
+import { isJsonObject } from "./app-server/protocol.js";
+import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
+import {
+  requestCodexAppServerJson,
+  withCodexAppServerJsonClient,
+  type CodexAppServerScopedRequest,
+} from "./app-server/request.js";
+import { createCodexSessionGenerationSupersededError } from "./app-server/session-binding.js";
+import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
+import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
+
+export type SafeCodexControlRequestFn = (
+  pluginConfig: unknown,
+  method: CodexControlMethod,
+  requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
+) => Promise<SafeValue<JsonValue | undefined>>;
 
 type AuthProfileOrderConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
@@ -23,17 +69,176 @@ type AuthProfileOrderConfig = Parameters<
 
 export type CodexControlRequestOptions = {
   config?: AuthProfileOrderConfig;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentId?: string;
   agentDir?: string;
   sessionKey?: string;
   sessionId?: string;
+  storePath?: string;
   isolated?: boolean;
+  startOptions?: CodexAppServerStartOptions;
+  timeoutMs?: number;
+  assertCurrent?: () => void;
+  /** Owner authority applies before dispatch; accepted responses still settle. */
+  assertOwnerCurrent?: () => void;
+  catalogPreview?: true;
+  catalogPreviewCache?: CodexCatalogPreviewCache;
+  catalogRows?: number;
+  controlObservation?: CodexControlRequestObservation;
+  beforeRequest?: (
+    request: CodexAppServerScopedRequest,
+    client: CodexAppServerClient,
+    scope: { assertCurrent: () => void },
+  ) => Promise<void>;
+  /** Settles ownership while leased, including final authority checks before committing. */
+  onResponse?: (
+    response: unknown,
+    client: CodexAppServerClient,
+    auth: { authProfileId?: string; assertCurrent: () => void },
+  ) => Promise<void>;
 };
+
+/** Selects the same prepared auth partition as an admitted session turn. */
+export async function prepareCodexControlSessionAuth(
+  options: CodexControlRequestOptions,
+  startOptions: CodexAppServerStartOptions,
+) {
+  if (!options.config || !options.sessionKey || !options.sessionId) {
+    if (options.onResponse) {
+      throw new Error("Codex control subscription requires admitted session authority.");
+    }
+    return {
+      authProfileId: options.authProfileId ?? undefined,
+      clientOptions: { authProfileId: options.authProfileId },
+    };
+  }
+  const config = options.config;
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
+    config,
+    sessionKey: options.sessionKey,
+    agentId: options.agentId,
+  });
+  const agentDir = options.agentDir ?? resolveAgentDir(config, sessionAgentId);
+  const workspaceDir = resolveAgentWorkspaceDir(config, sessionAgentId);
+  const storePath =
+    options.storePath?.trim() ||
+    resolveStorePath(config.session?.store, { agentId: sessionAgentId });
+  const current = await captureSessionEntryCurrentCheck({
+    agentId: sessionAgentId,
+    storePath,
+    sessionKey: options.sessionKey,
+    fields: [
+      "model",
+      "modelProvider",
+      "modelOverride",
+      "providerOverride",
+      "authProfileOverride",
+      "authProfileOverrideSource",
+    ],
+  });
+  const { entry } = current;
+  const assertCurrent = composeSessionEntryCommitGuards([
+    options.assertCurrent,
+    current.assertCurrent,
+  ]);
+  assertCurrent();
+  if (entry?.sessionId !== options.sessionId) {
+    throw createCodexSessionGenerationSupersededError(options.sessionId);
+  }
+  if (options.authProfileId === null || startOptions.homeScope === "user") {
+    return {
+      authProfileId: options.authProfileId ?? undefined,
+      clientOptions: {
+        authProfileId: options.authProfileId,
+        assertCurrent,
+        storePath,
+        agentId: sessionAgentId,
+      },
+    };
+  }
+  const model = resolveSessionModelRef(config, entry, sessionAgentId);
+  const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
+  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
+  const { plan, attempts } = prepareAgentRuntimeAuth({
+    provider: model.provider,
+    modelId: model.model,
+    config,
+    agentDir,
+    workspaceDir,
+    authProfileStore: store,
+    sessionAuthProfileId: authProfileId,
+    sessionAuthProfileSource: entry?.authProfileOverrideSource,
+    harnessId: "codex",
+    harnessAuthBootstrap: "harness",
+  });
+  const route = plan.modelRoute;
+  // A control subscription must use the same prepared auth partition as a turn.
+  // Unsubscribe leaves Codex's native writer loaded for 30 minutes; another
+  // process cannot resume that thread, even after its OpenClaw binding is gone.
+  const resolvedAuth = route
+    ? await resolveApiKeyForProvider({
+        provider: route.provider,
+        modelId: route.modelId,
+        modelApi: route.api,
+        cfg: config,
+        agentDir,
+        workspaceDir,
+        store,
+        profileId: attempts[0]?.profileId,
+        lockedProfile: plan.forwardedAuthProfileSource === "user",
+        allowAuthProfileFallback: attempts[0]?.allowAuthProfileFallback,
+        skipSetupProviderFallback: true,
+      })
+    : undefined;
+  const handoff = await resolveCodexAppServerPreparedAuthHandoff({
+    authRequirement: route?.authRequirement,
+    resolvedApiKey: resolvedAuth?.apiKey,
+    authProfileId: route
+      ? plan.forwardedAuthProfileId
+      : resolveCodexAppServerAuthProfileId({
+          authProfileId: plan.forwardedAuthProfileId,
+          store,
+          config,
+        }),
+    authProfileStore: store,
+    agentDir,
+    homeScope: startOptions.homeScope ?? "agent",
+    config,
+    subscriptionProfileRequiredError:
+      "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
+    subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
+  });
+  const binding = handoff.authProfileId
+    ? await prepareCodexAppServerAuthBinding({
+        authProfileId: handoff.authProfileId,
+        authProfileStore: store,
+        agentDir,
+        config,
+      })
+    : undefined;
+  assertCurrent();
+  return {
+    authProfileId: handoff.authProfileId,
+    clientOptions: {
+      ...(handoff.preparedAuth
+        ? { preparedAuth: handoff.preparedAuth }
+        : { authProfileId: handoff.authProfileId }),
+      authRequirement: route?.authRequirement,
+      authProfileStore: binding?.authProfileStore ?? store,
+      authBindingFingerprint: binding?.fingerprint,
+      agentDir,
+      assertCurrent,
+      storePath,
+      agentId: sessionAgentId,
+    },
+  };
+}
 
 export function requestOptions(
   pluginConfig: unknown,
   limit: number,
   config?: AuthProfileOrderConfig,
+  agentDir?: string,
 ) {
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   return {
@@ -41,6 +246,7 @@ export function requestOptions(
     timeoutMs: runtime.requestTimeoutMs,
     startOptions: runtime.start,
     config,
+    agentDir,
   };
 }
 
@@ -62,20 +268,117 @@ export async function codexControlRequest(
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams?: unknown,
-  options: CodexControlRequestOptions = {},
-) {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  inputOptions: CodexControlRequestOptions = {},
+): Promise<unknown> {
+  const options = { ...inputOptions };
+  try {
+    options.controlObservation?.phase("prepare");
+  } catch {
+    // Diagnostic callbacks cannot change control-request behavior.
+  }
+  // Explicit control options own the connection; harness defaults would reject user-home Unix.
+  const runtime = options.startOptions
+    ? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig })
+    : resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const startOptions = options.startOptions ?? runtime.start;
+  // Native-auth forks also settle detached subscriptions on their selected
+  // local or remote connection without acquiring an OpenClaw session login.
+  const nativeAuthFork =
+    method === "thread/fork" &&
+    options.startOptions !== undefined &&
+    options.authProfileId === null;
+  const auth =
+    options.onResponse && !nativeAuthFork
+      ? await prepareCodexControlSessionAuth(options, startOptions)
+      : {
+          authProfileId: options.authProfileId ?? undefined,
+          clientOptions: { authProfileId: options.authProfileId },
+        };
+  const controlRequestOptions = {
+    timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
+    assertCurrent: options.assertCurrent,
+    startOptions,
+    config: options.config,
+    agentId: options.agentId,
+    sessionKey: options.sessionKey,
+    sessionId: options.sessionId,
+    storePath: options.storePath,
+    agentDir: options.agentDir,
+    isolated: options.isolated,
+    ...(options.catalogPreview
+      ? {
+          catalogPreview: true as const,
+          catalogPreviewCache: options.catalogPreviewCache,
+          catalogRows: options.catalogRows,
+        }
+      : {}),
+    ...(options.controlObservation ? { controlObservation: options.controlObservation } : {}),
+    ...auth.clientOptions,
+  };
+  if (options.onResponse || options.beforeRequest) {
+    return await withCodexAppServerJsonClient(
+      controlRequestOptions,
+      async (request, client, scope) => {
+        await options.beforeRequest?.(request, client, scope);
+        scope.assertCurrent();
+        let response: unknown;
+        if (method === "thread/resume") {
+          if (!isJsonObject(requestParams) || typeof requestParams.threadId !== "string") {
+            throw new Error("Codex thread/resume requires a thread id.");
+          }
+          response = await resumeCodexAppServerThread({
+            client,
+            request: { ...requestParams, threadId: requestParams.threadId },
+            requestResume: () =>
+              request({ method, requestParams, assertCurrent: options.assertOwnerCurrent }),
+            abandonClient: () => closeCodexStartupClientBestEffort(client),
+          });
+        } else {
+          try {
+            response = await request({
+              method,
+              requestParams,
+              assertCurrent: options.assertOwnerCurrent,
+            });
+          } catch (error) {
+            if (
+              nativeAuthFork &&
+              (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+                isCodexAppServerIndeterminateTransportError(error) ||
+                (error instanceof CodexAppServerRpcError && !isCodexAppServerOverloadError(error)))
+            ) {
+              // Codex can subscribe before response assembly fails. Without the
+              // new thread id, only the exact client can settle that subscription.
+              await closeCodexStartupClientBestEffort(client);
+            }
+            throw error;
+          }
+        }
+        if (options.onResponse) {
+          // Settlement fences its commit; a later guard cannot turn that committed result into failure.
+          await options.onResponse(response, client, {
+            authProfileId: auth.authProfileId,
+            assertCurrent: scope.assertCurrent,
+          });
+        } else {
+          scope.assertCurrent();
+        }
+        return response;
+      },
+    );
+  }
   return await requestCodexAppServerJson({
     method,
     requestParams,
-    timeoutMs: runtime.requestTimeoutMs,
-    startOptions: runtime.start,
-    config: options.config,
-    sessionKey: options.sessionKey,
-    sessionId: options.sessionId,
-    authProfileId: options.authProfileId,
-    agentDir: options.agentDir,
-    isolated: options.isolated,
+    ...controlRequestOptions,
+    ...(options.assertOwnerCurrent
+      ? {
+          assertCurrent: () => {
+            options.assertOwnerCurrent?.();
+            options.assertCurrent?.();
+          },
+        }
+      : {}),
   });
 }
 
@@ -96,49 +399,35 @@ export async function safeCodexControlRequest(
   method: CodexControlMethod,
   requestParams?: unknown,
   options: CodexControlRequestOptions = {},
-) {
+): Promise<SafeValue<unknown>> {
   return await safeValue(
     async () =>
       await codexControlRequest(pluginConfig, method, requestParams as JsonValue, options),
   );
 }
 
-async function safeCodexModelList(
-  pluginConfig: unknown,
-  limit: number,
-  config?: AuthProfileOrderConfig,
-) {
-  return await safeValue(
-    async () => await listCodexAppServerModels(requestOptions(pluginConfig, limit, config)),
-  );
-}
-
 export async function readCodexStatusProbes(
   pluginConfig: unknown,
   config?: AuthProfileOrderConfig,
+  agentDir?: string,
 ) {
+  const options = { config, agentDir };
+  const probe = <M extends CodexControlRequestMethod>(
+    method: M,
+    params: CodexAppServerRequestParams<M>,
+  ) => safeCodexControlRequest(pluginConfig, method, params, options);
   const [models, account, limits, mcps, skills] = await Promise.all([
-    safeCodexModelList(pluginConfig, 20, config),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.account,
-      { refreshToken: false },
-      { config },
-    ),
-    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.rateLimits, undefined, { config }),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.listMcpServers,
-      { limit: 100 },
-      { config },
-    ),
-    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}, { config }),
+    safeValue(() => listCodexAppServerModels(requestOptions(pluginConfig, 20, config, agentDir))),
+    probe(CODEX_CONTROL_METHODS.account, { refreshToken: false }),
+    probe(CODEX_CONTROL_METHODS.rateLimits, undefined),
+    probe(CODEX_CONTROL_METHODS.listMcpServers, { limit: 100 }),
+    probe(CODEX_CONTROL_METHODS.listSkills, {}),
   ]);
 
   return { models, account, limits, mcps, skills };
 }
 
-export async function safeValue<T>(read: () => Promise<T>): Promise<SafeValue<T>> {
+async function safeValue<T>(read: () => Promise<T>): Promise<SafeValue<T>> {
   try {
     return { ok: true, value: await read() };
   } catch (error) {

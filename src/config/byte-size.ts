@@ -1,4 +1,3 @@
-// Parses byte-size config values for logging and retention limits.
 import { parseByteSize } from "../cli/parse-bytes.js";
 
 /**
@@ -6,9 +5,9 @@ import { parseByteSize } from "../cli/parse-bytes.js";
  * Accepts non-negative numbers or strings like "2mb".
  */
 export function parseNonNegativeByteSize(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (typeof value === "number") {
     const int = Math.floor(value);
-    return int >= 0 ? int : null;
+    return Number.isSafeInteger(int) && int >= 0 ? int : null;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();

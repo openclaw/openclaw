@@ -1,13 +1,20 @@
 {
   "id": "pixverse",
+  "categories": ["media"],
   "name": "PixVerse",
   "description": "OpenClaw PixVerse video generation provider plugin.",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerAuthEnvVars": {
-    "pixverse": ["PIXVERSE_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "pixverse",
+        "authMethods": ["api-key"],
+        "envVars": ["PIXVERSE_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

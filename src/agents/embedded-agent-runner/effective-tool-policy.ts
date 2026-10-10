@@ -1,58 +1,28 @@
-/**
- * Applies final effective tool policy to embedded-agent runtime settings.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getPluginToolMeta } from "../../plugins/tools.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
-  resolveConversationCapabilityProfile,
-  type ResolvedConversationCapabilityProfile,
-} from "../conversation-capability-profile.js";
+  buildConversationToolPolicyPipelineSteps,
+  resolveConversationToolPolicies,
+} from "../conversation-tool-policy-pipeline.js";
 import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-context.js";
-import {
-  applyToolPolicyPipeline,
-  buildDefaultToolPolicyPipelineSteps,
-  type ToolPolicyPipelineStep,
-} from "../tool-policy-pipeline.js";
-import { collectExplicitDenylist, mergeAlsoAllowPolicy } from "../tool-policy.js";
+import { applyToolPolicyPipeline, type ToolPolicyFilterEvent } from "../tool-policy-pipeline.js";
+import { collectExplicitDenylist } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-/**
- * Identity inputs used by `resolveGroupToolPolicy` to look up channel/group
- * tool policy. These fields are an authorization signal (they can widen
- * bundled-tool availability via a group-scoped allowlist), so callers MUST
- * pass values derived from server-verified session metadata (session key,
- * inbound transport event), not from tool-call or model-controlled input.
- * The helper cross-checks caller-provided `groupId` against session-derived
- * group ids and drops the caller value when they disagree, but it cannot
- * detect drift on fields that have no session-bound counterpart.
- */
+// Reuse core tool construction's server-verified capability profile: group/sender
+// policy can widen access, so model-controlled input must never supply it.
 type FinalEffectiveToolPolicyParams = {
-  // Tools appended to the core tool set after `createOpenClawCodingTools()`
-  // has already applied the shared tool-policy pipeline (e.g. bundled
-  // MCP/LSP tools). Only these are filtered here; re-running the pipeline over
-  // the already-filtered core tools would drop plugin tools whose WeakMap
-  // metadata no longer survives core-tool wrapping/normalization.
+  // Filter only added MCP/LSP tools; core wrapping has already lost the WeakMap
+  // metadata needed to safely rerun its policy pipeline.
   bundledTools: AnyAgentTool[];
   config?: OpenClawConfig;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  sessionKey?: string;
-  agentId?: string;
-  modelProvider?: string;
-  modelId?: string;
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  senderIsOwner?: boolean;
-  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
   warn: (message: string) => void;
-  toolPolicyAuditLogLevel?: "info" | "debug";
+  onFilter?: (event: ToolPolicyFilterEvent) => void;
 };
 
 export function applyFinalEffectiveToolPolicy(
@@ -61,27 +31,7 @@ export function applyFinalEffectiveToolPolicy(
   if (params.bundledTools.length === 0) {
     return params.bundledTools;
   }
-  const capabilityProfile =
-    params.conversationCapabilityProfile ??
-    resolveConversationCapabilityProfile({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      agentAccountId: params.agentAccountId,
-      messageProvider: params.messageProvider,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-      sandboxToolPolicy: params.sandboxToolPolicy,
-    });
+  const capabilityProfile = params.conversationCapabilityProfile;
   const { trustedGroup } = capabilityProfile.policy;
   // Resolve here for warnings and to strip caller-only group metadata before
   // this pass; resolveGroupToolPolicy re-checks internally for all callers.
@@ -90,66 +40,24 @@ export function applyFinalEffectiveToolPolicy(
       "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
     );
   }
-  const {
-    agentId,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profilePolicy,
-    providerProfilePolicy,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-    groupPolicy,
-    senderPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-  } = capabilityProfile.policy;
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
-  // Suppress unavailable-core-tool warnings on every step of this pass.
-  // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array
-  // it's filtering, and this pass only sees the bundled MCP/LSP subset.
-  // Normal core allowlist entries (e.g. `tools.allow: ["read", "exec"]`)
-  // would look "unknown" relative to that reduced set even though they are
-  // valid core names already resolved by `createOpenClawCodingTools()` in
-  // the first pass — keeping those warnings on would pollute logs and evict
-  // real diagnostics from the shared warning cache. Genuinely unknown
-  // entries (typos) still surface through the `otherEntries` path in
-  // `applyToolPolicyPipeline`.
-  const pipelineSteps: ToolPolicyPipelineStep[] = [
-    ...buildDefaultToolPolicyPipelineSteps({
-      profilePolicy: profilePolicyWithAlsoAllow,
-      profile,
-      profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-      providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-      providerProfile,
-      providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      agentId,
-    }),
-    { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
-    { policy: subagentPolicy, label: "subagent tools.allow" },
-    { policy: inheritedToolPolicy, label: "inherited tools" },
-  ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
+  const policies = resolveConversationToolPolicies({ capabilityProfile });
+  // Core tools are absent from this subset but already validated. Suppress only
+  // their unavailable warnings; the pipeline still reports unknown entries.
+  const pipelineSteps = buildConversationToolPolicyPipelineSteps({
+    capabilityProfile,
+    policies,
+    includeRuntimeToolPolicy: false,
+  }).map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: params.bundledTools,
-    toolMeta: (tool) => getPluginToolMeta(tool),
+    toolMeta: getPluginToolMeta,
     warn: params.warn,
     steps: pipelineSteps,
-    auditLogLevel: params.toolPolicyAuditLogLevel,
+    onFilter: params.onFilter,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
       toolDenylist: collectExplicitDenylist(pipelineSteps.map((step) => step.policy)),
     }),
   });

@@ -1,18 +1,16 @@
 /** Normalizes manifest-declared CLI command aliases. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isRecord } from "../utils.js";
-
-export type PluginManifestCommandAliasKind = "runtime-slash";
 
 /** One command alias declared by a plugin manifest. */
 export type PluginManifestCommandAlias = {
   /** Command-like name users may put in plugin config by mistake. */
   name: string;
   /** Command family, used for targeted diagnostics. */
-  kind?: PluginManifestCommandAliasKind;
+  kind?: "runtime-slash";
   /** Optional root CLI command that handles related CLI operations. */
   cliCommand?: string;
 };
@@ -26,15 +24,8 @@ export type PluginManifestToolOwnerRecord = {
   toolName: string;
   pluginId: string;
   /**
-   * "loaded" — the owning plugin passes control-plane availability filters and
-   * the tool itself passes manifest-tool-availability checks (configSignals/
-   * authSignals). The diagnostic can say the tool is available from this plugin.
-   *
-   * "manifest-only" — the manifest claims ownership but availability checks
-   * either failed (plugin denied/disabled, missing required config) or were
-   * not performed (pure registry lookup with no plugin metadata snapshot).
-   * Emit a softer "may be provided by" message in that case so the diagnostic
-   * does not over-assert about plugins that the runtime never registered.
+   * "loaded" passes manifest policy and tool availability checks; "manifest-only"
+   * supports only a "may be provided by" diagnostic. Neither proves live registration.
    */
   availability?: "loaded" | "manifest-only";
 };
@@ -48,7 +39,7 @@ export type PluginManifestCommandAliasRegistry = {
   }[];
 };
 
-/** Normalizes manifest command alias records and reports duplicate/invalid entries. */
+/** Normalizes manifest command alias records, omitting invalid entries. */
 export function normalizeManifestCommandAliases(
   value: unknown,
 ): PluginManifestCommandAlias[] | undefined {

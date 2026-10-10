@@ -1,4 +1,3 @@
-/** Command authorization helpers for owner and allowlist checks. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,19 +5,40 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getLoadedChannelPluginById,
+  getLoadedChannelPluginForRead,
   listLoadedChannelPlugins,
 } from "../channels/plugins/registry-loaded.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  prepareChannelOperatorAdmin,
+  resolveChannelOperatorAdminAuthority,
+  resolveUpdateChannelOperatorAdminIdentityAuthority,
+  type ResolvedChannelOperatorIdentity,
+} from "../gateway/channel-operator-authority.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+import { prepareConfiguredCommandOwnerAuthority } from "../state/user-channel-identity-operations.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import { isNativeCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
-import { shouldUseFromAsSenderFallback } from "./sender-identity.js";
+import {
+  captureCommandOwnerAssertion,
+  getCommandOwnerAuthority,
+  type CommandOwnerAssertion,
+} from "./command-owner-authority.js";
+import { getCommandSenderAuthority } from "./command-sender-authority.js";
+import {
+  formatAllowFromList,
+  normalizeAllowFromEntry,
+  resolveSenderCandidates,
+  type AllowFromParams,
+} from "./sender-identity.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -26,33 +46,34 @@ export type CommandAuthorization = {
   ownerList: string[];
   senderId?: string;
   senderIsOwner: boolean;
+  /** Rechecks the host-admitted owner capability after awaited work, when one is present. */
+  assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
   from?: string;
   to?: string;
 };
 
-type InferredProviderCandidate = {
+type CommandAuthorizationParams = {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  commandAuthorized: boolean;
+};
+
+type CommandSenderAccess = "denied" | "reset-only" | "commands";
+
+type ProviderResolution = {
   providerId: ChannelId;
   hadResolutionError: boolean;
 };
 
-type InferredProviderProbe = {
-  candidates: InferredProviderCandidate[];
-  droppedResolutionError: boolean;
+type AllowFromAccountConfig = {
+  allowFrom?: Array<string | number>;
+  dm?: { allowFrom?: Array<string | number> };
 };
 
-type ProviderAllowFromResolution = {
-  allowFrom: Array<string | number>;
-  allowFromList: string[];
-  hadResolutionError: boolean;
-};
-
-type OwnerAuthorizationState = {
-  allowAll: boolean;
-  ownerAllowAll: boolean;
-  ownerCandidatesForCommands: string[];
-  explicitOwners: string[];
-  ownerList: string[];
+type AllowFromChannelConfig = AllowFromAccountConfig & {
+  defaultAccount?: string;
+  accounts?: Record<string, AllowFromAccountConfig | undefined>;
 };
 
 function resolveProviderFromContext(
@@ -93,223 +114,122 @@ function resolveProviderFromContext(
       return { providerId: normalized, hadResolutionError: false };
     }
   }
-  const inferredProviders = probeInferredProviders(ctx, cfg);
-  const inferred = inferredProviders.candidates;
-  if (inferred.length === 1) {
-    return {
-      providerId: inferred[0].providerId,
-      hadResolutionError: inferred[0].hadResolutionError,
-    };
+  let droppedResolutionError = false;
+  const inferredCandidates: ProviderResolution[] = [];
+  for (const plugin of listLoadedChannelPlugins()) {
+    const resolved = resolveProviderAllowFrom({
+      plugin,
+      cfg,
+      accountId: ctx.AccountId,
+    });
+    if (resolved.allowFromList.length > 0) {
+      inferredCandidates.push({
+        providerId: plugin.id,
+        hadResolutionError: resolved.hadResolutionError,
+      });
+    } else if (resolved.hadResolutionError) {
+      droppedResolutionError = true;
+    }
+  }
+  const inferred = inferredCandidates[0];
+  if (inferredCandidates.length === 1 && inferred) {
+    return inferred;
   }
   return {
     providerId: undefined,
     hadResolutionError:
-      inferredProviders.droppedResolutionError ||
-      inferred.some((entry) => entry.hadResolutionError),
+      droppedResolutionError || inferredCandidates.some((entry) => entry.hadResolutionError),
   };
-}
-
-function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredProviderProbe {
-  let droppedResolutionError = false;
-  const candidates = listLoadedChannelPlugins()
-    .map((plugin) => {
-      const resolvedAllowFrom = buildProviderAllowFromResolution({
-        plugin: plugin as ChannelPlugin,
-        cfg,
-        accountId: ctx.AccountId,
-      });
-      if (resolvedAllowFrom.allowFromList.length === 0) {
-        if (resolvedAllowFrom.hadResolutionError) {
-          droppedResolutionError = true;
-        }
-        return null;
-      }
-      return {
-        providerId: plugin.id,
-        hadResolutionError: resolvedAllowFrom.hadResolutionError,
-      };
-    })
-    .filter((value): value is InferredProviderCandidate => Boolean(value));
-  return {
-    candidates,
-    droppedResolutionError,
-  };
-}
-
-function formatAllowFromList(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  allowFrom: Array<string | number>;
-}): string[] {
-  const { plugin, cfg, accountId, allowFrom } = params;
-  if (!allowFrom || allowFrom.length === 0) {
-    return [];
-  }
-  if (plugin?.config?.formatAllowFrom) {
-    return plugin.config.formatAllowFrom({ cfg, accountId, allowFrom });
-  }
-  return normalizeStringEntries(allowFrom);
-}
-
-function normalizeAllowFromEntry(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  value: string;
-}): string[] {
-  const normalized = formatAllowFromList({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    allowFrom: [params.value],
-  });
-  return normalized.filter((entry) => entry.trim().length > 0);
 }
 
 function isWildcardAllowFromEntry(entry: string): boolean {
   return entry.trim() === "*";
 }
 
-function hasWildcardAllowFrom(list: string[]): boolean {
-  return list.some((entry) => isWildcardAllowFromEntry(entry));
-}
-
 function stripWildcardAllowFrom(list: string[]): string[] {
   return list.filter((entry) => !isWildcardAllowFromEntry(entry));
 }
 
-function resolveProviderAllowFrom(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): {
-  allowFrom: Array<string | number>;
-  hadResolutionError: boolean;
-} {
+function resolveProviderAllowFrom(
+  params: AllowFromParams & {
+    providerId?: ChannelId;
+    forceFallbackResolutionError?: boolean;
+  },
+) {
   const { plugin, cfg, accountId } = params;
-  const providerId = plugin?.id;
-  if (!plugin?.config?.resolveAllowFrom) {
-    return {
-      allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
-      hadResolutionError: false,
-    };
-  }
+  // An unloaded channel has no trusted allowlist owner unless failed provider inference forces it.
+  const providerId = params.forceFallbackResolutionError
+    ? (params.providerId ?? plugin?.id)
+    : plugin?.id;
+  const resolveFallback = () => resolveFallbackAllowFrom({ cfg, providerId, accountId });
+  let hadResolutionError = Boolean(params.forceFallbackResolutionError);
+  let allowFrom: Array<string | number>;
 
-  try {
-    const allowFrom = plugin.config.resolveAllowFrom({ cfg, accountId });
-    if (allowFrom == null) {
-      return {
-        allowFrom: [],
-        hadResolutionError: false,
-      };
-    }
-    if (!Array.isArray(allowFrom)) {
-      console.warn(
-        `[command-auth] resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom: invalid_result`,
-      );
-      return {
-        allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
-        hadResolutionError: true,
-      };
-    }
-    return {
-      allowFrom,
-      hadResolutionError: false,
-    };
-  } catch (err) {
-    console.warn(
-      `[command-auth] resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeAllowFromResolutionError(err)}`,
-    );
-    return {
-      allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
-      hadResolutionError: true,
-    };
-  }
-}
-
-function buildProviderAllowFromResolution(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  providerId?: ChannelId;
-  forceFallbackResolutionError?: boolean;
-}): ProviderAllowFromResolution {
-  const providerId = params.providerId ?? params.plugin?.id;
-  const resolvedAllowFrom = params.forceFallbackResolutionError
-    ? {
-        allowFrom: resolveFallbackAllowFrom({
-          cfg: params.cfg,
-          providerId,
-          accountId: params.accountId,
-        }),
-        hadResolutionError: true,
+  if (hadResolutionError || !plugin?.config?.resolveAllowFrom) {
+    allowFrom = resolveFallback();
+  } else {
+    try {
+      const resolved = plugin.config.resolveAllowFrom({ cfg, accountId });
+      if (resolved == null || Array.isArray(resolved)) {
+        allowFrom = resolved ?? [];
+      } else {
+        console.warn(
+          `[command-auth] resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom: invalid_result`,
+        );
+        hadResolutionError = true;
+        allowFrom = resolveFallback();
       }
-    : resolveProviderAllowFrom({
-        plugin: params.plugin,
-        cfg: params.cfg,
-        accountId: params.accountId,
-      });
+    } catch (err) {
+      console.warn(
+        `[command-auth] resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeAllowFromResolutionError(err)}`,
+      );
+      hadResolutionError = true;
+      allowFrom = resolveFallback();
+    }
+  }
   return {
-    ...resolvedAllowFrom,
-    allowFromList: formatAllowFromList({
-      plugin: params.plugin,
-      cfg: params.cfg,
-      accountId: params.accountId,
-      allowFrom: resolvedAllowFrom.allowFrom,
-    }),
+    allowFromList: formatAllowFromList({ plugin, cfg, accountId, allowFrom }),
+    hadResolutionError,
   };
 }
 
 function describeAllowFromResolutionError(err: unknown): string {
-  if (err instanceof Error) {
-    const name = normalizeOptionalString(err.name) ?? "";
-    return name || "Error";
-  }
-  return "unknown_error";
+  return err instanceof Error ? (normalizeOptionalString(err.name) ?? "Error") : "unknown_error";
 }
 
-function resolveOwnerAllowFromList(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  providerId?: ChannelId;
-  allowFrom?: Array<string | number>;
-}): string[] {
+function resolveOwnerAllowFromList(
+  params: AllowFromParams & { providerId?: ChannelId; allowFrom?: Array<string | number> },
+): string[] {
   const raw = params.allowFrom ?? params.cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(raw) || raw.length === 0) {
     return [];
   }
   const filtered: string[] = [];
-  for (const entry of raw) {
-    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
-    if (!trimmed) {
+  for (const trimmed of normalizeStringEntries(raw.map((entry) => entry ?? ""))) {
+    const separatorIndex = trimmed.indexOf(":");
+    const prefix = trimmed.slice(0, separatorIndex);
+    const channel = separatorIndex > 0 ? normalizeAnyChannelId(prefix) : undefined;
+    if (!channel) {
+      filtered.push(trimmed);
       continue;
     }
-    const separatorIndex = trimmed.indexOf(":");
-    if (separatorIndex > 0) {
-      const prefix = trimmed.slice(0, separatorIndex);
-      const channel = normalizeAnyChannelId(prefix);
-      if (channel) {
-        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
-        if (!params.providerId || channel !== params.providerId) {
-          continue;
-        }
-        const remainder = trimmed.slice(separatorIndex + 1).trim();
-        if (remainder) {
-          filtered.push(remainder);
-        }
-        continue;
-      }
+    // Typed direct targets are canonical for plugins that require the user kind.
+    // Their allowlist formatter owns the conversion to a native sender identity.
+    if (
+      !params.providerId ||
+      channel !== params.providerId ||
+      (normalizeChatChannelId(prefix) &&
+        /^[^:]+:user:[^:\s*]+$/i.test(trimmed) &&
+        params.plugin?.messaging?.directTargetStyle !== "user-prefixed")
+    ) {
+      continue;
     }
-    filtered.push(trimmed);
+    const remainder = trimmed.slice(separatorIndex + 1).trim();
+    if (remainder) {
+      filtered.push(remainder);
+    }
   }
-  return formatAllowFromList({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    allowFrom: filtered,
-  });
+  return formatAllowFromList({ ...params, allowFrom: filtered });
 }
 
 /**
@@ -317,193 +237,98 @@ function resolveOwnerAllowFromList(params: {
  * Returns the provider-specific list if defined, otherwise the "*" global list.
  * Returns null if commands.allowFrom is not configured at all (fall back to channel allowFrom).
  */
-function resolveCommandsAllowFromList(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  providerId?: ChannelId;
-}): string[] | null {
-  const { plugin, cfg, accountId, providerId } = params;
-  const commandsAllowFrom = cfg.commands?.allowFrom;
+function resolveCommandsAllowFromList(
+  params: AllowFromParams & { providerId?: ChannelId },
+): string[] | null {
+  const commandsAllowFrom = params.cfg.commands?.allowFrom;
   if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
-    return null; // Not configured, fall back to channel allowFrom
+    // An absent command allowlist falls back to the channel's allowFrom.
+    return null;
   }
 
-  // Check provider-specific list first, then fall back to global "*"
-  const providerKey = providerId ?? "";
+  const providerKey = params.providerId ?? "";
   const providerList = commandsAllowFrom[providerKey];
   const globalList = commandsAllowFrom["*"];
 
   const rawList = Array.isArray(providerList) ? providerList : globalList;
   if (!Array.isArray(rawList)) {
-    return null; // No applicable list found
+    return null;
   }
 
-  return formatAllowFromList({
-    plugin,
-    cfg,
-    accountId,
-    allowFrom: rawList,
-  });
+  return formatAllowFromList({ ...params, allowFrom: rawList });
 }
 
-function resolveOwnerCandidatesForCommands(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to?: string;
-  allowAll: boolean;
-  allowFromList: string[];
-}): string[] {
-  if (params.allowAll) {
-    return [];
-  }
-  const ownerCandidatesForCommands = stripWildcardAllowFrom(params.allowFromList);
-  if (ownerCandidatesForCommands.length > 0 || !params.to) {
-    return ownerCandidatesForCommands;
-  }
-  const normalizedTo = normalizeAllowFromEntry({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    value: params.to,
-  });
-  return normalizedTo.length > 0 ? [...ownerCandidatesForCommands, ...normalizedTo] : [];
-}
-
-function resolveOwnerAuthorizationState(params: {
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  providerId?: ChannelId;
-  to?: string;
-  allowFromList: string[];
-  hadResolutionError: boolean;
-  configOwnerAllowFrom?: Array<string | number>;
-  contextOwnerAllowFrom?: Array<string | number>;
-}): OwnerAuthorizationState {
-  const configOwnerAllowFromList = resolveOwnerAllowFromList({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    providerId: params.providerId,
-    allowFrom: params.configOwnerAllowFrom,
-  });
+function resolveOwnerAuthorizationState(
+  params: AllowFromParams & {
+    providerId?: ChannelId;
+    to?: string;
+    allowFromList: string[];
+    hadResolutionError: boolean;
+    contextOwnerAllowFrom?: Array<string | number>;
+  },
+) {
+  const configOwnerAllowFromList = resolveOwnerAllowFromList(params);
   const contextOwnerAllowFromList = resolveOwnerAllowFromList({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    providerId: params.providerId,
+    ...params,
     allowFrom: params.contextOwnerAllowFrom,
   });
   const allowAll =
     !params.hadResolutionError &&
-    (params.allowFromList.length === 0 || hasWildcardAllowFrom(params.allowFromList));
-  const ownerCandidatesForCommands = resolveOwnerCandidatesForCommands({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    to: params.to,
-    allowAll,
-    allowFromList: params.allowFromList,
-  });
-  const ownerAllowAll = hasWildcardAllowFrom(configOwnerAllowFromList);
-  const explicitOwners = stripWildcardAllowFrom(configOwnerAllowFromList);
-  const explicitOverrides = stripWildcardAllowFrom(contextOwnerAllowFromList);
-  const ownerList = Array.from(
+    (params.allowFromList.length === 0 || params.allowFromList.some(isWildcardAllowFromEntry));
+  const channelCommandOwners = allowAll ? [] : stripWildcardAllowFrom(params.allowFromList);
+  if (!allowAll && channelCommandOwners.length === 0 && params.to) {
+    channelCommandOwners.push(...normalizeAllowFromEntry({ ...params, value: params.to }));
+  }
+  const explicitOwners = Array.from(new Set(stripWildcardAllowFrom(configOwnerAllowFromList)));
+  const contextCommandOwners = stripWildcardAllowFrom(contextOwnerAllowFromList);
+  // Channel and context lists can authorize commands within one transport, but only the global
+  // owner list grants owner-only command and action authority.
+  const commandOwnerCandidates = Array.from(
     new Set(
       explicitOwners.length > 0
         ? explicitOwners
-        : ownerAllowAll
-          ? []
-          : explicitOverrides.length > 0
-            ? explicitOverrides
-            : ownerCandidatesForCommands,
+        : contextCommandOwners.length > 0
+          ? contextCommandOwners
+          : channelCommandOwners,
     ),
   );
   return {
-    allowAll,
-    ownerAllowAll,
-    ownerCandidatesForCommands,
+    commandOwnerCandidates,
     explicitOwners,
-    ownerList,
   };
 }
 
 function resolveCommandSenderAuthorization(params: {
   commandAuthorized: boolean;
   enforceOwnerForCommands: boolean;
-  nativeCommandAuthorized: boolean;
   isOwnerForCommands: boolean;
   senderCandidates: string[];
   commandsAllowFromList: string[] | null;
   providerResolutionError: boolean;
   commandsAllowFromConfigured: boolean;
-}): boolean {
+}): CommandSenderAccess {
   if (params.enforceOwnerForCommands && !params.isOwnerForCommands) {
-    return false;
+    return "denied";
   }
   if (
     params.commandsAllowFromList !== null ||
     (params.providerResolutionError && params.commandsAllowFromConfigured)
   ) {
-    const commandsAllowFromList = params.commandsAllowFromList;
-    const commandsAllowAll =
-      !params.providerResolutionError &&
-      Boolean(commandsAllowFromList && hasWildcardAllowFrom(commandsAllowFromList));
-    const matchedCommandsAllowFrom = commandsAllowFromList?.length
-      ? params.senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
-      : undefined;
-    return (
-      !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
-    );
-  }
-  return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
-}
-
-function resolveSenderCandidates(params: {
-  plugin?: ChannelPlugin;
-  providerId?: ChannelId;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  senderId?: string | null;
-  senderE164?: string | null;
-  from?: string | null;
-  chatType?: string | null;
-}): string[] {
-  const { plugin, cfg, accountId } = params;
-  const candidates: string[] = [];
-  const pushCandidate = (value?: string | null) => {
-    const trimmed = normalizeOptionalString(value) ?? "";
-    if (!trimmed) {
-      return;
+    if (params.providerResolutionError) {
+      return "denied";
     }
-    candidates.push(trimmed);
-  };
-  if (plugin?.commands?.preferSenderE164ForCommands) {
-    pushCandidate(params.senderE164);
-    pushCandidate(params.senderId);
-  } else {
-    pushCandidate(params.senderId);
-    pushCandidate(params.senderE164);
+    return params.commandsAllowFromList?.some(
+      (entry) => isWildcardAllowFromEntry(entry) || params.senderCandidates.includes(entry),
+    )
+      ? "commands"
+      : "denied";
   }
-  if (
-    candidates.length === 0 &&
-    shouldUseFromAsSenderFallback({ from: params.from, chatType: params.chatType })
-  ) {
-    pushCandidate(params.from);
+  if (!params.commandAuthorized) {
+    return "denied";
   }
-
-  const normalized: string[] = [];
-  for (const sender of candidates) {
-    const entries = normalizeAllowFromEntry({ plugin, cfg, accountId, value: sender });
-    for (const entry of entries) {
-      if (!normalized.includes(entry)) {
-        normalized.push(entry);
-      }
-    }
-  }
-  return normalized;
+  // Global ownership does not revoke channel-admitted session resets; explicit
+  // channel owner enforcement and commands.allowFrom have already been applied.
+  return params.isOwnerForCommands ? "commands" : "reset-only";
 }
 
 function resolveFallbackAllowFrom(params: {
@@ -516,26 +341,26 @@ function resolveFallbackAllowFrom(params: {
     return [];
   }
   const channels = params.cfg.channels as
-    | Record<
-        string,
-        | {
-            allowFrom?: Array<string | number>;
-            dm?: { allowFrom?: Array<string | number> };
-            accounts?: Record<
-              string,
-              {
-                allowFrom?: Array<string | number>;
-                dm?: { allowFrom?: Array<string | number> };
-              }
-            >;
-          }
-        | undefined
-      >
+    | Record<string, AllowFromChannelConfig | undefined>
     | undefined;
   const channelCfg = channels?.[providerId];
-  const accountCfg =
-    resolveFallbackAccountConfig(channelCfg?.accounts, params.accountId) ??
-    resolveFallbackDefaultAccountConfig(channelCfg);
+  let accountCfg = resolveFallbackAccountConfig(channelCfg?.accounts, providerId, params.accountId);
+  if (accountCfg == null) {
+    const accounts = channelCfg?.accounts;
+    if (accounts) {
+      accountCfg =
+        resolveFallbackAccountConfig(accounts, providerId, channelCfg?.defaultAccount) ??
+        resolveFallbackAccountConfig(accounts, providerId, "default");
+      if (!accountCfg) {
+        const definedAccountIds = Object.keys(accounts).filter((id) => accounts[id]);
+        const accountId = definedAccountIds.length === 1 ? definedAccountIds[0] : undefined;
+        accountCfg =
+          accountId === undefined
+            ? undefined
+            : resolveChannelAccountEntry(accounts, accountId, providerId);
+      }
+    }
+  }
   const allowFrom =
     accountCfg?.allowFrom ??
     accountCfg?.dm?.allowFrom ??
@@ -545,128 +370,62 @@ function resolveFallbackAllowFrom(params: {
 }
 
 function resolveFallbackAccountConfig(
-  accounts:
-    | Record<
-        string,
-        | {
-            allowFrom?: Array<string | number>;
-            dm?: { allowFrom?: Array<string | number> };
-          }
-        | undefined
-      >
-    | undefined,
+  accounts: AllowFromChannelConfig["accounts"],
+  channelId: string,
   accountId?: string | null,
 ) {
   const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
   if (!accounts || !normalizedAccountId) {
     return undefined;
   }
-  const direct = accounts[normalizedAccountId];
-  if (direct) {
-    return direct;
-  }
-  const matchKey = Object.keys(accounts).find(
-    (key) => normalizeOptionalLowercaseString(key) === normalizedAccountId,
-  );
-  return matchKey ? accounts[matchKey] : undefined;
+  return resolveChannelAccountEntry(accounts, normalizedAccountId, channelId);
 }
 
-function resolveFallbackDefaultAccountConfig(
-  channelCfg:
-    | {
-        allowFrom?: Array<string | number>;
-        dm?: { allowFrom?: Array<string | number> };
-        defaultAccount?: string;
-        accounts?: Record<
-          string,
-          | {
-              allowFrom?: Array<string | number>;
-              dm?: { allowFrom?: Array<string | number> };
-            }
-          | undefined
-        >;
-      }
-    | undefined,
-) {
-  const accounts = channelCfg?.accounts;
-  if (!accounts) {
-    return undefined;
-  }
-  const preferred =
-    resolveFallbackAccountConfig(accounts, channelCfg?.defaultAccount) ??
-    resolveFallbackAccountConfig(accounts, "default");
-  if (preferred) {
-    return preferred;
-  }
-  const definedAccounts = Object.values(accounts).filter(Boolean);
-  return definedAccounts.length === 1 ? definedAccounts[0] : undefined;
-}
-
-export function resolveCommandAuthorization(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  commandAuthorized: boolean;
-}): CommandAuthorization {
+function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
+  authorization: CommandAuthorization;
+  access: CommandSenderAccess;
+} {
   const { ctx, cfg, commandAuthorized } = params;
   const { providerId, hadResolutionError: providerResolutionError } = resolveProviderFromContext(
     ctx,
     cfg,
   );
-  const plugin = providerId
-    ? ((getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined) ?? undefined)
-    : undefined;
+  const plugin = providerId ? getLoadedChannelPluginById(providerId) : undefined;
   const from = normalizeOptionalString(ctx.From) ?? "";
   const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );
 
-  // Check if commands.allowFrom is configured (separate command authorization)
-  const commandsAllowFromList = resolveCommandsAllowFromList({
-    plugin,
-    cfg,
-    accountId: ctx.AccountId,
-    providerId,
-  });
-
-  const resolvedAllowFrom = buildProviderAllowFromResolution({
-    plugin,
-    cfg,
-    accountId: ctx.AccountId,
-    providerId,
+  const providerContext = { plugin, cfg, accountId: ctx.AccountId, providerId };
+  const commandsAllowFromList = resolveCommandsAllowFromList(providerContext);
+  const resolvedAllowFrom = resolveProviderAllowFrom({
+    ...providerContext,
     forceFallbackResolutionError: providerResolutionError,
   });
   const ownerState = resolveOwnerAuthorizationState({
-    plugin,
-    cfg,
-    accountId: ctx.AccountId,
-    providerId,
+    ...providerContext,
     to,
     allowFromList: resolvedAllowFrom.allowFromList,
     hadResolutionError: resolvedAllowFrom.hadResolutionError,
-    configOwnerAllowFrom: cfg.commands?.ownerAllowFrom,
     contextOwnerAllowFrom: ctx.OwnerAllowFrom,
   });
 
   const senderCandidates = resolveSenderCandidates({
-    plugin,
-    providerId,
-    cfg,
-    accountId: ctx.AccountId,
+    ...providerContext,
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
+    commandSenderId: getCommandSenderAuthority(ctx)?.(),
     from,
     chatType: ctx.ChatType,
   });
-  const matchedSender = ownerState.ownerList.length
-    ? senderCandidates.find((candidate) => ownerState.ownerList.includes(candidate))
-    : undefined;
-  const matchedCommandOwner = ownerState.ownerCandidatesForCommands.length
-    ? senderCandidates.find((candidate) =>
-        ownerState.ownerCandidatesForCommands.includes(candidate),
-      )
-    : undefined;
-  const senderId = matchedSender ?? senderCandidates[0];
+  const matchedSender = senderCandidates.find((candidate) =>
+    ownerState.explicitOwners.includes(candidate),
+  );
+  const matchedCommandOwner = senderCandidates.find((candidate) =>
+    ownerState.commandOwnerCandidates.includes(candidate),
+  );
+  const senderId = matchedSender ?? matchedCommandOwner ?? senderCandidates[0];
 
   const enforceOwner = Boolean(plugin?.commands?.enforceOwnerForCommands);
   const senderIsOwnerByIdentity = Boolean(matchedSender);
@@ -674,36 +433,213 @@ export function resolveCommandAuthorization(params: {
     isInternalMessageChannel(ctx.Provider) &&
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
-  const ownerAllowlistConfigured = ownerState.ownerAllowAll || ownerState.explicitOwners.length > 0;
-  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
+  const ownerAllowlistConfigured = ownerState.explicitOwners.length > 0;
+  const assertOwnerCurrent = captureCommandOwnerAssertion(ctx);
+  const senderIsOwner =
+    senderIsOwnerByIdentity ||
+    senderIsOwnerByScope ||
+    getCommandOwnerAuthority(ctx)?.isCurrent() === true;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
-    : ownerState.ownerAllowAll
-      ? true
-      : ownerAllowlistConfigured
-        ? senderIsOwner
-        : senderIsOwnerByScope || Boolean(matchedCommandOwner);
-  const nativeCommandAuthorized =
-    commandAuthorized && isNativeCommandTurn(resolveCommandTurnContext(ctx)) && !requireOwner;
-  const isAuthorizedSender = resolveCommandSenderAuthorization({
-    commandAuthorized,
-    enforceOwnerForCommands: enforceOwner,
-    nativeCommandAuthorized,
-    isOwnerForCommands,
-    senderCandidates,
-    commandsAllowFromList,
-    providerResolutionError,
-    commandsAllowFromConfigured,
-  });
+    : ownerAllowlistConfigured
+      ? senderIsOwner
+      : senderIsOwner || Boolean(matchedCommandOwner);
+  // Literal turns cannot regain command access through an allowlist; inline
+  // command consumers must preserve their text while owner facts remain intact.
+  const access =
+    ctx.CommandInterpretationSuppressed === true
+      ? "denied"
+      : resolveCommandSenderAuthorization({
+          commandAuthorized,
+          enforceOwnerForCommands: enforceOwner,
+          isOwnerForCommands,
+          senderCandidates,
+          commandsAllowFromList,
+          providerResolutionError,
+          commandsAllowFromConfigured,
+        });
 
   return {
-    providerId,
-    ownerList: ownerState.ownerList,
-    senderId: senderId || undefined,
-    senderIsOwner,
-    isAuthorizedSender,
-    from: from || undefined,
-    to: to || undefined,
+    authorization: {
+      providerId,
+      ownerList: ownerState.explicitOwners,
+      senderId: senderId || undefined,
+      senderIsOwner,
+      ...(assertOwnerCurrent ? { assertOwnerCurrent } : {}),
+      isAuthorizedSender: access === "commands",
+      from: from || undefined,
+      to: to || undefined,
+    },
+    access,
   };
+}
+
+export function resolveCommandAuthorization(
+  params: CommandAuthorizationParams,
+): CommandAuthorization {
+  return resolveCommandAuthorizationState(params).authorization;
+}
+
+export function isConfiguredCommandOwner(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string; senderId?: string },
+): boolean {
+  const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
+  const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
+  const params = { cfg, plugin, providerId, accountId: requester.accountId };
+  const owners = stripWildcardAllowFrom(resolveOwnerAllowFromList(params));
+  return resolveSenderCandidates({ ...params, senderId: requester.senderId }).some((sender) =>
+    owners.includes(sender),
+  );
+}
+
+/** Synchronous CLI capture; deferred effects retain its original person-access grant. */
+export function resolveCommandOwnerAuthority(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string; senderId?: string },
+  stateOptions: OpenClawStateDatabaseOptions = {},
+): PreparedCommandOwnerAuthority {
+  return captureCommandOwnerIdentity(
+    cfg,
+    requester,
+    stateOptions,
+    resolveChannelOperatorAdminAuthority,
+  );
+}
+
+/** Additional person policy stays with the original Gateway's accepted update operation. */
+export function resolveUpdateRequesterIdentityAuthority(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string; senderId?: string },
+  stateOptions: OpenClawStateDatabaseOptions = {},
+): PreparedCommandOwnerAuthority {
+  return captureCommandOwnerIdentity(
+    cfg,
+    requester,
+    stateOptions,
+    resolveUpdateChannelOperatorAdminIdentityAuthority,
+  );
+}
+
+function resolveCommandOwnerIdentity(requester?: {
+  channel?: string;
+  accountId?: string;
+  senderId?: string;
+}) {
+  const providerId = normalizeAnyChannelId(requester?.channel) ?? requester?.channel;
+  return providerId && requester?.senderId
+    ? {
+        channelId: providerId,
+        accountId: normalizeAccountId(requester.accountId),
+        senderId: requester.senderId,
+      }
+    : undefined;
+}
+
+function captureCommandOwnerIdentity(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string; senderId?: string },
+  stateOptions: OpenClawStateDatabaseOptions,
+  resolveProfile: typeof resolveChannelOperatorAdminAuthority,
+): PreparedCommandOwnerAuthority {
+  const captured = { ...requester };
+  if (isConfiguredCommandOwner(cfg, captured)) {
+    return Object.freeze({
+      source: "configured-owner",
+      isCurrent: (currentCfg: OpenClawConfig) => isConfiguredCommandOwner(currentCfg, captured),
+    });
+  }
+  const identity = resolveCommandOwnerIdentity(captured);
+  const authority = identity ? resolveProfile(cfg, identity, stateOptions) : undefined;
+  return Object.freeze({
+    source: authority ? `profile:${authority.profileId}` : undefined,
+    ...(authority?.signal ? { signal: authority.signal } : {}),
+    isCurrent: (currentCfg: OpenClawConfig) =>
+      authority !== undefined &&
+      !isConfiguredCommandOwner(currentCfg, captured) &&
+      authority.isCurrent(currentCfg),
+  });
+}
+
+export type PreparedCommandOwnerAuthority = Readonly<{
+  source: string | undefined;
+  operatorProfile?: NonNullable<
+    Awaited<ReturnType<typeof prepareChannelOperatorAdmin>>
+  >["operatorProfile"];
+  recoveryReference?: Exclude<CommandOwnerAssertion["recoveryReference"], null>;
+  isCurrent: (currentCfg: OpenClawConfig) => boolean;
+  /** The original additional person-policy grant, never a substitute for the current check. */
+  signal?: AbortSignal;
+}>;
+
+/** Admission and recovery share the original authority owner; final checks never touch SQLite. */
+export async function prepareCommandOwnerAuthority(
+  cfg: OpenClawConfig,
+  requester:
+    | { channel?: string; accountId?: string; senderId?: string }
+    | CommandOwnerReference
+    | ResolvedChannelOperatorIdentity,
+  stateOptions: OpenClawStateDatabaseOptions = {},
+): Promise<PreparedCommandOwnerAuthority> {
+  const resolved = "identity" in requester ? requester : undefined;
+  const captured =
+    "identity" in requester
+      ? {
+          channel: requester.identity.channelId,
+          accountId: requester.identity.accountId,
+          senderId: requester.identity.senderId,
+        }
+      : "version" in requester
+        ? undefined
+        : { ...requester };
+  const reference = "version" in requester ? requester : undefined;
+  if (reference?.version === 2 || (captured && isConfiguredCommandOwner(cfg, captured))) {
+    const prepared = await prepareConfiguredCommandOwnerAuthority(
+      cfg.commands?.ownerAllowFrom,
+      stateOptions,
+    );
+    const accepted = !reference || prepared?.recoveryReference.id === reference.id;
+    return Object.freeze({
+      source: accepted ? "configured-owner" : undefined,
+      recoveryReference: prepared?.recoveryReference,
+      // Live configured admission remains config-owned; an absent durable policy cannot recover.
+      isCurrent: (currentCfg: OpenClawConfig) =>
+        accepted &&
+        (prepared ? prepared.isCurrent() : !reference) &&
+        (!captured || isConfiguredCommandOwner(currentCfg, captured)),
+    });
+  }
+  const identity = reference ?? resolveCommandOwnerIdentity(captured);
+  const prepared =
+    identity && (await prepareChannelOperatorAdmin(cfg, resolved ?? identity, stateOptions));
+  return Object.freeze({
+    source: prepared ? `profile:${prepared.profileId}` : undefined,
+    operatorProfile: prepared?.operatorProfile,
+    recoveryReference: prepared?.recoveryReference,
+    ...(prepared?.signal ? { signal: prepared.signal } : {}),
+    isCurrent: (currentCfg: OpenClawConfig) =>
+      prepared !== undefined &&
+      (!captured || !isConfiguredCommandOwner(currentCfg, captured)) &&
+      prepared.isCurrent(currentCfg),
+  });
+}
+
+/** Resolves reset admission without granting other command or owner authority. */
+export function isResetAuthorizedForContext(params: CommandAuthorizationParams): boolean {
+  if (resolveCommandAuthorizationState(params).access === "denied") {
+    return false;
+  }
+  const provider = params.ctx.Provider;
+  const internalGatewayCaller = provider
+    ? isInternalMessageChannel(provider)
+    : isInternalMessageChannel(params.ctx.Surface);
+  if (!internalGatewayCaller) {
+    return true;
+  }
+  const scopes = params.ctx.GatewayClientScopes;
+  if (!Array.isArray(scopes) || scopes.length === 0) {
+    return true;
+  }
+  return scopes.includes("operator.admin");
 }

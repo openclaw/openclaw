@@ -27,23 +27,17 @@ actor CameraController {
                 "Microphone unavailable"
             case let .permissionDenied(kind):
                 "\(kind) permission denied"
-            case let .invalidParams(msg):
-                msg
-            case let .captureFailed(msg):
-                msg
-            case let .exportFailed(msg):
+            case let .invalidParams(msg), let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
         }
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> (
-        format: String,
-        base64: String,
-        width: Int,
-        height: Int)
+    func snap(
+        params: OpenClawCameraSnapParams,
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraSnapResult
     {
-        let facing = params.facing ?? .front
+        let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let format = params.format ?? .jpg
         // Default to a reasonable max width to keep gateway payload sizes manageable.
         // If you need the full-res photo, explicitly request a larger maxWidth.
@@ -51,56 +45,71 @@ actor CameraController {
         let quality = Self.clampQuality(params.quality)
         let delayMs = max(0, params.delayMs ?? 0)
 
+        try Task.checkCancellation()
         try await self.ensureAccess(for: .video)
+        try Task.checkCancellation()
 
         let prepared = try CameraCapturePipelineSupport.preparePhotoSession(
             preferFrontCamera: facing == .front,
             deviceId: params.deviceId,
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
         let session = prepared.session
         let output = prepared.output
 
-        session.startRunning()
-        defer { session.stopRunning() }
-        await CameraCapturePipelineSupport.warmUpCaptureSession()
-        await Self.sleepDelayMs(delayMs)
+        let rawData: Data
+        do {
+            let sessionStopper = CameraCaptureSessionStopper {
+                session.stopRunning()
+            }
+            try Task.checkCancellation()
+            session.startRunning()
+            defer { sessionStopper.stop() }
+            try Task.checkCancellation()
+            try await CameraCapturePipelineSupport.warmUpCaptureSession()
+            try await Self.sleepDelayMs(delayMs)
 
-        let rawData = try await CameraCapturePipelineSupport.capturePhotoData(output: output) { continuation in
-            PhotoCaptureDelegate(continuation)
+            let capture = CameraPhotoCaptureOperation(
+                output: output,
+                cancelAction: { sessionStopper.stop() })
+            rawData = try await capture.run()
         }
 
+        try Task.checkCancellation()
         let res = try PhotoCapture.transcodeJPEGForGateway(
             rawData: rawData,
             maxWidthPx: maxWidth,
             quality: quality)
+        try Task.checkCancellation()
+        let base64 = res.data.base64EncodedString()
+        try Task.checkCancellation()
 
         return (
             format: format.rawValue,
-            base64: res.data.base64EncodedString(),
+            base64: base64,
             width: res.widthPx,
             height: res.heightPx)
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> (
-        format: String,
-        base64: String,
-        durationMs: Int,
-        hasAudio: Bool)
+    func clip(
+        params: OpenClawCameraClipParams,
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraClipResult
     {
-        let facing = params.facing ?? .front
-        let durationMs = Self.clampDurationMs(params.durationMs)
+        let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
+        let durationMs = CaptureRateLimits.clampDurationMs(params.durationMs, defaultMs: 3000)
         let includeAudio = params.includeAudio ?? true
         let format = params.format ?? .mp4
 
+        try Task.checkCancellation()
         try await self.ensureAccess(for: .video)
+        try Task.checkCancellation()
         if includeAudio {
             try await self.ensureAccess(for: .audio)
+            try Task.checkCancellation()
         }
 
         let movURL = FileManager().temporaryDirectory
@@ -112,31 +121,32 @@ actor CameraController {
             try? FileManager().removeItem(at: mp4URL)
         }
 
-        let data = try await CameraCapturePipelineSupport.withWarmMovieSession(
-            preferFrontCamera: facing == .front,
-            deviceId: params.deviceId,
-            includeAudio: includeAudio,
-            durationMs: durationMs,
+        let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
+            options: CameraMovieSessionOptions(
+                preferFrontCamera: facing == .front,
+                deviceId: params.deviceId,
+                includeAudio: includeAudio,
+                durationMs: durationMs),
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: Self.mapMovieSetupError,
             operation: { output in
-                var delegate: MovieFileDelegate?
-                let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
-                    let d = MovieFileDelegate(cont)
-                    delegate = d
-                    output.startRecording(to: movURL, recordingDelegate: d)
-                }
-                withExtendedLifetime(delegate) {}
-                // Transcode .mov -> .mp4 for easier downstream handling.
-                try await Self.exportToMP4(inputURL: recordedURL, outputURL: mp4URL)
-                return try Data(contentsOf: mp4URL)
+                let recording = CameraMovieRecordingOperation(output: output, outputURL: movURL)
+                return try await recording.run()
             })
+        try Task.checkCancellation()
+        // The capture session is stopped before post-processing so a timeout cannot
+        // keep the camera active while export or payload encoding finishes.
+        try await Self.exportToMP4(inputURL: recordedURL, outputURL: mp4URL)
+        try Task.checkCancellation()
+        let data = try Data(contentsOf: mp4URL)
+        try Task.checkCancellation()
+        let base64 = data.base64EncodedString()
+        try Task.checkCancellation()
         return (
             format: format.rawValue,
-            base64: data.base64EncodedString(),
+            base64: base64,
             durationMs: durationMs,
             hasAudio: includeAudio)
     }
@@ -146,32 +156,50 @@ actor CameraController {
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
-                position: Self.positionLabel(device.position),
+                position: CameraCapturePipelineSupport.positionLabel(device.position),
                 deviceType: device.deviceType.rawValue)
         }
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
-        if await !(CameraAuthorization.isAuthorized(for: mediaType)) {
+        let authorized: Bool = switch AVCaptureDevice.authorizationStatus(for: mediaType) {
+        case .authorized:
+            true
+        case .notDetermined:
+            await PermissionRequestBridge.awaitRequest { completion in
+                AVCaptureDevice.requestAccess(for: mediaType, completionHandler: completion)
+            }
+        case .denied, .restricted:
+            false
+        @unknown default:
+            false
+        }
+        try Task.checkCancellation()
+        if !authorized {
             throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
         }
     }
 
     private nonisolated static func pickCamera(
         facing: OpenClawCameraFacing,
-        deviceId: String?) -> AVCaptureDevice?
+        deviceId: String?) throws -> AVCaptureDevice
     {
-        if let deviceId, !deviceId.isEmpty {
-            if let match = discoverVideoDevices().first(where: { $0.uniqueID == deviceId }) {
-                return match
-            }
-        }
-        let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
-            return device
-        }
-        // Fall back to any default camera (e.g. simulator / unusual device configurations).
-        return AVCaptureDevice.default(for: .video)
+        try CameraCapturePipelineSupport.selectCamera(
+            deviceId: deviceId,
+            matching: { deviceId in
+                self.discoverVideoDevices().first { $0.uniqueID == deviceId }
+            },
+            fallback: {
+                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+                    AVCaptureDevice.default(for: .video)
+            },
+            unavailableError: CameraError.cameraUnavailable,
+            deviceNotFoundError: {
+                CameraError.invalidParams(
+                    "INVALID_REQUEST: camera device not found: \($0); " +
+                        "run camera.list for current device IDs")
+            })
     }
 
     private nonisolated static func mapMovieSetupError(_ setupError: CameraSessionConfigurationError) -> CameraError {
@@ -179,10 +207,6 @@ actor CameraController {
             setupError,
             microphoneUnavailableError: .microphoneUnavailable,
             captureFailed: { .captureFailed($0) })
-    }
-
-    private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
-        CameraCapturePipelineSupport.positionLabel(position)
     }
 
     private nonisolated static func discoverVideoDevices() -> [AVCaptureDevice] {
@@ -208,63 +232,243 @@ actor CameraController {
         return min(1.0, max(0.05, q))
     }
 
-    nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 3000
-        // Keep clips short by default; avoid huge base64 payloads on the gateway.
-        return min(60000, max(250, v))
+    nonisolated static func resolveFacing(
+        _ explicitFacing: OpenClawCameraFacing?,
+        defaultFacing: OpenClawCameraFacing) -> OpenClawCameraFacing
+    {
+        explicitFacing ?? defaultFacing
     }
 
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {
+        try Task.checkCancellation()
         let asset = AVURLAsset(url: inputURL)
         guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
             throw CameraError.exportFailed("Failed to create export session")
         }
         exporter.shouldOptimizeForNetworkUse = true
 
-        if #available(iOS 18.0, tvOS 18.0, visionOS 2.0, *) {
-            do {
-                try await exporter.export(to: outputURL, as: .mp4)
-                return
-            } catch {
-                throw CameraError.exportFailed(error.localizedDescription)
-            }
-        } else {
-            exporter.outputURL = outputURL
-            exporter.outputFileType = .mp4
-
-            try await withCheckedThrowingContinuation(isolation: nil) { (cont: CheckedContinuation<Void, Error>) in
-                exporter.exportAsynchronously {
-                    cont.resume(returning: ())
-                }
-            }
-
-            switch exporter.status {
-            case .completed:
-                return
-            case .failed:
-                throw CameraError.exportFailed(exporter.error?.localizedDescription ?? "export failed")
-            case .cancelled:
-                throw CameraError.exportFailed("export cancelled")
-            default:
-                throw CameraError.exportFailed("export did not complete")
-            }
+        // The iOS app and shared package both target iOS 18, whose native async
+        // export propagates parent-task cancellation to AVFoundation.
+        do {
+            try await exporter.export(to: outputURL, as: .mp4)
+        } catch {
+            try Task.checkCancellation()
+            throw CameraError.exportFailed(error.localizedDescription)
         }
     }
 
-    private nonisolated static func sleepDelayMs(_ delayMs: Int) async {
+    private nonisolated static func sleepDelayMs(_ delayMs: Int) async throws {
         guard delayMs > 0 else { return }
         let maxDelayMs = 10 * 1000
         let ns = UInt64(min(delayMs, maxDelayMs)) * UInt64(NSEC_PER_MSEC)
-        try? await Task.sleep(nanoseconds: ns)
+        try await Task.sleep(nanoseconds: ns)
     }
 }
 
-private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    private let continuation: CheckedContinuation<Data, Error>
-    private let resumed = OSAllocatedUnfairLock(initialState: false)
+final class CameraCaptureSessionStopper: @unchecked Sendable {
+    private enum State: Equatable {
+        case running
+        case stopping
+        case stopped
+    }
 
-    init(_ continuation: CheckedContinuation<Data, Error>) {
-        self.continuation = continuation
+    private let condition = NSCondition()
+    private var state = State.running
+    private let stopAction: () -> Void
+
+    init(stopAction: @escaping () -> Void) {
+        self.stopAction = stopAction
+    }
+
+    func stop() {
+        self.condition.lock()
+        while self.state == .stopping {
+            self.condition.wait()
+        }
+        guard self.state == .running else {
+            self.condition.unlock()
+            return
+        }
+        self.state = .stopping
+        self.condition.unlock()
+
+        self.stopAction()
+
+        self.condition.lock()
+        self.state = .stopped
+        self.condition.broadcast()
+        self.condition.unlock()
+    }
+}
+
+/// Orders cancellation against synchronous capture admission and the delegate's final callback.
+private final class CameraCaptureOperation<Output: Sendable>: @unchecked Sendable {
+    private enum Phase {
+        case idle
+        case starting
+        case capturing
+        case cancelling
+        case cancelled
+        case finished
+    }
+
+    private struct State {
+        var phase = Phase.idle
+        var continuation: CheckedContinuation<Output, Error>?
+        var processedResult: Result<Output, Error>?
+        var cancellationRequested = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let name: String
+    private let cancelAction: () -> Void
+
+    init(name: String, cancelAction: @escaping () -> Void) {
+        self.name = name
+        self.cancelAction = cancelAction
+    }
+
+    func run(startAction: () -> Void) async throws -> Output {
+        try Task.checkCancellation()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                self.begin(continuation, startAction: startAction)
+            }
+        }, onCancel: {
+            self.cancel()
+        })
+    }
+
+    func cancel() {
+        let shouldCancel = self.state.withLock { state -> Bool in
+            switch state.phase {
+            case .idle:
+                state.phase = .cancelled
+                return false
+            case .starting:
+                state.phase = .cancelling
+                return false
+            case .capturing:
+                state.phase = .cancelling
+                state.cancellationRequested = true
+                return true
+            case .cancelling, .cancelled, .finished:
+                return false
+            }
+        }
+        if shouldCancel { self.cancelAction() }
+    }
+
+    func captureDidStart() {
+        self.state.withLock { state in
+            if state.phase == .starting { state.phase = .capturing }
+        }
+    }
+
+    func processingDidFinish(_ result: Result<Output, Error>) {
+        self.state.withLock { state in
+            guard state.phase == .starting || state.phase == .capturing || state.phase == .cancelling else { return }
+            state.processedResult = result
+        }
+    }
+
+    func finish(_ result: @Sendable (Result<Output, Error>?) -> Result<Output, Error>) {
+        let completion = self.state.withLock { state -> (CheckedContinuation<Output, Error>, Result<Output, Error>)? in
+            guard let continuation = state.continuation else { return nil }
+            let resolved: Result<Output, Error>
+            switch state.phase {
+            case .cancelling:
+                resolved = .failure(CancellationError())
+            case .starting, .capturing:
+                resolved = result(state.processedResult)
+            case .idle, .cancelled, .finished:
+                return nil
+            }
+            state.phase = .finished
+            state.continuation = nil
+            state.processedResult = nil
+            return (continuation, resolved)
+        }
+        if let (continuation, result) = completion {
+            continuation.resume(with: result)
+        }
+    }
+
+    private func begin(_ continuation: CheckedContinuation<Output, Error>, startAction: () -> Void) {
+        let shouldStart = self.state.withLock { state -> Bool in
+            switch state.phase {
+            case .idle:
+                state.phase = .starting
+                state.continuation = continuation
+                return true
+            case .cancelled:
+                state.phase = .finished
+                return false
+            case .starting, .capturing, .cancelling, .finished:
+                preconditionFailure("\(self.name) operation can only run once")
+            }
+        }
+        guard shouldStart else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        startAction()
+        let shouldCancel = self.state.withLock { state -> Bool in
+            switch state.phase {
+            case .starting:
+                state.phase = .capturing
+                return false
+            case .cancelling:
+                guard !state.cancellationRequested else { return false }
+                state.cancellationRequested = true
+                return true
+            case .idle, .capturing, .cancelled, .finished:
+                return false
+            }
+        }
+        if shouldCancel { self.cancelAction() }
+    }
+}
+
+final class CameraPhotoCaptureOperation: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
+    typealias StartAction = (any AVCapturePhotoCaptureDelegate) -> Void
+    typealias CancelAction = () -> Void
+
+    private let operation: CameraCaptureOperation<Data>
+    private let startAction: StartAction
+
+    convenience init(output: AVCapturePhotoOutput, cancelAction: @escaping CancelAction) {
+        let settings = CameraCapturePipelineSupport.makePhotoSettings(output: output)
+        self.init(
+            startAction: { delegate in
+                output.capturePhoto(with: settings, delegate: delegate)
+            },
+            cancelAction: cancelAction)
+    }
+
+    init(startAction: @escaping StartAction, cancelAction: @escaping CancelAction = {}) {
+        self.startAction = startAction
+        self.operation = CameraCaptureOperation(name: "camera photo capture", cancelAction: cancelAction)
+    }
+
+    func run() async throws -> Data {
+        defer { withExtendedLifetime(self) {} }
+        return try await self.operation.run { self.startAction(self) }
+    }
+
+    func cancel() {
+        self.operation.cancel()
+    }
+
+    func processingDidFinish(_ result: Result<Data, Error>) {
+        self.operation.processingDidFinish(result)
+    }
+
+    func captureDidFinish(error: Error?) {
+        self.operation.finish { processedResult in
+            if let error { return .failure(error) }
+            return processedResult ?? .failure(Self.missingDataError)
+        }
     }
 
     func photoOutput(
@@ -272,32 +476,21 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?)
     {
-        let alreadyResumed = self.resumed.withLock { old in
-            let was = old
-            old = true
-            return was
-        }
-        guard !alreadyResumed else { return }
-
         if let error {
-            self.continuation.resume(throwing: error)
+            self.processingDidFinish(.failure(error))
             return
         }
         guard let data = photo.fileDataRepresentation() else {
-            self.continuation.resume(
-                throwing: NSError(domain: "Camera", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey: "photo data missing",
-                ]))
+            self.processingDidFinish(.failure(Self.missingDataError))
             return
         }
-        if data.isEmpty {
-            self.continuation.resume(
-                throwing: NSError(domain: "Camera", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "photo data empty",
-                ]))
+        guard !data.isEmpty else {
+            self.processingDidFinish(.failure(NSError(domain: "Camera", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "photo data empty",
+            ])))
             return
         }
-        self.continuation.resume(returning: data)
+        self.processingDidFinish(.success(data))
     }
 
     func photoOutput(
@@ -305,23 +498,60 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
         error: Error?)
     {
-        guard let error else { return }
-        let alreadyResumed = self.resumed.withLock { old in
-            let was = old
-            old = true
-            return was
-        }
-        guard !alreadyResumed else { return }
-        self.continuation.resume(throwing: error)
+        self.captureDidFinish(error: error)
     }
+
+    private static let missingDataError = NSError(domain: "Camera", code: 1, userInfo: [
+        NSLocalizedDescriptionKey: "photo data missing",
+    ])
 }
 
-private final class MovieFileDelegate: NSObject, AVCaptureFileOutputRecordingDelegate {
-    private let continuation: CheckedContinuation<URL, Error>
-    private let resumed = OSAllocatedUnfairLock(initialState: false)
+final class CameraMovieRecordingOperation: NSObject, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
+    typealias StartAction = (any AVCaptureFileOutputRecordingDelegate) -> Void
+    typealias StopAction = () -> Void
 
-    init(_ continuation: CheckedContinuation<URL, Error>) {
-        self.continuation = continuation
+    private let operation: CameraCaptureOperation<URL>
+    private let startAction: StartAction
+
+    convenience init(output: AVCaptureMovieFileOutput, outputURL: URL) {
+        self.init(
+            startAction: { delegate in
+                output.startRecording(to: outputURL, recordingDelegate: delegate)
+            },
+            stopAction: { output.stopRecording() })
+    }
+
+    init(
+        startAction: @escaping StartAction,
+        stopAction: @escaping StopAction)
+    {
+        self.startAction = startAction
+        self.operation = CameraCaptureOperation(name: "camera movie recording", cancelAction: stopAction)
+    }
+
+    func run() async throws -> URL {
+        defer { withExtendedLifetime(self) {} }
+        return try await self.operation.run { self.startAction(self) }
+    }
+
+    func cancel() {
+        self.operation.cancel()
+    }
+
+    func recordingDidStart() {
+        self.operation.captureDidStart()
+    }
+
+    func recordingDidFinish(outputURL: URL, error: Error?) {
+        self.operation.finish { _ in Self.recordingResult(outputURL: outputURL, error: error) }
+    }
+
+    func fileOutput(
+        _ output: AVCaptureFileOutput,
+        didStartRecordingTo fileURL: URL,
+        from connections: [AVCaptureConnection])
+    {
+        self.recordingDidStart()
     }
 
     func fileOutput(
@@ -330,24 +560,17 @@ private final class MovieFileDelegate: NSObject, AVCaptureFileOutputRecordingDel
         from connections: [AVCaptureConnection],
         error: Error?)
     {
-        let alreadyResumed = self.resumed.withLock { old in
-            let was = old
-            old = true
-            return was
-        }
-        guard !alreadyResumed else { return }
+        self.recordingDidFinish(outputURL: outputFileURL, error: error)
+    }
 
-        if let error {
-            let ns = error as NSError
-            if ns.domain == AVFoundationErrorDomain,
-               ns.code == AVError.maximumDurationReached.rawValue
-            {
-                self.continuation.resume(returning: outputFileURL)
-                return
-            }
-            self.continuation.resume(throwing: error)
-            return
+    private static func recordingResult(outputURL: URL, error: Error?) -> Result<URL, Error> {
+        guard let error else { return .success(outputURL) }
+        let ns = error as NSError
+        if ns.domain == AVFoundationErrorDomain,
+           ns.code == AVError.maximumDurationReached.rawValue
+        {
+            return .success(outputURL)
         }
-        self.continuation.resume(returning: outputFileURL)
+        return .failure(error)
     }
 }

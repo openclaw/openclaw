@@ -1,13 +1,16 @@
-// Pixverse tests cover index plugin behavior.
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  capturePluginRegistration,
+  createQueuedWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import {
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
   PIXVERSE_PROVIDER_ID,
 } from "./constants.js";
 import plugin from "./index.js";
-import { applyPixVerseConfig, applyPixVerseProviderConfig } from "./onboard.js";
 
 function registerPixVerseProvider() {
   const captured = capturePluginRegistration(plugin);
@@ -22,49 +25,46 @@ function registerPixVerseProvider() {
   return provider;
 }
 
-function createRuntimeContext(region: "international" | "cn") {
-  const select = vi.fn(async (params: { message: string }) => {
-    expect(params.message).toBe("Select PixVerse API region");
-    return region;
-  });
-  const ctx = {
-    config: {
-      models: {
-        providers: {
-          pixverse: {
-            baseUrl: "https://proxy.example/openapi/v2",
-            models: [],
-            params: { quality: "720p" },
-          },
+function createProxyConfig() {
+  return {
+    models: {
+      providers: {
+        pixverse: {
+          baseUrl: "https://proxy.example/openapi/v2",
+          models: [],
+          params: { quality: "720p" },
         },
       },
     },
+  };
+}
+
+function createRuntimeContext(
+  region: "international" | "cn",
+  config: ProviderAuthContext["config"] = {
+    ...createProxyConfig(),
+    agents: { entries: { main: {}, work: { workspace: "/tmp/pixverse-workspace" } } },
+  },
+) {
+  const { prompter, select, text } = createQueuedWizardPrompter();
+  select.mockImplementation(async (params) => {
+    expect(params).toHaveProperty("message", "Select PixVerse API region");
+    return region;
+  });
+  text.mockImplementation(async () => "pixverse-test-key");
+  const ctx = {
+    config,
     env: {},
-    prompter: {
-      intro: vi.fn(),
-      outro: vi.fn(),
-      note: vi.fn(),
-      select,
-      multiselect: vi.fn(),
-      text: vi.fn(async () => "pixverse-test-key"),
-      confirm: vi.fn(),
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-    },
-    runtime: {
-      error: vi.fn(),
-      exit: vi.fn(),
-      log: vi.fn(),
-    },
+    workspaceDir: "/tmp/pixverse-workspace",
+    prompter,
+    runtime: createRuntimeSpies(),
     secretInputMode: "plaintext",
     isRemote: false,
-    openUrl: vi.fn(),
+    openUrl: vi.fn<ProviderAuthContext["openUrl"]>(),
     oauth: {
-      createVpsAwareHandlers: vi.fn(),
+      createVpsAwareHandlers: vi.fn<ProviderAuthContext["oauth"]["createVpsAwareHandlers"]>(),
     },
-  } as never;
+  } satisfies ProviderAuthContext;
   return { ctx, select };
 }
 
@@ -139,59 +139,63 @@ describe("pixverse plugin", () => {
       region: "cn",
     });
     expect(result.defaultModel).toBeUndefined();
-    expect(result.configPatch?.agents?.defaults?.videoGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
       primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
     });
     expect(result.notes).toEqual([`PixVerse endpoint: CN (${PIXVERSE_BASE_URL_BY_REGION.cn})`]);
   });
 
-  it("only resets custom baseUrl when a region is explicitly selected", () => {
-    const config = {
-      models: {
-        providers: {
-          pixverse: {
-            baseUrl: "https://proxy.example/openapi/v2",
-            models: [],
-            params: { quality: "720p" },
-          },
-        },
-      },
-    };
-
-    expect(
-      applyPixVerseProviderConfig(config, "international").models?.providers?.pixverse,
-    ).toEqual({
-      baseUrl: "https://proxy.example/openapi/v2",
-      models: [],
-      params: { quality: "720p" },
-      region: "international",
+  it("preserves an existing video generation default through setup", async () => {
+    const provider = registerPixVerseProvider();
+    const auth = provider?.auth?.[0];
+    if (!auth) {
+      throw new Error("expected PixVerse auth method");
+    }
+    const { ctx } = createRuntimeContext("international", {
+      agents: { defaults: { mediaModels: { video: { primary: "openai/sora-2" } } } },
     });
-    expect(
-      applyPixVerseProviderConfig(config, "cn", { resetBaseUrl: true }).models?.providers?.pixverse,
-    ).toEqual({
-      baseUrl: PIXVERSE_BASE_URL_BY_REGION.cn,
-      models: [],
-      params: { quality: "720p" },
-      region: "cn",
+
+    const result = await auth.run(ctx);
+
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
+      primary: "openai/sora-2",
     });
   });
 
-  it("preserves an existing video generation default", () => {
-    const result = applyPixVerseConfig(
-      {
-        agents: {
-          defaults: {
-            videoGenerationModel: {
-              primary: "openai/sora-2",
-            },
-          },
-        },
-      },
-      "international",
-    );
+  it.each([
+    {
+      name: "preserves a custom base URL without an explicit region",
+      opts: {},
+      baseUrl: "https://proxy.example/openapi/v2",
+      region: "international",
+    },
+    {
+      name: "resets a custom base URL when selecting a region",
+      opts: { pixverseRegion: "cn" },
+      baseUrl: PIXVERSE_BASE_URL_BY_REGION.cn,
+      region: "cn",
+    },
+  ])("non-interactive setup $name", async ({ opts, baseUrl, region }) => {
+    const auth = registerPixVerseProvider().auth?.[0];
+    if (!auth?.runNonInteractive) {
+      throw new Error("expected PixVerse non-interactive auth method");
+    }
+    const config = createProxyConfig();
 
-    expect(result.agents?.defaults?.videoGenerationModel).toEqual({
-      primary: "openai/sora-2",
+    const result = await auth.runNonInteractive({
+      authChoice: "pixverse-api-key",
+      config,
+      baseConfig: config,
+      opts,
+      runtime: createRuntimeSpies(),
+      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
+      toApiKeyCredential: vi.fn(() => null),
+    });
+
+    expect(result?.models?.providers?.pixverse).toMatchObject({
+      baseUrl,
+      params: { quality: "720p" },
+      region,
     });
   });
 });

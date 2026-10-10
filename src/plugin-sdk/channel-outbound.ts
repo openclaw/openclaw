@@ -4,70 +4,121 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
-type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
-type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
+import {
+  resolveChannelProgressDraftConfig as readProgressDraftConfig,
+  type StreamingCompatEntry as ProgressDraftCompatEntry,
+} from "../channels/streaming.js";
+import { classifyGatewayStaleInstall } from "../gateway/stale-install.js";
+import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
+import { preserveReplyPayloadMediaSelectionCore } from "../infra/outbound/reply-media-entries.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
-let channelMessageRuntimeModulePromise: Promise<ChannelMessageRuntimeModule> | null = null;
+export { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 
-const loadChannelMessageRuntimeModule = async () => {
-  // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
-  // message runtime internals into registration/discovery-only paths.
-  channelMessageRuntimeModulePromise ??= import("../channels/message/runtime.js");
-  return await channelMessageRuntimeModulePromise;
-};
+type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
+// Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
+// message runtime internals into registration/discovery-only paths.
+const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
+  () => import("../channels/message/runtime.js"),
+);
 
-export type {
-  DurableInboundReplyDeliveryOptions,
-  DurableInboundReplyDeliveryParams,
-  DurableInboundReplyDeliveryResult,
-} from "../channels/turn/kernel.js";
-export type {
-  DurableMessageBatchSendParams,
-  DurableMessageBatchSendResult,
-  DurableMessageSendContext,
-  DurableMessageSendContextParams,
-} from "../channels/message/runtime.js";
+export type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 export {
+  isRecentOutboundMessageIdentity,
+  recordOutboundMessageIdentity,
+} from "../channels/message/outbound-echo.js";
+export type { OutboundMessageIdentity } from "../channels/message/outbound-echo.js";
+export {
+  bindIngressLifecycleToReplyOptions,
+  createChannelIngressDrain,
+  // Narrow drain seam by maintainer decision (#108924): factory, lifecycle binding,
+  // tuning constants, and processPidFromOwnerId (telegram transport display). All other
+  // claim/retry/adoption internals stay core-owned; test helpers live on the
+  // private-local plugin-state-test-runtime subpath.
+  DEFAULT_INGRESS_ADOPTION_STALL_MS,
+} from "../channels/message/ingress-drain.js";
+export {
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
+  createChannelIngressMonitor,
+} from "../channels/message/ingress-monitor.js";
+export { createChannelIngressError } from "../channels/message/ingress-errors.js";
+export {
+  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "../channels/message/ingress-retry-policy.js";
+export {
+  INGRESS_CLAIM_PROCESS_ID,
+  processPidFromOwnerId,
+} from "../channels/message/ingress-claim-owner.js";
+export {
+  createChannelReplyPipeline as createChannelMessageReplyPipeline,
   createReplyPrefixContext,
   createReplyPrefixOptions,
   createTypingCallbacks,
-  createChannelReplyPipeline as createChannelMessageReplyPipeline,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
-} from "../channels/message/index.js";
+} from "../channels/message/reply-pipeline.js";
+export type {
+  ChannelReplyPipeline,
+  CreateTypingCallbacksParams,
+  ReplyPrefixContext,
+  ReplyPrefixContextBundle,
+  ReplyPrefixOptions,
+  SourceReplyDeliveryMode,
+  TypingCallbacks,
+} from "../channels/message/reply-pipeline.js";
+// Bare interval/stop orchestration for channels that own their typing renewal
+// policy (e.g. per-message reply budgets) instead of the createTypingCallbacks lifecycle.
+export { createTypingKeepaliveLoop } from "../channels/typing-lifecycle.js";
 
 export {
+  clearFinalizableDraftMessage,
   createFinalizableDraftLifecycle,
   createFinalizableDraftStreamControls,
   createFinalizableDraftStreamControlsForState,
-  clearFinalizableDraftMessage,
   takeMessageIdAfterStop,
+  type FinalizableDraftStreamState,
 } from "../channels/draft-stream-controls.js";
-export type { FinalizableDraftStreamState } from "../channels/draft-stream-controls.js";
-export { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
-export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
+
+export { createDraftStreamLoop, type DraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { createRunStateMachine } from "../channels/run-state-machine.js";
+export {
+  createArmableStallWatchdog,
+  type ArmableStallWatchdog,
+  type StallWatchdogTimeoutMeta,
+} from "../channels/transport/stall-watchdog.js";
+
 export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
-export { createChannelRunQueue } from "./channel-lifecycle.core.js";
-export type {
-  ChannelRunQueue,
-  ChannelRunQueueParams,
-  ChannelRunQueueTaskContext,
-} from "./channel-lifecycle.core.js";
 export {
   createAccountStatusSink,
+  createChannelRunQueue,
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
+  type ChannelRunQueue,
+  type ChannelRunQueueParams,
+  type ChannelRunQueueTaskContext,
 } from "./channel-lifecycle.core.js";
 export {
   createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "../infra/outbound/payloads.js";
-export {
-  buildOutboundSessionContext,
-  type OutboundSessionContext,
-} from "../infra/outbound/session-context.js";
+export { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
+
+/** Keep the current operation media selection when recovering other reply fields. */
+export function preserveReplyPayloadMediaSelection(
+  source: ReplyPayload,
+  recovered: ReplyPayload,
+): ReplyPayload {
+  return preserveReplyPayloadMediaSelectionCore(source, recovered);
+}
+
+export type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
+export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+export type { OutboundSessionContext } from "../infra/outbound/session-context.js";
 export type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";
 export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
@@ -76,142 +127,153 @@ export type { ReplyToResolution } from "../infra/outbound/reply-policy.js";
 export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
-export { logAckFailure, logTypingFailure } from "../channels/logging.js";
-export * from "../channels/streaming.js";
+export { logTypingFailure } from "../channels/logging.js";
+export {
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
+  createChannelProgressDraftGate,
+  formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftText,
+  getChannelStreamingConfigObject,
+  isChannelProgressDraftWorkToolName,
+  formatPlanChecklistLines,
+  selectPlanChecklistSteps,
+  compactChannelProgressDraftLine,
+  isChannelProgressAttentionLine,
+  mergeChannelProgressDraftLine,
+  normalizeAgentPlanSteps,
+  normalizeChannelProgressDraftLineIdentity,
+  resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftConfig,
+  resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelStreamingBlockCoalesce,
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingChunkMode,
+  resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingPreviewCommandText,
+  resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressCommentary,
+  resolveChannelStreamingProgressNarration,
+  resolveChannelStreamingSuppressDefaultToolProgressMessages,
+} from "../channels/streaming.js";
+export type {
+  AgentPlanStep,
+  AgentPlanStepStatus,
+  ChannelDeliveryStreamingConfig,
+  ChannelPreviewStreamingConfig,
+  ChannelProgressDraftLine,
+  ChannelStreamingBlockConfig,
+  ChannelStreamingProgressConfig,
+  StreamingMode,
+  TextChunkMode,
+} from "../channels/streaming.js";
 export {
   createChannelProgressDraftCompositor,
-  type ChannelProgressDraftCompositor,
-  type ChannelProgressDraftCompositorLine,
-  type ChannelProgressDraftMode,
-  type ChannelProgressDraftUpdateOptions,
+  createChannelProgressWorkCounter,
 } from "../channels/progress-draft-compositor.js";
+export { formatChannelProgressDraftDiffStat } from "../channels/progress-draft-diffstat.js";
+
+/** @deprecated The streaming.progress.render key was retired (#122927). */
+export type ChannelProgressDraftRenderMode = "rich" | "text";
+
+/**
+ * @deprecated Load-only bridge: the published Slack channel package
+ * (2026.7.2-beta.7 and earlier) imports this at module top level, so removing
+ * it makes the installed plugin fail to load after a core upgrade. The config
+ * key it read is retired and doctor strips it, so this resolves the same
+ * "text"/"rich" answer pre-doctor configs produced and the default otherwise.
+ * Remove once managed releases have replaced the old npm latest/extended-stable
+ * packages and their upgrade window has closed.
+ */
+export function resolveChannelProgressDraftRender(
+  entry: ProgressDraftCompatEntry | null | undefined,
+  defaultValue: ChannelProgressDraftRenderMode = "text",
+): ChannelProgressDraftRenderMode {
+  const configured = (readProgressDraftConfig(entry) as { render?: unknown }).render;
+  return configured === "rich" || configured === "text" ? configured : defaultValue;
+}
+export type {
+  ChannelProgressDraftCompositorLine,
+  ChannelProgressDraftCompositorSnapshot,
+} from "../channels/progress-draft-compositor.js";
+export { deriveDurableFinalDeliveryRequirements } from "../channels/message/capabilities.js";
+export { defineChannelMessageAdapter } from "../channels/message/adapter.js";
+export { createChannelMessageAdapterFromOutbound } from "../channels/message/outbound-bridge.js";
+export { createDurableInboundReceiveJournalFromQueue } from "../channels/message/durable-receive.js";
 export {
-  classifyDurableSendRecoveryState,
-  createChannelMessageAdapterFromOutbound,
-  createDurableInboundReceiveJournal,
-  createDurableInboundReceiveJournalFromQueue,
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-  createMessageReceiveContext,
-  createPreviewMessageReceipt,
-  defineFinalizableLivePreviewAdapter,
-  deriveDurableFinalDeliveryRequirements,
-  deliverFinalizableLivePreview,
-  deliverWithFinalizableLivePreviewAdapter,
-  listDeclaredChannelMessageLiveCapabilities,
-  listDeclaredDurableFinalCapabilities,
-  listDeclaredLivePreviewFinalizerCapabilities,
-  listDeclaredReceiveAckPolicies,
-  createLiveMessageState,
-  createDurableMessageStateRecord,
-  defineChannelMessageAdapter,
-  markLiveMessageCancelled,
-  markLiveMessageFinalized,
-  markLiveMessagePreviewUpdated,
-  resolveMessageReceiptPrimaryId,
-  shouldAckMessageAfterStage,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
-  verifyChannelMessageLiveCapabilityProofs,
   verifyChannelMessageLiveFinalizerProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
-  verifyChannelMessageReceiveAckPolicyProofs,
   verifyDurableFinalCapabilityProofs,
-  verifyLivePreviewFinalizerCapabilityProofs,
-} from "../channels/message/index.js";
+} from "../channels/message/contracts.js";
+export {
+  createLivePreviewLifecycle,
+  createPreviewMessageReceipt,
+  defineFinalizableLivePreviewAdapter,
+  deliverWithFinalizableLivePreviewAdapter,
+} from "../channels/message/live.js";
+export type { LivePreviewDeliveryResult, LivePreviewLifecycle } from "../channels/message/live.js";
+export { createChannelDeliveryAccumulator } from "../channels/turn/delivery-result.js";
+export {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptPrimaryId,
+} from "../channels/message/receipt.js";
+export { createMessageReceiveContext } from "../channels/message/receive.js";
+export type { ChannelIngressDrain } from "../channels/message/ingress-drain.js";
 export type {
-  ChannelMessageAdapter,
-  ChannelMessageAdapterShape,
-  ChannelMessageDurableFinalAdapter,
-  ChannelMessageLiveFinalizerAdapterShape,
-  ChannelMessageLiveAdapterShape,
-  ChannelMessageLiveCapability,
-  ChannelMessageOutboundBridgeAdapter,
-  ChannelMessageOutboundBridgeResult,
-  ChannelMessageReceiveAckPolicy,
-  ChannelMessageReceiveAdapterShape,
-  ChannelMessageSendAdapter,
-  ChannelMessageSendAttemptContext,
-  ChannelMessageSendAttemptKind,
-  ChannelMessageSendCommitContext,
-  ChannelMessageSendFailureContext,
-  ChannelMessageSendLifecycleAdapter,
-  ChannelMessageSendMediaContext,
-  ChannelMessageSendPayloadContext,
-  ChannelMessageSendPollContext,
-  ChannelMessageSendResult,
-  ChannelMessageSendSuccessContext,
-  ChannelMessageSendTextContext,
-  ChannelMessageUnknownSendContext,
-  ChannelMessageUnknownSendReconciliationResult,
-  CreateChannelReplyPipelineParams,
-  CreateChannelMessageAdapterFromOutboundParams,
+  ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorLifecycle,
+} from "../channels/message/ingress-monitor.js";
+export type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
-  ChannelIngressQueueCompletedRecord,
-  ChannelIngressQueueEnqueueResult,
-  ChannelIngressQueueFailedRecord,
-  ChannelIngressQueuePruneOptions,
+  ChannelIngressQueueCorruptClaim,
   ChannelIngressQueueRecord,
-  DeriveDurableFinalDeliveryRequirementsParams,
-  ChannelMessageLiveCapabilityProof,
-  ChannelMessageLiveCapabilityProofMap,
-  ChannelMessageLiveCapabilityProofResult,
-  ChannelMessageReceiveAckPolicyProof,
-  ChannelMessageReceiveAckPolicyProofMap,
-  ChannelMessageReceiveAckPolicyProofResult,
-  DurableFinalCapabilityProof,
-  DurableFinalCapabilityProofMap,
-  DurableFinalCapabilityProofResult,
-  DurableFinalDeliveryCapability,
-  DurableFinalDeliveryPayloadShape,
-  DurableFinalDeliveryRequirementMap,
-  DurableFinalRequirementExtras,
-  DurableInboundReceiveAcceptOptions,
-  DurableInboundReceiveAcceptResult,
-  DurableInboundReceiveCompletedRecord,
-  DurableInboundReceiveCompleteOptions,
-  DurableInboundReceiveJournal,
-  DurableInboundReceiveJournalOptions,
-  DurableInboundReceivePendingRecord,
-  DurableInboundReceiveQueueJournalOptions,
-  DurableInboundReceiveReleaseOptions,
-  DurableMessageSendIntent,
-  DurableMessageSendState,
-  DurableMessageStateRecord,
-  FinalizableLivePreviewAdapter,
-  LiveMessagePhase,
-  LiveMessageState,
-  LivePreviewFinalizerCapability,
-  LivePreviewFinalizerCapabilityMap,
-  LivePreviewFinalizerDraft,
-  LivePreviewFinalizerCapabilityProof,
-  LivePreviewFinalizerCapabilityProofMap,
-  LivePreviewFinalizerCapabilityProofResult,
-  LivePreviewFinalizerResult,
-  LivePreviewFinalizerResultKind,
-  MessageAckPolicy,
-  MessageAckStage,
-  MessageAckState,
-  MessageReceiveContext,
-  MessageSendContext,
-  MessageDurabilityPolicy,
+} from "../channels/message/ingress-queue.js";
+export type { MessageAckPolicy, MessageReceiveContext } from "../channels/message/receive.js";
+export type {
+  ChannelMessageAdapterShape,
+  ChannelMessageDurableFinalAdapter,
+  ChannelMessageSendMediaContext,
+  ChannelMessageSendPayloadContext,
+  ChannelMessageSendResult,
+  ChannelMessageSendTextContext,
+  ChannelMessageUnknownSendContext,
+  ChannelMessageUnknownSendReconciliationResult,
   MessageReceipt,
   MessageReceiptPart,
   MessageReceiptPartKind,
   MessageReceiptSourceResult,
-  RenderedMessageBatch,
-  RenderedMessageBatchPlan,
-  RenderedMessageBatchPlanItem,
-  RenderedMessageBatchPlanKind,
-} from "../channels/message/index.js";
+} from "../channels/message/types.js";
 
-/** Lazily forwards inbound reply delivery through the channel turn kernel. */
-export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModule["deliverInboundReplyWithMessageSendContext"] =
+async function loadChannelDurableDeliveryModule(): Promise<ChannelDurableDeliveryModule> {
+  return await import("../channels/turn/durable-delivery.js").catch((error: unknown) => {
+    const staleInstall = classifyGatewayStaleInstall(error);
+    // Only import failure proves no send: errors from the delivery runtime may be ambiguous.
+    throw new PlatformMessageNotDispatchedError(
+      staleInstall?.error.message ?? "Reply delivery runtime could not load before dispatch",
+      { cause: error },
+    );
+  });
+}
+
+/** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
+export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContextCore"] =
   async (...args) => {
-    const mod = await import("../channels/turn/kernel.js");
-    return await mod.deliverInboundReplyWithMessageSendContext(...args);
+    const mod = await loadChannelDurableDeliveryModule();
+    return await mod.deliverInboundReplyWithMessageSendContextCore(...args);
+  };
+
+/** Delivers a producer's prepared plan without reparsing literal text. */
+export const deliverStructuredInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverStructuredInboundReplyWithMessageSendContextCore"] =
+  async (...args) => {
+    const mod = await loadChannelDurableDeliveryModule();
+    return await mod.deliverStructuredInboundReplyWithMessageSendContextCore(...args);
   };
 
 /** Sends a durable message batch without eager-loading channel message runtime internals. */
@@ -222,7 +284,7 @@ export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.sendDurableMessageBatch(params);
+  return await mod.sendDurableMessageBatchCore(params);
 }
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
@@ -237,5 +299,11 @@ export async function withDurableMessageSendContext<T>(
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.withDurableMessageSendContext(params, run);
+  return await mod.withDurableMessageSendContextCore(params, run);
 }
+
+export {
+  isPotentialTruncatedFinal,
+  resolveTranscriptBackedChannelFinalText,
+  selectLongerFinalText,
+} from "../channels/streaming-final-text.js";

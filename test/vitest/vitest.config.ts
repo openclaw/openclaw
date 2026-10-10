@@ -1,18 +1,10 @@
 // Vitest config config wires the config test shard.
 import { defineConfig } from "vitest/config";
-import {
-  resolveDefaultVitestPool,
-  resolveLocalVitestMaxWorkers,
-  resolveLocalVitestScheduling,
-  nonIsolatedRunnerPath,
-  sharedVitestConfig,
-} from "./vitest.shared.config.ts";
+import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
-export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers, resolveLocalVitestScheduling };
-
-export const rootVitestProjects = [
+const rootVitestProjects = [
   "test/vitest/vitest.unit.config.ts",
-  "test/vitest/vitest.unit-ui.config.ts",
   "test/vitest/vitest.infra.config.ts",
   "test/vitest/vitest.boundary.config.ts",
   "test/vitest/vitest.contracts-channel-surface.config.ts",
@@ -22,24 +14,26 @@ export const rootVitestProjects = [
   "test/vitest/vitest.contracts-plugin.config.ts",
   "test/vitest/vitest.bundled.config.ts",
   "test/vitest/vitest.gateway-core.config.ts",
+  "test/vitest/vitest.gateway-database-workers.config.ts",
   "test/vitest/vitest.gateway-client.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
+  "test/vitest/vitest.gateway-methods-isolated.config.ts",
   "test/vitest/vitest.gateway-server.config.ts",
+  "test/vitest/vitest.gateway-server-isolated.config.ts",
   "test/vitest/vitest.hooks.config.ts",
   "test/vitest/vitest.acp.config.ts",
   "test/vitest/vitest.runtime-config.config.ts",
   "test/vitest/vitest.secrets.config.ts",
+  "test/vitest/vitest.cli-process.config.ts",
   "test/vitest/vitest.cli.config.ts",
   "test/vitest/vitest.commands-light.config.ts",
   "test/vitest/vitest.commands.config.ts",
   "test/vitest/vitest.auto-reply.config.ts",
-  "test/vitest/vitest.agents-core.config.ts",
-  "test/vitest/vitest.agents-embedded-agent.config.ts",
-  "test/vitest/vitest.agents-support.config.ts",
-  "test/vitest/vitest.agents-tools.config.ts",
+  ...agentVitestProjectConfigs,
   "test/vitest/vitest.daemon.config.ts",
   "test/vitest/vitest.media.config.ts",
-  "test/vitest/vitest.unit-fast.config.ts",
+  "test/vitest/vitest.unit-fast-root.config.ts",
+  "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
   "test/vitest/vitest.plugin-sdk-light.config.ts",
   "test/vitest/vitest.plugin-sdk.config.ts",
@@ -49,12 +43,14 @@ export const rootVitestProjects = [
   "test/vitest/vitest.cron.config.ts",
   "test/vitest/vitest.media-understanding.config.ts",
   "test/vitest/vitest.shared-core.config.ts",
-  "test/vitest/vitest.tasks.config.ts",
   "test/vitest/vitest.tooling-docker.config.ts",
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling.config.ts",
   "test/vitest/vitest.tui.config.ts",
   "test/vitest/vitest.ui.config.ts",
+  "test/vitest/vitest.ui-timing.config.ts",
+  "test/vitest/vitest.ui-isolated.config.ts",
+  "test/vitest/vitest.ui-browser.config.ts",
   "test/vitest/vitest.utils.config.ts",
   "test/vitest/vitest.wizard.config.ts",
   "test/vitest/vitest.channels.config.ts",
@@ -76,6 +72,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.extension-providers.config.ts",
   "test/vitest/vitest.extension-signal.config.ts",
   "test/vitest/vitest.extension-slack.config.ts",
+  "test/vitest/vitest.extension-database-workers.config.ts",
   "test/vitest/vitest.extension-telegram.config.ts",
   "test/vitest/vitest.extension-voice-call.config.ts",
   "test/vitest/vitest.extension-whatsapp.config.ts",

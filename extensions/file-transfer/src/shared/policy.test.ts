@@ -1,12 +1,7 @@
-// File Transfer tests cover policy plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the plugin-sdk runtime-config surface so we can drive the policy
-// reader from the test without booting a gateway. mutateConfigFile is also
-// mocked so persistAllowAlways tests can assert what would have been written
-// without touching ~/.openclaw/openclaw.json.
 const getRuntimeConfigMock = vi.fn();
 const mutateConfigFileMock = vi.fn();
 
@@ -18,7 +13,12 @@ vi.mock("openclaw/plugin-sdk/config-mutation", () => ({
 }));
 
 // Imported AFTER vi.mock so the mocked module is what policy.ts binds to.
-const { evaluateFilePolicy, persistAllowAlways } = await import("./policy.js");
+const {
+  evaluateFilePolicy,
+  evaluateFileReadPolicySnapshot,
+  snapshotNodeFileReadPolicy,
+  persistLiteralGrant,
+} = await import("./policy.js");
 
 beforeEach(() => {
   getRuntimeConfigMock.mockReset();
@@ -35,31 +35,60 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function withConfig(fileTransfer: Record<string, unknown> | undefined) {
-  if (fileTransfer === undefined) {
-    getRuntimeConfigMock.mockReturnValue({});
-  } else {
-    getRuntimeConfigMock.mockReturnValue({
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: fileTransfer },
-          },
-        },
-      },
-    });
-  }
+function withConfig(nodes: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  const config: Record<string, unknown> = { policyVersion: 2, nodes, ...extra };
+  getRuntimeConfigMock.mockReturnValue({ plugins: { entries: { "file-transfer": { config } } } });
+  return config;
+}
+
+function withMutableConfig(nodes: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  const config = withConfig(nodes, extra);
+  mutateConfigFileMock.mockImplementation(
+    async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+      mutate({ plugins: { entries: { "file-transfer": { config } } } });
+    },
+  );
+  return config;
 }
 
 function expectResultFields(result: unknown, fields: Record<string, unknown>) {
-  if (typeof result !== "object" || result === null) {
-    throw new Error("policy result was not an object");
-  }
-  const record = result as Record<string, unknown>;
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
+  expect(result).toMatchObject(fields);
 }
+
+it("delegates only the selected node read policy and ignores the Node process policy", () => {
+  const gatewayHome = os.homedir();
+  withConfig({
+    "node-1": {
+      allowReadPaths: ["/workspace/**", "~/shared/**"],
+      allowWritePaths: ["/other/**"],
+      denyPaths: ["/workspace/private.txt"],
+    },
+    "node-2": { allowReadPaths: ["/unrelated/**"] },
+  });
+  const snapshot = snapshotNodeFileReadPolicy({ nodeId: "node-1" });
+  expect(Object.keys(snapshot.pluginConfig.nodes)).toEqual(["node-1"]);
+  expect(snapshot.pluginConfig.nodes["node-1"]).not.toHaveProperty("allowWritePaths");
+  withConfig({ "node-1": { allowReadPaths: ["/**"] } });
+  vi.spyOn(os, "homedir").mockReturnValue("/different-node-home");
+
+  expect(evaluateFileReadPolicySnapshot({ ...snapshot, path: "/workspace/SKILL.md" }).ok).toBe(
+    true,
+  );
+  expect(evaluateFileReadPolicySnapshot({ ...snapshot, path: "/workspace/private.txt" }).ok).toBe(
+    false,
+  );
+  expect(evaluateFileReadPolicySnapshot({ ...snapshot, path: "/unrelated/file.txt" }).ok).toBe(
+    false,
+  );
+  expect(
+    evaluateFileReadPolicySnapshot({ ...snapshot, path: path.join(gatewayHome, "shared/file.txt") })
+      .ok,
+  ).toBe(true);
+  expect(
+    evaluateFileReadPolicySnapshot({ ...snapshot, path: "/different-node-home/shared/file.txt" })
+      .ok,
+  ).toBe(false);
+});
 
 describe("evaluateFilePolicy — default deny", () => {
   it("returns NO_POLICY when no plugin config block is present", () => {
@@ -81,18 +110,8 @@ describe("evaluateFilePolicy — default deny", () => {
   });
 
   it("prefers the current runtime config over a stale passed plugin config", () => {
-    getRuntimeConfigMock.mockReturnValue({
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: {
-              nodes: {
-                n1: { allowReadPaths: ["/tmp/**"] },
-              },
-            },
-          },
-        },
-      },
+    withConfig({
+      n1: { allowReadPaths: ["/tmp/**"] },
     });
     const r = evaluateFilePolicy({
       nodeId: "n1",
@@ -105,6 +124,25 @@ describe("evaluateFilePolicy — default deny", () => {
       },
     });
     expectResultFields(r, { ok: true, reason: "matched-allow" });
+  });
+
+  it("fails closed with the one-command handoff for unreviewed legacy positive policy", () => {
+    withConfig({ Shared: { allowReadPaths: ["/tmp/report-*.txt"] } }, { policyVersion: undefined });
+
+    const result = evaluateFilePolicy({
+      nodeId: "node-a",
+      nodeDisplayName: "Shared",
+      kind: "read",
+      command: "file.fetch",
+      path: "/tmp/report-secret.txt",
+    });
+
+    expectResultFields(result, {
+      ok: false,
+      code: "POLICY_MIGRATION_REQUIRED",
+      askable: false,
+    });
+    expect(result.ok ? "" : result.reason).toContain("openclaw file-transfer approvals migrate");
   });
 });
 
@@ -120,26 +158,6 @@ describe("evaluateFilePolicy — '..' traversal short-circuit", () => {
     });
     expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
     expect(r.ok ? "" : r.reason).toMatch(/\.\./);
-  });
-
-  it("rejects a path that ENDS in /..", () => {
-    withConfig({
-      n1: { allowReadPaths: ["/tmp/**"] },
-    });
-    const r = evaluateFilePolicy({
-      nodeId: "n1",
-      kind: "read",
-      path: "/tmp/foo/..",
-    });
-    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
-  });
-
-  it("rejects bare '..'", () => {
-    withConfig({
-      n1: { allowReadPaths: ["/**"] },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: ".." });
-    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
   });
 });
 
@@ -200,6 +218,40 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
     );
   });
 
+  it.each([
+    {
+      label: "the bare denied directory",
+      requestedPath: path.join(os.homedir(), ".ssh"),
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the denied directory with a trailing separator",
+      requestedPath: `${path.join(os.homedir(), ".ssh")}/`,
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the bare denied directory on Windows",
+      requestedPath: "C:\\Users\\me\\.ssh",
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "a sibling sharing only the denied directory prefix",
+      requestedPath: path.join(os.homedir(), ".sshrc"),
+      expected: { ok: true },
+    },
+  ])("handles $label", ({ requestedPath, expected }) => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["/**"],
+        denyPaths: ["**/.ssh/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({ nodeId: "n1", kind: "read", path: requestedPath }),
+      expected,
+    );
+  });
+
   it("denies even with ask=always (denyPaths is hard)", () => {
     withConfig({
       n1: {
@@ -217,18 +269,6 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
 });
 
 describe("evaluateFilePolicy — allow matching", () => {
-  it("allows on matched-allow with ask=off (default)", () => {
-    withConfig({
-      n1: { allowReadPaths: ["/tmp/**"] },
-    });
-    expect(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/foo/bar.png" })).toEqual({
-      ok: true,
-      reason: "matched-allow",
-      maxBytes: undefined,
-      followSymlinks: false,
-    });
-  });
-
   it("propagates per-node maxBytes on matched-allow", () => {
     withConfig({
       n1: { allowReadPaths: ["/tmp/**"], maxBytes: 1024 },
@@ -299,19 +339,6 @@ describe("evaluateFilePolicy — allow matching", () => {
 });
 
 describe("evaluateFilePolicy — ask modes", () => {
-  it("ask=on-miss returns askable POLICY_DENIED on miss", () => {
-    withConfig({
-      n1: { ask: "on-miss", allowReadPaths: ["/var/log/**"] },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, {
-      ok: false,
-      code: "POLICY_DENIED",
-      askable: true,
-      askMode: "on-miss",
-    });
-  });
-
   it("ask=on-miss miss preserves transfer caps for one-time approvals", () => {
     withConfig({
       n1: {
@@ -397,172 +424,138 @@ describe("evaluateFilePolicy — node-id resolution", () => {
   });
 });
 
-describe("persistAllowAlways", () => {
-  it("appends path to allowReadPaths under the existing matching key", async () => {
-    let captured: Record<string, unknown> | null = null;
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {
-          plugins: {
-            entries: {
-              "file-transfer": {
-                config: { nodes: { n1: { allowReadPaths: ["/tmp/**"] } } },
-              },
-            },
-          },
-        };
-        mutate(draft);
-        captured = draft;
-      },
+describe("literal standing grants", () => {
+  it("makes only a migration-selected exact path askable under ask=off", () => {
+    withConfig(
+      { Shared: { ask: "off" } },
+      { pendingReapprovals: [{ selector: "Shared", kind: "read", path: "/tmp/report-*.txt" }] },
     );
-    await persistAllowAlways({ nodeId: "n1", kind: "read", path: "/srv/added.png" });
 
-    expect(mutateConfigFileMock).toHaveBeenCalledOnce();
-    // Drill back into the captured draft to assert the added path.
-    const root = captured as unknown as {
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: Record<string, { allowReadPaths: string[] }> };
-          };
-        };
-      };
-    };
-    expect(root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths).toContain(
-      "/srv/added.png",
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-a",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/report-*.txt",
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: true },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-a",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/unrelated.txt",
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
     );
   });
 
-  it("creates a new node entry keyed by displayName when no entry exists", async () => {
-    let captured: Record<string, unknown> | null = null;
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {};
-        mutate(draft);
-        captured = draft;
-      },
-    );
+  it.each([
+    ["asterisk", "/tmp/report-*.txt", "/tmp/report-secret.txt"],
+    ["POSIX backslash", "/tmp/report\\*.txt", "/tmp/report/*.txt"],
+    ["Windows separators", "C:\\Temp\\report-*.txt", "C:\\Temp\\report-a.txt"],
+    ["UNC path", "\\\\server\\share\\report-?.txt", "\\\\server\\share\\report-a.txt"],
+  ])("keeps an approved path containing %s literal", async (_label, approvedPath, siblingPath) => {
+    withMutableConfig({ n1: { ask: "on-miss" } });
 
-    await persistAllowAlways({
+    await persistLiteralGrant({
       nodeId: "n1",
-      nodeDisplayName: "Lobster",
-      kind: "write",
-      path: "/srv/out.txt",
+      command: "file.fetch",
+      requestedPath: approvedPath,
+      canonicalPath: approvedPath,
     });
 
-    const root = captured as unknown as {
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: Record<string, { allowWritePaths: string[] }> };
-          };
-        };
-      };
-    };
-    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowWritePaths).toContain(
-      "/srv/out.txt",
-    );
-  });
-
-  it("never persists under the '*' wildcard even when '*' is the matching key", async () => {
-    let captured: Record<string, unknown> | null = null;
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {
-          plugins: {
-            entries: {
-              "file-transfer": {
-                config: { nodes: { "*": { allowReadPaths: ["/var/log/**"] } } },
-              },
-            },
-          },
-        };
-        mutate(draft);
-        captured = draft;
-      },
-    );
-
-    await persistAllowAlways({
-      nodeId: "n1",
-      nodeDisplayName: "Lobster",
-      kind: "read",
-      path: "/srv/added.png",
-    });
-
-    const root = captured as unknown as {
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: Record<string, { allowReadPaths?: string[] }> };
-          };
-        };
-      };
-    };
-    // The "*" entry must not have been mutated.
-    expect(root.plugins.entries["file-transfer"].config.nodes["*"].allowReadPaths).toEqual([
-      "/var/log/**",
-    ]);
-    // A new entry keyed by displayName (not "*") must hold the new path.
-    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowReadPaths).toEqual([
-      "/srv/added.png",
-    ]);
-  });
-
-  it("rejects unsafe keys (__proto__, prototype, constructor) that would mutate prototype chain", async () => {
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {};
-        mutate(draft);
-      },
-    );
-
-    await expect(
-      persistAllowAlways({
+    expectResultFields(
+      evaluateFilePolicy({
         nodeId: "n1",
-        nodeDisplayName: "__proto__",
+        command: "file.fetch",
         kind: "read",
-        path: "/etc/passwd",
+        path: approvedPath,
       }),
-    ).rejects.toThrow(/unsafe key.*__proto__/);
-
-    await expect(
-      persistAllowAlways({
-        nodeId: "constructor",
+      { ok: true, reason: "matched-literal", expectedCanonicalPath: approvedPath },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        command: "file.fetch",
         kind: "read",
-        path: "/etc/passwd",
+        path: siblingPath,
       }),
-    ).rejects.toThrow(/unsafe key.*constructor/);
+      { ok: false, code: "POLICY_DENIED", askable: true },
+    );
   });
 
-  it("dedupes when path already present", async () => {
-    let captured: Record<string, unknown> | null = null;
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {
-          plugins: {
-            entries: {
-              "file-transfer": {
-                config: { nodes: { n1: { allowReadPaths: ["/tmp/x"] } } },
-              },
-            },
-          },
-        };
-        mutate(draft);
-        captured = draft;
+  it("does not replay a standing approval onto another node with the same display name", async () => {
+    withMutableConfig({ Shared: { ask: "on-miss" } });
+
+    await persistLiteralGrant({
+      nodeId: "node-a",
+      command: "file.fetch",
+      requestedPath: "/tmp/report.txt",
+      canonicalPath: "/tmp/report.txt",
+    });
+
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-a",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/report.txt",
+      }),
+      { ok: true, reason: "matched-literal" },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-b",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/report.txt",
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: true },
+    );
+  });
+
+  it("dedupes the exact tuple without changing authored policy", async () => {
+    const config = withMutableConfig({ Shared: { ask: "on-miss", denyPaths: ["**/.ssh/**"] } });
+    const grant = {
+      nodeId: "n1",
+      command: "file.fetch" as const,
+      requestedPath: "/tmp/x",
+      canonicalPath: "/private/tmp/x",
+    };
+    await persistLiteralGrant(grant);
+    await persistLiteralGrant(grant);
+    expect(config.nodes).toEqual({
+      Shared: { ask: "on-miss", denyPaths: ["**/.ssh/**"] },
+    });
+    expect(config.literalGrants).toEqual([grant]);
+  });
+
+  it("clears the matching pending reapproval after saving the exact grant", async () => {
+    const config = withMutableConfig(
+      { Shared: { ask: "off" } },
+      {
+        pendingReapprovals: [
+          { selector: "Shared", kind: "read", path: "/tmp/report.txt" },
+          { selector: "Shared", kind: "read", path: "/tmp/other.txt" },
+        ],
       },
     );
-    await persistAllowAlways({ nodeId: "n1", kind: "read", path: "/tmp/x" });
 
-    const root = captured as unknown as {
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: Record<string, { allowReadPaths: string[] }> };
-          };
-        };
-      };
-    };
-    const list = root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths;
-    expect(list.reduce((count, p) => count + (p === "/tmp/x" ? 1 : 0), 0)).toBe(1);
+    await persistLiteralGrant({
+      nodeId: "node-a",
+      command: "file.fetch",
+      requestedPath: "/tmp/report.txt",
+      canonicalPath: "/private/tmp/report.txt",
+      pendingReapprovalSelector: "Shared",
+    });
+    expect(config.pendingReapprovals).toEqual([
+      { selector: "Shared", kind: "read", path: "/tmp/other.txt" },
+    ]);
   });
 });

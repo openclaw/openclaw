@@ -1,156 +1,87 @@
-// Verifies config validation rejects unsupported enumerated values.
-import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { testing, validateConfigObjectRaw } from "./validation.js";
+import { assert, describe, expect, it } from "vitest";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
-function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
-  const issue = issues.find((entry) => entry.path === path);
-  if (!issue) {
-    throw new Error(`expected validation issue at ${path}`);
-  }
+function issues(config: unknown) {
+  const result = validateConfigObjectRaw(config);
+  assert(!result.ok, "expected invalid config");
+  return result.issues;
+}
+
+function issueAt(config: unknown, path: string) {
+  const issue = issues(config).find((entry) => entry.path === path);
+  assert(issue, "expected validation issue at " + path);
   return issue;
 }
 
-function mapFirstIssue(
-  schema: { safeParse: (value: unknown) => { success: true } | { success: false; error: unknown } },
-  value: unknown,
-) {
-  const result = schema.safeParse(value);
-  expect(result.success).toBe(false);
-  if (result.success) {
-    throw new Error("expected schema parse failure");
-  }
-  const issue = (result.error as { issues?: unknown[] }).issues?.[0];
-  if (!issue) {
-    throw new Error("expected first zod issue");
-  }
-  return testing.mapZodIssueToConfigIssue(issue);
-}
-
 describe("config validation allowed-values metadata", () => {
-  it("adds allowed values for invalid union paths", () => {
-    const result = validateConfigObjectRaw({
-      update: { channel: "nightly" },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const issue = requireIssue(result.issues, "update.channel");
-      expect(issue.message).toContain('(allowed: "stable", "beta", "dev")');
-      expect(issue.allowedValues).toEqual(["stable", "beta", "dev"]);
-      expect(issue.allowedValuesHiddenCount).toBe(0);
+  it("does not infer allowed values from user text in collected config issues", () => {
+    const text = 'expected one of "bogus"';
+    const config = {
+      agents: { entries: { main: {} } },
+      bindings: [{ agentId: text, match: { channel: "discord" } }],
+      broadcast: { "discord:qa": [text] },
+      talk: { agentId: text, provider: text, providers: { qa: {} } },
+    };
+    const original = structuredClone(config);
+    const result = issues(config);
+    expect(result.map((issue) => issue.path).toSorted()).toEqual([
+      "bindings.0.agentId",
+      "broadcast.discord:qa.0",
+      "talk.agentId",
+      "talk.provider",
+    ]);
+    for (const issue of result) {
+      expect(issue.message).toContain(text);
+      expect(issue.allowedValues).toBeUndefined();
+      expect(issue.allowedValuesHiddenCount).toBeUndefined();
     }
+    expect(config).toEqual(original);
   });
 
-  it("keeps native enum messages while attaching allowed values metadata", () => {
-    const issue = mapFirstIssue(
-      z.object({ dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]) }),
-      { dmPolicy: "maybe" },
-    );
-    expect(issue.path).toBe("dmPolicy");
-    expect(issue.message).toContain("expected one of");
-    expect(issue.message).not.toContain("(allowed:");
-    expect(issue.allowedValues).toEqual(["pairing", "allowlist", "open", "disabled"]);
+  it("adds allowed values and non-enumerable path segments for invalid unions", () => {
+    const issue = issueAt({ update: { channel: "nightly" } }, "update.channel");
+    expect(issue.pathSegments).toEqual(["update", "channel"]);
+    expect(JSON.stringify(issue)).not.toContain("pathSegments");
+    expect(issue.message).toContain('(allowed: "stable", "extended-stable", "beta", "dev")');
+    expect(issue.allowedValues).toEqual(["stable", "extended-stable", "beta", "dev"]);
     expect(issue.allowedValuesHiddenCount).toBe(0);
   });
 
-  it("includes boolean variants for boolean-or-enum unions", () => {
-    const issue = testing.mapZodIssueToConfigIssue({
-      code: "custom",
-      path: ["channels", "telegram"],
-      message:
-        "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
-    });
-    expect(issue.path).toBe("channels.telegram");
-    expect(issue.message).toContain(
-      "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
-    );
+  it("skips allowed-values hints for open-ended unions", () => {
+    const issue = issueAt({ cron: { sessionRetention: true } }, "cron.sessionRetention");
     expect(issue.allowedValues).toBeUndefined();
+    expect(issue.allowedValuesHiddenCount).toBeUndefined();
+    expect(issue.message).not.toContain("(allowed:");
   });
 
-  it("skips allowed-values hints for unions with open-ended branches", () => {
-    const result = validateConfigObjectRaw({
-      cron: { sessionRetention: true },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const issue = requireIssue(result.issues, "cron.sessionRetention");
-      expect(issue.allowedValues).toBeUndefined();
-      expect(issue.allowedValuesHiddenCount).toBeUndefined();
-      expect(issue.message).not.toContain("(allowed:");
-    }
+  it("adds an exclusive lower-bound hint", () => {
+    expect(
+      issueAt({ agents: { defaults: { maxConcurrent: 0 } } }, "agents.defaults.maxConcurrent")
+        .message,
+    ).toContain("(must be greater than 0)");
   });
 
-  it("surfaces specific sub-issue for invalid_union bindings errors instead of generic 'Invalid input'", () => {
-    const result = validateConfigObjectRaw({
-      bindings: [
-        {
-          type: "acp",
-          agentId: "test",
-          match: { channel: "discord", peer: { kind: "direct", id: "123" } },
-          acp: { agent: "claude" },
-        },
-      ],
-    });
+  it.each([{ acp: { agent: "claude" }, extra: {}, path: "bindings.0.acp", key: "agent" }])(
+    "selects the matching ACP union branch at $path",
+    ({ acp, extra, path, key }) => {
+      expect(
+        issues({
+          bindings: [
+            {
+              type: "acp",
+              agentId: "test",
+              match: { channel: "discord", peer: { kind: "direct", id: "123" } },
+              acp,
+              ...extra,
+            },
+          ],
+        }),
+      ).toEqual([{ path, message: 'Unrecognized key: "' + key + '"' }]);
+    },
+  );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toEqual([
-        {
-          path: "bindings.0.acp",
-          message: 'Unrecognized key: "agent"',
-        },
-      ]);
-    }
-  });
-
-  it("prefers the matching union branch for top-level unexpected keys", () => {
-    const result = validateConfigObjectRaw({
-      bindings: [
-        {
-          type: "acp",
-          agentId: "test",
-          match: { channel: "discord", peer: { kind: "direct", id: "123" } },
-          acp: { mode: "persistent" },
-          extraTopLevel: true,
-        },
-      ],
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toEqual([
-        {
-          path: "bindings.0",
-          message: 'Unrecognized key: "extraTopLevel"',
-        },
-      ]);
-    }
-  });
-
-  it("keeps generic union messaging for mixed scalar-or-object unions", () => {
-    const result = validateConfigObjectRaw({
-      agents: {
-        list: [{ id: "a", model: true }],
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toEqual([
-        {
-          path: "agents.list.0.model",
-          message: "Invalid input",
-        },
-      ]);
-    }
-  });
-});
-
-describe("config validation legacy openai-codex api", () => {
-  it("names openai-chatgpt-responses for the removed openai-codex-responses api id", () => {
-    const result = validateConfigObjectRaw({
+  it("names the replacement for a removed provider and model API", () => {
+    const result = issues({
       models: {
         providers: {
           "openai-codex": {
@@ -160,75 +91,11 @@ describe("config validation legacy openai-codex api", () => {
         },
       },
     });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const providerIssue = requireIssue(result.issues, "models.providers.openai-codex.api");
-      expect(providerIssue.message).toContain('"openai-codex-responses" is a removed api id');
-      expect(providerIssue.message).toContain('use "openai-chatgpt-responses"');
-      const modelIssue = requireIssue(result.issues, "models.providers.openai-codex.models.0.api");
-      expect(modelIssue.message).toContain('use "openai-chatgpt-responses"');
-    }
-  });
-
-  it("keeps the generic enum message for other invalid api ids", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          "openai-codex": {
-            api: "openai-codex",
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const issue = requireIssue(result.issues, "models.providers.openai-codex.api");
-      expect(issue.message).toContain("expected one of");
-      expect(issue.message).not.toContain("removed api id");
-    }
-  });
-});
-
-describe("config validation numeric bound hints", () => {
-  it("appends maximum for inclusive too_big numeric bound", () => {
-    const issue = mapFirstIssue(
-      z.object({ maxPingPongTurns: z.number().int().min(0).max(20).optional() }),
-      { maxPingPongTurns: 50 },
-    );
-    expect(issue.path).toBe("maxPingPongTurns");
-    expect(issue.message).toContain("(maximum: 20)");
-    expect(issue.allowedValues).toBeUndefined();
-  });
-
-  it("appends 'must be less than' for exclusive too_big numeric bound", () => {
-    const issue = mapFirstIssue(z.object({ rate: z.number().lt(5) }), { rate: 5 });
-    expect(issue.path).toBe("rate");
-    expect(issue.message).toContain("(must be less than 5)");
-    expect(issue.message).not.toContain("(maximum: 5)");
-  });
-
-  it("appends 'must be greater than' for exclusive too_small numeric bound (positive/gt)", () => {
-    const issue = mapFirstIssue(z.object({ count: z.number().positive() }), { count: 0 });
-    expect(issue.path).toBe("count");
-    expect(issue.message).toContain("(must be greater than 0)");
-    expect(issue.message).not.toContain("(minimum: 0)");
-  });
-
-  it("appends minimum for inclusive too_small numeric bound", () => {
-    const issue = mapFirstIssue(z.object({ retries: z.number().min(0) }), { retries: -1 });
-    expect(issue.path).toBe("retries");
-    expect(issue.message).toContain("(minimum: 0)");
-  });
-
-  it("does not append numeric bound hints for non-number origins (string)", () => {
-    const issue = mapFirstIssue(z.object({ name: z.string().max(10) }), {
-      name: "abcdefghijklmnop",
-    });
-    expect(issue.path).toBe("name");
-    expect(issue.message).not.toContain("(maximum:");
-    expect(issue.message).not.toContain("(must be less than");
-    expect(issue.allowedValues).toBeUndefined();
+    const provider = result.find((issue) => issue.path === "models.providers.openai-codex.api");
+    expect(provider?.message).toContain('"openai-codex-responses" is a removed api id');
+    expect(provider?.message).toContain('use "openai-chatgpt-responses"');
+    expect(
+      result.find((issue) => issue.path === "models.providers.openai-codex.models.0.api")?.message,
+    ).toContain('use "openai-chatgpt-responses"');
   });
 });

@@ -1,6 +1,6 @@
 // Nextcloud Talk tests cover channel.lifecycle plugin behavior.
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
+  createStartAccountContext,
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
@@ -39,7 +39,6 @@ function buildAccount(): ResolvedNextcloudTalkAccount {
       baseUrl: "https://nextcloud.example.com",
       botSecret: "secret", // pragma: allowlist secret
       webhookPath: "/nextcloud-talk-webhook",
-      webhookPort: 8788,
     },
   };
 }
@@ -88,5 +87,17 @@ describe("nextcloud-talk startAccount lifecycle", () => {
 
     expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not start the gateway monitor for an unavailable account credential", async () => {
+    const account: ResolvedNextcloudTalkAccount = {
+      ...buildAccount(),
+      secret: "",
+      tokenStatus: "configured_unavailable",
+    };
+    await expect(requireStartAccount()(createStartAccountContext({ account }))).rejects.toThrow(
+      /secret|unavailable/i,
+    );
+    expect(hoisted.monitorNextcloudTalkProvider).not.toHaveBeenCalled();
   });
 });

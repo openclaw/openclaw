@@ -2,13 +2,9 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  COPILOT_SDK_SPEC,
-  resetCopilotSdkCacheForTests,
-  loadCopilotSdk,
-  resolveCopilotSdkFallbackDir,
-} from "./sdk-loader.js";
+import { describe, expect, it, vi } from "vitest";
+import copilotPluginPackage from "../package.json" with { type: "json" };
+import { loadCopilotSdk } from "./sdk-loader.js";
 
 const FAKE_SDK = {
   CopilotClient: class FakeCopilotClient {
@@ -17,63 +13,6 @@ const FAKE_SDK = {
 } as unknown as typeof import("@github/copilot-sdk");
 
 describe("sdk-loader", () => {
-  beforeEach(() => {
-    resetCopilotSdkCacheForTests();
-  });
-
-  it("returns the primary import when it succeeds", async () => {
-    const primaryImport = vi.fn(async () => FAKE_SDK);
-    const fallbackImport = vi.fn(async () => {
-      throw new Error("should not be called");
-    });
-
-    const sdk = await loadCopilotSdk({
-      cache: false,
-      fallbackDir: "/dev/null/does-not-exist",
-      primaryImport,
-      fallbackImport,
-    });
-
-    expect(sdk).toBe(FAKE_SDK);
-    expect(primaryImport).toHaveBeenCalledTimes(1);
-    expect(fallbackImport).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the on-demand install location when primary import fails", async () => {
-    const tmp = mkdtempSync(path.join(tmpdir(), "copilot-sdk-loader-"));
-    try {
-      // Materialize the fallback path so the existsSync check passes.
-      const fallbackPath = path.join(tmp, "node_modules", "@github", "copilot-sdk");
-      mkdirSync(fallbackPath, { recursive: true });
-      writeFileSync(path.join(fallbackPath, "index.js"), "// placeholder");
-
-      const primaryImport = vi.fn(async () => {
-        const err = new Error("Cannot find module '@github/copilot-sdk'") as Error & {
-          code: string;
-        };
-        err.code = "ERR_MODULE_NOT_FOUND";
-        throw err;
-      });
-      const fallbackImport = vi.fn(async (abs: string) => {
-        expect(abs).toBe(fallbackPath);
-        return FAKE_SDK;
-      });
-
-      const sdk = await loadCopilotSdk({
-        cache: false,
-        fallbackDir: tmp,
-        primaryImport,
-        fallbackImport,
-      });
-
-      expect(sdk).toBe(FAKE_SDK);
-      expect(primaryImport).toHaveBeenCalledTimes(1);
-      expect(fallbackImport).toHaveBeenCalledTimes(1);
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
   it("default fallback importer resolves and imports the installed SDK entry", async () => {
     // Exercise the real default fallback importer (no fallbackImport injection)
     // to prove it imports a concrete entry file rather than the package
@@ -117,72 +56,63 @@ describe("sdk-loader", () => {
     }
   });
 
-  it("throws an actionable error with plugin install instructions when both probes fail", async () => {
+  it("throws an actionable error with install and resolution details", async () => {
     const primaryImport = vi.fn(async () => {
-      throw new Error("Cannot find module '@github/copilot-sdk'");
+      throw new Error("primary boom");
     });
     const fallbackImport = vi.fn(async () => {
       throw new Error("should not be called when fallback dir does not exist");
     });
+    const fallbackDir = path.join(tmpdir(), "copilot-sdk-loader-missing-" + Date.now());
+    const failed = loadCopilotSdk({ cache: false, fallbackDir, primaryImport, fallbackImport });
 
-    await expect(
-      loadCopilotSdk({
-        cache: false,
-        fallbackDir: path.join(tmpdir(), "copilot-sdk-loader-missing-" + Date.now()),
-        primaryImport,
-        fallbackImport,
-      }),
-    ).rejects.toMatchObject({
-      code: "COPILOT_SDK_MISSING",
-      message: expect.stringContaining("openclaw plugins install @openclaw/copilot"),
-    });
-
+    await expect(failed).rejects.toMatchObject({ code: "COPILOT_SDK_MISSING" });
+    for (const detail of [
+      "openclaw plugins install @openclaw/copilot",
+      "primary boom",
+      path.join(fallbackDir, "node_modules", "@github", "copilot-sdk"),
+      `@github/copilot-sdk@${copilotPluginPackage.dependencies["@github/copilot-sdk"]}`,
+    ]) {
+      await expect(failed).rejects.toThrow(detail);
+    }
     expect(fallbackImport).not.toHaveBeenCalled();
   });
 
-  it("error message includes the fallback path and underlying primary error", async () => {
-    const primaryImport = vi.fn(async () => {
-      throw new Error("primary boom");
+  it("caches successful loads across calls when cache is enabled", async () => {
+    vi.resetModules();
+    const { loadCopilotSdk: loadFreshCopilotSdk } = await import("./sdk-loader.js");
+    const primaryImport = vi.fn(async () => FAKE_SDK);
+    const fallbackImport = vi.fn(async () => {
+      throw new Error("should not be called");
     });
 
-    const fallbackDir = path.join(tmpdir(), "copilot-sdk-loader-missing-" + Date.now());
-    let captured: Error | undefined;
-    try {
-      await loadCopilotSdk({
-        cache: false,
-        fallbackDir,
-        primaryImport,
-      });
-    } catch (err) {
-      captured = err as Error;
-    }
-    expect(captured).toBeDefined();
-    const message = captured?.message ?? "";
-    expect(message).toContain("primary boom");
-    expect(message).toContain(path.join(fallbackDir, "node_modules", "@github", "copilot-sdk"));
-    expect(message).toContain(COPILOT_SDK_SPEC);
-    expect(message).toContain("openclaw plugins install @openclaw/copilot");
-  });
-
-  it("caches successful loads across calls when cache is enabled", async () => {
-    const primaryImport = vi.fn(async () => FAKE_SDK);
-
-    const a = await loadCopilotSdk({ primaryImport, fallbackDir: "/dev/null/does-not-exist" });
-    const b = await loadCopilotSdk({ primaryImport, fallbackDir: "/dev/null/does-not-exist" });
+    const a = await loadFreshCopilotSdk({
+      primaryImport,
+      fallbackImport,
+      fallbackDir: "/dev/null/does-not-exist",
+    });
+    const b = await loadFreshCopilotSdk({
+      primaryImport,
+      fallbackImport,
+      fallbackDir: "/dev/null/does-not-exist",
+    });
 
     expect(a).toBe(FAKE_SDK);
     expect(b).toBe(FAKE_SDK);
     expect(primaryImport).toHaveBeenCalledTimes(1);
+    expect(fallbackImport).not.toHaveBeenCalled();
   });
 
   it("does not poison the cache after a failed load", async () => {
+    vi.resetModules();
+    const { loadCopilotSdk: loadFreshCopilotSdk } = await import("./sdk-loader.js");
     const primaryImport = vi
       .fn<typeof Promise>()
       .mockRejectedValueOnce(new Error("first boom"))
       .mockResolvedValueOnce(FAKE_SDK);
 
     await expect(
-      loadCopilotSdk({
+      loadFreshCopilotSdk({
         primaryImport: primaryImport as unknown as () => Promise<
           typeof import("@github/copilot-sdk")
         >,
@@ -190,7 +120,7 @@ describe("sdk-loader", () => {
       }),
     ).rejects.toBeInstanceOf(Error);
 
-    const sdk = await loadCopilotSdk({
+    const sdk = await loadFreshCopilotSdk({
       primaryImport: primaryImport as unknown as () => Promise<
         typeof import("@github/copilot-sdk")
       >,
@@ -200,22 +130,37 @@ describe("sdk-loader", () => {
     expect(primaryImport).toHaveBeenCalledTimes(2);
   });
 
-  it("resolves the fallback dir from OPENCLAW_STATE_DIR for relocated profiles", () => {
-    expect(
-      resolveCopilotSdkFallbackDir({
-        ...process.env,
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
-      }),
-    ).toBe(path.join("/tmp/openclaw-state", "npm-runtime", "copilot"));
-  });
+  it("resolves the fallback install from OPENCLAW_STATE_DIR", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "copilot-sdk-loader-state-"));
+    try {
+      const fallbackPath = path.join(
+        stateDir,
+        "npm-runtime",
+        "copilot",
+        "node_modules",
+        "@github",
+        "copilot-sdk",
+      );
+      mkdirSync(fallbackPath, { recursive: true });
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const fallbackImport = vi.fn(async (absolutePath: string) => {
+        expect(absolutePath).toBe(fallbackPath);
+        return FAKE_SDK;
+      });
 
-  afterEach(() => {
-    resetCopilotSdkCacheForTests();
-  });
-});
-
-describe("sdk dependency constants", () => {
-  it("COPILOT_SDK_SPEC pins the canonical SDK spec", () => {
-    expect(COPILOT_SDK_SPEC).toBe("@github/copilot-sdk@1.0.0-beta.9");
+      await expect(
+        loadCopilotSdk({
+          cache: false,
+          primaryImport: async () => {
+            throw new Error("primary missing");
+          },
+          fallbackImport,
+        }),
+      ).resolves.toBe(FAKE_SDK);
+      expect(fallbackImport).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });

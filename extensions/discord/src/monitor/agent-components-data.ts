@@ -1,27 +1,25 @@
-// Discord plugin module implements agent components data behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
 } from "../component-custom-id.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import { decodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData, ModalInteraction } from "../internal/discord.js";
 import type { AgentComponentInteraction } from "./agent-components.types.js";
 import { formatDiscordUserTag } from "./format.js";
 
-function readParsedComponentId(data: ComponentData): unknown {
+function readParsedId(data: ComponentData, key: "cid" | "mid"): unknown {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  return "cid" in data
-    ? (data as Record<string, unknown>).cid
-    : (data as Record<string, unknown>).componentId;
+  return key in data ? data[key] : data[key === "cid" ? "componentId" : "modalId"];
 }
 
 function normalizeComponentId(value: unknown): string | undefined {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
+    return normalizeOptionalString(value);
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
@@ -41,22 +39,13 @@ function mapOptionLabels(
 }
 
 export function parseAgentComponentData(data: ComponentData): { componentId: string } | null {
-  const raw = readParsedComponentId(data);
-  const decodeSafe = (value: string): string => {
-    if (!value.includes("%")) {
-      return value;
-    }
-    if (!/%[0-9A-Fa-f]{2}/.test(value)) {
-      return value;
-    }
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  };
+  const raw = readParsedId(data, "cid");
   const componentId =
-    typeof raw === "string" ? decodeSafe(raw) : typeof raw === "number" ? String(raw) : null;
+    typeof raw === "string"
+      ? decodeCustomIdComponent(raw)
+      : typeof raw === "number"
+        ? String(raw)
+        : null;
   if (!componentId) {
     return null;
   }
@@ -70,9 +59,8 @@ export function parseDiscordComponentData(
   if (!data || typeof data !== "object") {
     return null;
   }
-  const rawComponentId = readParsedComponentId(data);
-  const rawModalId =
-    "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
+  const rawComponentId = readParsedId(data, "cid");
+  const rawModalId = readParsedId(data, "mid");
   let componentId = normalizeComponentId(rawComponentId);
   let modalId = normalizeComponentId(rawModalId);
   if (!componentId && customId) {
@@ -89,13 +77,9 @@ export function parseDiscordComponentData(
 }
 
 export function parseDiscordModalId(data: ComponentData, customId?: string): string | null {
-  if (data && typeof data === "object") {
-    const rawModalId =
-      "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
-    const modalId = normalizeComponentId(rawModalId);
-    if (modalId) {
-      return modalId;
-    }
+  const modalId = normalizeComponentId(readParsedId(data, "mid"));
+  if (modalId) {
+    return modalId;
   }
   if (customId) {
     return parseDiscordModalCustomId(customId);
@@ -112,32 +96,21 @@ export function resolveInteractionCustomId(
   if (!("data" in interaction.rawData)) {
     return undefined;
   }
-  const data = (interaction.rawData as { data?: { custom_id?: unknown } }).data;
-  const customId = data?.custom_id;
-  if (typeof customId !== "string") {
-    return undefined;
-  }
-  const trimmed = customId.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(interaction.rawData.data?.custom_id);
 }
 
 export function mapSelectValues(entry: DiscordComponentEntry, values: string[]): string[] {
-  if (entry.selectType === "string") {
-    return mapOptionLabels(entry.options, values);
+  switch (entry.selectType) {
+    case "string":
+      return mapOptionLabels(entry.options, values);
+    case "user":
+    case "role":
+    case "mentionable":
+    case "channel":
+      return values.map((value) => `${entry.selectType}:${value}`);
+    default:
+      return values;
   }
-  if (entry.selectType === "user") {
-    return values.map((value) => `user:${value}`);
-  }
-  if (entry.selectType === "role") {
-    return values.map((value) => `role:${value}`);
-  }
-  if (entry.selectType === "mentionable") {
-    return values.map((value) => `mentionable:${value}`);
-  }
-  if (entry.selectType === "channel") {
-    return values.map((value) => `channel:${value}`);
-  }
-  return values;
 }
 
 export function resolveModalFieldValues(
@@ -145,43 +118,29 @@ export function resolveModalFieldValues(
   interaction: ModalInteraction,
 ): string[] {
   const fields = interaction.fields;
-  const optionLabels = field.options?.map((option) => ({
-    value: option.value,
-    label: option.label,
-  }));
   const required = field.required === true;
   try {
     switch (field.type) {
       case "text": {
-        const value = required ? fields.getText(field.id, true) : fields.getText(field.id);
+        const value = fields.getText(field.id, required);
         return value ? [value] : [];
       }
       case "select":
       case "checkbox":
       case "radio": {
-        const values = required
-          ? fields.getStringSelect(field.id, true)
-          : (fields.getStringSelect(field.id) ?? []);
-        return mapOptionLabels(optionLabels, values);
+        return mapOptionLabels(field.options, fields.getStringSelect(field.id, required));
       }
       case "role-select": {
         try {
-          const roles = required
-            ? fields.getRoleSelect(field.id, true)
-            : (fields.getRoleSelect(field.id) ?? []);
+          const roles = fields.getRoleSelect(field.id, required);
           return roles.map((role) => role.name ?? role.id);
         } catch {
-          const values = required
-            ? fields.getStringSelect(field.id, true)
-            : (fields.getStringSelect(field.id) ?? []);
-          return values;
+          return fields.getStringSelect(field.id, required);
         }
       }
       case "user-select": {
-        const users = required
-          ? fields.getUserSelect(field.id, true)
-          : (fields.getUserSelect(field.id) ?? []);
-        return users.map((user) => formatDiscordUserTag(user));
+        const users = fields.getUserSelect(field.id, required);
+        return users.map(formatDiscordUserTag);
       }
       default:
         return [];
@@ -196,30 +155,10 @@ export function formatModalSubmissionText(
   entry: DiscordModalEntry,
   interaction: ModalInteraction,
 ): string {
-  const lines: string[] = [`Form "${entry.title}" submitted.`];
-  for (const field of entry.fields) {
+  const title = `Form "${entry.title}" submitted.`;
+  const lines = entry.fields.flatMap((field) => {
     const values = resolveModalFieldValues(field, interaction);
-    if (values.length === 0) {
-      continue;
-    }
-    lines.push(`- ${field.label}: ${values.join(", ")}`);
-  }
-  if (lines.length === 1) {
-    lines.push("- (no values)");
-  }
-  return lines.join("\n");
-}
-
-export function resolveDiscordInteractionId(interaction: AgentComponentInteraction): string {
-  const rawId =
-    interaction.rawData && typeof interaction.rawData === "object" && "id" in interaction.rawData
-      ? (interaction.rawData as { id?: unknown }).id
-      : undefined;
-  if (typeof rawId === "string" && rawId.trim()) {
-    return rawId.trim();
-  }
-  if (typeof rawId === "number" && Number.isFinite(rawId)) {
-    return String(rawId);
-  }
-  return `discord-interaction:${Date.now()}`;
+    return values.length > 0 ? [`- ${field.label}: ${values.join(", ")}`] : [];
+  });
+  return [title, ...(lines.length > 0 ? lines : ["- (no values)"])].join("\n");
 }

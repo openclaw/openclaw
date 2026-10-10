@@ -1,93 +1,32 @@
 // Tests queue setting normalization and directive parsing.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveQueueSettings } from "./settings.js";
+import { resolveQueueSettingsCore } from "./settings.js";
 
-describe("resolveQueueSettings", () => {
-  it("defaults inbound channels to steering settings", () => {
-    expect(resolveQueueSettings({ cfg: {} as OpenClawConfig })).toEqual({
-      mode: "steer",
-      debounceMs: 500,
-      cap: 20,
-      dropPolicy: "summarize",
-    });
-  });
-
-  it("uses the short debounce when collect is selected globally", () => {
-    expect(
-      resolveQueueSettings({
-        cfg: {
-          messages: {
-            queue: {
-              mode: "collect",
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    ).toEqual({
+describe("resolveQueueSettingsCore", () => {
+  it.each([
+    { name: "inbound defaults", params: { cfg: {} }, mode: "steer" },
+    {
+      name: "global collect",
+      params: { cfg: { messages: { queue: { mode: "collect" } } } },
       mode: "collect",
-      debounceMs: 500,
-      cap: 20,
-      dropPolicy: "summarize",
-    });
-  });
-
-  it("keeps explicit channel queue overrides ahead of defaults", () => {
-    expect(
-      resolveQueueSettings({
-        cfg: {
-          messages: {
-            queue: {
-              mode: "followup",
-              debounceMs: 750,
-              byChannel: {
-                discord: "collect",
-              },
-            },
-          },
-        } as OpenClawConfig,
+    },
+    {
+      name: "channel override before global mode",
+      params: {
+        cfg: { messages: { queue: { mode: "followup", byChannel: { discord: "collect" } } } },
         channel: "discord",
-      }),
-    ).toEqual({
+      },
       mode: "collect",
-      debounceMs: 750,
-      cap: 20,
-      dropPolicy: "summarize",
-    });
-  });
-
-  it("uses explicit steer mode from config", () => {
-    expect(
-      resolveQueueSettings({
-        cfg: {
-          messages: {
-            queue: {
-              mode: "steer",
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    ).toEqual({
+    },
+    {
+      name: "removed mode in stale config",
+      params: { cfg: { messages: { queue: { mode: "steer-backlog" as never } } } },
       mode: "steer",
-      debounceMs: 500,
-      cap: 20,
-      dropPolicy: "summarize",
-    });
-  });
-
-  it("ignores removed steering queue modes from stale config", () => {
-    expect(
-      resolveQueueSettings({
-        cfg: {
-          messages: {
-            queue: {
-              mode: "steer-backlog" as never,
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    ).toEqual({
-      mode: "steer",
+    },
+  ] as const)("resolves $name with the built-in batching defaults", ({ params, mode }) => {
+    expect(resolveQueueSettingsCore(params)).toEqual({
+      mode,
       debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",
@@ -96,13 +35,13 @@ describe("resolveQueueSettings", () => {
 
   it("maps retired persisted session queue modes to compatible modes", () => {
     expect(
-      resolveQueueSettings({
+      resolveQueueSettingsCore({
         cfg: {} as OpenClawConfig,
         sessionEntry: { sessionId: "test-session", updatedAt: 0, queueMode: "queue" as never },
       }).mode,
     ).toBe("steer");
     expect(
-      resolveQueueSettings({
+      resolveQueueSettingsCore({
         cfg: {} as OpenClawConfig,
         sessionEntry: {
           sessionId: "test-session",
@@ -112,7 +51,7 @@ describe("resolveQueueSettings", () => {
       }).mode,
     ).toBe("followup");
     expect(
-      resolveQueueSettings({
+      resolveQueueSettingsCore({
         cfg: {} as OpenClawConfig,
         sessionEntry: {
           sessionId: "test-session",

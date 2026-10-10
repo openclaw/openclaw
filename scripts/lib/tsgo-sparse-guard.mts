@@ -1,0 +1,223 @@
+// Detects sparse-checkout gaps before tsgo runs core TypeScript projects.
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { readFlagValue } from "./arg-utils.mts";
+import { createManagedCommandInvocation } from "./managed-child-process.mts";
+import {
+  TSGO_CORE_TEST_SHARDS,
+  TSGO_TARGETED_TEST_SHARED_SHARDS,
+} from "./tsgo-core-test-shards.mts";
+
+const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
+
+const CORE_PROD_REQUIRED_PATHS = [
+  {
+    path: "scripts/lib/bundled-runtime-sidecar-paths.json",
+    whenPresent: "src/plugins/runtime-sidecar-paths.ts",
+  },
+  {
+    path: "scripts/lib/official-external-channel-catalog.json",
+    whenPresent: "src/channels/plugins/catalog.ts",
+  },
+  {
+    path: "scripts/lib/official-external-plugin-catalog.json",
+    whenPresent: "src/plugins/official-external-plugin-catalog.ts",
+  },
+  {
+    path: "scripts/lib/official-external-provider-catalog.json",
+    whenPresent: "src/plugins/official-external-plugin-catalog.ts",
+  },
+  {
+    path: "scripts/lib/recommended-tool-installs.json",
+    whenPresent: "src/plugins/recommended-tool-installs.ts",
+  },
+  {
+    path: "scripts/lib/plugin-sdk-entrypoints.json",
+    whenPresent: "scripts/lib/plugin-sdk-entries.mts",
+  },
+];
+
+const UI_PROD_REQUIRED_PATHS = [
+  {
+    path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+    whenPresent: "ui/src/lib/chat/tool-display.ts",
+  },
+];
+
+const CORE_TEST_REQUIRED_PATHS = [
+  "packages/plugin-package-contract/src/index.ts",
+  "ui/config/control-ui-chunking.ts",
+  "ui/src/i18n/lib/registry.ts",
+  "ui/src/i18n/lib/types.ts",
+  "ui/src/app/settings.ts",
+  "ui/src/api/gateway.ts",
+];
+
+type FileExists = typeof fs.existsSync;
+type ProjectRequirements = {
+  roots: readonly string[];
+  paths: readonly { path: string; whenPresent?: string }[];
+};
+const CORE_TEST_REQUIREMENTS: ProjectRequirements = {
+  roots: ["packages", "ui/config", "ui/src"],
+  paths: CORE_TEST_REQUIRED_PATHS.map((requiredPath) => ({ path: requiredPath })),
+};
+const PROJECT_REQUIREMENTS = new Map<string, ProjectRequirements>([
+  ["tsconfig.core.json", { roots: ["packages"], paths: CORE_PROD_REQUIRED_PATHS }],
+  [
+    "tsconfig.ui.json",
+    { roots: ["packages", "src", "ui/config", "ui/src"], paths: UI_PROD_REQUIRED_PATHS },
+  ],
+  ["tsconfig.core.test.json", CORE_TEST_REQUIREMENTS],
+  ...[...TSGO_CORE_TEST_SHARDS, ...TSGO_TARGETED_TEST_SHARED_SHARDS].map(
+    (shard) =>
+      [
+        path.basename(shard.config),
+        "sparseRoots" in shard ? { roots: shard.sparseRoots, paths: [] } : CORE_TEST_REQUIREMENTS,
+      ] as const,
+  ),
+]);
+type SparseGuardOptions = {
+  cwd?: string;
+  fileExists?: FileExists;
+  isSparseCheckoutEnabled?: (options: { cwd: string }) => boolean;
+  sparseCheckoutPatterns?: string[];
+};
+
+export function shouldSkipSparseTsgoGuardError(env: NodeJS.ProcessEnv = process.env) {
+  const value = env[TSGO_SPARSE_SKIP_ENV_KEY]?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+export function createSparseTsgoSkipEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
+  return {
+    ...baseEnv,
+    [TSGO_SPARSE_SKIP_ENV_KEY]: baseEnv[TSGO_SPARSE_SKIP_ENV_KEY]?.trim() || "1",
+  };
+}
+
+export function getSparseTsgoGuardError(
+  args: readonly string[],
+  {
+    cwd = process.cwd(),
+    fileExists = fs.existsSync,
+    isSparseCheckoutEnabled,
+    sparseCheckoutPatterns,
+  }: SparseGuardOptions = {},
+) {
+  const projectNames = readProjectNames(args);
+  if (projectNames.length === 0 || isMetadataOnlyCommand(args)) {
+    return null;
+  }
+
+  const sparseEnabled =
+    isSparseCheckoutEnabled?.({ cwd }) ?? getGitBooleanConfig("core.sparseCheckout", { cwd });
+  if (!sparseEnabled) {
+    return null;
+  }
+
+  const sparsePatterns = sparseCheckoutPatterns ?? getSparseCheckoutPatterns({ cwd });
+  const missingPaths = [
+    ...new Set(
+      projectNames
+        .flatMap((project) => PROJECT_REQUIREMENTS.get(project)?.roots ?? [])
+        .filter((relativePath) =>
+          sparsePatterns ? !isSparseRootCovered(relativePath, sparsePatterns) : false,
+        ),
+    ),
+    ...new Set(
+      projectNames
+        .flatMap((projectName) => getRequiredPathsForProject(projectName, cwd, fileExists))
+        .filter((relativePath) => !fileExists(path.join(cwd, relativePath))),
+    ),
+  ];
+  if (missingPaths.length === 0) {
+    return null;
+  }
+
+  return [
+    `${projectNames.join(", ")} cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:`,
+    ...missingPaths.map((relativePath) => `- ${relativePath}`),
+    "Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree.",
+  ].join("\n");
+}
+
+function getRequiredPathsForProject(projectName: string, cwd: string, fileExists: FileExists) {
+  const requiredPaths = (PROJECT_REQUIREMENTS.get(projectName)?.paths ?? [])
+    .filter(
+      (entry) => entry.whenPresent === undefined || fileExists(path.join(cwd, entry.whenPresent)),
+    )
+    .map((entry) => entry.path);
+  return [...new Set(requiredPaths)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function readGitOutput(args: string[], cwd: string): string | null {
+  const git = createManagedCommandInvocation({ args, bin: "git" });
+  const result = spawnSync(git.command, git.args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: git.shell,
+    windowsVerbatimArguments: git.windowsVerbatimArguments,
+  });
+  return result.error || (result.status ?? 1) !== 0 ? null : (result.stdout ?? "");
+}
+
+function getGitBooleanConfig(name: string, { cwd }: { cwd: string }) {
+  return readGitOutput(["config", "--get", "--bool", name], cwd)?.trim() === "true";
+}
+
+function getSparseCheckoutPatterns({ cwd }: { cwd: string }) {
+  const output = readGitOutput(["sparse-checkout", "list"], cwd);
+  return output === null
+    ? null
+    : output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+}
+
+function isSparseRootCovered(relativeRoot: string, patterns: string[]) {
+  const root = normalizeSparsePattern(relativeRoot);
+  return patterns.some((pattern) => {
+    if (pattern.startsWith("!")) {
+      return false;
+    }
+
+    const normalized = normalizeSparsePattern(pattern);
+    return normalized === root || (normalized.length > 0 && root.startsWith(`${normalized}/`));
+  });
+}
+
+function normalizeSparsePattern(pattern: string) {
+  return pattern
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^!/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/\*\*$/, "")
+    .replace(/\/+$/, "");
+}
+
+function readProjectNames(args: readonly string[]) {
+  const projectPath = readFlagValue(args, "-p") ?? readFlagValue(args, "--project");
+  const candidates = projectPath
+    ? [projectPath]
+    : args.some((arg) => arg === "-b" || arg === "--build")
+      ? args.filter((arg) => !arg.startsWith("-"))
+      : [];
+  return [
+    ...new Set(
+      candidates
+        .map((candidate) => path.basename(candidate))
+        .filter((config) => PROJECT_REQUIREMENTS.has(config)),
+    ),
+  ];
+}
+
+function isMetadataOnlyCommand(args: readonly string[]) {
+  return args.some((arg) =>
+    ["--help", "-h", "--version", "-v", "--init", "--showConfig"].includes(arg),
+  );
+}

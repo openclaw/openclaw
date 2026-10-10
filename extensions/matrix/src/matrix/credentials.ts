@@ -1,8 +1,16 @@
-// Matrix plugin module implements credentials behavior.
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { createAsyncLock, type AsyncLock } from "./async-lock.js";
-import { loadMatrixCredentials, resolveMatrixCredentialsPath } from "./credentials-read.js";
-import type { MatrixStoredCredentials } from "./credentials-read.js";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { openMatrixCredentialsAsyncStore, openMatrixCredentialsStore } from "./credentials-read.js";
+import {
+  isMatrixCredentialRevocation,
+  matrixCredentialsStoreKey,
+  normalizeMatrixStoredCredentials,
+} from "./credentials-state.js";
+import type {
+  MatrixCredentialStateRecord,
+  MatrixStoredCredentialRecord,
+  MatrixStoredCredentials,
+} from "./credentials-state.js";
+import { updateMatrixKeyedState } from "./sqlite-state.js";
 
 export {
   clearMatrixCredentials,
@@ -11,46 +19,14 @@ export {
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
 } from "./credentials-read.js";
-export type { MatrixStoredCredentials } from "./credentials-read.js";
-
-const credentialWriteLocks = new Map<string, AsyncLock>();
-
-function withCredentialWriteLock<T>(credPath: string, fn: () => Promise<T>): Promise<T> {
-  let withLock = credentialWriteLocks.get(credPath);
-  if (!withLock) {
-    withLock = createAsyncLock();
-    credentialWriteLocks.set(credPath, withLock);
-  }
-  return withLock(fn);
-}
-
-async function writeMatrixCredentialsUnlocked(params: {
-  credPath: string;
-  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">;
-  existing: MatrixStoredCredentials | null;
-}): Promise<void> {
-  const now = new Date().toISOString();
-  const toSave: MatrixStoredCredentials = {
-    ...params.credentials,
-    createdAt: params.existing?.createdAt ?? now,
-    lastUsedAt: now,
-  };
-  await writeJsonFileAtomically(params.credPath, toSave);
-}
+export type { MatrixStoredCredentials } from "./credentials-state.js";
 
 export async function saveMatrixCredentials(
   credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): Promise<void> {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
-  await withCredentialWriteLock(credPath, async () => {
-    await writeMatrixCredentialsUnlocked({
-      credPath,
-      credentials,
-      existing: loadMatrixCredentials(env, accountId),
-    });
-  });
+  await persistMatrixCredentials(credentials, env, accountId, false);
 }
 
 export async function saveBackfilledMatrixDeviceId(
@@ -58,39 +34,78 @@ export async function saveBackfilledMatrixDeviceId(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): Promise<"saved" | "skipped"> {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
-  return await withCredentialWriteLock(credPath, async () => {
-    const existing = loadMatrixCredentials(env, accountId);
-    if (
-      existing &&
-      (existing.homeserver !== credentials.homeserver ||
-        existing.userId !== credentials.userId ||
-        existing.accessToken !== credentials.accessToken)
-    ) {
-      return "skipped";
-    }
+  return persistMatrixCredentials(credentials, env, accountId, true);
+}
 
-    await writeMatrixCredentialsUnlocked({
-      credPath,
-      credentials,
-      existing,
-    });
-    return "saved";
+async function persistMatrixCredentials(
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv,
+  accountId: string | null | undefined,
+  backfill: boolean,
+): Promise<"saved" | "skipped"> {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const preparedCredentials = { ...credentials };
+  const now = new Date().toISOString();
+  let result: "saved" | "skipped" = "saved";
+  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
+    result = "saved";
+    // A delayed login backfill must not resurrect credentials after logout.
+    if (backfill && isMatrixCredentialRevocation(current, normalizedAccountId)) {
+      result = "skipped";
+      return current;
+    }
+    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
+    if (
+      backfill &&
+      existing &&
+      (existing.homeserver !== preparedCredentials.homeserver ||
+        existing.userId !== preparedCredentials.userId ||
+        existing.accessToken !== preparedCredentials.accessToken)
+    ) {
+      result = "skipped";
+      return existing;
+    }
+    return {
+      accountId: normalizedAccountId,
+      homeserver: preparedCredentials.homeserver,
+      userId: preparedCredentials.userId,
+      accessToken: preparedCredentials.accessToken,
+      ...(typeof preparedCredentials.deviceId === "string"
+        ? { deviceId: preparedCredentials.deviceId }
+        : {}),
+      createdAt: existing?.createdAt ?? now,
+      lastUsedAt: now,
+    } satisfies MatrixStoredCredentialRecord;
   });
+  return result;
 }
 
 export async function touchMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): Promise<void> {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
-  await withCredentialWriteLock(credPath, async () => {
-    const existing = loadMatrixCredentials(env, accountId);
-    if (!existing) {
-      return;
+  const normalizedAccountId = normalizeAccountId(accountId);
+  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
+    // A delayed activity touch must preserve an explicit logout tombstone.
+    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
+      return current;
     }
+    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
+    return existing ? { ...existing, lastUsedAt: new Date().toISOString() } : undefined;
+  });
+}
 
-    existing.lastUsedAt = new Date().toISOString();
-    await writeJsonFileAtomically(credPath, existing);
+async function updateMatrixCredentials(
+  env: NodeJS.ProcessEnv,
+  accountId: string,
+  update: (
+    current: MatrixCredentialStateRecord | undefined,
+  ) => MatrixCredentialStateRecord | undefined,
+): Promise<void> {
+  const store = openMatrixCredentialsAsyncStore(env);
+  const key = matrixCredentialsStoreKey(accountId);
+  await updateMatrixKeyedState(store, key, update, () => {
+    // Matrix's published >=2026.9.4 host floor predates data-only comparisons.
+    return openMatrixCredentialsStore(env).update(key, update);
   });
 }

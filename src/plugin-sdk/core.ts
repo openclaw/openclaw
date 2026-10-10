@@ -1,10 +1,12 @@
-// Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
-import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
+import {
+  findChatChannelMeta,
+  getChatChannelMeta as getBuiltInChatChannelMeta,
+} from "../channels/chat-meta.js";
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
+import { createTextPairingAdapter } from "../channels/plugins/pairing-adapters.js";
 import {
   createScopedAccountReplyToModeResolver,
   createTopLevelChannelReplyToModeResolver,
@@ -18,7 +20,7 @@ import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
-  ChannelPollResult,
+  ChannelSecurityDmPolicy,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -26,9 +28,7 @@ import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
-import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -36,7 +36,8 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-
+import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -50,6 +51,8 @@ export type {
   OpenClawPluginDefinition,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
+  OpenClawPluginServiceV2,
   PluginCommandContext,
   PluginCommandResult,
   PluginAgentEventEmitParams,
@@ -67,6 +70,7 @@ export type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginServiceSchedulerV1,
   PluginSessionActionContext,
   PluginSessionActionRegistration,
   PluginSessionActionResult,
@@ -86,6 +90,9 @@ export type {
   ProviderAuthDoctorHintContext,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAppGuidedSetup,
+  ProviderAppGuidedSetupCandidate,
+  ProviderAppGuidedSetupContext,
   ProviderAuthResult,
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
@@ -96,7 +103,6 @@ export type {
   ProviderCatalogContext,
   ProviderCatalogResult,
   ProviderDefaultThinkingPolicyContext,
-  ProviderDiscoveryContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeResolvedModelContext,
@@ -111,6 +117,7 @@ export type {
   ProviderReplayPolicyContext,
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
+  ProviderReplaySessionStateV2,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
@@ -118,6 +125,7 @@ export type {
   ProviderUsageAuthToken,
   RealtimeTranscriptionProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
@@ -141,6 +149,11 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
+export type {
+  OpenClawPluginGatewayEventScope,
+  OpenClawPluginGatewayEvents,
+  OpenClawPluginSessionsChangedEvent,
+} from "../plugins/gateway-events.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
@@ -169,7 +182,7 @@ export type {
   ChannelSetupInput,
 } from "../channels/plugins/types.public.js";
 export type { ChatType } from "../channels/chat-type.js";
-export type { NormalizedLocation } from "../channels/location.js";
+export type { NormalizedLocation, OutboundLocation } from "../channels/location.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 export type { PollInput } from "../polls.js";
@@ -180,24 +193,6 @@ export type {
   ChannelMessagingAdapter,
 } from "../channels/plugins/types.core.js";
 
-function createInlineTextPairingAdapter(params: {
-  idLabel: string;
-  message: string;
-  normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-  notify: (
-    params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
-      message: string;
-    },
-  ) => Promise<void> | void;
-}): ChannelPairingAdapter {
-  return {
-    idLabel: params.idLabel,
-    normalizeAllowEntry: params.normalizeAllowEntry,
-    notifyApproval: async (ctx) => {
-      await params.notify({ ...ctx, message: params.message });
-    },
-  };
-}
 export type {
   ProviderUsageSnapshot,
   UsageProviderId,
@@ -208,6 +203,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export type { ContextEngineSessionTarget } from "../context-engine/types.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export {
@@ -218,9 +214,11 @@ export {
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
+export { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
+  prepareMemorySystemPromptAddition,
 } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {
@@ -269,9 +267,9 @@ export {
   readNumberParam,
   readReactionParams,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
-export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+export { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
 export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
@@ -282,10 +280,13 @@ export async function ensureConfiguredAcpBindingReady(params: {
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const runtime = await import("../acp/persistent-bindings.lifecycle.js");
-  return runtime.ensureConfiguredAcpBindingReady(params);
+  return runtime.ensureConfiguredAcpBindingReadyCore(params);
 }
 
-export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
+export {
+  resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
+} from "../shared/tailscale-status.js";
 export type {
   TailscaleStatusCommandResult,
   TailscaleStatusCommandRunner,
@@ -302,45 +303,16 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
-let cachedSdkChatChannelMeta:
-  | {
-      cacheKey: string;
-      metaById: ReturnType<typeof buildChatChannelMetaById>;
-    }
-  | undefined;
-
-function resolveSdkChatChannelMeta(id: string) {
-  const cacheKey = resolveBundledPluginsDir(process.env) ?? "";
-  if (cachedSdkChatChannelMeta?.cacheKey !== cacheKey) {
-    cachedSdkChatChannelMeta = {
-      cacheKey,
-      metaById: buildChatChannelMetaById(),
-    };
-  }
-  return cachedSdkChatChannelMeta.metaById[id];
+function getChatChannelMetaForSdk(id: ChatChannelId): ChannelMeta {
+  return getBuiltInChatChannelMeta(id);
 }
 
-/** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
-export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
-  return resolveSdkChatChannelMeta(id);
-}
+export { getChatChannelMetaForSdk as getChatChannelMeta };
 
-/** Remove one of the known provider prefixes from a free-form target string. */
-export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
-  const trimmed = raw.trim();
-  for (const provider of providers) {
-    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
-    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
-      return trimmed.slice(prefix.length).trim();
-    }
-  }
-  return trimmed;
-}
-
-/** Remove generic target-kind prefixes such as `user:` or `group:`. */
-export function stripTargetKindPrefix(raw: string): string {
-  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
-}
+export {
+  stripChannelTargetPrefix,
+  stripTargetKindPrefix,
+} from "../channels/plugins/chat-target-prefixes.js";
 
 /**
  * Build the canonical outbound session route payload returned by channel
@@ -351,6 +323,7 @@ export function buildChannelOutboundSessionRoute(params: {
   agentId: string;
   channel: string;
   accountId?: string | null;
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: { kind: "direct" | "group" | "channel"; id: string };
   chatType: "direct" | "group" | "channel";
   from: string;
@@ -367,6 +340,9 @@ export function buildChannelOutboundSessionRoute(params: {
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    ...(params.recipientSessionExact !== undefined
+      ? { recipientSessionExact: params.recipientSessionExact }
+      : {}),
     peer: params.peer,
     chatType: params.chatType,
     from: params.from,
@@ -484,13 +460,14 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   setRuntime?: (runtime: PluginRuntime) => void;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
+  registerCapabilities?: (api: OpenClawPluginApi) => void;
 };
 
 type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -511,39 +488,27 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   configSchema?: ChannelPlugin<TResolvedAccount>["configSchema"];
   config?: ChannelPlugin<TResolvedAccount>["config"];
   security?: ChannelPlugin<TResolvedAccount>["security"];
-  setup: NonNullable<ChannelPlugin<TResolvedAccount>["setup"]>;
+  setup?: NonNullable<ChannelPlugin<TResolvedAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<TResolvedAccount>["setupContract"]>;
   groups?: ChannelPlugin<TResolvedAccount>["groups"];
 };
 
 type CreatedChannelPluginBase<TResolvedAccount> = Pick<
   ChannelPlugin<TResolvedAccount>,
-  "id" | "meta" | "setup"
+  "id" | "meta"
 > &
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount>,
-      | "setupWizard"
-      | "capabilities"
-      | "commands"
-      | "doctor"
-      | "agentPrompt"
-      | "streaming"
-      | "reload"
-      | "gatewayMethods"
-      | "gatewayMethodDescriptors"
-      | "configSchema"
-      | "config"
-      | "security"
-      | "groups"
+      Exclude<keyof CreateChannelPluginBaseOptions<TResolvedAccount>, "id" | "meta">
     >
   >;
 
 /**
  * Canonical entry helper for channel plugins.
  *
- * This wraps `definePluginEntry(...)`, registers the channel capability, and
- * optionally exposes extra full-runtime registration such as tools or gateway
- * handlers that only make sense outside setup-only registration modes.
+ * Registers the channel capability and optionally exposes full-runtime hooks
+ * such as tools or gateway handlers outside setup-only registration modes.
  */
 export function defineChannelPluginEntry<TPlugin>({
   id,
@@ -554,16 +519,16 @@ export function defineChannelPluginEntry<TPlugin>({
   setRuntime,
   registerCliMetadata,
   registerFull,
+  registerCapabilities,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
-    typeof configSchema === "function"
-      ? configSchema()
-      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
-  const entry = {
+  const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
+  return {
     id,
     name,
     description,
-    configSchema: resolvedConfigSchema,
+    get configSchema() {
+      return getConfigSchema();
+    },
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
@@ -571,12 +536,14 @@ export function defineChannelPluginEntry<TPlugin>({
       }
       if (api.registrationMode === "tool-discovery") {
         registerFull?.(api);
+        registerCapabilities?.(api);
         return;
       }
       api.registerChannel({ plugin: plugin as ChannelPlugin });
       setRuntime?.(api.runtime);
       if (api.registrationMode === "discovery") {
         registerCliMetadata?.(api);
+        registerCapabilities?.(api);
         return;
       }
       if (api.registrationMode !== "full") {
@@ -584,10 +551,8 @@ export function defineChannelPluginEntry<TPlugin>({
       }
       registerCliMetadata?.(api);
       registerFull?.(api);
+      registerCapabilities?.(api);
     },
-  };
-  return {
-    ...entry,
     channelPlugin: plugin,
     ...(setRuntime ? { setChannelRuntime: setRuntime } : {}),
   };
@@ -603,16 +568,8 @@ export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
   return { plugin };
 }
 
-type ChatChannelPluginBase<TResolvedAccount, Probe, Audit> = Omit<
-  ChannelPlugin<TResolvedAccount, Probe, Audit>,
-  "security" | "pairing" | "threading" | "outbound"
-> &
-  Partial<
-    Pick<
-      ChannelPlugin<TResolvedAccount, Probe, Audit>,
-      "security" | "pairing" | "threading" | "outbound"
-    >
-  >;
+type ChatChannelPluginBase<Plugin> = Omit<Plugin, "capabilities"> &
+  Partial<Pick<ChannelPlugin, "capabilities">>;
 
 type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | null }> = {
   dm: {
@@ -626,8 +583,10 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     approveChannelId?: string;
     approveHint?: string;
     normalizeEntry?: (raw: string) => string;
+    classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
     inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
+  dmRouting?: ChannelSecurityAdapter<TResolvedAccount>["dmRouting"];
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
   collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
 };
@@ -667,56 +626,12 @@ type ChatChannelThreadingOptions<TResolvedAccount> =
 
 type ChatChannelAttachedOutboundOptions = {
   base: Omit<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-  attachedResults: {
-    channel: string;
-    sendText?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendMedia?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendPoll?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0],
-    ) => MaybePromise<Omit<ChannelPollResult, "channel">>;
-  };
+  attachedResults: Parameters<typeof createAttachedChannelResultAdapter>[0];
 };
 
-type MaybePromise<T> = T | Promise<T>;
-
-function createInlineAttachedChannelResultAdapter(
-  params: ChatChannelAttachedOutboundOptions["attachedResults"],
-) {
-  return {
-    sendText: params.sendText
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendText!(ctx)),
-        })
-      : undefined,
-    sendMedia: params.sendMedia
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendMedia!(ctx)),
-        })
-      : undefined,
-    sendPoll: params.sendPoll
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendPoll!(ctx)),
-        })
-      : undefined,
-  } satisfies Pick<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-}
-
 function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: string | null }>(
-  security:
-    | ChannelSecurityAdapter<TResolvedAccount>
-    | ChatChannelSecurityOptions<TResolvedAccount>
-    | undefined,
-): ChannelSecurityAdapter<TResolvedAccount> | undefined {
-  if (!security) {
-    return undefined;
-  }
+  security: ChannelSecurityAdapter<TResolvedAccount> | ChatChannelSecurityOptions<TResolvedAccount>,
+): ChannelSecurityAdapter<TResolvedAccount> {
   if (!("dm" in security)) {
     return security;
   }
@@ -735,9 +650,11 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         approveChannelId: security.dm.approveChannelId,
         approveHint: security.dm.approveHint,
         normalizeEntry: security.dm.normalizeEntry,
+        classifyEntryAuthentication: security.dm.classifyEntryAuthentication,
         inheritSharedDefaultsFromDefaultAccount:
           security.dm.inheritSharedDefaultsFromDefaultAccount,
       }),
+    ...(security.dmRouting ? { dmRouting: security.dmRouting } : {}),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
     ...(security.collectAuditFindings
       ? { collectAuditFindings: security.collectAuditFindings }
@@ -746,36 +663,24 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
 }
 
 function resolveChatChannelPairing(
-  pairing: ChannelPairingAdapter | ChatChannelPairingOptions | undefined,
-): ChannelPairingAdapter | undefined {
-  if (!pairing) {
-    return undefined;
-  }
-  if (!("text" in pairing)) {
-    return pairing;
-  }
-  return createInlineTextPairingAdapter(pairing.text);
+  pairing: ChannelPairingAdapter | ChatChannelPairingOptions,
+): ChannelPairingAdapter {
+  return "text" in pairing ? createTextPairingAdapter(pairing.text) : pairing;
 }
 
 function resolveChatChannelThreading<TResolvedAccount>(
-  threading: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount> | undefined,
-): ChannelThreadingAdapter | undefined {
-  if (!threading) {
-    return undefined;
-  }
+  threading: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount>,
+): ChannelThreadingAdapter {
   if (!("topLevelReplyToMode" in threading) && !("scopedAccountReplyToMode" in threading)) {
     return threading;
   }
 
-  let resolveReplyToMode: ChannelThreadingAdapter["resolveReplyToMode"];
-  if ("topLevelReplyToMode" in threading) {
-    resolveReplyToMode = createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode);
-  } else {
-    resolveReplyToMode = createScopedAccountReplyToModeResolver<TResolvedAccount>(
-      threading.scopedAccountReplyToMode,
-    );
-  }
-
+  const resolveReplyToMode =
+    "topLevelReplyToMode" in threading
+      ? createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode)
+      : createScopedAccountReplyToModeResolver<TResolvedAccount>(
+          threading.scopedAccountReplyToMode,
+        );
   return {
     ...threading,
     resolveReplyToMode,
@@ -783,17 +688,14 @@ function resolveChatChannelThreading<TResolvedAccount>(
 }
 
 function resolveChatChannelOutbound(
-  outbound: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions | undefined,
-): ChannelOutboundAdapter | undefined {
-  if (!outbound) {
-    return undefined;
-  }
+  outbound: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions,
+): ChannelOutboundAdapter {
   if (!("attachedResults" in outbound)) {
     return outbound;
   }
   return {
     ...outbound.base,
-    ...createInlineAttachedChannelResultAdapter(outbound.attachedResults),
+    ...createAttachedChannelResultAdapter(outbound.attachedResults),
   };
 }
 
@@ -805,17 +707,19 @@ export function createChatChannelPlugin<
   TResolvedAccount extends { accountId?: string | null },
   Probe = unknown,
   Audit = unknown,
+  GatewayVersion extends 1 | 2 = 1,
 >(params: {
-  base: ChatChannelPluginBase<TResolvedAccount, Probe, Audit>;
+  base: ChatChannelPluginBase<ChannelPlugin<TResolvedAccount, Probe, Audit, GatewayVersion>>;
   security?:
     | ChannelSecurityAdapter<TResolvedAccount>
     | ChatChannelSecurityOptions<TResolvedAccount>;
   pairing?: ChannelPairingAdapter | ChatChannelPairingOptions;
   threading?: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount>;
   outbound?: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions;
-}): ChannelPlugin<TResolvedAccount, Probe, Audit> {
+}): ChannelPlugin<TResolvedAccount, Probe, Audit, GatewayVersion> {
   return {
     ...params.base,
+    capabilities: params.base.capabilities ?? { chatTypes: ["direct"] },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
       ...params.base.conversationBindings,
@@ -824,7 +728,7 @@ export function createChatChannelPlugin<
     ...(params.pairing ? { pairing: resolveChatChannelPairing(params.pairing) } : {}),
     ...(params.threading ? { threading: resolveChatChannelThreading(params.threading) } : {}),
     ...(params.outbound ? { outbound: resolveChatChannelOutbound(params.outbound) } : {}),
-  } as ChannelPlugin<TResolvedAccount, Probe, Audit>;
+  };
 }
 
 /** Create the shared base object for channel plugins that override only selected surfaces. */
@@ -834,7 +738,7 @@ export function createChannelPluginBase<TResolvedAccount>(
   return {
     id: params.id,
     meta: {
-      ...resolveSdkChatChannelMeta(params.id),
+      ...findChatChannelMeta(params.id as ChatChannelId),
       ...params.meta,
       id: params.id,
     },
@@ -853,6 +757,13 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.config ? { config: params.config } : {}),
     ...(params.security ? { security: params.security } : {}),
     ...(params.groups ? { groups: params.groups } : {}),
-    setup: params.setup,
+    ...(params.setup ? { setup: params.setup } : {}),
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+export type {
+  ChannelGatewayContextV2,
+  ChannelGatewayAdapterV2,
+} from "../channels/plugins/types.adapters.js";

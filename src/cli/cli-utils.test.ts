@@ -1,8 +1,14 @@
 // CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { defaultRuntime, ExitError } from "../runtime.js";
+import { captureEnv } from "../test-utils/env.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
 import {
@@ -35,7 +41,33 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it("surfaces cause chains and error codes through the default runtime", async () => {
+  it.each([
+    { code: 0, customErrorHandler: false },
+    { code: 2, customErrorHandler: true },
+  ])(
+    "preserves completed exit $code with custom error handler $customErrorHandler",
+    async ({ code, customErrorHandler }) => {
+      const runtime = { error: vi.fn(), exit: vi.fn() };
+      const onError = vi.fn();
+      const outcome = new ExitError(code);
+
+      await expect(
+        runCommandWithRuntime(
+          runtime,
+          async () => {
+            throw outcome;
+          },
+          customErrorHandler ? onError : undefined,
+        ),
+      ).rejects.toBe(outcome);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps cause chains and error codes behind debug intent", async () => {
     const messages: string[] = [];
     const exits: number[] = [];
     const cause = Object.assign(new Error("invalid onRequestStart method"), {
@@ -43,72 +75,102 @@ describe("runCommandWithRuntime", () => {
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
 
-    await runCommandWithRuntime(
-      {
-        error: (message) => messages.push(message),
-        exit: (code) => exits.push(code),
-      },
-      async () => {
-        throw fetchError;
-      },
-    );
+    const run = async () =>
+      await runCommandWithRuntime(
+        {
+          error: (message) => messages.push(message),
+          exit: (code) => exits.push(code),
+        },
+        async () => {
+          throw fetchError;
+        },
+      );
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("TypeError: fetch failed");
-    expect(messages[0]).toContain("invalid onRequestStart method");
-    expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
-    expect(exits).toEqual([1]);
+    const originalEnv = captureEnv(["OPENCLAW_DEBUG"]);
+    delete process.env.OPENCLAW_DEBUG;
+    try {
+      await run();
+      process.env.OPENCLAW_DEBUG = "1";
+      await run();
+    } finally {
+      originalEnv.restore();
+    }
+
+    expect(messages).toEqual([
+      "fetch failed",
+      "fetch failed | invalid onRequestStart method | UND_ERR_INVALID_ARG",
+    ]);
+    expect(exits).toEqual([1, 1]);
+  });
+
+  it("bubbles JSON-mode failures to the process-level owner", async () => {
+    const originalArgv = process.argv;
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    process.argv = ["node", "openclaw", "backup", "verify", "missing.tgz", "--json"];
+    try {
+      await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
+        applyResolvedCommandOutputMode(true);
+        await expect(
+          runCommandWithRuntime(runtime, async () => {
+            throw new Error("archive missing");
+          }),
+        ).rejects.toThrow("archive missing");
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 
-describe("shouldSkipRespawnForArgv", () => {
+describe("respawn policy", () => {
   it.each([
-    { argv: ["node", "openclaw", "--help"] },
-    { argv: ["node", "openclaw", "-V"] },
-    { argv: ["node", "openclaw", "tui"] },
-    { argv: ["node", "openclaw", "terminal"] },
-    { argv: ["node", "openclaw", "chat"] },
-    { argv: ["node", "openclaw", "gateway"] },
-    { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
-    { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
+    { args: ["--help"], skip: true, startup: true },
+    { args: ["-V"], skip: true, startup: true },
+    { args: ["tui"], skip: true, startup: false },
+    { args: ["hooks", "relay", "--relay-id", "relay-1"], skip: true, startup: true },
     {
-      argv: ["node", "openclaw", "--profile", "server", "gateway", "run", "--allow-unconfigured"],
+      args: ["hooks", "relay", "--relay-id", "relay-1"],
+      platform: "win32",
+      skip: false,
+      startup: false,
     },
-  ] as const)("skips respawn for argv %j", ({ argv }) => {
-    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
-  });
-
-  it.each([
-    { argv: ["node", "openclaw", "status"] },
-    { argv: ["node", "openclaw", "gateway", "status"] },
-    { argv: ["node", "openclaw", "gateway", "call", "health"] },
-  ] as const)("keeps respawn path for argv %j", ({ argv }) => {
-    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
-  });
-});
-
-describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
-  it.each([
-    { argv: ["node", "openclaw", "--help"] },
-    { argv: ["node", "openclaw", "gateway"] },
-    { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
-  ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
-    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
-  });
-
-  it.each([
-    { argv: ["node", "openclaw", "tui"] },
-    { argv: ["node", "openclaw", "terminal"] },
-    { argv: ["node", "openclaw", "chat"] },
-    { argv: ["node", "openclaw", "status"] },
-  ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
-    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
-  });
+    { args: ["gateway"], skip: true, startup: true },
+    { args: ["gateway", "--port", "14720", "--bind", "loopback"], skip: true, startup: true },
+    { args: ["gateway", "run", "--port=14720", "--bind", "loopback"], skip: true, startup: true },
+    { args: ["gateway", "--update-canary"], skip: true, startup: true },
+    { args: ["gateway", "run", "--update-canary", "--port=14720"], skip: true, startup: true },
+    { args: ["gateway", "status"], skip: true, startup: false },
+    { args: ["--", "gateway", "run"], skip: true, startup: true },
+    { args: ["gateway", "--", "status"], skip: true, startup: false },
+    { args: ["gateway", "--token", "test-token", "status"], skip: true, startup: false },
+    {
+      args: ["--profile", "server", "gateway", "run", "--allow-unconfigured"],
+      skip: true,
+      startup: true,
+    },
+    { args: ["--profile", "server", "gateway", "status", "--json"], skip: true, startup: false },
+    { args: ["status"], skip: false, startup: false },
+    { args: ["gateway", "call", "health"], skip: false, startup: false },
+    { args: ["--", "gateway", "run", "--force"], skip: false, startup: false },
+  ] satisfies { args: string[]; platform?: NodeJS.Platform; skip: boolean; startup: boolean }[])(
+    "resolves both respawn policies for $args on $platform",
+    ({ args, platform, skip, startup }) => {
+      const argv = ["node", "openclaw", ...args];
+      expect(shouldSkipRespawnForArgv(argv, platform), argv.join(" ")).toBe(skip);
+      expect(shouldSkipStartupEnvironmentRespawnForArgv(argv, platform), argv.join(" ")).toBe(
+        startup,
+      );
+    },
+  );
 });
 
 describe("dns cli", () => {
   it("prints setup info (no apply)", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     try {
       const program = new Command();
       registerDnsCli(program);
@@ -116,12 +178,17 @@ describe("dns cli", () => {
       const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
       expect(output).toContain("DNS setup");
       expect(output).toContain("openclaw.internal");
+      expect(writeJson).toHaveBeenCalledWith({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { domain: "openclaw.internal." } },
+      });
     } finally {
+      writeJson.mockRestore();
       log.mockRestore();
     }
   });
 
-  it.each(["foo/bar", "../../x", "evil\nrecords"])(
+  it.each(["../../x", "evil\nrecords"])(
     "rejects invalid --domain %j with explicit DNS-name diagnostic",
     async (domain) => {
       const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -143,45 +210,52 @@ describe("dns cli", () => {
 
 describe("parseByteSize", () => {
   it.each([
-    ["parses 10kb", "10kb", 10 * 1024],
-    ["parses 1mb", "1mb", 1024 * 1024],
-    ["parses 2gb", "2gb", 2 * 1024 * 1024 * 1024],
-    ["parses shorthand 5k", "5k", 5 * 1024],
-    ["parses shorthand 1m", "1m", 1024 * 1024],
-  ] as const)("%s", (_name, input, expected) => {
+    ["10kb", 10 * 1024],
+    ["123", 123],
+    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+    [`${Number.MAX_SAFE_INTEGER}.1`, Number.MAX_SAFE_INTEGER],
+  ] as const)("parses %s without losing precision", (input, expected) => {
     expect(parseByteSize(input)).toBe(expected);
   });
 
-  it("uses default unit when omitted", () => {
-    expect(parseByteSize("123")).toBe(123);
-  });
-
-  it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
+  it.each(["", "nope", "9007199254740993"])("rejects invalid byte size %j", (input) => {
     expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
 });
 
 describe("parseDurationMs", () => {
   it.each([
-    ["parses bare ms", "10000", 10_000],
-    ["parses seconds suffix", "10s", 10_000],
-    ["parses minutes suffix", "1m", 60_000],
-    ["parses hours suffix", "2h", 7_200_000],
-    ["parses days suffix", "2d", 172_800_000],
-    ["supports decimals", "0.5s", 500],
-    ["parses composite hours+minutes", "1h30m", 5_400_000],
-    ["parses composite with milliseconds", "2m500ms", 120_500],
-  ] as const)("%s", (_name, input, expected) => {
+    ["10000", 10_000],
+    ["0.5s", 500],
+    ["  1H30M  ", 5_400_000],
+    ["0.4ms0.4ms", 1],
+    ["30m1h30m", 7_200_000],
+    ["9007199254740991ms", Number.MAX_SAFE_INTEGER],
+    ["9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],
+  ] as const)("parses %s", (input, expected) => {
     expect(parseDurationMs(input)).toBe(expected);
   });
 
-  it("rejects invalid composite strings", () => {
-    expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
-    expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  it("uses the default unit only for bare numbers", () => {
+    expect(parseDurationMs("1.5", { defaultUnit: "m" })).toBe(90_000);
+    expect(parseDurationMs("1s", { defaultUnit: "m" })).toBe(1000);
   });
 
-  it("rejects unsafe millisecond results", () => {
-    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
-    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
+  it.each(["", "-1s", "1w", "1h30", "9007199254740993ms", "9007199254740990ms10ms"])(
+    "rejects invalid or unsafe duration %j",
+    (input) => {
+      expect(() => parseDurationMs(input)).toThrow(/Invalid duration/);
+    },
+  );
+
+  it("retains the 100-character limit per token, including the default unit", () => {
+    const value = `${"0".repeat(97)}1`;
+    expect(parseDurationMs(`${value}ms`)).toBe(1);
+    expect(parseDurationMs(value)).toBe(1);
+    expect(parseDurationMs(`0${value}`, { defaultUnit: "s" })).toBe(1000);
+    expect(parseDurationMs("1ms".repeat(40))).toBe(40);
+    expect(() => parseDurationMs(`0${value}ms`)).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs(`0${value}`)).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs(`1s0${value}ms`)).toThrow(/Invalid duration/);
   });
 });

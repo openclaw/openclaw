@@ -12,14 +12,31 @@ public struct WizardOption: Sendable {
     }
 }
 
-public func decodeWizardStep(_ raw: [String: AnyCodable]?) -> WizardStep? {
-    guard let raw else { return nil }
-    do {
-        let data = try JSONEncoder().encode(raw)
-        return try JSONDecoder().decode(WizardStep.self, from: data)
-    } catch {
-        return nil
+public struct WizardDeviceCodePresentation: Sendable {
+    public let code: String
+    public let expiresInMinutes: Int?
+    public let message: String?
+}
+
+public func parseWizardDeviceCode(
+    _ raw: [String: AnyCodable]?) -> WizardDeviceCodePresentation?
+{
+    guard let code = raw?["code"]?.value as? String, !code.isEmpty else { return nil }
+    let allowedMinutes = 1...1440
+    let expiresInMinutes: Int? = switch raw?["expiresInMinutes"]?.value {
+    case let value as Int where allowedMinutes.contains(value): value
+    case let value as Double:
+        if let exact = Int(exactly: value), allowedMinutes.contains(exact) {
+            exact
+        } else {
+            nil
+        }
+    default: nil
     }
+    return WizardDeviceCodePresentation(
+        code: code,
+        expiresInMinutes: expiresInMinutes,
+        message: raw?["message"]?.value as? String)
 }
 
 public func parseWizardOptions(_ raw: [[String: AnyCodable]]?) -> [WizardOption] {
@@ -38,6 +55,13 @@ public func wizardStatusString(_ value: AnyCodable?) -> String? {
 
 public func wizardStepType(_ step: WizardStep) -> String {
     (step.type.value as? String) ?? ""
+}
+
+/// `"gateway"` marks a step the Gateway runs itself (download/install progress).
+/// Those steps carry no answer, so clients must poll for the next frame instead
+/// of waiting for input that will never come.
+public func wizardStepExecutor(_ step: WizardStep) -> String {
+    (step.executor?.value as? String) ?? ""
 }
 
 public func anyCodableString(_ value: AnyCodable?) -> String {
@@ -92,14 +116,10 @@ public func anyCodableEqual(_ lhs: AnyCodable?, _ rhs: AnyCodable?) -> Bool {
         l == r
     case let (l as Bool, r as Bool):
         l == r
-    case let (l as String, r as Int):
-        l == String(r)
-    case let (l as Int, r as String):
-        String(l) == r
-    case let (l as String, r as Double):
-        l == String(r)
-    case let (l as Double, r as String):
-        String(l) == r
+    case let (string as String, number as Int), let (number as Int, string as String):
+        string == String(number)
+    case let (string as String, number as Double), let (number as Double, string as String):
+        string == String(number)
     default:
         false
     }

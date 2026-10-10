@@ -1,25 +1,42 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Voice Call tests cover response generator plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../api.js";
 import { VoiceCallConfigSchema } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
 type TestSessionEntry = {
   sessionId: string;
   updatedAt: number;
+  agentHarnessId?: string;
+  agentRuntimeOverride?: string;
   providerOverride?: string;
   modelOverride?: string;
   modelOverrideSource?: string;
   model?: string;
   modelProvider?: string;
+  modelSelectionLocked?: boolean;
+  pluginOwnerId?: string;
+  pluginExtensions?: Record<string, unknown>;
   contextTokens?: number;
   authProfileOverride?: string;
 };
 
 type EmbeddedAgentArgs = {
+  abortSignal?: AbortSignal;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
   extraSystemPrompt: string;
   provider?: string;
   model?: string;
+  modelSelectionLocked?: boolean;
+  inputProvenance?: {
+    kind: "external_user";
+    sourceChannel?: string;
+  };
+  prompt: string;
+  transcriptPrompt?: string;
   sessionKey?: string;
   sessionTarget?: {
     agentId?: string;
@@ -32,10 +49,28 @@ type EmbeddedAgentArgs = {
   agentId?: string;
   workspaceDir?: string;
   sessionFile?: string;
+  senderIsOwner?: boolean;
   toolsAllow?: string[];
+  blockReplyBreak?: "text_end" | "message_end";
+  resolveReplyDelivery?: (
+    minimumAssistantMessageIndex?: number,
+  ) => Promise<"delivered" | "pending" | "missing">;
+  onBlockReply?: (
+    payload: Record<string, unknown>,
+    context?: { assistantMessageIndex?: number },
+  ) => void;
+  onBlockReplyFlush?: (
+    context:
+      | { reason: "message_end" | "terminal" }
+      | { reason: "tool_start"; assistantMessageIndex: number }
+      | { reason: "pre_compaction"; attemptAccepted: boolean },
+  ) => void | Promise<void>;
 };
 
-function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
+function createAgentRuntime(
+  payloads: Array<Record<string, unknown>>,
+  options?: { blockReplyPayloads?: Array<Record<string, unknown>> },
+) {
   const sessionStore: Record<string, TestSessionEntry> = {};
   const saveSessionStore = vi.fn(async () => {});
   const updateSessionStore = vi.fn(
@@ -71,17 +106,29 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       sessionStore[params.sessionKey] = { ...params.entry };
     },
   );
-  const runEmbeddedAgent = vi.fn(async (_args: EmbeddedAgentArgs) => ({
-    payloads,
-    meta: { durationMs: 12, aborted: false },
-  }));
-  const resolveAgentDir = vi.fn((_cfg: CoreConfig, agentId: string) => {
+  const runEmbeddedAgent = vi.fn(async (args: EmbeddedAgentArgs) => {
+    for (const payload of options?.blockReplyPayloads ?? []) {
+      args.onBlockReply?.(payload, { assistantMessageIndex: 0 });
+    }
+    await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+    return {
+      payloads,
+      meta: { durationMs: 12, aborted: false },
+    };
+  });
+  const runWithWorkAdmission = vi.fn(
+    async (
+      _params: { storePath: string; sessionKey: string },
+      run: (signal: AbortSignal) => Promise<unknown>,
+    ) => await run(new AbortController().signal),
+  );
+  const resolveAgentDir = vi.fn((_cfg: OpenClawConfig, agentId: string) => {
     return `/tmp/openclaw/agents/${agentId}`;
   });
-  const resolveAgentWorkspaceDir = vi.fn((_cfg: CoreConfig, agentId: string) => {
+  const resolveAgentWorkspaceDir = vi.fn((_cfg: OpenClawConfig, agentId: string) => {
     return `/tmp/openclaw/workspace/${agentId}`;
   });
-  const resolveAgentIdentity = vi.fn((_cfg: CoreConfig, agentId: string) => ({
+  const resolveAgentIdentity = vi.fn((_cfg: OpenClawConfig, agentId: string) => ({
     name: `${agentId} tester`,
   }));
   const resolveStorePath = vi.fn((_store: string | undefined, params: { agentId?: string }) => {
@@ -113,13 +160,15 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       getSessionEntry,
       patchSessionEntry,
       upsertSessionEntry,
+      runWithWorkAdmission,
       resolveSessionFilePath,
     },
-  } as unknown as CoreAgentDeps;
+  } as unknown as OpenClawPluginApi["runtime"]["agent"];
 
   return {
     runtime,
     runEmbeddedAgent,
+    runWithWorkAdmission,
     saveSessionStore,
     updateSessionStore,
     patchSessionEntry,
@@ -134,8 +183,8 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
 
 function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
   const calls = runEmbeddedAgent.mock.calls as unknown[][];
-  const firstCall = requireFirstMockCall(
-    calls,
+  const firstCall = expectDefined(
+    calls.at(0),
     "voice response generator embedded agent invocation",
   );
   const args = firstCall[0] as Partial<EmbeddedAgentArgs> | undefined;
@@ -145,43 +194,136 @@ function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
   return args as EmbeddedAgentArgs;
 }
 
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 async function runGenerateVoiceResponse(
   payloads: Array<Record<string, unknown>>,
   overrides?: {
-    runtime?: CoreAgentDeps;
+    runtime?: OpenClawPluginApi["runtime"]["agent"];
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
+    userMessage?: string;
+    onEarlyText?: (text: string) => Promise<boolean>;
+    senderIsOwner?: boolean;
   },
 ) {
   const voiceConfig = VoiceCallConfigSchema.parse({
     responseTimeoutMs: 5000,
   });
-  const coreConfig = {} as CoreConfig;
+  const coreConfig = {} as OpenClawConfig;
   const runtime = overrides?.runtime ?? createAgentRuntime(payloads).runtime;
+  const userMessage = overrides?.userMessage ?? "hello there";
 
   const result = await generateVoiceResponse({
     voiceConfig,
     coreConfig,
     agentRuntime: runtime,
     callId: "call-123",
+    agentId: "main",
     from: "+15550001111",
-    transcript: overrides?.transcript ?? [{ speaker: "user", text: "hello there" }],
-    userMessage: "hello there",
+    senderIsOwner: overrides?.senderIsOwner,
+    transcript: overrides?.transcript ?? [{ speaker: "user", text: userMessage }],
+    userMessage,
+    onEarlyText: overrides?.onEarlyText,
   });
 
   return { result };
 }
 
 describe("generateVoiceResponse", () => {
-  it("suppresses reasoning payloads and reads structured spoken output", async () => {
+  it("marks classic inbound callers as non-owners", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+
+    await runGenerateVoiceResponse([], { runtime, senderIsOwner: false });
+
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent).senderIsOwner).toBe(false);
+  });
+
+  it("preserves delegated authority for outbound conversations", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+
+    await runGenerateVoiceResponse([], { runtime });
+
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent).senderIsOwner).toBeUndefined();
+  });
+
+  it("keeps bounded audible opening context at external-user priority", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Safe response."}' },
+    ]);
+    const currentCallerSpeech = "My confirmation number is ABC-123";
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      transcript: [
+        { speaker: "bot", text: "Welcome. What is the confirmation number?" },
+        { speaker: "user", text: currentCallerSpeech },
+      ],
+      userMessage: currentCallerSpeech,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.prompt).toContain("[Audible call-opening context]");
+    expect(args.prompt).toContain("Assistant: Welcome. What is the confirmation number?");
+    expect(args.prompt).toContain(`Current caller message:\n${currentCallerSpeech}`);
+    expect(args.prompt).not.toContain(`Caller: ${currentCallerSpeech}`);
+    expect(args.transcriptPrompt).toBe(currentCallerSpeech);
+    expect(args.inputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "voice",
+    });
+    expect(args.extraSystemPrompt).not.toContain(currentCallerSpeech);
+    expect(args.extraSystemPrompt).toContain("helpful voice assistant on a phone call");
+    expect(args.extraSystemPrompt).toContain("untrusted conversation data");
+    expect(args.extraSystemPrompt).toContain("Return only valid JSON in this exact shape");
+  });
+
+  it("does not replay cumulative call history after the first caller turn", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Safe response."}' },
+    ]);
+    const currentCallerSpeech = "What did you just say?";
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      transcript: [
+        { speaker: "bot", text: "Welcome to the service." },
+        { speaker: "user", text: "Please check order ABC." },
+        { speaker: "bot", text: "Order ABC is ready." },
+        { speaker: "user", text: currentCallerSpeech },
+      ],
+      userMessage: currentCallerSpeech,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.prompt).toBe(currentCallerSpeech);
+    expect(args.transcriptPrompt).toBe(currentCallerSpeech);
+  });
+
+  it("caps oversized audible opening context without splitting UTF-16", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Safe response."}' },
+    ]);
+    const currentCallerSpeech = "I am ready.";
+    const oversizedGreeting = "🚀x".repeat(3_000);
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      transcript: [
+        { speaker: "bot", text: oversizedGreeting },
+        { speaker: "user", text: currentCallerSpeech },
+      ],
+      userMessage: currentCallerSpeech,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.prompt.length).toBeLessThanOrEqual(2_100 + currentCallerSpeech.length);
+    expect(args.prompt).toContain(" [truncated]");
+    expect(args.prompt).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(args.transcriptPrompt).toBe(currentCallerSpeech);
+  });
+
+  it("suppresses reasoning payloads and reads structured spoken output", async () => {
+    const { runtime, runEmbeddedAgent, runWithWorkAdmission } = createAgentRuntime([
       { text: "Reasoning: hidden", isReasoning: true },
       { text: '{"spoken":"Hello from JSON."}' },
     ]);
@@ -193,6 +335,254 @@ describe("generateVoiceResponse", () => {
     expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
     expect(args.provider).toBe("together");
     expect(args.model).toBe("Qwen/Qwen2.5-7B-Instruct-Turbo");
+    expect(args.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(args.blockReplyBreak).toBe("text_end");
+    expect(args.onBlockReply).toEqual(expect.any(Function));
+    expect(args.onBlockReplyFlush).toEqual(expect.any(Function));
+    expect(runWithWorkAdmission).toHaveBeenCalledWith(
+      {
+        storePath: "/tmp/openclaw/main/sessions.json",
+        sessionKey: "agent:main:voice:15550001111",
+      },
+      expect.any(Function),
+    );
+  });
+
+  it("returns the lifecycle rejection without starting the embedded agent", async () => {
+    const { runtime, runEmbeddedAgent, runWithWorkAdmission } = createAgentRuntime([]);
+    runWithWorkAdmission.mockRejectedValueOnce(
+      new Error('Session "agent:main:voice:15550001111" is archived.'),
+    );
+
+    const { result } = await runGenerateVoiceResponse([], { runtime });
+
+    expect(result).toEqual({
+      text: null,
+      deliveredEarly: false,
+      error: 'Error: Session "agent:main:voice:15550001111" is archived.',
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("delivers a completed reply block before the embedded run settles", async () => {
+    let finishRun: (value: {
+      payloads: Array<Record<string, unknown>>;
+      meta: { durationMs: number; aborted: boolean };
+    }) => void = () => {};
+    const runFinished = new Promise<{
+      payloads: Array<Record<string, unknown>>;
+      meta: { durationMs: number; aborted: boolean };
+    }>((resolve) => {
+      finishRun = resolve;
+    });
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      args.onBlockReply?.({ text: '{"spoken":"Already ready."}' });
+      expect(await args.resolveReplyDelivery?.()).toBe("missing");
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      expect(await args.resolveReplyDelivery?.()).toBe("pending");
+      expect(await args.resolveReplyDelivery?.(1)).toBe("missing");
+      return await runFinished;
+    });
+    let reportEarlyDelivery: () => void = () => {};
+    const earlyDeliveryStarted = new Promise<void>((resolve) => {
+      reportEarlyDelivery = resolve;
+    });
+    const onEarlyText = vi.fn(async () => {
+      reportEarlyDelivery();
+      return true;
+    });
+
+    const response = runGenerateVoiceResponse([], { runtime, onEarlyText });
+    await earlyDeliveryStarted;
+
+    expect(onEarlyText).toHaveBeenCalledWith("Already ready.");
+    finishRun({ payloads: [], meta: { durationMs: 20_000, aborted: false } });
+    await expect(response).resolves.toEqual({
+      result: { text: "Already ready.", deliveredEarly: true },
+    });
+  });
+
+  it("awaits in-flight early delivery before exposing the fallback decision", async () => {
+    const { runtime } = createAgentRuntime([], {
+      blockReplyPayloads: [{ text: '{"spoken":"No duplicate."}' }],
+    });
+    let finishDelivery: (delivered: boolean) => void = () => {};
+    const deliveryFinished = new Promise<boolean>((resolve) => {
+      finishDelivery = resolve;
+    });
+    const onEarlyText = vi.fn(async () => await deliveryFinished);
+    let responseSettled = false;
+
+    const response = runGenerateVoiceResponse([], { runtime, onEarlyText }).finally(() => {
+      responseSettled = true;
+    });
+    await vi.waitFor(() => expect(onEarlyText).toHaveBeenCalledOnce());
+    expect(responseSettled).toBe(false);
+
+    finishDelivery(true);
+    await expect(response).resolves.toEqual({
+      result: { text: "No duplicate.", deliveredEarly: true },
+    });
+  });
+
+  it("combines multiple final-answer items into one early transport handoff", async () => {
+    const { runtime } = createAgentRuntime([], {
+      blockReplyPayloads: [
+        { text: '{"spoken":"First block."}' },
+        { text: '{"spoken":"Second block."}' },
+      ],
+    });
+    const delivered: string[] = [];
+    const onEarlyText = vi.fn(async (text: string) => {
+      delivered.push(text);
+      return true;
+    });
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(delivered).toEqual(["First block. Second block."]);
+    expect(result).toEqual({
+      text: "First block. Second block.",
+      deliveredEarly: true,
+    });
+  });
+
+  it("discards pre-tool narration before the completed answer", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+      args.onBlockReply?.(
+        { text: '{"spoken":"The result is ready."}' },
+        { assistantMessageIndex: 1 },
+      );
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"The result is ready."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).toHaveBeenCalledWith("The result is ready.");
+    expect(result).toEqual({ text: "The result is ready.", deliveredEarly: true });
+  });
+
+  it("discards deferred pre-tool narration delivered after the tool boundary", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+      args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
+      args.onBlockReply?.(
+        { text: '{"spoken":"The deferred result is ready."}' },
+        { assistantMessageIndex: 1 },
+      );
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"The deferred result is ready."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).toHaveBeenCalledWith("The deferred result is ready.");
+    expect(result).toEqual({ text: "The deferred result is ready.", deliveredEarly: true });
+  });
+
+  it("keeps final delivery when a post-tool payload has no boundary metadata", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+      args.onBlockReply?.({ text: '{"spoken":"Unclassified response."}' });
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"Complete fallback response."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Complete fallback response.", deliveredEarly: false });
+  });
+
+  it("discards rejected-attempt audio before delivering the accepted retry", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      args.onBlockReply?.({ text: '{"spoken":"First completed response."}' });
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: false });
+      args.onBlockReply?.({ text: '{"spoken":"Retry response."}' });
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"Retry response."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).toHaveBeenCalledOnce();
+    expect(onEarlyText).toHaveBeenCalledWith("Retry response.");
+    expect(result).toEqual({
+      text: "Retry response.",
+      deliveredEarly: true,
+    });
+  });
+
+  it("resets a rejected attempt tool boundary before the accepted retry", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+      args.onBlockReply?.(
+        { text: '{"spoken":"Rejected tool response."}' },
+        { assistantMessageIndex: 1 },
+      );
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: false });
+      args.onBlockReply?.(
+        { text: '{"spoken":"Accepted retry response."}' },
+        { assistantMessageIndex: 0 },
+      );
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"Accepted retry response."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).toHaveBeenCalledWith("Accepted retry response.");
+    expect(result).toEqual({ text: "Accepted retry response.", deliveredEarly: true });
+  });
+
+  it("keeps final delivery enabled when the early transport handoff fails", async () => {
+    const { runtime } = createAgentRuntime([], {
+      blockReplyPayloads: [
+        { text: '{"spoken":"First block."}' },
+        { text: '{"spoken":"Try the fallback."}' },
+      ],
+    });
+    const onEarlyText = vi.fn<(text: string) => Promise<boolean>>().mockResolvedValue(false);
+
+    const { result } = await runGenerateVoiceResponse([], {
+      runtime,
+      onEarlyText,
+    });
+
+    expect(onEarlyText).toHaveBeenCalledWith("First block. Try the fallback.");
+    expect(result).toEqual({
+      text: "First block. Try the fallback.",
+      deliveredEarly: false,
+    });
   });
 
   it("extracts spoken text from fenced JSON", async () => {
@@ -248,10 +638,12 @@ describe("generateVoiceResponse", () => {
 
     const result = await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
       userMessage: "hello there",
     });
@@ -265,8 +657,8 @@ describe("generateVoiceResponse", () => {
     expect(pinnedSessionEntry?.modelProvider).toBeUndefined();
     expect(pinnedSessionEntry?.contextTokens).toBeUndefined();
     expect(pinnedSessionEntry?.authProfileOverride).toBeUndefined();
-    const patchSessionEntryCall = requireFirstMockCall(
-      patchSessionEntry.mock.calls,
+    const patchSessionEntryCall = expectDefined(
+      patchSessionEntry.mock.calls.at(0),
       "session entry patch",
     );
     expect(patchSessionEntryCall[0]).toMatchObject({
@@ -281,6 +673,134 @@ describe("generateVoiceResponse", () => {
     expect(args.sessionKey).toBe("agent:main:voice:15550001111");
   });
 
+  it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
+    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([]);
+    sessionStore["agent:main:voice:15550001111"] = {
+      sessionId: "locked-session",
+      updatedAt: 100,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      modelSelectionLocked: true,
+    };
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      responseModel: "openai/gpt-4.1-nano",
+      responseTimeoutMs: 5000,
+    });
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      agentId: "main",
+      from: "+15550001111",
+      senderIsOwner: undefined,
+      transcript: [{ speaker: "user", text: "hello there" }],
+      userMessage: "hello there",
+    });
+
+    expect(result).toEqual({
+      text: null,
+      deliveredEarly: false,
+      error: "Model selection is locked for this session.",
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(patchSessionEntry).not.toHaveBeenCalled();
+    expect(sessionStore["agent:main:voice:15550001111"]).toMatchObject({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      modelSelectionLocked: true,
+    });
+    expect(sessionStore["agent:main:voice:15550001111"]?.modelOverride).toBeUndefined();
+  });
+
+  it("propagates the lock for a same-agent supervised Codex session", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Native Codex continued."}' },
+    ]);
+    const sessionKey = "agent:main:harness:codex:supervision:019f-codex-thread";
+    sessionStore[sessionKey] = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: 100,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+    };
+    const voiceConfig = VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 });
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      agentId: "main",
+      sessionKey,
+      from: "+15550001111",
+      senderIsOwner: undefined,
+      transcript: [{ speaker: "user", text: "continue" }],
+      userMessage: "continue",
+    });
+
+    expect(result.text).toBe("Native Codex continued.");
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      provider: "together",
+      model: "Qwen/Qwen2.5-7B-Instruct-Turbo",
+      modelSelectionLocked: true,
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+      sessionKey,
+    });
+  });
+
+  it.each([
+    {
+      name: "unlocked observation",
+      entry: { agentHarnessId: "codex" },
+    },
+    {
+      name: "plugin-owned locked observation",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginOwnerId: "voice-call",
+      },
+    },
+    {
+      name: "plugin-owned runtime request",
+      entry: {
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+        modelSelectionLocked: true,
+        pluginOwnerId: "voice-call",
+      },
+    },
+  ])("does not turn $name into a native voice pin", async ({ entry }) => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Voice continued."}' },
+    ]);
+    sessionStore["agent:main:voice:15550001111"] = {
+      sessionId: "existing-session",
+      updatedAt: 100,
+      ...entry,
+    };
+
+    const { result } = await runGenerateVoiceResponse([], { runtime });
+
+    expect(result.text).toBe("Voice continued.");
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.agentHarnessId).toBeUndefined();
+    expect(args.agentHarnessRuntimeOverride).toBeUndefined();
+    expect(args.modelSelectionLocked).toBe(entry.modelSelectionLocked === true);
+  });
+
   it("canonicalizes a restored legacy per-call key for classic responses", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Fresh call context."}' },
@@ -292,11 +812,13 @@ describe("generateVoiceResponse", () => {
 
     const result = await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       sessionKey: "voice:call:call-123",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
       userMessage: "hello there",
     });
@@ -322,11 +844,13 @@ describe("generateVoiceResponse", () => {
 
     await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       sessionKey: "meet-room-1",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
@@ -348,11 +872,13 @@ describe("generateVoiceResponse", () => {
     const generate = (sessionKey: string) =>
       generateVoiceResponse({
         voiceConfig,
-        coreConfig: {} as CoreConfig,
+        coreConfig: {} as OpenClawConfig,
         agentRuntime: runtime,
         callId: "call-123",
+        agentId: "voice",
         sessionKey,
         from: "+15550001111",
+        senderIsOwner: undefined,
         transcript: [],
         userMessage: "hello there",
       });
@@ -388,8 +914,10 @@ describe("generateVoiceResponse", () => {
       coreConfig: { session: { mainKey: "work" } },
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       sessionKey: "agent:voice:main",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
@@ -398,98 +926,109 @@ describe("generateVoiceResponse", () => {
     expect(requireEmbeddedAgentArgs(runEmbeddedAgent).sessionKey).toBe("agent:voice:work");
   });
 
-  it("uses the main agent workspace when voice config omits agentId", async () => {
-    const {
-      runtime,
-      runEmbeddedAgent,
-      resolveAgentDir,
-      resolveAgentWorkspaceDir,
-      resolveAgentIdentity,
-      resolveStorePath,
-      sessionStore,
-    } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
-    const coreConfig = {} as CoreConfig;
+  it.each([
+    { configuredAgentId: "voice", agentId: "main" },
+    { configuredAgentId: undefined, agentId: "voice" },
+  ])(
+    "uses recorded owner $agentId with config agentId=$configuredAgentId",
+    async ({ configuredAgentId, agentId }) => {
+      const {
+        runtime,
+        runEmbeddedAgent,
+        resolveAgentDir,
+        resolveAgentWorkspaceDir,
+        resolveAgentIdentity,
+        resolveStorePath,
+        sessionStore,
+      } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
+      const coreConfig = {} as OpenClawConfig;
 
-    await generateVoiceResponse({
-      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
-      coreConfig,
-      agentRuntime: runtime,
-      callId: "call-123",
-      from: "+15550001111",
-      transcript: [],
-      userMessage: "hello there",
-    });
+      const result = await generateVoiceResponse({
+        voiceConfig: VoiceCallConfigSchema.parse({
+          agentId: configuredAgentId,
+          responseTimeoutMs: 5000,
+        }),
+        coreConfig,
+        agentRuntime: runtime,
+        callId: "call-123",
+        agentId,
+        from: "+15550001111",
+        senderIsOwner: undefined,
+        transcript: [],
+        userMessage: "hello there",
+      });
 
-    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
-    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
-    expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    const defaultSessionEntry = sessionStore["agent:main:voice:15550001111"];
-    if (!defaultSessionEntry) {
-      throw new Error("Expected default voice session entry");
-    }
-    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
-    expect(args.agentDir).toBe("/tmp/openclaw/agents/main");
-    expect(args.agentId).toBe("main");
-    expect(args.sessionKey).toBe("agent:main:voice:15550001111");
-    expect(args.sessionTarget).toStrictEqual({
-      agentId: "main",
-      sessionId: defaultSessionEntry.sessionId,
-      sessionKey: "agent:main:voice:15550001111",
-      storePath: "/tmp/openclaw/main/sessions.json",
-    });
-    expect(args.sandboxSessionKey).toBe("agent:main:voice:15550001111");
-    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/main");
-    expect(args.sessionFile).toBeUndefined();
+      expect(result.text).toBe("Voice agent.");
+      expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId });
+      expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, agentId);
+      expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, agentId);
+      expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, agentId);
+      const sessionKey = `agent:${agentId}:voice:15550001111`;
+      const sessionEntry = expectDefined(sessionStore[sessionKey], "voice session entry");
+      const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+      expect(args.agentDir).toBe(`/tmp/openclaw/agents/${agentId}`);
+      expect(args.agentId).toBe(agentId);
+      expect(args.sessionKey).toBe(sessionKey);
+      expect(args.sessionTarget).toStrictEqual({
+        agentId,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        storePath: `/tmp/openclaw/${agentId}/sessions.json`,
+      });
+      expect(args.sandboxSessionKey).toBe(sessionKey);
+      expect(args.workspaceDir).toBe(`/tmp/openclaw/workspace/${agentId}`);
+      expect(args.sessionFile).toBeUndefined();
+    },
+  );
+
+  it("rejects an empty recorded owner before session work", async () => {
+    const { runtime, runEmbeddedAgent, runWithWorkAdmission, sessionStore } = createAgentRuntime(
+      [],
+    );
+
+    await expect(
+      generateVoiceResponse({
+        voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice" }),
+        coreConfig: {},
+        agentRuntime: runtime,
+        callId: "call-unowned",
+        agentId: " ",
+        sessionKey: "agent:support:voice:15550001111",
+        from: "+15550001111",
+        senderIsOwner: undefined,
+        transcript: [],
+        userMessage: "hello there",
+      }),
+    ).rejects.toThrow("Voice Call has no recorded agent owner");
+
+    expect(runWithWorkAdmission).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(sessionStore).toEqual({});
   });
 
-  it("uses the configured voice response agent workspace", async () => {
-    const {
-      runtime,
-      runEmbeddedAgent,
-      resolveAgentDir,
-      resolveAgentWorkspaceDir,
-      resolveAgentIdentity,
-      resolveStorePath,
-      sessionStore,
-    } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
-    const coreConfig = {} as CoreConfig;
+  it("prefers the agent frozen on the call", async () => {
+    const { runtime, runEmbeddedAgent, resolveStorePath } = createAgentRuntime([
+      { text: '{"spoken":"Support agent."}' },
+    ]);
 
-    const result = await generateVoiceResponse({
-      voiceConfig: VoiceCallConfigSchema.parse({
-        agentId: "voice",
-        responseTimeoutMs: 5000,
-      }),
-      coreConfig,
+    await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice", responseTimeoutMs: 5000 }),
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "support",
+      sessionKey: "agent:support:google-meet:meet-1",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
 
-    expect(result.text).toBe("Voice agent.");
-    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "voice" });
-    expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    const voiceSessionEntry = sessionStore["agent:voice:voice:15550001111"];
-    if (!voiceSessionEntry) {
-      throw new Error("Expected routed voice session entry");
-    }
-    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
-    expect(args.agentDir).toBe("/tmp/openclaw/agents/voice");
-    expect(args.agentId).toBe("voice");
-    expect(args.sessionKey).toBe("agent:voice:voice:15550001111");
-    expect(args.sessionTarget).toStrictEqual({
-      agentId: "voice",
-      sessionId: voiceSessionEntry.sessionId,
-      sessionKey: "agent:voice:voice:15550001111",
-      storePath: "/tmp/openclaw/voice/sessions.json",
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "support" });
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      agentId: "support",
+      sessionKey: "agent:support:google-meet:meet-1",
     });
-    expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
-    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
-    expect(args.sessionFile).toBeUndefined();
   });
 
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
@@ -498,14 +1037,13 @@ describe("generateVoiceResponse", () => {
     ]);
     const coreConfig = {
       agents: {
-        list: [
-          {
-            id: "voice",
+        entries: {
+          voice: {
             tools: { allow: [] },
           },
-        ],
+        },
       },
-    } as CoreConfig;
+    } as OpenClawConfig;
 
     const result = await generateVoiceResponse({
       voiceConfig: VoiceCallConfigSchema.parse({
@@ -516,7 +1054,9 @@ describe("generateVoiceResponse", () => {
       coreConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });

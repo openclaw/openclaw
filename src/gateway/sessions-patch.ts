@@ -1,410 +1,437 @@
-// Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { SESSION_COMMUNICATION_MODES } from "../../packages/gateway-protocol/src/session-communication.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
-  normalizeInheritedToolAllowlist,
-  normalizeInheritedToolDenylist,
-} from "../agents/inherited-tool-deny.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  resolveAgentHarnessOwnerPluginIds,
+} from "../agents/harness/runtime-plugin-load-plan.js";
+import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import {
+  findModelCatalogEntry,
+  type ModelCatalogEntry,
+  type ModelCatalogSnapshot,
+} from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
-  resolveAllowedModelRef,
+  type ModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
-  formatThinkingLevels,
-  isThinkingLevelSupported,
+  applyModelRuntimeDirective,
+  resolveModelRuntimeDirective,
+} from "../auto-reply/reply/directive-handling.model-runtime.js";
+import {
   normalizeElevatedLevel,
   normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
-  resolveSupportedThinkingLevel,
+  resolveSupportedThinkingLevelFromProfile,
+  resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeExecTarget } from "../infra/exec-approvals.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import {
-  isAcpSessionKey,
+  buildSessionCreationStamp,
+  type SessionCreatedVia,
+} from "../config/sessions/session-entry-provenance.js";
+import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
+import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-overrides.js";
+import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   applyTraceOverride,
   applyVerboseOverride,
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import {
+  isSessionAgentAttentionIconId,
+  resolveActiveSessionAgentStatus,
+  sanitizeSessionAgentStatusNote,
+  sessionAgentStatusExpiresAt,
+  SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
+} from "../sessions/session-agent-status.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import type { UserModelAccountSelection } from "./model-account-authority.js";
+import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
+import {
+  prepareSessionPatchModelSelection,
+  resolveSessionPatchModelSelection,
+} from "./server-methods/sessions-patch-model-selection.js";
+import { resolveProtectedSessionVisibilityError } from "./server-methods/sessions-shared.js";
+import { applySessionExecutionSettings } from "./session-execution-settings.js";
+import {
+  isAgentSessionModelPatchOrigin,
+  isSessionStatusModelPatchOrigin,
+} from "./session-model-patch-origin.js";
+import { invalidSessionRequest as invalid } from "./session-request-error.js";
+import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
+import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
+import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
+import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
+import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
-function invalid(message: string): { ok: false; error: ErrorShape } {
-  return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
-
-function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function shouldPreserveSessionAuthProfileOverride(params: {
+type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;
-  entry: SessionEntry;
-  currentProvider: string;
-  provider: string;
-}): boolean {
-  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
-  if (!profileOverride) {
-    return false;
-  }
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
-    const candidate = normalizeOptionalLowercaseString(rawProvider);
-    if (!candidate) {
-      return false;
-    }
-    return (
-      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
-      resolveProviderIdForAuth(provider, { config: params.cfg })
-    );
-  };
-  const delimiterIndex = profileOverride.indexOf(":");
-  if (delimiterIndex < 0) {
-    return resolvesToTargetProvider(params.currentProvider);
-  }
-  const profileProvider = normalizeOptionalLowercaseString(
-    profileOverride.slice(0, delimiterIndex),
-  );
-  if (!profileProvider) {
-    return false;
-  }
-  return resolvesToTargetProvider(profileProvider);
-}
-
-function supportsSpawnLineage(storeKey: string): boolean {
-  return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
-}
-
-function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "orchestrator" || normalized === "leaf") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "children" || normalized === "none") {
-    return normalized;
-  }
-  return undefined;
-}
-
-type SessionPatchProjectionEntry = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
-/** Project a validated gateway session patch for one session entry. */
-export async function projectSessionsPatchEntry(params: {
-  cfg: OpenClawConfig;
-  entries: readonly SessionPatchProjectionEntry[];
+  creation?: { via: SessionCreatedVia; actor?: SessionEntry["createdActor"] };
   existingEntry?: SessionEntry;
+  isLabelInUse: (label: string) => boolean;
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const { cfg, storeKey, patch } = params;
+  /** Canonical root prepared by the trusted create path; never accepted from public patches. */
+  preparedSessionRoot?: string;
+  /** Trusted catalog runtime must own selection checks before the new row is persisted. */
+  preparedAgentRuntime?: string;
+  archivedBy?: SessionEntry["archivedBy"];
+  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  /** Exact harness owner authorized to project its new reserved session row. */
+  authorizedAgentHarnessId?: string;
+  personalModelSelection?: UserModelAccountSelection;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Resolved spawn identity supplied only by the trusted creation owner. */
+  preparedModelSelection?: ModelRef;
+};
+
+type SessionPatchProjectionResult =
+  | { ok: true; entry: SessionEntry; validateModelSelection?: () => ErrorShape | undefined }
+  | { ok: false; error: ErrorShape };
+
+type SessionPatchPreparation =
+  | { kind: "complete"; result: SessionPatchProjectionResult }
+  | {
+      kind: "model-catalog";
+      finish: (catalog: ModelCatalogSnapshot | undefined) => SessionPatchProjectionResult;
+    };
+
+/** Stop at the first actual catalog use without committing or acquiring runtime effects. */
+export function prepareSessionsPatchEntry(
+  params: SessionPatchProjectionParams,
+): SessionPatchPreparation {
+  const projection = projectSessionPatchSteps(params);
+  const first = projection.next();
+  if (first.done) {
+    return { kind: "complete", result: first.value };
+  }
+  return {
+    kind: "model-catalog",
+    finish: (catalog) => {
+      const completed = projection.next(catalog);
+      if (!completed.done) {
+        throw new Error("Session patch preparation requested the catalog more than once");
+      }
+      return completed.value;
+    },
+  };
+}
+
+export async function projectSessionsPatchEntry(
+  params: SessionPatchProjectionParams & {
+    loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
+  },
+): Promise<SessionPatchProjectionResult> {
+  const preparation = prepareSessionsPatchEntry(params);
+  if (preparation.kind === "complete") {
+    return preparation.result;
+  }
+  if (!params.loadGatewayModelCatalogSnapshot) {
+    return preparation.finish(undefined);
+  }
+  const catalog = await params.loadGatewayModelCatalogSnapshot();
+  return preparation.finish(catalog);
+}
+
+function* projectSessionPatchSteps(
+  params: SessionPatchProjectionParams,
+): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
+  const { cfg, storeKey, patch, creation } = params;
+  const invalidPatch = validateSessionPatchAdmission(params);
+  if (invalidPatch) {
+    return invalidPatch;
+  }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
     params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
   );
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  let resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
-  let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadModelCatalogForPatch = async () => {
-    if (loadedModelCatalog) {
-      return loadedModelCatalog;
-    }
-    if (!params.loadGatewayModelCatalog) {
-      return undefined;
-    }
-    const catalog = await params.loadGatewayModelCatalog();
-    loadedModelCatalog = Array.isArray(catalog) ? catalog : [];
-    return loadedModelCatalog;
+  const resolveThinkingRuntime = (
+    provider: string,
+    model: string,
+    entry?: SessionEntry,
+  ): string => {
+    // ACP metadata can own canonical agent keys (for example agent:main:main),
+    // so key shape alone cannot identify the runtime that validates thinking.
+    const acpMeta = readAcpSessionMetaForEntry({
+      sessionKey: storeKey,
+      agentId: sessionAgentId,
+      entry,
+    });
+    return (
+      params.preparedAgentRuntime ??
+      acpMeta?.backend ??
+      resolveEffectiveAgentRuntime({
+        cfg,
+        provider,
+        modelId: model,
+        agentId: sessionAgentId,
+        sessionKey: storeKey,
+        sessionEntry: entry,
+      })
+    );
   };
+  let loadedModelCatalog: ModelCatalogSnapshot | undefined;
+  let validateModelSelection: (() => ErrorShape | undefined) | undefined;
+  let catalogPrepared = false;
+  function* loadPreparedModelCatalogForPatch(): Generator<
+    void,
+    ModelCatalogEntry[] | undefined,
+    ModelCatalogSnapshot | undefined
+  > {
+    if (!catalogPrepared) {
+      loadedModelCatalog = yield;
+      catalogPrepared = true;
+    }
+    return loadedModelCatalog?.entries;
+  }
+  function* loadThinkingProfileForPatch(
+    provider: string,
+    model: string,
+    entry?: SessionEntry,
+  ): Generator<void, ReturnType<typeof resolveThinkingProfile>, ModelCatalogSnapshot | undefined> {
+    const catalog = yield* loadPreparedModelCatalogForPatch();
+    const agentRuntime = resolveThinkingRuntime(provider, model, entry);
+    const logical = catalog
+      ? findModelCatalogEntry(catalog, { provider, modelId: model })
+      : undefined;
+    const selected =
+      logical && loadedModelCatalog
+        ? selectModelCatalogRuntimeEntry({
+            entry: logical,
+            routeVariants: loadedModelCatalog.routeVariants,
+            runtimeId: agentRuntime,
+          }).entry
+        : undefined;
+    return resolveThinkingProfile({
+      provider,
+      model,
+      catalog: selected ? [selected] : catalog,
+      agentRuntime,
+    });
+  }
 
-  const existing = params.existingEntry;
+  const existing =
+    params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
+  // A read acknowledgement is not session activity: ageing the row here would move a
+  // just-opened session to the top of recency order, so only the read state commits.
+  const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
+  const nextUpdatedAt = unreadAckOnly
+    ? (existing?.updatedAt ?? now)
+    : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
-  const next: SessionEntry = existing?.sessionId
-    ? {
-        ...existing,
-        updatedAt: Math.max(existing.updatedAt ?? 0, now),
-      }
-    : {
-        ...existing,
-        sessionId: randomUUID(),
-        sessionFile: undefined,
-        updatedAt: Math.max(existing?.updatedAt ?? 0, now),
-      };
+  const next: SessionEntry = {
+    ...existing,
+    sessionId: existing?.sessionId || randomUUID(),
+    // Reset retains sessionId, so rollback also needs the original lifecycle revision.
+    ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
+    updatedAt: nextUpdatedAt,
+    ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
+    // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
+    ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
+  };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.autoLabel;
+    delete next.category;
     delete next.displayName;
   }
 
-  type PatchError = ReturnType<typeof invalid> | null;
-  const checkSpawnLineage = (field: string): PatchError =>
-    supportsSpawnLineage(storeKey)
-      ? null
-      : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
-  const applyImmutableString = (
-    field: "spawnedBy" | "spawnedWorkspaceDir" | "spawnedCwd",
-    checkLineageBeforeEmpty: boolean,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
+  function applyNormalizedPreference<Key extends keyof SessionEntry & keyof SessionsPatchParams>(
+    key: Key,
+    normalize: (raw: NonNullable<SessionsPatchParams[Key]>) => SessionEntry[Key] | undefined,
+    error: string,
+  ): string | undefined {
+    const raw = patch[key];
     if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
+      delete next[key];
+    } else if (raw !== undefined) {
+      const value = normalize(raw);
+      if (value === undefined) {
+        return error;
+      }
+      next[key] = value;
     }
-    if (raw === undefined) {
-      return null;
+    return undefined;
+  }
+
+  const subagentPolicyError = applySessionsPatchSubagentPolicy({
+    existing,
+    next,
+    patch,
+    storeKey,
+  });
+  if (subagentPolicyError) {
+    return invalid(subagentPolicyError);
+  }
+
+  const displayMetadataError = applySessionsPatchDisplayMetadata({
+    patch,
+    next,
+    isLabelInUse: params.isLabelInUse,
+  });
+  if (displayMetadataError) {
+    return invalid(displayMetadataError);
+  }
+
+  if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {
+    const rawNote = patch.statusNote;
+    const rawAttention = patch.attention;
+    const ttlMinutes = patch.ttlMinutes;
+    if (
+      ttlMinutes !== undefined &&
+      (!Number.isInteger(ttlMinutes) ||
+        ttlMinutes < 1 ||
+        ttlMinutes > SESSION_AGENT_STATUS_MAX_TTL_MINUTES)
+    ) {
+      return invalid(`invalid ttlMinutes (use 1-${SESSION_AGENT_STATUS_MAX_TTL_MINUTES})`);
     }
-    const earlyLineage = checkLineageBeforeEmpty ? checkSpawnLineage(field) : null;
-    if (earlyLineage) {
-      return earlyLineage;
+    if (rawNote === null || rawAttention === null) {
+      if (
+        (rawNote !== undefined && rawNote !== null) ||
+        (rawAttention !== undefined && rawAttention !== null)
+      ) {
+        return invalid("cannot clear and set agent status in the same patch");
+      }
+      delete next.agentStatus;
+    } else {
+      const current = resolveActiveSessionAgentStatus(next.agentStatus, now);
+      const note = rawNote === undefined ? current?.note : sanitizeSessionAgentStatusNote(rawNote);
+      if (!note) {
+        return invalid("statusNote required before setting attention or ttlMinutes");
+      }
+      if (rawAttention !== undefined && !isSessionAgentAttentionIconId(rawAttention)) {
+        return invalid("invalid attention icon");
+      }
+      const attention = rawAttention ?? current?.attention;
+      next.agentStatus = {
+        note,
+        expiresAt: sessionAgentStatusExpiresAt(now, ttlMinutes),
+        ...(attention ? { attention } : {}),
+      };
     }
-    const trimmed = normalizeOptionalString(raw) ?? "";
-    if (!trimmed) {
-      return invalid(`invalid ${field}: empty`);
+  }
+
+  if (patch.snoozedUntil !== undefined && patch.snoozedUntil !== null) {
+    const protectedError = resolveProtectedSessionVisibilityError(cfg, storeKey, "snooze");
+    if (protectedError) {
+      return { ok: false, error: protectedError };
     }
-    const lateLineage = checkLineageBeforeEmpty ? null : checkSpawnLineage(field);
-    if (lateLineage) {
-      return lateLineage;
-    }
-    if (existing?.[field] && existing[field] !== trimmed) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = trimmed;
-    return null;
-  };
-  const applyImmutableNormalized = <T extends "subagentRole" | "subagentControlScope">(
-    field: T,
-    normalize: (raw: string) => NonNullable<SessionEntry[T]> | undefined,
-    invalidMessage: string,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
-    if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
-    }
-    if (raw === undefined) {
-      return null;
-    }
-    const lineage = checkSpawnLineage(field);
-    if (lineage) {
-      return lineage;
-    }
-    const normalized = normalize(raw);
+  }
+  const lifecycleFlagsError = applySessionPatchLifecycleFlags({
+    patch,
+    next,
+    existingEntry: params.existingEntry,
+    storeKey,
+    now,
+    archivedBy: params.archivedBy,
+  });
+  if (lifecycleFlagsError) {
+    return { ok: false, error: lifecycleFlagsError };
+  }
+
+  const rawThinking = patch.thinkingLevel;
+  if (rawThinking === null) {
+    delete next.thinkingLevel;
+  } else if (rawThinking !== undefined) {
+    const normalized = normalizeThinkLevel(rawThinking);
     if (!normalized) {
-      return invalid(invalidMessage);
+      const hintProvider =
+        normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
+      const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
+      const profile = yield* loadThinkingProfileForPatch(hintProvider, hintModel, existing);
+      return invalid(
+        `invalid thinkingLevel (use ${profile.levels.map(({ label }) => label).join("|")})`,
+      );
     }
-    if (existing?.[field] && existing[field] !== normalized) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = normalized;
-    return null;
-  };
-
-  for (const fieldParams of [
-    { field: "spawnedBy" as const, checkLineageBeforeEmpty: false },
-    { field: "spawnedWorkspaceDir" as const, checkLineageBeforeEmpty: true },
-    { field: "spawnedCwd" as const, checkLineageBeforeEmpty: true },
-  ]) {
-    const result = applyImmutableString(fieldParams.field, fieldParams.checkLineageBeforeEmpty);
-    if (result) {
-      return result;
-    }
+    next.thinkingLevel = normalized;
   }
 
-  if ("spawnDepth" in patch) {
-    const raw = patch.spawnDepth;
+  const fastModeError = applyNormalizedPreference(
+    "fastMode",
+    normalizeFastMode,
+    'invalid fastMode (use true, false, "auto", or "ultrafast")',
+  );
+  if (fastModeError) {
+    return invalid(fastModeError);
+  }
+
+  if ("toolOverrides" in patch) {
+    const raw = patch.toolOverrides;
     if (raw === null) {
-      if (typeof existing?.spawnDepth === "number") {
-        return invalid("spawnDepth cannot be cleared once set");
-      }
+      delete next.toolOverrides;
     } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnDepth is only supported for subagent:* or acp:* sessions");
-      }
-      const numeric = raw;
-      if (!Number.isInteger(numeric) || numeric < 0) {
-        return invalid("invalid spawnDepth (use an integer >= 0)");
-      }
-      const normalized = numeric;
-      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== normalized) {
-        return invalid("spawnDepth cannot be changed once set");
-      }
-      next.spawnDepth = normalized;
-    }
-  }
-
-  for (const fieldParams of [
-    {
-      field: "subagentRole" as const,
-      normalize: normalizeSubagentRole,
-      invalidMessage: 'invalid subagentRole (use "orchestrator" or "leaf")',
-    },
-    {
-      field: "subagentControlScope" as const,
-      normalize: normalizeSubagentControlScope,
-      invalidMessage: 'invalid subagentControlScope (use "children" or "none")',
-    },
-  ]) {
-    const result = applyImmutableNormalized(
-      fieldParams.field,
-      fieldParams.normalize,
-      fieldParams.invalidMessage,
-    );
-    if (result) {
-      return result;
-    }
-  }
-
-  if ("inheritedToolDeny" in patch) {
-    const raw = patch.inheritedToolDeny;
-    if (raw === null) {
-      delete next.inheritedToolDeny;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolDeny (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolDeny is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolDeny = normalizeInheritedToolDenylist(raw);
-      if (inheritedToolDeny.length > 0) {
-        next.inheritedToolDeny = inheritedToolDeny;
+      // Session patches replace this sparse overlay atomically; they never deep-merge old policy.
+      const normalized = normalizeSessionToolOverrides(raw);
+      if (normalized) {
+        next.toolOverrides = normalized;
       } else {
-        delete next.inheritedToolDeny;
+        delete next.toolOverrides;
       }
     }
   }
 
-  if ("inheritedToolAllow" in patch) {
-    const raw = patch.inheritedToolAllow;
-    if (raw === null) {
-      delete next.inheritedToolAllow;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolAllow (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolAllow is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolAllow = normalizeInheritedToolAllowlist(raw);
-      if (inheritedToolAllow.length > 0) {
-        next.inheritedToolAllow = inheritedToolAllow;
-      } else {
-        delete next.inheritedToolAllow;
-      }
-    }
-  }
-
-  if ("label" in patch) {
-    const raw = patch.label;
-    if (raw === null) {
-      delete next.label;
-    } else if (raw !== undefined) {
-      const parsed = parseSessionLabel(raw);
-      if (!parsed.ok) {
-        return invalid(parsed.error);
-      }
-      for (const { sessionKey, entry } of params.entries) {
-        if (sessionKey === storeKey) {
-          continue;
+  if (patch.communication === null) {
+    delete next.communication;
+  } else if (patch.communication !== undefined) {
+    const communication = { ...next.communication };
+    for (const direction of ["send", "receive"] as const) {
+      const mode = patch.communication[direction];
+      if (mode === null) {
+        delete communication[direction];
+      } else if (mode !== undefined) {
+        if (!SESSION_COMMUNICATION_MODES.some((allowed) => allowed === mode)) {
+          return invalid(`invalid communication.${direction} (use always|ask|never)`);
         }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
-        }
+        communication[direction] = mode;
       }
-      next.label = parsed.label;
     }
-  }
-
-  if ("thinkingLevel" in patch) {
-    const raw = patch.thinkingLevel;
-    if (raw === null) {
-      // Clear the override and fall back to model default
-      delete next.thinkingLevel;
-    } else if (raw !== undefined) {
-      const normalized = normalizeThinkLevel(raw);
-      if (!normalized) {
-        const hintProvider =
-          normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
-        const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadModelCatalogForPatch();
-        return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog)})`,
-        );
-      }
-      next.thinkingLevel = normalized;
-    }
-  }
-
-  if ("fastMode" in patch) {
-    const raw = patch.fastMode;
-    if (raw === null) {
-      delete next.fastMode;
-    } else if (raw !== undefined) {
-      const normalized = normalizeFastMode(raw);
-      if (normalized === undefined) {
-        return invalid('invalid fastMode (use true, false, or "auto")');
-      }
-      next.fastMode = normalized;
+    if (Object.keys(communication).length) {
+      next.communication = communication;
+    } else {
+      delete next.communication;
     }
   }
 
   if ("verboseLevel" in patch) {
-    const raw = patch.verboseLevel;
-    const parsed = parseVerboseOverride(raw);
+    const parsed = parseVerboseOverride(patch.verboseLevel);
     if (!parsed.ok) {
       return invalid(parsed.error);
     }
@@ -412,256 +439,267 @@ export async function projectSessionsPatchEntry(params: {
   }
 
   if ("traceLevel" in patch) {
-    const raw = patch.traceLevel;
-    const parsed = parseTraceOverride(raw);
+    const parsed = parseTraceOverride(patch.traceLevel);
     if (!parsed.ok) {
       return invalid(parsed.error);
     }
     applyTraceOverride(next, parsed.value);
   }
 
-  if ("reasoningLevel" in patch) {
-    const raw = patch.reasoningLevel;
-    if (raw === null) {
-      delete next.reasoningLevel;
-    } else if (raw !== undefined) {
-      const normalized = normalizeReasoningLevel(raw);
-      if (!normalized) {
-        return invalid('invalid reasoningLevel (use "on"|"off"|"stream")');
-      }
-      // Persist "off" explicitly so that resolveDefaultReasoningLevel()
-      // does not re-enable reasoning for capable models (#24406).
-      next.reasoningLevel = normalized;
-    }
+  // Explicit "off" values remain stored so session preferences override defaults.
+  const preferenceError =
+    applyNormalizedPreference(
+      "reasoningLevel",
+      normalizeReasoningLevel,
+      'invalid reasoningLevel (use "on"|"off"|"stream")',
+    ) ??
+    applyNormalizedPreference(
+      "responseUsage",
+      normalizeUsageDisplay,
+      'invalid responseUsage (use "off"|"tokens"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "elevatedLevel",
+      normalizeElevatedLevel,
+      'invalid elevatedLevel (use "on"|"off"|"ask"|"full")',
+    );
+  if (preferenceError) {
+    return invalid(preferenceError);
   }
 
-  if ("responseUsage" in patch) {
-    const raw = patch.responseUsage;
-    if (raw === null) {
-      delete next.responseUsage;
-    } else if (raw !== undefined) {
-      const normalized = normalizeUsageDisplay(raw);
-      if (!normalized) {
-        return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
-      }
-      next.responseUsage = normalized;
-    }
+  const executionError = applySessionExecutionSettings(next, patch);
+  if (executionError) {
+    return invalid(executionError);
   }
-
-  if ("elevatedLevel" in patch) {
-    const raw = patch.elevatedLevel;
-    if (raw === null) {
-      delete next.elevatedLevel;
-    } else if (raw !== undefined) {
-      const normalized = normalizeElevatedLevel(raw);
-      if (!normalized) {
-        return invalid('invalid elevatedLevel (use "on"|"off"|"ask"|"full")');
-      }
-      // Persist "off" explicitly so patches can override defaults.
-      next.elevatedLevel = normalized;
-    }
+  if (
+    "agentRuntime" in patch &&
+    readAcpSessionMetaForEntry({ sessionKey: storeKey, agentId: sessionAgentId, entry: existing })
+  ) {
+    return invalid("Runtime selection is owned by this ACP session.");
   }
-
-  if ("execHost" in patch) {
-    const raw = patch.execHost;
-    if (raw === null) {
-      delete next.execHost;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecTarget(raw) ?? undefined;
-      if (!normalized) {
-        return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
-      }
-      next.execHost = normalized;
-    }
+  if (patch.agentRuntime === null) {
+    applyModelRuntimeDirective(next, { kind: "clear" });
   }
-
-  if ("execSecurity" in patch) {
-    const raw = patch.execSecurity;
-    if (raw === null) {
-      delete next.execSecurity;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecSecurity(raw);
-      if (!normalized) {
-        return invalid('invalid execSecurity (use "deny"|"allowlist"|"full")');
-      }
-      next.execSecurity = normalized;
-    }
+  if (typeof patch.nativeRuntimeConsent === "string" && typeof patch.model !== "string") {
+    yield* loadPreparedModelCatalogForPatch();
   }
-
-  if ("execAsk" in patch) {
-    const raw = patch.execAsk;
-    if (raw === null) {
-      delete next.execAsk;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecAsk(raw);
-      if (!normalized) {
-        return invalid('invalid execAsk (use "off"|"on-miss"|"always")');
-      }
-      next.execAsk = normalized;
-    }
-  }
-
-  if ("execNode" in patch) {
-    const raw = patch.execNode;
-    if (raw === null) {
-      delete next.execNode;
-    } else if (raw !== undefined) {
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return invalid("invalid execNode: empty");
-      }
-      next.execNode = trimmed;
-    }
-  }
-
   if ("model" in patch) {
+    const statusModelPatch = isSessionStatusModelPatchOrigin();
+    const agentModelFallback = isAgentSessionModelPatchOrigin()
+      ? next.modelFallback?.source === "agent-patch"
+        ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
+        : createAgentPatchedSessionModelFallback({
+            ...resolveSessionModelRef(cfg, next, sessionAgentId),
+            entry: next,
+            ts: now,
+          })
+      : undefined;
+    if (!statusModelPatch) {
+      delete next.modelFallback;
+    }
     const raw = patch.model;
+    let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
     if (raw === null) {
-      applyModelOverrideToSessionEntry({
-        entry: next,
-        selection: {
-          provider: resolvedDefault.provider,
-          model: resolvedDefault.model,
-          isDefault: true,
-        },
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-          cfg,
-          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-          entry: next,
-          provider: resolvedDefault.provider,
-        }),
-      });
-      delete next.liveModelSwitchPending;
+      selection = { ...resolvedDefault, isDefault: true };
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      if (!params.loadGatewayModelCatalog) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
-        };
-      }
-      const catalog = await loadModelCatalogForPatch();
+      const catalog = yield* loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "model catalog is still loading; retry in a few seconds",
+          ),
         };
       }
-      const { model: modelWithoutProfile, profile: trailingProfile } =
-        splitTrailingAuthProfile(trimmed);
-      const resolved = resolveAllowedModelRef({
+      const resolved = resolveSessionPatchModelSelection({
         cfg,
+        agentId: sessionAgentId,
         catalog,
-        raw: modelWithoutProfile,
-        defaultProvider: resolvedDefault.provider,
-        defaultModel: subagentModelHint ?? resolvedDefault.model,
+        raw: trimmed,
+        defaultProvider:
+          (statusModelPatch && next.providerOverride?.trim()) || resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
+        subagentModelHint,
+        preparedModelSelection: params.preparedModelSelection,
       });
-      if ("error" in resolved) {
+      if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
-      applyModelOverrideToSessionEntry({
-        entry: next,
-        selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
-        },
-        profileOverride: trailingProfile || undefined,
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-          cfg,
-          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-          entry: next,
-          provider: resolved.ref.provider,
-        }),
-        markLiveSwitchPending: true,
+      selection = resolved;
+    }
+    if (selection) {
+      const prepared = prepareSessionPatchModelSelection({
+        cfg,
+        agentId: sessionAgentId,
+        selection,
+        resetToDefault: raw === null,
+        operatorAuthority: params.operatorAuthority,
       });
+      if (!prepared.ok) {
+        return prepared;
+      }
+      selection = prepared.selection;
+      validateModelSelection = params.operatorAuthority ? prepared.validate : undefined;
+      if (raw === null) {
+        resolvedDefault = selection;
+      }
+      if (
+        typeof patch.agentRuntime === "string" &&
+        splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
+      ) {
+        return invalid("agentRuntime requires an explicit canonical provider/model selection");
+      }
+      const runtime = resolveModelRuntimeDirective({
+        cfg,
+        provider: selection.provider,
+        rawRuntime: patch.agentRuntime ?? undefined,
+        sessionEntry: next,
+      });
+      if (runtime.kind === "invalid") {
+        return invalid(runtime.errorText);
+      }
+      if (
+        typeof patch.agentRuntime === "string" &&
+        (runtime.kind !== "set" || runtime.runtime !== patch.agentRuntime)
+      ) {
+        return invalid("Use a canonical agentRuntime id, or null to follow configured routing");
+      }
+      applyModelRuntimeDirective(next, runtime);
+      if (selection.profile && isUserModelAuthProfileId(selection.profile)) {
+        if (params.personalModelSelection?.authProfileId !== selection.profile) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.FORBIDDEN,
+              "Choose your personal account from an identified Gateway connection.",
+            ),
+          };
+        }
+        params.personalModelSelection.assertCurrent();
+      }
+      // Catalog membership does not guarantee an activatable harness. Reject before
+      // committing the session so sticky defaults cannot retain an unusable selection.
+      const harnessSelection = {
+        provider: selection.provider,
+        modelId: selection.model,
+        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+        agentId: sessionAgentId,
+      };
+      if (
+        !readAcpSessionMetaForEntry({
+          sessionKey: storeKey,
+          agentId: sessionAgentId,
+          entry: next,
+        }) &&
+        requiresAgentHarnessPluginSelection(harnessSelection, cfg) &&
+        resolveAgentHarnessOwnerPluginIds({
+          ...harnessSelection,
+          config: cfg,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+        }).length === 0
+      ) {
+        return invalid(
+          `Model ${selection.provider}/${selection.model} requires agent harness "${harnessSelection.runtime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
+        );
+      }
+      applyModelOverrideWithAuthProfileCompatibility({
+        cfg,
+        agentDir: resolveAgentDir(cfg, sessionAgentId),
+        entry: next,
+        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+        selection,
+        explicitDefaultSelection: raw === null || (statusModelPatch && selection.isDefault),
+        profileOverride: selection.profile,
+        ...(params.providerAuthMetadataSnapshot
+          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+          : {}),
+        markLiveSwitchPending: statusModelPatch || raw !== null,
+      });
+      if (raw === null && !statusModelPatch) {
+        delete next.liveModelSwitchPending;
+      }
+    }
+    if (agentModelFallback) {
+      next.modelFallback = agentModelFallback;
     }
   }
 
-  if (next.thinkingLevel) {
+  if ("thinkingLevel" in patch || "model" in patch || "agentRuntime" in patch) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
-    } else if (
-      !isThinkingLevelSupported({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      })
-    ) {
-      if ("thinkingLevel" in patch) {
+    } else {
+      const profile = yield* loadThinkingProfileForPatch(effectiveProvider, effectiveModel, next);
+      if ("thinkingLevel" in patch && !profile.levels.some(({ id }) => id === thinkingLevel)) {
         return invalid(
-          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog)})`,
+          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${profile.levels.map(({ label }) => label).join("|")})`,
         );
       }
-      next.thinkingLevel = resolveSupportedThinkingLevel({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      });
+      next.thinkingLevel = resolveSupportedThinkingLevelFromProfile(profile, thinkingLevel);
     }
   }
 
-  if ("sendPolicy" in patch) {
-    const raw = patch.sendPolicy;
-    if (raw === null) {
-      delete next.sendPolicy;
-    } else if (raw !== undefined) {
-      const normalized = normalizeSendPolicy(raw);
-      if (!normalized) {
-        return invalid('invalid sendPolicy (use "allow"|"deny")');
-      }
-      next.sendPolicy = normalized;
-    }
-  }
-
-  if ("groupActivation" in patch) {
-    const raw = patch.groupActivation;
-    if (raw === null) {
-      delete next.groupActivation;
-    } else if (raw !== undefined) {
-      const normalized = normalizeGroupActivation(raw);
-      if (!normalized) {
-        return invalid('invalid groupActivation (use "mention"|"always")');
-      }
-      next.groupActivation = normalized;
-    }
-  }
-
-  return { ok: true, entry: next };
-}
-
-/** Apply a validated gateway session patch to an in-memory session store entry. */
-export async function applySessionsPatchToStore(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  storeKey: string;
-  agentId?: string;
-  patch: SessionsPatchParams;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const projected = await projectSessionsPatchEntry({
-    cfg: params.cfg,
-    entries: Object.entries(params.store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
-    existingEntry: params.store[params.storeKey],
-    storeKey: params.storeKey,
-    agentId: params.agentId,
-    patch: params.patch,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+  const contextWindowPatch = yield* applySessionContextWindowPatch({
+    defaultModel: resolvedDefault.model,
+    defaultProvider: resolvedDefault.provider,
+    loadModelCatalog: loadPreparedModelCatalogForPatch,
+    runtimeId: resolveThinkingRuntime,
+    routeVariants: () => loadedModelCatalog?.routeVariants,
+    next,
+    patch,
   });
-  if (projected.ok) {
-    params.store[params.storeKey] = projected.entry;
+  if (!contextWindowPatch.ok) {
+    return invalid(contextWindowPatch.error);
   }
-  return projected;
+
+  // Independent preference changes must survive a later model rollback. Copy
+  // the marker so previews and prepared patches keep their input snapshot intact.
+  if (
+    next.modelFallback?.source === "agent-patch" &&
+    !("model" in patch) &&
+    ("thinkingLevel" in patch || "contextWindow" in patch)
+  ) {
+    next.modelFallback = {
+      ...next.modelFallback,
+      ...("thinkingLevel" in patch ? { prevThinkingLevel: next.thinkingLevel } : {}),
+      ...("contextWindow" in patch ? { prevContextWindow: next.contextWindow } : {}),
+    };
+  }
+
+  const deliveryPreferenceError =
+    applyNormalizedPreference(
+      "sendPolicy",
+      normalizeSendPolicy,
+      'invalid sendPolicy (use "allow"|"deny")',
+    ) ??
+    applyNormalizedPreference(
+      "groupActivation",
+      normalizeGroupActivation,
+      'invalid groupActivation (use "mention"|"always")',
+    );
+  if (deliveryPreferenceError) {
+    return invalid(deliveryPreferenceError);
+  }
+
+  if ("agentRuntime" in patch && existing?.agentRuntimeOverride !== next.agentRuntimeOverride) {
+    delete next.contextTokens;
+    delete next.contextTokensSource;
+    delete next.contextBudgetStatus;
+    next.liveModelSwitchPending = true;
+  }
+
+  // Fresh rows and placeholder aliases have no running model to replace. Model
+  // and context-window initialization must not queue a switch on their first turn.
+  if (!existing?.sessionId) {
+    delete next.liveModelSwitchPending;
+  }
+
+  return { ok: true, entry: next, ...(validateModelSelection ? { validateModelSelection } : {}) };
 }

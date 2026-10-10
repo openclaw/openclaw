@@ -31,7 +31,6 @@ describe("getFeishuSequentialKey", () => {
     [createTextEvent({ text: "hello" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/status" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/stop" }), "feishu:default:oc_dm_chat:control"],
-    [createTextEvent({ text: "/btw what changed?" }), "feishu:default:oc_dm_chat:btw"],
   ])("resolves sequential key %#", (event, expected) => {
     expect(
       getFeishuSequentialKey({
@@ -39,6 +38,19 @@ describe("getFeishuSequentialKey", () => {
         event,
       }),
     ).toBe(expected);
+  });
+
+  it("classifies the prepared batch body instead of only its last event", () => {
+    const event = createTextEvent({ text: "@_bot/stop" });
+    event.message.mentions = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot",
+        preparedContent: "first message\n@_bot/stop",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
   });
 
   it("keeps /btw on a stable per-chat lane across different message ids", () => {
@@ -69,5 +81,26 @@ describe("getFeishuSequentialKey", () => {
         event,
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
+  });
+
+  it("keeps an empty group message with bot mentions on its normal chat lane", () => {
+    const event = createTextEvent({ text: "" });
+    event.message.chat_type = "group";
+    event.message.content = "";
+    event.message.mentions = [
+      {
+        key: "@_bot_1",
+        id: { open_id: "ou_bot_1" },
+        name: "OpenClaw",
+      },
+    ];
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot_1",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
   });
 });

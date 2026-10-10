@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.bot identity behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { waitForAbortableDelay } from "./async.js";
@@ -13,13 +12,10 @@ const BOT_IDENTITY_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000
 export function applyBotIdentityState(
   accountId: string,
   identity: FeishuMonitorBotIdentity,
-): { botOpenId?: string; botName?: string } {
+): string | undefined {
   const botOpenId = normalizeOptionalString(identity.botOpenId);
-  const botName = normalizeOptionalString(identity.botName);
-
-  setFeishuBotIdentityState(accountId, { botOpenId: botOpenId ?? "", botName });
-
-  return { botOpenId, botName };
+  setFeishuBotIdentityState(accountId, botOpenId ?? "");
+  return botOpenId;
 }
 
 async function retryBotIdentityProbe(
@@ -31,22 +27,24 @@ async function retryBotIdentityProbe(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  for (let i = 0; i < BOT_IDENTITY_RETRY_DELAYS_MS.length; i += 1) {
+  for (const [i, delayMs] of BOT_IDENTITY_RETRY_DELAYS_MS.entries()) {
     if (abortSignal?.aborted) {
       return;
     }
 
-    const delayElapsed = await waitForAbortableDelay(BOT_IDENTITY_RETRY_DELAYS_MS[i], abortSignal);
+    const delayElapsed = await waitForAbortableDelay(delayMs, abortSignal);
     if (!delayElapsed) {
       return;
     }
 
-    const identity = await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
-    const resolved = applyBotIdentityState(accountId, identity);
-    if (resolved.botOpenId) {
-      log(
-        `feishu[${accountId}]: bot open_id recovered via background retry: ${resolved.botOpenId}`,
-      );
+    const identity = await fetchBotIdentityForMonitor(account, {
+      runtime,
+      abortSignal,
+      allowCachedFallback: false,
+    });
+    if (normalizeOptionalString(identity.botOpenId) && identity.source === "provider") {
+      const resolved = applyBotIdentityState(accountId, identity);
+      log(`feishu[${accountId}]: bot open_id recovered via background retry: ${resolved}`);
       return;
     }
 
@@ -67,16 +65,24 @@ export function startBotIdentityRecovery(params: {
   accountId: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
+  currentSource?: FeishuMonitorBotIdentity["source"];
 }): void {
-  const { account, accountId, runtime, abortSignal } = params;
+  const { account, accountId, runtime, abortSignal, currentSource } = params;
   const log = runtime?.log ?? console.log;
 
+  const identityState = currentSource === "cache" ? "loaded from cache" : "unknown";
   log(
-    `feishu[${accountId}]: bot open_id unknown; starting background retry (delays: ${BOT_IDENTITY_RETRY_DELAYS_MS.map((delay) => `${delay / 1000}s`).join(", ")})`,
+    `feishu[${accountId}]: bot open_id ${identityState}; starting background provider refresh (delays: ${BOT_IDENTITY_RETRY_DELAYS_MS.map((delay) => `${delay / 1000}s`).join(", ")})`,
   );
-  log(
-    `feishu[${accountId}]: requireMention group messages stay gated until bot identity recovery succeeds`,
-  );
+  if (currentSource !== "cache") {
+    log(
+      `feishu[${accountId}]: requireMention group messages stay gated until bot identity recovery succeeds`,
+    );
+  }
 
-  void retryBotIdentityProbe(account, accountId, runtime, abortSignal);
+  void retryBotIdentityProbe(account, accountId, runtime, abortSignal).catch((err: unknown) => {
+    (runtime?.error ?? console.error)(
+      `feishu[${accountId}]: bot identity background retry failed unexpectedly: ${String(err)}`,
+    );
+  });
 }

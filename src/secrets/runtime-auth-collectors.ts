@@ -1,105 +1,123 @@
 /** Collects auth-profile and OAuth secret refs for runtime preparation. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import type { ProviderAuthAliasLookupParams } from "../agents/provider-auth-aliases.js";
+import { parseSecretRef } from "../config/types.secrets.js";
+import { setSecretAssignmentSource } from "./runtime-assignment-provenance.js";
+import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
-  pushAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   pushWarning,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isNonEmptyString } from "./shared.js";
 
-type ApiKeyCredentialLike = AuthProfileCredential & {
-  type: "api_key";
-  key?: string;
-  keyRef?: unknown;
-};
+type StaticProfileCredential = Extract<AuthProfileCredential, { type: "api_key" | "token" }>;
 
-type TokenCredentialLike = AuthProfileCredential & {
-  type: "token";
-  token?: string;
-  tokenRef?: unknown;
-};
-
-function collectApiKeyProfileAssignment(params: {
-  profile: ApiKeyCredentialLike;
-  profileId: string;
-  agentDir: string;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const {
-    explicitRef: keyRef,
-    inlineRef: inlineKeyRef,
-    ref: resolvedKeyRef,
-  } = resolveSecretInputRef({
-    value: params.profile.key,
-    refValue: params.profile.keyRef,
-    defaults: params.defaults,
-  });
-  if (!resolvedKeyRef) {
-    return;
-  }
-  // Inline SecretRefs are normalized into keyRef so runtime snapshots preserve the
-  // explicit auth-profile ref surface instead of leaving a template string in key.
-  if (!keyRef && inlineKeyRef) {
-    params.profile.keyRef = inlineKeyRef;
-  }
-  if (keyRef && isNonEmptyString(params.profile.key)) {
-    pushWarning(params.context, {
-      code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
-      path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
-      message: `auth-profiles ${params.profileId}: keyRef is set; runtime will ignore plaintext key.`,
-    });
-  }
-  pushAssignment(params.context, {
-    ref: resolvedKeyRef,
-    path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
-    expected: "string",
-    apply: (value) => {
-      params.profile.key = String(value);
-    },
-  });
+function resolveAuthProfileOwnerContract(
+  profile: StaticProfileCredential,
+  context: ResolverContext,
+): unknown {
+  const providerId = normalizeOptionalLowercaseString(profile.provider) ?? profile.provider;
+  const configuredProvider = Object.entries(context.sourceConfig.models?.providers ?? {}).find(
+    ([candidateId]) =>
+      (normalizeOptionalLowercaseString(candidateId) ?? candidateId) === providerId,
+  );
+  return {
+    profile: structuredClone(profile),
+    providerId,
+    configuredProvider,
+  };
 }
 
-function collectTokenProfileAssignment(params: {
-  profile: TokenCredentialLike;
+function collectAuthStoreSecretInputAssignment(
+  params: Parameters<typeof collectSecretInputAssignment>[0],
+): void {
+  const previousCount = params.context.assignments.length;
+  collectSecretInputAssignment(params);
+  for (const assignment of params.context.assignments.slice(previousCount)) {
+    setSecretAssignmentSource(assignment, "auth-store");
+  }
+}
+
+function collectStaticProfileAssignment(params: {
+  profile: StaticProfileCredential;
   profileId: string;
+  store: AuthProfileStore;
   agentDir: string;
   defaults: SecretDefaults | undefined;
+  authAliasLookupParams: ProviderAuthAliasLookupParams;
   context: ResolverContext;
 }): void {
-  const {
-    explicitRef: tokenRef,
-    inlineRef: inlineTokenRef,
-    ref: resolvedTokenRef,
-  } = resolveSecretInputRef({
-    value: params.profile.token,
-    refValue: params.profile.tokenRef,
-    defaults: params.defaults,
-  });
-  if (!resolvedTokenRef) {
+  const ownerContract = resolveAuthProfileOwnerContract(params.profile, params.context);
+  const profile = params.profile;
+  const field = profile.type === "api_key" ? "key" : "token";
+  const explicitRef = parseSecretRef(
+    profile.type === "api_key" ? profile.keyRef : profile.tokenRef,
+    params.defaults,
+  );
+  const inlineRef = explicitRef
+    ? null
+    : parseSecretRef(profile.type === "api_key" ? profile.key : profile.token, params.defaults);
+  const ref = explicitRef ?? inlineRef;
+  if (!ref) {
     return;
   }
-  // Token profiles follow the same precedence contract as API keys: explicit refs win over
-  // plaintext and inline refs are promoted to the dedicated ref field.
-  if (!tokenRef && inlineTokenRef) {
-    params.profile.tokenRef = inlineTokenRef;
+  // Promote inline refs before eligibility reads the authoritative ref field.
+  if (!explicitRef && inlineRef) {
+    if (profile.type === "api_key") {
+      profile.keyRef = inlineRef;
+    } else {
+      profile.tokenRef = inlineRef;
+    }
   }
-  if (tokenRef && isNonEmptyString(params.profile.token)) {
+  if (explicitRef && isNonEmptyString(profile.type === "api_key" ? profile.key : profile.token)) {
     pushWarning(params.context, {
       code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
-      path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
-      message: `auth-profiles ${params.profileId}: tokenRef is set; runtime will ignore plaintext token.`,
+      path: `${params.agentDir}.auth-profiles.${params.profileId}.${field}`,
+      message: `auth-profiles ${params.profileId}: ${field}Ref is set; runtime will ignore plaintext ${field}.`,
     });
   }
-  pushAssignment(params.context, {
-    ref: resolvedTokenRef,
-    path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
+  const setValue =
+    profile.type === "api_key"
+      ? (value: string | undefined) => {
+          profile.key = value;
+        }
+      : (value: string | undefined) => {
+          profile.token = value;
+        };
+  // Only successful runtime materialization may populate the authoritative secret slot.
+  setValue(undefined);
+  const eligibility = resolveAuthProfileEligibility({
+    cfg: params.context.sourceConfig,
+    authAliasLookupParams: params.authAliasLookupParams,
+    store: params.store,
+    provider: profile.provider,
+    profileId: params.profileId,
+  });
+  collectAuthStoreSecretInputAssignment({
+    value: ref,
+    path: `${params.agentDir}.auth-profiles.${params.profileId}.${field}`,
     expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active: eligibility.eligible,
+    inactiveReason: `auth profile is not eligible (${eligibility.reasonCode}); skipping resolution until it becomes eligible.`,
+    owner: {
+      ownerKind: "account",
+      ownerId: resolveAuthProfileSecretOwnerId(params),
+      requiredForGateway: false,
+      disposition: "isolate",
+      contract: ownerContract,
+    },
     apply: (value) => {
-      params.profile.token = String(value);
+      setValue(String(value));
+    },
+    applyUnavailable: () => {
+      setValue(undefined);
     },
   });
 }
@@ -117,23 +135,21 @@ export function collectAuthStoreAssignments(params: {
   });
 
   const defaults = params.context.sourceConfig.secrets?.defaults;
+  const authAliasLookupParams: ProviderAuthAliasLookupParams = {
+    env: params.context.env,
+    ...(params.context.manifestRegistry
+      ? { metadataSnapshot: params.context.manifestRegistry }
+      : {}),
+  };
   for (const [profileId, profile] of Object.entries(params.store.profiles)) {
-    if (profile.type === "api_key") {
-      collectApiKeyProfileAssignment({
-        profile: profile as ApiKeyCredentialLike,
+    if (profile.type === "api_key" || profile.type === "token") {
+      collectStaticProfileAssignment({
+        profile,
         profileId,
+        store: params.store,
         agentDir: params.agentDir,
         defaults,
-        context: params.context,
-      });
-      continue;
-    }
-    if (profile.type === "token") {
-      collectTokenProfileAssignment({
-        profile: profile as TokenCredentialLike,
-        profileId,
-        agentDir: params.agentDir,
-        defaults,
+        authAliasLookupParams,
         context: params.context,
       });
     }

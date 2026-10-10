@@ -1,89 +1,92 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
  * Artifact lookup and download protocol schemas.
  *
- * Artifacts are files or payloads produced by sessions, runs, tasks, or agents;
+ * Artifacts are files or payloads produced by sessions, runs, or agents;
  * these schemas keep lookup filters explicit and download results transport-safe.
  */
 const ArtifactQueryParamsProperties = {
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
-  taskId: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Assistant-delivered artifacts only; omit to include uploaded inputs and tool observations. */
+  messageRole: Type.Optional(Type.Literal("assistant")),
 };
 
-/** Shared artifact filter payload used by list-style requests. */
-export const ArtifactQueryParamsSchema = Type.Object(ArtifactQueryParamsProperties, {
-  additionalProperties: false,
+/** Artifact lookup payload with a required artifact id plus optional scope filters. */
+const ArtifactGetParamsSchema = closedObject({
+  ...ArtifactQueryParamsProperties,
+  artifactId: NonEmptyString,
 });
 
-/** Artifact lookup payload with a required artifact id plus optional scope filters. */
-export const ArtifactGetParamsSchema = Type.Object(
-  {
-    ...ArtifactQueryParamsProperties,
-    artifactId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
 /** Public artifact metadata returned before or alongside download data. */
-export const ArtifactSummarySchema = Type.Object(
-  {
-    id: NonEmptyString,
-    type: NonEmptyString,
-    title: NonEmptyString,
-    mimeType: Type.Optional(NonEmptyString),
-    sizeBytes: Type.Optional(Type.Integer({ minimum: 0 })),
-    sessionKey: Type.Optional(NonEmptyString),
-    runId: Type.Optional(NonEmptyString),
-    taskId: Type.Optional(NonEmptyString),
-    messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
-    source: Type.Optional(NonEmptyString),
-    download: Type.Object(
-      {
-        mode: Type.Union([Type.Literal("bytes"), Type.Literal("url"), Type.Literal("unsupported")]),
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+export const ArtifactSummarySchema = closedObject({
+  id: NonEmptyString,
+  type: NonEmptyString,
+  title: NonEmptyString,
+  mimeType: Type.Optional(NonEmptyString),
+  sizeBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+  sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
+  messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
+  source: Type.Optional(NonEmptyString),
+  image: Type.Optional(closedObject({ url: NonEmptyString })),
+  download: closedObject({
+    mode: Type.Union([Type.Literal("bytes"), Type.Literal("url"), Type.Literal("unsupported")]),
+  }),
+});
 
 /** List request payload for artifacts visible in the selected scope. */
-export const ArtifactsListParamsSchema = ArtifactQueryParamsSchema;
+export const ArtifactsListParamsSchema = closedObject({
+  ...ArtifactQueryParamsProperties,
+  type: Type.Optional(Type.Literal("image")),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+});
 
 /** List response containing artifact summaries only. */
-export const ArtifactsListResultSchema = Type.Object(
-  {
-    artifacts: Type.Array(ArtifactSummarySchema),
-  },
-  { additionalProperties: false },
-);
+export const ArtifactsListResultSchema = closedObject({
+  artifacts: Type.Array(ArtifactSummarySchema),
+  nextCursor: Type.Optional(NonEmptyString),
+  omittedOversized: Type.Optional(Type.Boolean()),
+});
 
 /** Get request payload for one artifact summary. */
 export const ArtifactsGetParamsSchema = ArtifactGetParamsSchema;
 
 /** Get response containing one artifact summary. */
-export const ArtifactsGetResultSchema = Type.Object(
-  {
-    artifact: ArtifactSummarySchema,
-  },
-  { additionalProperties: false },
-);
+export const ArtifactsGetResultSchema = closedObject({
+  artifact: ArtifactSummarySchema,
+});
 
 /** Download request payload for one artifact. */
-export const ArtifactsDownloadParamsSchema = ArtifactGetParamsSchema;
+export const ArtifactsDownloadParamsSchema = closedObject({
+  ...ArtifactQueryParamsProperties,
+  artifactId: NonEmptyString,
+  /** Opt in only when the client can reach the Gateway's HTTP(S) media routes. */
+  transport: Type.Optional(Type.Literal("http")),
+});
 
 /** Download response, either inline base64 bytes, URL, or metadata for unsupported modes. */
-export const ArtifactsDownloadResultSchema = Type.Object(
-  {
-    artifact: ArtifactSummarySchema,
-    encoding: Type.Optional(Type.Literal("base64")),
-    data: Type.Optional(Type.String()),
-    url: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const ArtifactsDownloadResultSchema = closedObject({
+  artifact: ArtifactSummarySchema,
+  encoding: Type.Optional(Type.Literal("base64")),
+  data: Type.Optional(Type.String()),
+  url: Type.Optional(NonEmptyString),
+  expiresAt: Type.Optional(NonEmptyString),
+});
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type ArtifactSummary = Static<typeof ArtifactSummarySchema>;
+export type ArtifactsListParams = Static<typeof ArtifactsListParamsSchema>;
+export type ArtifactsListResult = Static<typeof ArtifactsListResultSchema>;
+export type ArtifactsGetParams = Static<typeof ArtifactsGetParamsSchema>;
+export type ArtifactsGetResult = Static<typeof ArtifactsGetResultSchema>;
+export type ArtifactsDownloadParams = Static<typeof ArtifactsDownloadParamsSchema>;
+export type ArtifactsDownloadResult = Static<typeof ArtifactsDownloadResultSchema>;

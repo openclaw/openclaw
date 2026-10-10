@@ -1,36 +1,30 @@
-// Discord plugin module implements rest fetch behavior.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import * as fetchRuntimeSdk from "openclaw/plugin-sdk/fetch-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   resolveEnvHttpProxyAgentOptions,
   wrapFetchWithAbortSignal,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import {
-  captureHttpExchange,
-  resolveEffectiveDebugProxyUrl,
-} from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
+import { resolveEffectiveDebugProxyUrl } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { Agent, fetch as undiciFetch } from "undici";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
+import type { Dispatcher } from "undici";
 import { createDiscordDnsLookup } from "../network-config.js";
 import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 
+// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
+const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+  proxyCaptureSdk;
+
+// The 2026.9.6 SDK has only the environment-aware factory; retire with that host floor.
+const fetchSdk: Partial<Pick<typeof fetchRuntimeSdk, "createHttp1Agent">> = fetchRuntimeSdk;
+
 const discordDnsLookup = createDiscordDnsLookup();
-
-type DiscordRestDispatcher =
-  | InstanceType<typeof Agent>
-  | ReturnType<typeof createHttp1EnvHttpProxyAgent>
-  | ReturnType<typeof createHttp1ProxyAgent>;
-
-function createDirectDiscordRestDispatcher(): InstanceType<typeof Agent> {
-  return new Agent({
-    allowH2: false,
-    connect: { lookup: discordDnsLookup },
-  });
-}
 
 function createEnvProxyDiscordRestDispatcher(
   runtime: RuntimeEnv,
@@ -54,23 +48,21 @@ function createEnvProxyDiscordRestDispatcher(
   }
 }
 
-function createDiscordRestFetchWithDispatcher(dispatcher: DiscordRestDispatcher): typeof fetch {
+function createDiscordRestFetchWithDispatcher(dispatcher: Dispatcher): typeof fetch {
   return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
-    (
-      undiciFetch(input as string | URL, {
-        ...(init as Record<string, unknown>),
-        dispatcher,
-      }) as unknown as Promise<Response>
-    ).then((response) => {
-      captureHttpExchange({
-        url: resolveRequestUrl(input),
-        method: init?.method ?? "GET",
-        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-        requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-        response,
-        flowId: randomUUID(),
-        meta: { subsystem: "discord-rest" },
-      });
+    fetchWithRuntimeDispatcher(input, { ...init, dispatcher }).then((response) => {
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureSdk
+        .captureHttpExchangeAsync?.({
+          url: resolveRequestUrl(input),
+          method: init?.method ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "discord-rest" },
+        })
+        .catch(() => {});
       return response;
     })) as typeof fetch);
 }
@@ -91,8 +83,15 @@ export function resolveDiscordRestFetch(
     return fetcher;
   }
 
-  const fetcher = createDiscordRestFetchWithDispatcher(
-    createEnvProxyDiscordRestDispatcher(runtime) ?? createDirectDiscordRestDispatcher(),
+  return createDiscordRestFetchWithDispatcher(
+    createEnvProxyDiscordRestDispatcher(runtime) ??
+      fetchSdk.createHttp1Agent?.({ connect: { lookup: discordDnsLookup } }) ??
+      createHttp1EnvHttpProxyAgent({
+        // Empty overrides keep the direct fallback independent of invalid proxy environment.
+        httpProxy: "",
+        httpsProxy: "",
+        noProxy: "*",
+        connect: { lookup: discordDnsLookup },
+      }),
   );
-  return fetcher;
 }

@@ -9,20 +9,16 @@ import os from "node:os";
 import path from "node:path";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  ANTHROPIC_SETUP_TOKEN_PREFIX,
-  validateAnthropicSetupToken,
-} from "../commands/auth-token.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { validateAnthropicSetupToken } from "../commands/auth-token.js";
+import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   type AuthProfileCredential,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
+import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
@@ -42,7 +38,7 @@ type TokenSource = {
 };
 
 function isSetupToken(value: string): boolean {
-  return value.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX);
+  return validateAnthropicSetupToken(value) === undefined;
 }
 
 function listSetupTokenProfiles(store: {
@@ -100,7 +96,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     };
   }
 
-  const agentDir = resolveDefaultAgentDir(getRuntimeConfig());
+  const agentDir = resolveDefaultAgentDir(await readLiveTestConfig());
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -189,10 +185,10 @@ describeLive("live anthropic setup-token", () => {
     async () => {
       const tokenSource = await resolveTokenSource();
       try {
-        const cfg = getRuntimeConfig();
+        const cfg = await readLiveTestConfig();
         await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
-        const authStorage = discoverAuthStorage(tokenSource.agentDir);
+        const { authStorage } = discoverAuthStorageFacts(tokenSource.agentDir);
         const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);
         const all = Array.isArray(modelRegistry) ? modelRegistry : modelRegistry.getAll();
         const candidates = all.filter(
@@ -209,7 +205,7 @@ describeLive("live anthropic setup-token", () => {
           );
         }
 
-        const apiKeyInfo = await getApiKeyForModel({
+        const apiKeyInfo = await getApiKeyForModelCore({
           model,
           cfg,
           profileId: tokenSource.profileId,

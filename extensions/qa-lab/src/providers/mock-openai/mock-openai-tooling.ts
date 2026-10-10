@@ -1,0 +1,370 @@
+import { createHash } from "node:crypto";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readQaNativeWorkspaceBehaviorFromPrompt } from "../../native-workspace-behavior.js";
+import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
+import {
+  type MockToolCallItem,
+  type StreamEvent,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
+  TINY_PNG_BASE64,
+} from "./mock-openai-contracts.js";
+import { MockResponseStream } from "./mock-openai-stream.js";
+
+let mockFunctionCallSequence = 0;
+
+export const QA_TOOL_SEARCH_SECONDARY_TARGET = "fake_plugin_tool_01";
+
+export function buildWhatsAppAgentActionArgs(prompt: string): Record<string, unknown> | undefined {
+  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(prompt)) {
+    return { action: "react", emoji: "👍", final: true };
+  }
+  const uploadCaption = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(prompt)?.[1];
+  if (uploadCaption) {
+    return {
+      action: "upload-file",
+      buffer: TINY_PNG_BASE64,
+      caption: uploadCaption,
+      contentType: "image/png",
+      filename: "whatsapp-qa-agent-upload.png",
+    };
+  }
+  return undefined;
+}
+
+function normalizePromptPathCandidate(candidate: string) {
+  const normalized = candidate
+    .trim()
+    .replace(/^`+|`+$/g, "")
+    .replace(/^\.\//, "");
+  if (
+    normalized.includes("/") ||
+    /\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)$/i.test(normalized)
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+export function readTargetFromPrompt(prompt: string) {
+  for (const pattern of [/`([^`]+)`/g, /"([^"]+)"/g]) {
+    for (const match of prompt.matchAll(pattern)) {
+      const candidate = normalizePromptPathCandidate(match[1] ?? "");
+      if (candidate) {
+        return candidate;
+      }
+    }
+  }
+
+  const repoScoped = /\b(?:repo\/[^\s`",)]+|QA_[A-Z_]+\.md)\b/.exec(prompt)?.[0];
+  if (repoScoped) {
+    return repoScoped;
+  }
+
+  const loosePath =
+    /\b[A-Za-z0-9_][A-Za-z0-9._@!:-]*\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i.exec(
+      prompt,
+    )?.[0];
+  if (loosePath) {
+    return loosePath;
+  }
+
+  if (/\bdocs?\b/i.test(prompt)) {
+    return "repo/docs/help/testing.md";
+  }
+  if (/\bscenario|kickoff|qa\b/i.test(prompt)) {
+    return "QA_KICKOFF_TASK.md";
+  }
+  return "repo/package.json";
+}
+
+export function execCommandFromToolProgressPrompt(prompt: string) {
+  return (
+    /call the exec tool exactly once with this exact command before answering:\s*`([^`]+)`/i
+      .exec(prompt)?.[1]
+      ?.trim() || null
+  );
+}
+
+export function buildMockFunctionCall(
+  name: string,
+  args: Record<string, unknown>,
+  namespace?: string,
+) {
+  const serialized = JSON.stringify(args);
+  const callSuffix = createHash("sha256")
+    .update(name)
+    .update("\0")
+    .update(serialized)
+    .digest("hex")
+    .slice(0, 10);
+  const sequence = ++mockFunctionCallSequence;
+  const uniqueSuffix = `${callSuffix}_${sequence}`;
+  const item: MockToolCallItem = {
+    type: "function_call",
+    id: `fc_mock_${name}_${uniqueSuffix}`,
+    call_id: `call_mock_${name}_${uniqueSuffix}`,
+    name,
+    ...(namespace ? { namespace } : {}),
+    arguments: serialized,
+  };
+  return {
+    item,
+    responseId: `resp_mock_${name}_${uniqueSuffix}`,
+  };
+}
+
+export function buildToolCallEventsWithArgs(
+  name: string,
+  args: Record<string, unknown>,
+  namespace?: string,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, args, namespace);
+  const stream = new MockResponseStream(call.responseId);
+  stream.tool(call.item);
+  return stream.complete(16);
+}
+
+export function buildCustomToolCallEventsWithInput(
+  name: string,
+  input: string,
+  namespace?: string,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, { input }, namespace);
+  const stream = new MockResponseStream(call.responseId);
+  stream.tool({
+    type: "custom_tool_call",
+    id: call.item.id.replace(/^fc_/, "ctc_"),
+    call_id: call.item.call_id,
+    name,
+    ...(namespace ? { namespace } : {}),
+    input,
+    status: "completed",
+  });
+  return stream.complete(16);
+}
+
+export function extractRememberedFact(userTexts: string[]) {
+  for (const pattern of [
+    /\bqa canary code is\s+([A-Za-z0-9-]+)/i,
+    /remember(?: this fact for later)?:\s*([A-Za-z0-9-]+)/i,
+  ]) {
+    for (const text of userTexts) {
+      const fact = pattern.exec(text)?.[1];
+      if (fact) {
+        return fact;
+      }
+    }
+  }
+  return null;
+}
+
+export function extractOrbitCode(text: string) {
+  return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
+}
+
+function decodeXmlEntities(text: string) {
+  return text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'");
+}
+
+export function extractActiveMemorySummary(text: string) {
+  const match = /<active_memory_plugin>\s*([\s\S]*?)\s*<\/active_memory_plugin>/i.exec(text);
+  return match?.[1] ? decodeXmlEntities(match[1]).trim() : null;
+}
+
+export function extractToolSearchTarget(text: string): string | null {
+  // Tool descriptions also contain target= arguments; only the QA marker selects a tool.
+  const match = /\btool search qa (?:check|failure)\s+target=([A-Za-z0-9_.:-]+)\b/i.exec(text);
+  return match?.[1] ?? null;
+}
+
+export function toolSearchOutputHasCandidate(output: unknown, targetTool: string): boolean {
+  if (!isRecord(output) || !Array.isArray(output.results)) {
+    return false;
+  }
+  return output.results.some(
+    (result) =>
+      isRecord(result) &&
+      Array.isArray(result.candidates) &&
+      result.candidates.some(
+        (candidate) =>
+          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
+      ),
+  );
+}
+
+/** Stand-in for an API key an owner pastes into chat. */
+const QA_OWNER_CHAT_SECRET = "qa-owner-remote-token-5c1e8f2a9b7d";
+const RUNTIME_TOOL_SUCCESS_ARGS: Record<string, Record<string, unknown>> = {
+  exec: { command: "echo runtime-tool-fixture", timeoutSeconds: 5 },
+  read: { path: "QA_KICKOFF_TASK.md" },
+  write: { path: "runtime-tool-fixture-write.txt", content: "runtime tool fixture\n" },
+  edit: {
+    path: "runtime-tool-fixture-edit.txt",
+    edits: [{ oldText: "before edit\n", newText: "after edit\n" }],
+  },
+  apply_patch: {
+    input: [
+      "*** Begin Patch",
+      "*** Add File: runtime-tool-fixture-patch.txt",
+      "+runtime patch",
+      "*** End Patch",
+      "",
+    ].join("\n"),
+  },
+  web_search: { query: "OpenClaw runtime parity fixed query", count: 1 },
+  web_fetch: { url: "https://example.com/", maxChars: 500 },
+  image_generate: {
+    prompt: "QA lighthouse runtime parity fixture",
+    filename: "runtime-tool-fixture",
+  },
+  tts: { text: "Runtime parity voice fixture." },
+  message: { action: "send", message: "runtime parity message fixture" },
+  "llm-task": {
+    prompt: 'Remember this fact and reply exactly `{"status":"ok"}`.',
+    input: { secret: "qa-plugin-usage-secret-sentinel" },
+    schema: {
+      type: "object",
+      required: ["status"],
+      properties: { status: { const: "ok" } },
+    },
+  },
+  session_status: { sessionKey: "current" },
+  sessions_spawn: {
+    task: "Runtime tool fixture subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
+    label: "runtime-tool-fixture",
+    mode: "run",
+    thread: false,
+    expectsCompletionMessage: false,
+  },
+  memory_recall: { query: "runtime parity memory fixture" },
+};
+
+export function buildQaToolSearchArgs(
+  targetTool: string,
+  failureMode: boolean,
+  prompt = "",
+): Record<string, unknown> {
+  const nativeWorkspaceBehavior = readQaNativeWorkspaceBehaviorFromPrompt(prompt);
+  if (nativeWorkspaceBehavior?.providerToolName === targetTool) {
+    return structuredClone(
+      failureMode ? nativeWorkspaceBehavior.failureArgs : nativeWorkspaceBehavior.happyArgs,
+    );
+  }
+  if (targetTool === "ls") {
+    return { path: failureMode ? "runtime-tool-fixture-missing-directory" : "." };
+  }
+  if (failureMode && targetTool === "web_search") {
+    return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
+  if (failureMode && targetTool === "apply_patch") {
+    return {
+      input: [
+        "*** Begin Patch",
+        "*** Update File: ../runtime-tool-fixture-denied.txt",
+        "@@",
+        "-runtime-tool-fixture-denied-original",
+        "+runtime patch outside the workspace",
+        "*** End Patch",
+        "",
+      ].join("\n"),
+    };
+  }
+  if (failureMode && targetTool === "sessions_spawn") {
+    return { task: "" };
+  }
+  if (failureMode) {
+    return { __qaFailureMode: "denied-input" };
+  }
+  if (targetTool === "openclaw") {
+    // The system agent's own turn sees only the delegated message.
+    if (/\bopenclaw_fixture=system-store-secret\b/u.test(prompt)) {
+      return {
+        action: "config_set_ref",
+        path: "gateway.remote.token",
+        secret: QA_OWNER_CHAT_SECRET,
+      };
+    }
+    if (/\bopenclaw_fixture=chat-secret\b/u.test(prompt)) {
+      return {
+        message: `tool search qa check target=openclaw openclaw_fixture=system-store-secret. Save the user's remote Gateway token ${QA_OWNER_CHAT_SECRET}.`,
+      };
+    }
+    return {
+      message: /\bopenclaw_fixture=logging-level-info\b/u.test(prompt)
+        ? 'config set logging.level "info"'
+        : "Reply exactly QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK. Do not call tools.",
+    };
+  }
+  if (targetTool === "ask_user") {
+    const single = /\bask_user_fixture=single\b/i.test(prompt);
+    const deployQuestion = {
+      id: "deploy_target",
+      header: "Deploy",
+      question: "Where should this deploy?",
+      options: [
+        { label: "Staging (Recommended)", description: "Safer default" },
+        { label: single ? "Production 🚀" : "Production", description: "Ship to users" },
+      ],
+    };
+    const checksQuestion = {
+      id: "checks",
+      header: "Checks",
+      question: "Which checks should run?",
+      options: [
+        { label: "Unit (Recommended)", description: "Fast focused coverage" },
+        { label: "E2E", description: "Full user-path coverage" },
+        { label: "Lint", description: "Static checks" },
+      ],
+      multiSelect: true,
+    };
+    return {
+      questions: single
+        ? [deployQuestion]
+        : /\bask_user_fixture=multi\b/i.test(prompt)
+          ? [checksQuestion]
+          : [
+              deployQuestion,
+              checksQuestion,
+              {
+                id: "release_note",
+                header: "Note",
+                question: "Which release note label should be used?",
+                options: [
+                  { label: "Routine (Recommended)", description: "Standard release note" },
+                  { label: "Urgent", description: "Highlight prominently" },
+                ],
+              },
+            ],
+      timeoutSeconds: 60,
+    };
+  }
+  const args = Object.hasOwn(RUNTIME_TOOL_SUCCESS_ARGS, targetTool)
+    ? RUNTIME_TOOL_SUCCESS_ARGS[targetTool]
+    : undefined;
+  return args ? structuredClone(args) : { marker: "normal" };
+}
+
+export function isActiveMemorySubagentPrompt(text: string) {
+  return text.includes("You are a memory search agent.");
+}
+
+export function isSnackRecallPrompt(text: string) {
+  return (
+    /silent snack recall check/i.test(text) || /remember across conversations qa check/i.test(text)
+  );
+}
+
+export function extractSnackPreference(text: string) {
+  const normalized = text.replace(/\s+/g, " ");
+  const match =
+    /(lemon pepper wings(?:\s+with\s+blue cheese)?|blue cheese(?:\s+with\s+lemon pepper wings)?)/i.exec(
+      normalized,
+    );
+  return match?.[0] ?? null;
+}

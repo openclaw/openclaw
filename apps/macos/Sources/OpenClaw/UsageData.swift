@@ -17,6 +17,7 @@ struct GatewayUsageProvider: Codable {
 struct GatewayUsageSummary: Codable {
     let updatedAt: Double
     let providers: [GatewayUsageProvider]
+    let refreshing: Bool?
 }
 
 struct UsageRow: Identifiable {
@@ -27,12 +28,7 @@ struct UsageRow: Identifiable {
     let windowLabel: String?
     let usedPercent: Double?
     let resetAt: Date?
-    let error: String?
-
-    var hasError: Bool {
-        if let error, !error.isEmpty { return true }
-        return false
-    }
+    let errorText: String?
 
     var titleText: String {
         if let plan, !plan.isEmpty { return "\(self.displayName) (\(plan))" }
@@ -45,17 +41,17 @@ struct UsageRow: Identifiable {
     }
 
     func detailText(now: Date = .init()) -> String {
+        if let errorText, !errorText.isEmpty { return errorText }
         guard let remaining = self.remainingPercent else { return "No data" }
         var parts = ["\(remaining)% left"]
         if let windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
         if let resetAt {
-            let reset = UsageRow.formatResetRemaining(target: resetAt, now: now)
-            if let reset { parts.append("⏱\(reset)") }
+            parts.append("⏱\(Self.formatResetRemaining(target: resetAt, now: now))")
         }
         return parts.joined(separator: " · ")
     }
 
-    private static func formatResetRemaining(target: Date, now: Date) -> String? {
+    private static func formatResetRemaining(target: Date, now: Date) -> String {
         let diff = target.timeIntervalSince(now)
         if diff <= 0 { return "now" }
         let minutes = Int(floor(diff / 60))
@@ -74,30 +70,18 @@ struct UsageRow: Identifiable {
 extension GatewayUsageSummary {
     func primaryRows() -> [UsageRow] {
         self.providers.compactMap { provider in
-            guard let window = provider.windows.max(by: { $0.usedPercent < $1.usedPercent }) else {
-                return nil
-            }
-
+            let window = provider.windows.max(by: { $0.usedPercent < $1.usedPercent })
+            let error = provider.error?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard window != nil || error?.isEmpty == false else { return nil }
             return UsageRow(
-                id: "\(provider.provider)-\(window.label)",
+                id: "\(provider.provider)-\(window?.label ?? "error")",
                 providerId: provider.provider,
                 displayName: provider.displayName,
                 plan: provider.plan,
-                windowLabel: window.label,
-                usedPercent: window.usedPercent,
-                resetAt: window.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) },
-                error: nil)
+                windowLabel: window?.label,
+                usedPercent: window.flatMap { $0.usedPercent.isFinite ? min(100, max(0, $0.usedPercent)) : nil },
+                resetAt: window?.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) },
+                errorText: window == nil ? error : nil)
         }
-    }
-}
-
-@MainActor
-enum UsageLoader {
-    static func loadSummary() async throws -> GatewayUsageSummary {
-        let data = try await ControlChannel.shared.request(
-            method: "usage.status",
-            params: nil,
-            timeoutMs: 5000)
-        return try JSONDecoder().decode(GatewayUsageSummary.self, from: data)
     }
 }

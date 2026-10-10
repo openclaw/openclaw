@@ -1,0 +1,155 @@
+import { randomUUID } from "node:crypto";
+import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
+import {
+  createPromotedPlainTextToolCallEvents,
+  normalizePlainTextToolCallStreamEvents,
+  projectScrubbedPlainTextToolCallMessage,
+  projectStandalonePlainTextToolCallMessage as projectPlainTextToolCallMessage,
+  type PlainTextToolCallBlock,
+  type PlainTextToolCallMessageNormalization,
+  type PlainTextToolCallNameMatcher,
+} from "../../../../packages/tool-call-repair/src/index.js";
+import { findCodeRegions } from "../../../shared/text/code-regions.js";
+import type { StreamFn } from "../../runtime/index.js";
+import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
+import { isThinkingLikeBlock } from "../../thinking-block.js";
+import { couldNormalizeToolNamePrefixToAllowedTool } from "../../tool-policy.js";
+import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
+import { mapAssistantMessageStream } from "./stream-wrapper.js";
+
+type AssistantStream = Awaited<ReturnType<StreamFn>>;
+
+const STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS = new Set<unknown>(["stop", "toolUse"]);
+
+function wrapStreamPromoteStandaloneTextToolCalls(
+  stream: AssistantStream,
+  allowedToolNames: Set<string>,
+): AssistantStream {
+  const matcher: PlainTextToolCallNameMatcher = {
+    hasExactName: (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
+    hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
+  };
+  const promotedIdBySource = new Map<string, string>();
+  const normalizeTerminalMessage = (params: {
+    allowPromotion: boolean;
+    message: unknown;
+    preserveEmptyTextBlocks?: boolean;
+  }): PlainTextToolCallMessageNormalization => {
+    const scrubbed = projectScrubbedPlainTextToolCallMessage({
+      forceIncompleteCandidates: true,
+      matcher,
+      message: params.message,
+      preserveEmptyTextBlocks: params.preserveEmptyTextBlocks,
+      resolveProtectedRanges: findCodeRegions,
+      requireAssistantRole: true,
+    });
+    if (scrubbed) {
+      stripCompactionReplayCheckpointInPlace(scrubbed.message);
+      return { kind: "scrubbed", ...scrubbed };
+    }
+    if (!params.allowPromotion) {
+      return undefined;
+    }
+    let ordinal = 0;
+    const createStableToolCallBlock = (
+      block: PlainTextToolCallBlock,
+      name: string,
+    ): Record<string, unknown> => {
+      const sourceKey = `${ordinal}:${block.start}:${block.end}`;
+      ordinal += 1;
+      const id =
+        promotedIdBySource.get(sourceKey) || `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      promotedIdBySource.set(sourceKey, id);
+      return {
+        type: "toolCall",
+        id,
+        name,
+        arguments: block.arguments,
+        partialArgs: JSON.stringify(block.arguments),
+      };
+    };
+    const promoted = projectPlainTextToolCallMessage({
+      allowedStopReasons: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS,
+      allowedToolNames,
+      createToolCallBlock: createStableToolCallBlock,
+      isRetainableNonTextBlock: isThinkingLikeBlock,
+      message: params.message,
+      requireAssistantRole: true,
+      resolveProtectedRanges: findCodeRegions,
+      resolveToolName: (name) => resolveToolCallName(name, allowedToolNames, undefined, true),
+    });
+    if (promoted) {
+      stripCompactionReplayCheckpointInPlace(promoted.message);
+    }
+    return promoted ? { kind: "promoted", ...promoted } : undefined;
+  };
+
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    const reason =
+      message && typeof message === "object"
+        ? (message as { stopReason?: unknown }).stopReason
+        : undefined;
+    return (normalizeTerminalMessage({
+      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(reason),
+      message,
+    })?.message ?? message) as Awaited<ReturnType<typeof originalResult>>;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  const wrappedAsyncIterator = function () {
+    const sourceIterator = originalAsyncIterator();
+    const source = {
+      [Symbol.asyncIterator]: () => sourceIterator,
+    } as AsyncIterable<unknown>;
+    const normalized = normalizePlainTextToolCallStreamEvents(source, {
+      createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
+      matcher,
+      normalizeTerminalMessage,
+      // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+      // the carried fence scan models (and yields to the full parse for the rest), so its
+      // protection is safe to trust from the fast path.
+      protectedRangesFenceCompatible: true,
+      resolveProtectedRanges: findCodeRegions,
+    })[Symbol.asyncIterator]();
+    let started = false;
+    return createStreamIteratorWrapper({
+      iterator: normalized,
+      next: (iterator) => {
+        started = true;
+        return iterator.next();
+      },
+      onReturn: async (iterator, value) => {
+        const unopened = !started;
+        started = true;
+        try {
+          return (await iterator.return?.(value)) ?? { done: true, value: undefined };
+        } finally {
+          // An unopened normalizer has not entered its for-await cleanup yet.
+          if (unopened) {
+            await sourceIterator.return?.(value);
+          }
+        }
+      },
+    });
+  };
+  if (!Reflect.set(stream, Symbol.asyncIterator, wrappedAsyncIterator)) {
+    throw new TypeError("Cannot replace stream async iterator");
+  }
+
+  return stream;
+}
+
+export function wrapStreamFnPromoteStandaloneTextToolCalls(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+): StreamFn {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return baseFn;
+  }
+  return (model, context, streamOptions) =>
+    mapAssistantMessageStream(baseFn(model, context, streamOptions), (stream) =>
+      wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
+    );
+}

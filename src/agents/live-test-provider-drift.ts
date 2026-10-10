@@ -9,10 +9,11 @@ import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
-  isRateLimitErrorMessage,
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "./embedded-agent-helpers/failover-matches.js";
-import { isAnthropicBillingError, isApiKeyRateLimitError } from "./live-auth-keys.js";
+} from "./failover/classify.js";
+import { isApiKeyRateLimitError } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 type LiveProviderDriftReason =
@@ -45,8 +46,23 @@ function liveProviderErrorText(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
+function isAnthropicBillingError(message: string): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  if (
+    lower.includes("credit balance") ||
+    lower.includes("insufficient credit") ||
+    lower.includes("payment required") ||
+    (lower.includes("billing") && lower.includes("disabled"))
+  ) {
+    return true;
+  }
+  return /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\spayment/i.test(
+    lower,
+  );
+}
+
 /** Returns whether an error is expected live auth/account drift. */
-export function isLiveAuthDrift(error: unknown): boolean {
+function isLiveAuthDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   const message = normalizeLowercaseStringOrEmpty(raw);
   return (
@@ -57,33 +73,19 @@ export function isLiveAuthDrift(error: unknown): boolean {
 }
 
 /** Returns whether an error is expected live billing/quota drift. */
-export function isLiveBillingDrift(error: unknown): boolean {
+function isLiveBillingDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   return isBillingErrorMessage(raw) || isAnthropicBillingError(raw);
 }
 
-/** Returns whether an error is expected live rate-limit drift. */
-export function isLiveRateLimitDrift(error: unknown): boolean {
-  const raw = liveProviderErrorText(error);
-  return isRateLimitErrorMessage(raw) || isApiKeyRateLimitError(raw);
-}
-
-/** Returns whether an error is expected live timeout drift. */
-function isLiveTimeoutDrift(error: unknown): boolean {
-  return isTimeoutErrorMessage(liveProviderErrorText(error));
-}
-
-/** Returns whether an error is expected live missing-model drift. */
-function isLiveModelNotFoundDrift(error: unknown): boolean {
-  return isModelNotFoundErrorMessage(liveProviderErrorText(error));
-}
-
 /** Returns whether an error is expected upstream/provider availability drift. */
-export function isLiveProviderUnavailableDrift(error: unknown): boolean {
+function isLiveProviderUnavailableDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   const htmlCandidate = raw.trim().replace(/^error:\s*/i, "");
   const msg = normalizeLowercaseStringOrEmpty(raw);
   return (
+    isOverloadedErrorMessage(raw) ||
+    isServerErrorMessage(raw) ||
     isRawHtmlProviderErrorPage(htmlCandidate) ||
     isCloudflareOrHtmlErrorPage(raw) ||
     isCloudflareOrHtmlErrorPage(htmlCandidate) ||
@@ -96,6 +98,7 @@ export function isLiveProviderUnavailableDrift(error: unknown): boolean {
     msg.includes("unable to access non-serverless model") ||
     msg.includes("create and start a new dedicated endpoint") ||
     msg.includes("no available capacity was found for the model") ||
+    msg.includes("upstream request failed: model is unavailable") ||
     (msg.includes("502") && msg.includes("internal server error"))
   );
 }
@@ -114,16 +117,19 @@ export function shouldSkipLiveProviderDrift(
   if (options.allowAuth && isLiveAuthDrift(options.error)) {
     return { reason: "auth", label: "auth drift" };
   }
-  if (options.allowRateLimit && isLiveRateLimitDrift(options.error)) {
+  if (options.allowRateLimit && isApiKeyRateLimitError(liveProviderErrorText(options.error))) {
     return { reason: "rate-limit", label: "rate limit" };
   }
   if (options.allowProviderUnavailable && isLiveProviderUnavailableDrift(options.error)) {
     return { reason: "provider-unavailable", label: "provider unavailable" };
   }
-  if (options.allowTimeout && isLiveTimeoutDrift(options.error)) {
+  if (options.allowTimeout && isTimeoutErrorMessage(liveProviderErrorText(options.error))) {
     return { reason: "timeout", label: "timeout" };
   }
-  if (options.allowModelNotFound && isLiveModelNotFoundDrift(options.error)) {
+  if (
+    options.allowModelNotFound &&
+    isModelNotFoundErrorMessage(liveProviderErrorText(options.error))
+  ) {
     return { reason: "model-not-found", label: "model not found" };
   }
   return undefined;

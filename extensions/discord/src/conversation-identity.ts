@@ -1,4 +1,3 @@
-// Discord plugin module implements conversation identity behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -9,11 +8,7 @@ function normalizeDiscordTarget(
   raw: string | null | undefined,
   defaultKind: "user" | "channel",
 ): string | undefined {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return undefined;
-  }
-  return parseDiscordTarget(trimmed, { defaultKind })?.normalized;
+  return parseDiscordTarget(normalizeOptionalString(raw) ?? "", { defaultKind })?.normalized;
 }
 
 function buildDiscordConversationIdentity(
@@ -32,6 +27,18 @@ export function resolveDiscordConversationIdentity(params: {
   return params.isDirectMessage
     ? buildDiscordConversationIdentity("user", params.userId)
     : buildDiscordConversationIdentity("channel", params.channelId);
+}
+
+export function resolveDiscordRuntimeBindingConversationId(params: {
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  userId?: string | null;
+  channelId: string;
+}): string {
+  if (params.isDirectMessage && !params.isGroupDm) {
+    return buildDiscordConversationIdentity("user", params.userId) ?? params.channelId;
+  }
+  return params.channelId;
 }
 
 export function resolveDiscordCurrentConversationIdentity(params: {

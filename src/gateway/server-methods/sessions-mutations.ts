@@ -1,0 +1,667 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+  type SessionsPatchManyResult,
+  type SessionsPatchManyParams,
+  type SessionsPatchParams,
+  validateSessionsAssignOwnerParams,
+  validateSessionsSetInvolvementParams,
+  validateSessionsPatchManyParams,
+  validateSessionsPatchParams,
+  validateSessionsPluginPatchParams,
+  validateSessionsResetParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
+import { updateSessionProfileInvolvementAsync } from "../../config/sessions/session-accessor.js";
+import { assignSessionOwnerInWorker } from "../../config/sessions/session-metadata-write.async.js";
+import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
+import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
+import {
+  projectAssignableSessionOwner,
+  projectSessionActor,
+} from "../session-identity-projection.js";
+import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import {
+  authorizeIncognitoSessionTarget,
+  createSessionListEntryFilter,
+  SessionMutationAuthorizationChangedError,
+} from "../session-sharing.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+import { projectSessionPatchResult } from "../session-utils-model.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
+import { emitSessionsChanged } from "./session-change-event.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
+import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
+import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
+import { createCommitGuard } from "./sessions-patch-errors.js";
+import { sessionPatchTargetIdentity } from "./sessions-patch-expectations.js";
+import { requireSessionKey } from "./sessions-shared.js";
+import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
+import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
+
+function createSessionPatchHandler(
+  method: "sessions.patch" | "sessions.patchMany",
+): GatewayRequestHandlers[string] {
+  return async (options) => {
+    const {
+      params,
+      respond,
+      context,
+      client,
+      sessionMutationAuthorization,
+      hasCurrentClientAuthority,
+      signal,
+    } = options;
+    const requestAuthority = readGatewayRequestMutationAuthority(options);
+    const diagnostics = startSessionPatchDiagnostics(method);
+    let archivedSessionsCommitted = false;
+    let preparingOperator: ReturnType<typeof captureGatewayOperatorRunAuthority> | undefined;
+    try {
+      let request:
+        | { many: true; params: SessionsPatchManyParams }
+        | { many: false; params: SessionsPatchParams };
+      if (method === "sessions.patchMany") {
+        if (!assertValidParams(params, validateSessionsPatchManyParams, method, respond)) {
+          return;
+        }
+        request = { many: true, params };
+      } else {
+        if (!assertValidParams(params, validateSessionsPatchParams, method, respond)) {
+          return;
+        }
+        request = { many: false, params };
+      }
+      const inputPatch = request.many ? request.params.patch : request.params;
+      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      if (
+        (inputPatch.permissionMode === "full" ||
+          inputPatch.sandboxMode !== undefined ||
+          inputPatch.nativeRuntimeConsent !== undefined) &&
+        client !== null &&
+        !scopes.includes(ADMIN_SCOPE)
+      ) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+        );
+        return;
+      }
+      let targets: SessionPatchTargetIdentity[];
+      let patch: Parameters<typeof executeSessionPatchMutations>[0]["patch"];
+      if (request.many) {
+        targets = structuredClone(request.params.targets);
+        patch = structuredClone(request.params.patch);
+      } else {
+        const key = requireSessionKey(request.params.key, respond);
+        if (!key) {
+          return;
+        }
+        const singlePatch = structuredClone({ ...request.params, key });
+        patch = singlePatch;
+        targets = [sessionPatchTargetIdentity(singlePatch)];
+      }
+      const assertCurrent = () => {
+        requestAuthority.assertCurrent();
+        if (!request.many) {
+          sessionMutationAuthorization?.assertCurrent();
+        }
+      };
+      if (patch.model !== undefined) {
+        preparingOperator = captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+          invocationAuthority: { assertCurrent, signal },
+        });
+        void preparingOperator.catch(() => {});
+      }
+      const executed = await executeSessionPatchMutations({
+        client,
+        context,
+        signal,
+        diagnostics,
+        operatorAuthority: preparingOperator,
+        onCreatedSessionCommitted: request.many
+          ? undefined
+          : sessionMutationAuthorization?.recordCreatedSession,
+        patch,
+        targets: targets.map((target) => ({
+          ...target,
+          commitGuard: createCommitGuard(target.key.trim(), () => {
+            assertCurrent();
+            if (request.many) {
+              sessionMutationAuthorization?.assertTargetCurrent({
+                sessionKey: target.key.trim(),
+                ...(target.agentId ? { agentId: target.agentId } : {}),
+              });
+            }
+          }),
+        })),
+      });
+      if (!executed.ok) {
+        respond(false, undefined, executed.error);
+        return;
+      }
+      archivedSessionsCommitted = executed.archivedSessionsCommitted;
+      if (request.many) {
+        diagnostics?.scope("response");
+        const outcomes: SessionsPatchManyResult["outcomes"] = executed.outcomes.map(
+          (outcome, index) => {
+            const target = targets[index]!;
+            const identity = {
+              key: target.key,
+              ...(target.agentId ? { agentId: target.agentId } : {}),
+            };
+            return outcome.ok
+              ? { ok: true, ...identity }
+              : { ok: false, ...identity, error: outcome.error };
+          },
+        );
+        respond(true, { outcomes }, undefined);
+        return;
+      }
+      const outcome = executed.outcomes[0]!;
+      if (!outcome.ok) {
+        respond(false, undefined, outcome.error);
+        return;
+      }
+      const prepared = executed.preparedByIndex[0]!;
+      diagnostics?.scope("response");
+      const catalog = await executed.catalogs.available(prepared.targetAgentId);
+      const [acpMeta] = await readAcpSessionMetaForEntries({
+        cfg: executed.cfg,
+        entries: [
+          {
+            agentId: prepared.targetAgentId,
+            sessionKey: prepared.canonicalKey,
+            entry: outcome.entry,
+          },
+        ],
+      });
+      assertCurrent();
+      respond(
+        true,
+        projectSessionPatchResult({
+          ...prepared,
+          cfg: executed.cfg,
+          preparedAcpMeta: acpMeta ?? null,
+          entry: {
+            ...outcome.entry,
+            fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
+          },
+          modelCatalog: catalog?.entries,
+          modelCatalogRouteVariants: catalog?.routeVariants,
+        }),
+        undefined,
+      );
+    } finally {
+      try {
+        if (preparingOperator) {
+          const capturedOperator = await preparingOperator.catch(() => undefined);
+          capturedOperator?.release();
+        }
+      } finally {
+        diagnostics?.finish();
+        if (archivedSessionsCommitted) {
+          const { notifyGatewayWorktreeArchive } = await import("../worktree-maintenance.js");
+          notifyGatewayWorktreeArchive(context.getRuntimeConfig);
+        }
+      }
+    }
+  };
+}
+
+export const sessionMutationHandlers: GatewayRequestHandlers = {
+  "sessions.patchMany": createSessionPatchHandler("sessions.patchMany"),
+  "sessions.patch": createSessionPatchHandler("sessions.patch"),
+  "sessions.setInvolvement": async ({ params, respond, context, client }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsSetInvolvementParams,
+        "sessions.setInvolvement",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId;
+    const profile = profileId && resolveCurrentUserProfileDisplay(profileId);
+    if (
+      !client ||
+      client.invalidated ||
+      client.connectionSignal?.aborted ||
+      isSyntheticGatewayCaller(client) ||
+      !profile ||
+      profile.kind !== "resolved"
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Personal session visibility requires a signed-in profile.",
+        ),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, params.key, params.agentId);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const facts = await prepareSessionMutationFacts({
+      cfg,
+      sessionKey: params.key,
+      agentId: requestedAgent.agentId,
+      allowMissing: true,
+    });
+    try {
+      const target = facts.readCurrent(context.getRuntimeConfig()).target;
+      if (
+        !target ||
+        target.entry.sessionId !== params.expectedSessionId ||
+        target.entry.incognito ||
+        authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
+        createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "Session is unavailable or changed. Refresh the session list.",
+          ),
+        );
+        return;
+      }
+      const updated = await updateSessionProfileInvolvementAsync(
+        { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+        {
+          expectedSessionId: params.expectedSessionId,
+          expectedEntry: target.entry,
+          profileIds: [profile.profileId],
+          change: { kind: "visibility", hidden: params.hidden },
+          assertCurrent: () => {
+            const currentCfg = context.getRuntimeConfig();
+            const current = facts.readCurrent(currentCfg).target;
+            const currentProfile = client.authenticatedUserProfile?.profileId;
+            if (
+              client.invalidated ||
+              client.connectionSignal?.aborted ||
+              currentProfile !== profileId ||
+              !current ||
+              current.entry.sessionId !== params.expectedSessionId ||
+              current.entry.incognito ||
+              createSessionListEntryFilter({ client, cfg: currentCfg })?.(
+                current.storeKey,
+                current.entry,
+              ) === false
+            ) {
+              throw new SessionMutationAuthorizationChangedError(
+                errorShape(
+                  ErrorCodes.FORBIDDEN,
+                  "Session access changed. Refresh the session list.",
+                ),
+              );
+            }
+          },
+        },
+      );
+      if (!updated) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Session changed. Refresh the session list."),
+        );
+        return;
+      }
+      respond(
+        true,
+        { ok: true, key: target.canonicalKey, hiddenFromInvolvingMe: params.hidden },
+        undefined,
+      );
+    } finally {
+      facts.release();
+    }
+  },
+  "sessions.assignOwner": async ({
+    params,
+    respond,
+    context,
+    client,
+    signal,
+    sessionMutationAuthorization,
+  }) => {
+    if (
+      !assertValidParams(params, validateSessionsAssignOwnerParams, "sessions.assignOwner", respond)
+    ) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+    const respondUnknownSession = () => {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`));
+    };
+    const runtimeAgentId = normalizeOptionalString(client?.internal?.agentRuntimeIdentity?.agentId);
+    const agentToolCallerId =
+      client?.internal?.syntheticClient === true
+        ? normalizeOptionalString(client.internal.agentToolCaller?.agentId)
+        : undefined;
+    const trustedAgentId = runtimeAgentId ?? agentToolCallerId;
+    const humanActor = gatewayClientSessionCreator(client);
+    const assignedBy = trustedAgentId
+      ? ({ type: "agent", id: trustedAgentId } as const)
+      : humanActor
+        ? ({ type: "human", id: humanActor.id } as const)
+        : null;
+    if (!assignedBy) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "sessions.assignOwner requires an identified caller"),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const facts = await prepareSessionMutationFacts({
+      cfg,
+      sessionKey: key,
+      agentId: requestedAgent.agentId,
+      allowMissing: true,
+    });
+    try {
+      const target = facts.readCurrent(context.getRuntimeConfig()).target;
+      if (!target) {
+        respondUnknownSession();
+        return;
+      }
+      const authorizeView = (
+        candidate: NonNullable<typeof target>,
+        currentCfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
+      ) =>
+        authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
+        (createSessionListEntryFilter({ client, cfg: currentCfg })?.(
+          candidate.storeKey,
+          candidate.entry,
+        ) === false
+          ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
+          : null);
+      const visibilityError = authorizeView(target);
+      if (visibilityError) {
+        respond(false, undefined, visibilityError);
+        return;
+      }
+      const ownerIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
+      const projectedOwner = projectAssignableSessionOwner(params.owner, ownerIdentityById, cfg);
+      if (!projectedOwner) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session owner "${params.owner.id}"`),
+        );
+        return;
+      }
+      const owner = { type: projectedOwner.type, id: projectedOwner.id };
+      const expectedSessionId = target.entry.sessionId;
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        sessionMutationAuthorization?.assertCurrent();
+        const currentCfg = context.getRuntimeConfig();
+        const current = facts.readCurrent(currentCfg).target;
+        ownerIdentityById.clear();
+        const currentOwner = projectAssignableSessionOwner(
+          params.owner,
+          ownerIdentityById,
+          currentCfg,
+        );
+        const currentError = current
+          ? authorizeView(current, context.getCommittedRuntimeConfig?.() ?? currentCfg)
+          : null;
+        if (
+          !current ||
+          current.agentId !== target.agentId ||
+          current.canonicalKey !== target.canonicalKey ||
+          current.storeKey !== target.storeKey ||
+          current.storePath !== target.storePath ||
+          current.entry.sessionId !== expectedSessionId ||
+          currentOwner?.id !== owner.id ||
+          currentOwner.type !== owner.type ||
+          currentError
+        ) {
+          throw new SessionMutationAuthorizationChangedError(
+            currentError ??
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "session changed before sessions.assignOwner; retry the request",
+              ),
+          );
+        }
+      };
+      const assignment = await runExclusiveSessionLifecycleMutation("assign-owner", {
+        scope: target.storePath,
+        identities: [target.storeKey, expectedSessionId],
+        run: () =>
+          assignSessionOwnerInWorker(
+            { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+            {
+              owner,
+              assignedBy,
+              expectedSessionId,
+              expectedEntry: {
+                ...sharingExpectedEntry(target),
+                lifecycleRevision: target.entry.lifecycleRevision,
+              },
+            },
+            assertCurrent,
+          ),
+      });
+      const projectedActor = assignment
+        ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
+        : null;
+      const projectedAssignedBy = assignment?.assignedBy
+        ? projectSessionActor(assignment.assignedBy, new Map(), cfg)
+        : undefined;
+      const projected =
+        assignment && projectedActor
+          ? {
+              actor: projectedActor,
+              ...(projectedAssignedBy ? { assignedBy: projectedAssignedBy } : {}),
+              ...(assignment.assignedAt !== undefined ? { assignedAt: assignment.assignedAt } : {}),
+            }
+          : undefined;
+      if (!projected) {
+        respondUnknownSession();
+        return;
+      }
+      respond(true, { ok: true, key: target.canonicalKey, owner: projected }, undefined);
+      emitSessionsChanged(context, {
+        sessionKey: target.canonicalKey,
+        agentId: target.agentId,
+        reason: "owner",
+      });
+    } finally {
+      facts.release();
+    }
+  },
+  "sessions.pluginPatch": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
+    if (
+      !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
+    ) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    if (!scopes.includes(ADMIN_SCOPE)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.pluginPatch requires gateway scope: ${ADMIN_SCOPE}`,
+        ),
+      );
+      return;
+    }
+    const pluginId = normalizeOptionalString(params.pluginId);
+    const namespace = normalizeOptionalString(params.namespace);
+    if (!pluginId || !namespace) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "pluginId and namespace are required"),
+      );
+      return;
+    }
+    if (params.unset === true && params.value !== undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.pluginPatch cannot specify both unset and value",
+        ),
+      );
+      return;
+    }
+    if (params.value !== undefined && !isPluginJsonValue(params.value)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.pluginPatch value must be JSON-compatible",
+        ),
+      );
+      return;
+    }
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      key,
+      params.agentId,
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const canonicalKey = resolveStoredSessionKeyForAgentStore({
+      cfg: context.getRuntimeConfig(),
+      agentId: requestedAgent.agentId,
+      sessionKey: key,
+    });
+    const patched = await patchPluginSessionExtension({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: canonicalKey,
+      agentId: requestedAgent.agentId,
+      pluginId,
+      namespace,
+      value: params.value,
+      unset: params.unset === true,
+      assertCurrent: sessionMutationAuthorization?.assertCurrent,
+    });
+    if (!patched.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, patched.error));
+      return;
+    }
+    respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
+    emitSessionsChanged(context, {
+      sessionKey: patched.key,
+      agentId: requestedAgent.agentId,
+      reason: "plugin-patch",
+    });
+  },
+  "sessions.reset": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+    if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+
+    const reason = p.reason === "new" ? "new" : "reset";
+    const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
+    const result = await performGatewaySessionReset({
+      key,
+      ...(p.agentId ? { agentId: p.agentId } : {}),
+      reason,
+      commandSource: "gateway:sessions.reset",
+      creation: resolveOperatorSessionCreation(client),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
+      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      armSessionDiffBaselineCapture: true,
+      workerPlacementContext: context,
+      assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
+      expectedSessionId: p.expectedSessionId,
+    });
+    if (!result.ok) {
+      respond(false, undefined, result.error);
+      return;
+    }
+    const deleted = "incognitoDeleted" in result;
+    respond(
+      true,
+      {
+        ok: true,
+        key: result.key,
+        ...(deleted
+          ? {
+              deleted: true,
+              ...(result.worktreePreserved ? { worktreePreserved: result.worktreePreserved } : {}),
+            }
+          : {
+              entry: {
+                ...result.entry,
+                fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
+              },
+              resolved: result.resolved,
+            }),
+      },
+      undefined,
+    );
+    emitSessionsChanged(context, {
+      sessionKey: result.key,
+      agentId: result.agentId,
+      ...(deleted ? { sessionId: result.deletedSessionId } : {}),
+      reason: deleted ? "delete" : reason,
+    });
+  },
+};

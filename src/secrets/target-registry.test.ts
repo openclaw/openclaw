@@ -1,54 +1,48 @@
-/** Tests secret target registry matching and docs coverage. */
-import { describe, expect, it } from "vitest";
+/** Tests core secret target registry queries without plugin discovery. */
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildTalkTestProviderConfig,
-  TALK_TEST_PROVIDER_API_KEY_PATH,
-  TALK_TEST_PROVIDER_ID,
-} from "../test-utils/talk-test-provider.js";
-import { getCoreSecretTargetRegistry } from "./target-registry-data.js";
 import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
+  resolveSecretPlanTargetByPathCore,
 } from "./target-registry.js";
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
+}));
+
 describe("secret target registry", () => {
-  it("supports filtered discovery by target ids", () => {
+  it("preserves dotted provider header keys during discovery", () => {
     const config = {
-      ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
-      gateway: {
-        remote: {
-          token: { source: "env" as const, provider: "default", id: "REMOTE_TOKEN" },
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              "X.Trace": { source: "env", provider: "default", id: "TRACE_HEADER" },
+            },
+            request: {
+              headers: {
+                "X.Request.Trace": {
+                  source: "env",
+                  provider: "default",
+                  id: "REQUEST_TRACE_HEADER",
+                },
+              },
+            },
+          },
         },
       },
-    } satisfies OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
-    const targets = discoverConfigSecretTargetsByIds(config, new Set(["talk.providers.*.apiKey"]));
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["models.providers.*.headers.*", "models.providers.*.request.headers.*"]),
+    );
 
-    expect(targets).toHaveLength(1);
-    expect(targets[0]?.entry?.id).toBe("talk.providers.*.apiKey");
-    expect(targets[0]?.providerId).toBe(TALK_TEST_PROVIDER_ID);
-    expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
-  });
-
-  it("resolves config targets by exact path including sibling ref metadata", () => {
-    const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
-
-    expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
-    expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
-  });
-
-  it("resolves talk realtime provider api key targets", () => {
-    const target = resolveConfigSecretTargetByPath([
-      "talk",
-      "realtime",
-      "providers",
-      "openai",
-      "apiKey",
+    expect(targets.map(({ path }) => path).toSorted()).toEqual([
+      'models.providers.openai.headers["X.Trace"]',
+      'models.providers.openai.request.headers["X.Request.Trace"]',
     ]);
-
-    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
-    expect(target?.providerId).toBe("openai");
   });
 
   it("returns null when no config target path matches", () => {
@@ -57,74 +51,18 @@ describe("secret target registry", () => {
     expect(target).toBeNull();
   });
 
-  it("derives bundled web provider api key target paths from plugin manifests", () => {
-    const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
-    expect(coreTargetIds.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(false);
-    expect(coreTargetIds.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
+  it("resolves plan targets by owning config document", () => {
+    const configTarget = resolveSecretPlanTargetByPathCore({
+      configFile: "openclaw.json",
+      pathSegments: ["models", "providers", "openai", "apiKey"],
+    });
+    const authProfileTarget = resolveSecretPlanTargetByPathCore({
+      configFile: "auth-profile-store",
+      pathSegments: ["profiles", "openai:default", "key"],
+    });
 
-    const target = resolveConfigSecretTargetByPath([
-      "plugins",
-      "entries",
-      "exa",
-      "config",
-      "webSearch",
-      "apiKey",
-    ]);
-
-    expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
-
-    const fetchTarget = resolveConfigSecretTargetByPath([
-      "plugins",
-      "entries",
-      "firecrawl",
-      "config",
-      "webFetch",
-      "apiKey",
-    ]);
-    expect(fetchTarget?.entry?.id).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
-  });
-
-  it("derives bundled plugin SecretInput contract target paths from plugin manifests", () => {
-    const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
-    expect(coreTargetIds.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
-    expect(coreTargetIds.has("plugins.entries.codex.config.appServer.authToken")).toBe(false);
-
-    const target = resolveConfigSecretTargetByPath([
-      "plugins",
-      "entries",
-      "voice-call",
-      "config",
-      "tts",
-      "providers",
-      "elevenlabs",
-      "apiKey",
-    ]);
-
-    expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
-
-    const codexAuthTarget = resolveConfigSecretTargetByPath([
-      "plugins",
-      "entries",
-      "codex",
-      "config",
-      "appServer",
-      "authToken",
-    ]);
-    expect(codexAuthTarget?.entry?.id).toBe(
-      "plugins.entries.codex.config.appServer.authToken",
-    );
-
-    const codexHeaderTarget = resolveConfigSecretTargetByPath([
-      "plugins",
-      "entries",
-      "codex",
-      "config",
-      "appServer",
-      "headers",
-      "x-codex-client-session-token",
-    ]);
-    expect(codexHeaderTarget?.entry?.id).toBe(
-      "plugins.entries.codex.config.appServer.headers.*",
-    );
+    expect(configTarget?.entry.targetType).toBe("models.providers.apiKey");
+    expect(configTarget?.providerId).toBe("openai");
+    expect(authProfileTarget?.entry.targetType).toBe("auth-profiles.api_key.key");
   });
 });

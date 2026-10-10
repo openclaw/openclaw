@@ -1,5 +1,5 @@
-// Resolves runtime group-policy settings for channels and sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDedupeCache } from "../infra/dedupe.js";
 import type { GroupPolicy } from "./types.base.js";
 
 type RuntimeGroupPolicyResolution = {
@@ -7,36 +7,27 @@ type RuntimeGroupPolicyResolution = {
   providerMissingFallbackApplied: boolean;
 };
 
-type RuntimeGroupPolicyParams = {
+type ResolveProviderRuntimeGroupPolicyParams = {
   providerConfigPresent: boolean;
   groupPolicy?: GroupPolicy;
   defaultGroupPolicy?: GroupPolicy;
-  configuredFallbackPolicy?: GroupPolicy;
-  missingProviderFallbackPolicy?: GroupPolicy;
 };
 
 /**
  * Resolve the effective group policy for a channel/provider runtime.
  * Missing provider config can fail closed separately from configured providers.
  */
-export function resolveRuntimeGroupPolicy(
-  params: RuntimeGroupPolicyParams,
+function resolveRuntimeGroupPolicy(
+  params: ResolveProviderRuntimeGroupPolicyParams,
+  configuredFallbackPolicy: GroupPolicy,
 ): RuntimeGroupPolicyResolution {
-  const configuredFallbackPolicy = params.configuredFallbackPolicy ?? "open";
-  const missingProviderFallbackPolicy = params.missingProviderFallbackPolicy ?? "allowlist";
   const groupPolicy = params.providerConfigPresent
     ? (params.groupPolicy ?? params.defaultGroupPolicy ?? configuredFallbackPolicy)
-    : (params.groupPolicy ?? missingProviderFallbackPolicy);
+    : (params.groupPolicy ?? "allowlist");
   const providerMissingFallbackApplied =
     !params.providerConfigPresent && params.groupPolicy === undefined;
   return { groupPolicy, providerMissingFallbackApplied };
 }
-
-type ResolveProviderRuntimeGroupPolicyParams = {
-  providerConfigPresent: boolean;
-  groupPolicy?: GroupPolicy;
-  defaultGroupPolicy?: GroupPolicy;
-};
 
 type GroupPolicyDefaultsConfig = {
   channels?: {
@@ -67,13 +58,7 @@ export const GROUP_POLICY_BLOCKED_LABEL = {
 export function resolveOpenProviderRuntimeGroupPolicy(
   params: ResolveProviderRuntimeGroupPolicyParams,
 ): RuntimeGroupPolicyResolution {
-  return resolveRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-    configuredFallbackPolicy: "open",
-    missingProviderFallbackPolicy: "allowlist",
-  });
+  return resolveRuntimeGroupPolicy(params, "open");
 }
 
 /**
@@ -83,16 +68,16 @@ export function resolveOpenProviderRuntimeGroupPolicy(
 export function resolveAllowlistProviderRuntimeGroupPolicy(
   params: ResolveProviderRuntimeGroupPolicyParams,
 ): RuntimeGroupPolicyResolution {
-  return resolveRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-    configuredFallbackPolicy: "allowlist",
-    missingProviderFallbackPolicy: "allowlist",
-  });
+  return resolveRuntimeGroupPolicy(params, "allowlist");
 }
 
-const warnedMissingProviderGroupPolicy = new Set<string>();
+const MAX_WARNED_MISSING_PROVIDER_GROUP_POLICY_KEYS = 4096;
+// Warn-once keys accumulate per provider/account for the process lifetime;
+// bounding them means evicted keys can re-warn instead of growing without limit.
+const warnedMissingProviderGroupPolicy = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_MISSING_PROVIDER_GROUP_POLICY_KEYS,
+});
 
 /**
  * Log the missing-provider fail-closed fallback once per provider/account.
@@ -109,20 +94,12 @@ export function warnMissingProviderGroupPolicyFallbackOnce(params: {
     return false;
   }
   const key = `${params.providerKey}:${params.accountId ?? "*"}`;
-  if (warnedMissingProviderGroupPolicy.has(key)) {
+  if (warnedMissingProviderGroupPolicy.check(key)) {
     return false;
   }
-  warnedMissingProviderGroupPolicy.add(key);
   const blockedLabel = normalizeOptionalString(params.blockedLabel) || "group messages";
   params.log(
     `${params.providerKey}: channels.${params.providerKey} is missing; defaulting groupPolicy to "allowlist" (${blockedLabel} blocked until explicitly configured).`,
   );
   return true;
-}
-
-/**
- * Test helper. Keeps warning-cache state deterministic across test files.
- */
-export function resetMissingProviderGroupPolicyFallbackWarningsForTesting(): void {
-  warnedMissingProviderGroupPolicy.clear();
 }

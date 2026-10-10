@@ -1,23 +1,33 @@
-// Zalouser tests cover channel plugin behavior.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import "./zalo-js.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  checkZaloAuthenticatedMock,
+  listZaloFriendsMatchingMock,
+  startZaloQrLoginMock,
+  waitForZaloQrLoginMock,
+} from "./zalo-js.test-mocks.js";
 import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
   zalouserMessageActions,
+  zalouserMessagingAdapter,
   zalouserOutboundAdapter,
   zalouserPairingTextAdapter,
   zalouserResolverAdapter,
   zalouserSecurityAdapter,
 } from "./channel.adapters.js";
-import { setZalouserRuntime } from "./runtime.js";
+import { zalouserPlugin } from "./channel.js";
+
+describe("zalouser target classification", () => {
+  it("distinguishes users from groups", () => {
+    expect(zalouserMessagingAdapter.inferTargetChatType({ to: "user:123" })).toBe("direct");
+    expect(zalouserMessagingAdapter.inferTargetChatType({ to: "group:456" })).toBe("group");
+  });
+});
+import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
-import {
-  listZaloFriendsMatchingMock,
-  startZaloQrLoginMock,
-  waitForZaloQrLoginMock,
-} from "./zalo-js.test-mocks.js";
 
 vi.mock("./qr-temp-file.js", () => ({
   writeQrDataUrlToTempFile: vi.fn(async () => null),
@@ -34,14 +44,6 @@ vi.mock("./send.js", async () => {
 
 const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendReaction = vi.mocked(sendReactionZalouser);
-
-function requireZalouserSendText() {
-  const sendText = zalouserOutboundAdapter.sendText;
-  if (!sendText) {
-    throw new Error("zalouser outbound.sendText unavailable");
-  }
-  return sendText;
-}
 
 function getResolveToolPolicy() {
   const resolveToolPolicy = zalouserGroupsAdapter.resolveToolPolicy;
@@ -86,92 +88,21 @@ function resolveGroupToolPolicy(
 }
 
 describe("zalouser outbound", () => {
-  beforeEach(() => {
-    mockSendMessage.mockClear();
-    setZalouserRuntime({
-      channel: {
-        text: {
-          resolveChunkMode: vi.fn(() => "newline"),
-          resolveTextChunkLimit: vi.fn(() => 10),
-        },
-      },
-    } as never);
-  });
+  it("removes internal tool text while preserving user-visible examples", () => {
+    const sanitizeText = zalouserOutboundAdapter.sanitizeText;
+    if (!sanitizeText) {
+      throw new Error("expected Zalo Personal outbound sanitizeText hook");
+    }
+    const sanitize = (text: string) => sanitizeText({ text, payload: { text } });
+    const fenced = ["```xml", '<tool_call>{"name":"exec"}</tool_call>', "```"].join("\n");
 
-  it("passes markdown chunk settings through sendText", async () => {
-    const sendText = requireZalouserSendText();
-
-    const result = await sendText({
-      cfg: { channels: { zalouser: { enabled: true } } } as never,
-      to: "group:123456",
-      text: "hello world\nthis is a test",
-      accountId: "default",
-    } as never);
-
-    expect(mockSendMessage).toHaveBeenCalledWith("123456", "hello world\nthis is a test", {
-      profile: "default",
-      isGroup: true,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textChunkLimit: 10,
-    });
-    expect(result).toEqual({
-      channel: "zalouser",
-      messageId: "mid-1",
-      ok: true,
-    });
-  });
-
-  it("uses the selected account profile for direct outbound messages", async () => {
-    const sendText = requireZalouserSendText();
-
-    const result = await sendText({
-      cfg: {
-        channels: {
-          zalouser: {
-            accounts: {
-              work: {
-                profile: "work-profile",
-              },
-            },
-          },
-        },
-      } as never,
-      to: "user:987654",
-      text: "hello user",
-      accountId: "work",
-    } as never);
-
-    expect(mockSendMessage).toHaveBeenCalledWith("987654", "hello user", {
-      profile: "work-profile",
-      isGroup: false,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textChunkLimit: 10,
-    });
-    expect(result).toEqual({
-      channel: "zalouser",
-      messageId: "mid-1",
-      ok: true,
-    });
-  });
-
-  it("keeps the default account profile for unscoped outbound messages", async () => {
-    const sendText = requireZalouserSendText();
-
-    await sendText({
-      cfg: { channels: { zalouser: { enabled: true } } } as never,
-      to: "user:111222",
-      text: "hello default",
-    } as never);
-
-    expect(mockSendMessage).toHaveBeenCalledWith("111222", "hello default", {
-      profile: "default",
-      isGroup: false,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textChunkLimit: 10,
-    });
+    expect(sanitize("Done.\n⚠️ 🛠️ `search repos (agent)` failed")).toBe("Done.");
+    expect(sanitize('<tool_call>{"name":"exec"}</tool_call>Message sent.')).toBe("Message sent.");
+    expect(sanitize("The personal message was delivered.")).toBe(
+      "The personal message was delivered.",
+    );
+    expect(sanitize(fenced)).toBe(fenced);
+    expect(sanitize("⚠️ 🛠️ `search repos (agent)` failed")).toBe("");
   });
 });
 
@@ -253,11 +184,6 @@ describe("zalouser channel policies", () => {
     expect(requireMention).toBe(false);
   });
 
-  it("resolves group tool policy by explicit group id", () => {
-    const policy = resolveGroupToolPolicy({ "123": { tools: { allow: ["search"] } } }, "123");
-    expect(policy).toEqual({ allow: ["search"] });
-  });
-
   it("falls back to wildcard group policy", () => {
     const policy = resolveGroupToolPolicy({ "*": { tools: { deny: ["system.run"] } } }, "missing");
     expect(policy).toEqual({ deny: ["system.run"] });
@@ -304,6 +230,82 @@ describe("zalouser channel policies", () => {
         threadId: "123456",
       },
     });
+  });
+
+  it.each([
+    {
+      name: "prefixed direct target inside an ambient group",
+      params: { chatId: "zlu:user:user-456" },
+      threadId: "user-456",
+      isGroup: false,
+    },
+    {
+      name: "explicit direct override for a group target",
+      params: { to: "group:override-789", isGroup: false },
+      threadId: "override-789",
+      isGroup: false,
+    },
+    {
+      name: "ambient group without a target prefix",
+      params: {},
+      threadId: "ambient-group",
+      isGroup: true,
+    },
+  ])("routes $name reactions through the canonical target owner", async (testCase) => {
+    const result = await zalouserMessageActions.handleAction?.({
+      channel: "zalouser",
+      action: "react",
+      params: {
+        messageId: "111",
+        cliMsgId: "222",
+        emoji: "👍",
+        ...testCase.params,
+      },
+      cfg: { channels: { zalouser: { enabled: true, profile: "default" } } },
+      toolContext: {
+        currentChannelProvider: "zalouser",
+        currentChannelId: "ambient-group",
+        currentChatType: "group",
+      },
+    });
+
+    expect(mockSendReaction).toHaveBeenCalledWith({
+      profile: "default",
+      threadId: testCase.threadId,
+      isGroup: testCase.isGroup,
+      msgId: "111",
+      cliMsgId: "222",
+      emoji: "👍",
+      remove: false,
+    });
+    expect(result?.details).toEqual({
+      messageId: "111",
+      cliMsgId: "222",
+      threadId: testCase.threadId,
+    });
+  });
+
+  it("does not borrow group routing from another channel with the same conversation id", async () => {
+    await zalouserMessageActions.handleAction?.({
+      channel: "zalouser",
+      action: "react",
+      params: {
+        to: "shared-conversation",
+        messageId: "111",
+        cliMsgId: "222",
+        emoji: "👍",
+      },
+      cfg: { channels: { zalouser: { enabled: true, profile: "default" } } },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "shared-conversation",
+        currentChatType: "group",
+      },
+    });
+
+    expect(mockSendReaction).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "shared-conversation", isGroup: false }),
+    );
   });
 
   it("honors the selected Zalouser account during discovery", () => {
@@ -421,5 +423,86 @@ describe("zalouser account resolution", () => {
       profile: "work-profile",
       timeoutMs: 180_000,
     });
+  });
+});
+
+describe("zalouserPlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      zalouser: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: { profile: "alpha-profile" },
+          beta: { profile: "beta-profile" },
+        },
+      },
+    },
+  };
+
+  beforeEach(() => {
+    checkZaloAuthenticatedMock.mockClear();
+    checkZaloAuthenticatedMock.mockResolvedValue(true);
+    mockSendMessage.mockClear();
+  });
+
+  it("sends the approval from the approved account", async () => {
+    const notifyApproval = zalouserPlugin.pairing?.notifyApproval;
+    if (!notifyApproval) {
+      throw new Error("zalouser pairing.notifyApproval unavailable");
+    }
+
+    await notifyApproval({
+      cfg: pairingCfg,
+      id: "paired-user",
+      accountId: "beta",
+    });
+
+    expect(checkZaloAuthenticatedMock).toHaveBeenCalledTimes(1);
+    expect(checkZaloAuthenticatedMock.mock.calls[0]?.[0]).toBe("beta-profile");
+    expect(mockSendMessage).toHaveBeenCalledExactlyOnceWith(
+      "paired-user",
+      expect.any(String),
+      expect.objectContaining({ profile: "beta-profile" }),
+    );
+  });
+});
+
+describe("zalouserPlugin messaging target normalization", () => {
+  it("normalizes user/group aliases to canonical targets", () => {
+    const normalize = zalouserPlugin.messaging?.normalizeTarget;
+    if (!normalize) {
+      throw new Error("normalizeTarget unavailable");
+    }
+    expect(normalize("zlu:g:30003")).toBe("group:30003");
+    expect(normalize("zalouser:u:20002")).toBe("user:20002");
+    expect(normalize("zlu:g-30003")).toBe("group:g-30003");
+    expect(normalize("zalouser:u-20002")).toBe("user:u-20002");
+    expect(normalize("20002")).toBe("20002");
+  });
+
+  it("treats canonical and provider-native user/group targets as ids", () => {
+    const looksLikeId = zalouserPlugin.messaging?.targetResolver?.looksLikeId;
+    if (!looksLikeId) {
+      throw new Error("looksLikeId unavailable");
+    }
+    expect(looksLikeId("user:20002")).toBe(true);
+    expect(looksLikeId("group:30003")).toBe(true);
+    expect(looksLikeId("g-30003")).toBe(true);
+    expect(looksLikeId("u-20002")).toBe(true);
+    expect(looksLikeId("Alice Nguyen")).toBe(false);
+  });
+});
+
+describe("zalouser directory group members", () => {
+  it.each([
+    ["group:1471383327500481391", "1471383327500481391"],
+    ["1471383327500481391", "1471383327500481391"],
+  ])("resolves directory group %s to %s", async (groupId, expectedId) => {
+    const listZaloGroupMembers = vi.fn(async () => []);
+    await listZalouserDirectoryGroupMembers(
+      { cfg: {}, accountId: "default", groupId },
+      { listZaloGroupMembers },
+    );
+    expect(listZaloGroupMembers).toHaveBeenLastCalledWith("default", expectedId);
   });
 });

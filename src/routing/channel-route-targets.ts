@@ -1,6 +1,6 @@
-// Channel route target helpers normalize channel route targets for delivery.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,7 +9,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId, normalizeAgentId } from "./sess
 
 // Agent-to-channel coverage summary for diagnostics and background checks. It
 // samples configured channels/accounts and explicit bindings.
-export type ChannelRouteTarget = {
+type ChannelRouteTarget = {
   agentId: string;
   channels: string[];
 };
@@ -18,10 +18,6 @@ const CHANNELS_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
 
 function normalizeConfiguredChannelKey(raw?: string | null): string {
   return normalizeChatChannelId(raw) ?? normalizeLowercaseStringOrEmpty(raw);
-}
-
-function normalizeRouteBindingChannelKey(raw?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(raw);
 }
 
 function listConfiguredChannelIds(cfg: OpenClawConfig): string[] {
@@ -53,14 +49,13 @@ function listConfiguredChannelAccountIds(cfg: OpenClawConfig, channelId: string)
   return Object.entries(channel.accounts)
     .filter(([, value]) => !(hasRecord(value) && value.enabled === false))
     .map(([accountId]) => normalizeAccountId(accountId))
-    .filter(Boolean)
     .toSorted();
 }
 
 function addTarget(byAgent: Map<string, Set<string>>, agentId: string, channel: string): void {
   const normalizedAgentId = normalizeAgentId(agentId);
   const trimmedChannel = channel.trim();
-  if (!normalizedAgentId || !trimmedChannel) {
+  if (!trimmedChannel) {
     return;
   }
   const channels = byAgent.get(normalizedAgentId) ?? new Set<string>();
@@ -72,7 +67,7 @@ export function collectChannelRouteTargets(cfg: OpenClawConfig): ChannelRouteTar
   const byAgent = new Map<string, Set<string>>();
 
   for (const binding of listRouteBindings(cfg)) {
-    addTarget(byAgent, binding.agentId, normalizeRouteBindingChannelKey(binding.match.channel));
+    addTarget(byAgent, binding.agentId, normalizeLowercaseStringOrEmpty(binding.match.channel));
   }
 
   for (const channel of listConfiguredChannelIds(cfg)) {
@@ -81,12 +76,14 @@ export function collectChannelRouteTargets(cfg: OpenClawConfig): ChannelRouteTar
     // route, so sample it to discover the effective agent target.
     const sampledAccountIds = accountIds.length > 0 ? accountIds : [DEFAULT_ACCOUNT_ID];
     for (const accountId of sampledAccountIds) {
-      const route = resolveAgentRoute({
-        cfg,
-        channel,
-        accountId,
-      });
-      addTarget(byAgent, route.agentId, channel);
+      try {
+        const route = resolveAgentRoute({ cfg, channel, accountId });
+        addTarget(byAgent, route.agentId, channel);
+      } catch (error) {
+        if (!(error instanceof AgentSelectionRequiredError)) {
+          throw error;
+        }
+      }
     }
   }
 
@@ -95,6 +92,5 @@ export function collectChannelRouteTargets(cfg: OpenClawConfig): ChannelRouteTar
       agentId,
       channels: Array.from(channels).toSorted(),
     }))
-    .filter((target) => target.channels.length > 0)
     .toSorted((a, b) => a.agentId.localeCompare(b.agentId));
 }

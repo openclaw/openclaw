@@ -1,5 +1,6 @@
-// Mock server for minimal OpenAI web-search E2E scenarios.
+import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
 import { readTcpPortEnv } from "../env-limits.mjs";
 import {
   boundedRequestLogBody,
@@ -14,6 +15,12 @@ const port = readTcpPortEnv("MOCK_PORT");
 const requestLog = process.env.MOCK_REQUEST_LOG;
 const successMarker = process.env.SUCCESS_MARKER;
 const rawSchemaError = process.env.RAW_SCHEMA_ERROR;
+const tlsCertPath = process.env.MOCK_TLS_CERT?.trim();
+const tlsKeyPath = process.env.MOCK_TLS_KEY?.trim();
+
+if (Boolean(tlsCertPath) !== Boolean(tlsKeyPath)) {
+  throw new Error("MOCK_TLS_CERT and MOCK_TLS_KEY must be set together");
+}
 
 function writeOpenAiReject(res) {
   writeJson(res, 400, {
@@ -32,22 +39,13 @@ function hasWebSearchTool(tools) {
       if (!tool || typeof tool !== "object") {
         return false;
       }
-      if (tool.type === "web_search") {
-        return true;
-      }
-      if (tool.type === "function" && tool.name === "web_search") {
-        return true;
-      }
-      if (tool.type === "function" && tool.function?.name === "web_search") {
-        return true;
-      }
-      return false;
+      return (
+        tool.type === "web_search" ||
+        (tool.type === "function" &&
+          (tool.name === "web_search" || tool.function?.name === "web_search"))
+      );
     })
   );
-}
-
-function bodyContainsForceReject(body) {
-  return JSON.stringify(body).includes("FORCE_SCHEMA_REJECT");
 }
 
 function responseEvents(text) {
@@ -88,9 +86,9 @@ function responseEvents(text) {
   ];
 }
 
-const server = http.createServer((req, res) => {
+const handleRequest = (req, res) => {
   void (async () => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const url = new URL(req.url ?? "/", "https://api.openai.com");
     if (req.method === "GET" && url.pathname === "/health") {
       writeJson(res, 200, { ok: true });
       return;
@@ -135,7 +133,7 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
-      if (bodyContainsForceReject(body)) {
+      if (JSON.stringify(body).includes("FORCE_SCHEMA_REJECT")) {
         writeOpenAiReject(res);
         return;
       }
@@ -159,8 +157,19 @@ const server = http.createServer((req, res) => {
     }
     res.destroy(error instanceof Error ? error : new Error(message));
   });
-});
+};
+
+const server =
+  tlsCertPath && tlsKeyPath
+    ? https.createServer(
+        {
+          cert: fs.readFileSync(tlsCertPath),
+          key: fs.readFileSync(tlsKeyPath),
+        },
+        handleRequest,
+      )
+    : http.createServer(handleRequest);
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`mock-openai listening on ${port}`);
+  console.log(`mock-openai listening on ${port} (${tlsCertPath ? "HTTPS" : "HTTP"})`);
 });

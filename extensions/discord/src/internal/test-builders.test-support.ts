@@ -1,10 +1,14 @@
 // Discord plugin module implements test builders support behavior.
 import { ComponentType, InteractionType } from "discord-api-types/v10";
 import { vi, type Mock } from "vitest";
-import { Client, type ClientOptions } from "./client.js";
-import type { BaseCommand } from "./commands.js";
+import { Client } from "./client.js";
+import type { DiscordCommand } from "./commands.js";
 import type { RawInteraction } from "./interactions.js";
-import type { QueuedRequest, RequestClient, RequestData } from "./rest.js";
+import type { RequestData } from "./rest-body.js";
+import type { RequestClient } from "./rest.js";
+
+type ClientOptions = ConstructorParameters<typeof Client>[0];
+type RequestQuery = Parameters<RequestClient["get"]>[1];
 
 type RestMock = Partial<Record<"get" | "post" | "patch" | "put" | "delete", Mock>>;
 type RestMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -17,21 +21,12 @@ type FakeRestCall = {
   method: RestMethod;
   path: string;
   data?: RequestData;
-  query?: QueuedRequest["query"];
+  query?: RequestQuery;
 };
 
 type FakeRestClient = RequestClient & {
   calls: FakeRestCall[];
-  enqueueResponse: (value: unknown) => void;
 };
-
-export function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve: resolve! };
-}
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -60,14 +55,12 @@ export function createAbortableFetchMock() {
 }
 
 export function createInternalTestClient(
-  commands: BaseCommand[] = [],
+  commands: DiscordCommand[] = [],
   options?: Partial<ClientOptions>,
 ): Client {
   return new Client(
     {
-      baseUrl: "http://localhost",
       clientId: "app1",
-      publicKey: "public",
       token: "token",
       ...options,
     },
@@ -99,16 +92,13 @@ export function createFakeRestClient(responses: unknown[] = []): FakeRestClient 
     method: RestMethod,
     path: string,
     data?: RequestData,
-    query?: QueuedRequest["query"],
+    query?: RequestQuery,
   ) => {
     calls.push({ method, path, data, query });
     return queued.shift();
   };
   return {
     calls,
-    enqueueResponse: (value: unknown) => {
-      queued.push(value);
-    },
     get: async (path, query) => await request("GET", path, undefined, query),
     post: async (path, data, query) => await request("POST", path, data, query),
     patch: async (path, data, query) => await request("PATCH", path, data, query),

@@ -1,26 +1,67 @@
-// Release Beta Verifier script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
-import { readBoundedResponseText } from "./bounded-response.ts";
+import { fileURLToPath } from "node:url";
+import { lt as semverLt, valid as validSemver } from "semver";
+import { z } from "zod";
+import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import { retryClawHubRead } from "../../src/infra/clawhub-retry.ts";
+import { isRecoverableOpenClawNpmRegistryReadbackFailure } from "../openclaw-npm-resume-run.mts";
+import {
+  compareCodeUnits,
+  readPublicationArtifactArchive,
+  sha256Digest,
+} from "./actions-artifact-archive.mjs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./arg-utils.mts";
+import { readBoundedResponseText } from "./bounded-response.mjs";
+import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
+import { resolveNpmJsonEntries } from "./npm-json-output.mts";
+import { npmRegistryReadbackDeadline } from "./npm-publish-plan.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
   parsePluginReleaseSelection,
 } from "./plugin-npm-release.ts";
+import {
+  DIAGNOSTIC_MAX_PACKAGES,
+  diagnosticChildNames,
+  diagnosticId,
+  diagnosticOutcome,
+  diagnosticRef,
+  diagnosticSchema,
+  diagnosticSha,
+  diagnosticError,
+  diagnosticPackage,
+  diagnosticStage,
+  diagnosticStageNames,
+} from "./release-postpublish-diagnostic-schema.mts";
+import { sleep } from "./sleep.mjs";
 
 type JsonRecord = Record<string, unknown>;
 
-export type ReleaseVerifyBetaArgs = {
+type ReleaseVerifyBetaArgs = {
   version: string;
   tag: string;
   distTag: string;
   repo: string;
   registry: string;
+  releaseSha?: string;
   workflowRef?: string;
   clawHubWorkflowRef?: string;
   pluginSelection: string[];
+  clawHubBootstrapPlugins: string[];
   evidenceOut?: string;
+  postpublishVerifier?: string;
   skipPostpublish: boolean;
   skipGitHubRelease: boolean;
   skipClawHub: boolean;
@@ -35,62 +76,510 @@ export type ReleaseVerifyBetaArgs = {
   };
 };
 
-export type NpmViewFields = {
-  version?: string;
-  distTagVersion?: string;
-  integrity?: string;
-  tarball?: string;
-};
-
-type FetchWithRetryResult = {
-  response: Response;
-  signal: AbortSignal;
-};
-
-type WorkflowRunSummary = {
-  id: string;
-  label: string;
-  url?: string;
-  durationSeconds?: number;
-};
+type WorkflowRunSummary = ReturnType<typeof verifyWorkflowRun> &
+  Partial<Pick<ReturnType<typeof validateClawHubBootstrapEvidence>, "bootstrapEvidence">>;
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
+const CLAWHUB_BOOTSTRAP_WORKFLOW_PATH = ".github/workflows/plugin-clawhub-new.yml";
+const CLAWHUB_BOOTSTRAP_READBACK_FILE = "clawhub-bootstrap-readback.json";
 const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
 const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
-// Trusted publish can finish before npm registry metadata converges. Keep the
-// verifier on the same release train instead of forcing a republish/correction.
-const NPM_VIEW_ATTEMPTS = 30;
-const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
+const CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES = 2 * 1024 * 1024;
+const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/u;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
+const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/u;
+const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const RELEASE_COMMAND_TIMEOUT_MS = 120_000;
+const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+const DIAGNOSTIC_FILE = "release-postpublish-diagnostics.json";
+const DIAGNOSTIC_MAX_BYTES = 128 * 1024;
+type DiagnosticStageName = (typeof diagnosticStageNames)[number];
+type NpmDiagnosticScope = { stage: "coreNpm" } | { stage: "pluginNpm"; packageName: string };
+type DiagnosticChildName = (typeof diagnosticChildNames)[number];
+type PostpublishDiagnostic = z.infer<typeof diagnosticSchema>;
+
+function diagnosticValue<T>(schema: z.ZodType<T>, value: unknown): T | null {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+function diagnosticFailure(
+  error: unknown,
+  stage: DiagnosticStageName,
+): z.infer<typeof diagnosticError> {
+  const code = isJsonRecord(error) ? error.code : undefined;
+  const status = isJsonRecord(error) ? error.status : undefined;
+  // Classify locally, but never retain command text, URLs, stderr, or stack traces.
+  const message = error instanceof Error ? error.message : "";
+  const failureClass =
+    stage === "evidence" || stage === "binding"
+      ? "evidence-write-failure"
+      : isNpmPropagationError(error)
+        ? "registry-not-visible"
+        : code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ENOTFOUND"
+          ? "transport"
+          : /invalid JSON|unsupported JSON|response body/u.test(message)
+            ? "malformed-response"
+            : /dist-tag|ClawHub tag/u.test(message)
+              ? "selector-mismatch"
+              : /expected|mismatch|Unknown or non-publishable/u.test(message)
+                ? "identity-mismatch"
+                : "command-failure";
+  return {
+    class: failureClass,
+    status:
+      typeof status === "number" && Number.isInteger(status) && status >= 0 && status <= 255
+        ? status
+        : null,
+  };
+}
+
+class PostpublishDiagnostics {
+  readonly data: PostpublishDiagnostic;
+  private path: string | undefined;
+  private warned = false;
+  private packageName: string | undefined;
+
+  constructor(
+    args: ReleaseVerifyBetaArgs,
+    rootDir: string,
+    mode: "initialize" | "verify" | "observe",
+  ) {
+    let toolingSha: string | undefined;
+    try {
+      toolingSha = runReleaseVerifierCommand("git", ["rev-parse", "HEAD"], {
+        cwd: TRUSTED_TOOLING_ROOT,
+      });
+    } catch {
+      // A diagnostic never substitutes a supplied workflow SHA for unread tooling.
+    }
+    const env = process.env;
+    const emptyStage = (): z.infer<typeof diagnosticStage> => ({
+      state: "unattempted",
+      publication: "unknown",
+      error: null,
+      packages: [],
+      packagesTruncated: false,
+    });
+    this.data = {
+      schemaVersion: 1,
+      kind: "release-postpublish-diagnostics",
+      invocationId: randomUUID(),
+      context: {
+        repository: diagnosticValue(diagnosticSchema.shape.context.shape.repository, args.repo),
+        releaseVersion: diagnosticValue(
+          diagnosticSchema.shape.context.shape.releaseVersion,
+          args.version,
+        ),
+        releaseTag: diagnosticValue(diagnosticSchema.shape.context.shape.releaseTag, args.tag),
+        npmDistTag: diagnosticValue(diagnosticSchema.shape.context.shape.npmDistTag, args.distTag),
+        requestedSourceSha: diagnosticValue(diagnosticSha, args.releaseSha),
+        toolingSha: diagnosticValue(diagnosticSha, toolingSha),
+        suppliedToolingSha: diagnosticValue(diagnosticSha, env.GITHUB_WORKFLOW_SHA),
+        suppliedToolingRef: diagnosticValue(diagnosticRef, env.GITHUB_REF),
+        parentRunId: diagnosticValue(diagnosticId, env.GITHUB_RUN_ID),
+        parentRunAttempt: diagnosticValue(diagnosticId, env.GITHUB_RUN_ATTEMPT),
+        validationEvidence: {
+          mode: diagnosticValue(
+            diagnosticSchema.shape.context.shape.validationEvidence.shape.mode,
+            env.RELEASE_EVIDENCE_MODE,
+          ),
+          runId: diagnosticValue(
+            diagnosticId,
+            env.RELEASE_EVIDENCE_MODE === "authorized-beta-focused-v1"
+              ? env.FOCUSED_RELEASE_EVIDENCE_RUN_ID
+              : env.FULL_RELEASE_VALIDATION_RUN_ID,
+          ),
+          runAttempt: diagnosticValue(
+            diagnosticId,
+            env.RELEASE_EVIDENCE_MODE === "authorized-beta-focused-v1"
+              ? env.FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT
+              : env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+          ),
+        },
+      },
+      selection: {
+        plugins: args.pluginSelection
+          .slice(0, DIAGNOSTIC_MAX_PACKAGES)
+          .filter((name) => diagnosticPackage.shape.name.safeParse(name).success),
+        pluginsTruncated:
+          args.pluginSelection.length > DIAGNOSTIC_MAX_PACKAGES ||
+          args.pluginSelection.some(
+            (name) => !diagnosticPackage.shape.name.safeParse(name).success,
+          ),
+        workflowRef: diagnosticValue(diagnosticRef, args.workflowRef),
+        clawHubWorkflowRef: diagnosticValue(diagnosticRef, args.clawHubWorkflowRef),
+      },
+      verification: "unattempted",
+      currentStage: null,
+      stages: Object.fromEntries(
+        diagnosticStageNames.map((name) => [name, emptyStage()]),
+      ) as PostpublishDiagnostic["stages"],
+      children: Object.fromEntries(
+        diagnosticChildNames.map((name) => [
+          name,
+          {
+            suppliedRunId: diagnosticValue(diagnosticId, args.workflowRuns[name]),
+            runAttempt: null,
+            producerRunAttempt: null,
+            status: "unknown",
+            conclusion: "unknown",
+            failedJobCount: null,
+            readbackArtifactId: null,
+            packageArtifactId: null,
+          },
+        ]),
+      ) as PostpublishDiagnostic["children"],
+      jobOutcomeBeforeArtifactUploads: "unknown",
+      stepOutcomes: { coreStart: "unknown", completion: "unknown" },
+    };
+    if (!args.evidenceOut) {
+      return;
+    }
+    this.path = resolve(dirname(resolve(rootDir, args.evidenceOut)), DIAGNOSTIC_FILE);
+    let existing: PostpublishDiagnostic | undefined;
+    try {
+      const stat = lstatSync(this.path);
+      if (!stat.isFile() || stat.size > DIAGNOSTIC_MAX_BYTES) {
+        throw new Error("Invalid diagnostic file.");
+      }
+      existing = diagnosticSchema.parse(JSON.parse(readFileSync(this.path, "utf8")));
+      if (
+        mode === "initialize" ||
+        !this.data.context.parentRunId ||
+        !this.data.context.parentRunAttempt ||
+        JSON.stringify(existing.context) !== JSON.stringify(this.data.context) ||
+        (mode === "verify" && existing.verification !== "unattempted")
+      ) {
+        throw new Error("Diagnostic belongs to another invocation.");
+      }
+      const selection = this.data.selection;
+      const children = this.data.children;
+      this.data = existing;
+      if (mode === "verify") {
+        this.data.selection = selection;
+      }
+      for (const name of diagnosticChildNames) {
+        const supplied = children[name].suppliedRunId;
+        if (
+          supplied &&
+          this.data.children[name].suppliedRunId &&
+          supplied !== this.data.children[name].suppliedRunId
+        ) {
+          throw new Error("Diagnostic child identity changed.");
+        }
+        this.data.children[name].suppliedRunId ??= supplied;
+      }
+    } catch (error) {
+      if (!isJsonRecord(error) || error.code !== "ENOENT") {
+        this.warn();
+        this.path = undefined;
+        return;
+      }
+      if (mode === "observe") {
+        this.warn();
+        this.path = undefined;
+        return;
+      }
+    }
+    if (mode !== "observe") {
+      for (const [stage, skipped] of [
+        ["githubRelease", args.skipGitHubRelease],
+        ["postpublish", args.skipPostpublish],
+        ["clawHub", args.skipClawHub],
+        ["evidence", false],
+      ] as const) {
+        this.data.stages[stage].state = skipped ? "skipped" : "unattempted";
+      }
+      for (const name of diagnosticChildNames) {
+        this.data.stages[this.workflowStage(name)].state = args.workflowRuns[name]
+          ? "unattempted"
+          : "skipped";
+      }
+    }
+    this.save(existing === undefined);
+  }
+
+  private warn() {
+    if (!this.warned) {
+      console.error(
+        "Warning: postpublish diagnostics unavailable or incomplete; inspect the primary result.",
+      );
+      this.warned = true;
+    }
+  }
+
+  save(create = false) {
+    if (!this.path) {
+      return;
+    }
+    const temporary = `${this.path}.${randomUUID()}.tmp`;
+    try {
+      const bytes = `${JSON.stringify(diagnosticSchema.parse(this.data), null, 2)}\n`;
+      if (Buffer.byteLength(bytes) > DIAGNOSTIC_MAX_BYTES) {
+        throw new Error("Diagnostic exceeds byte bound.");
+      }
+      mkdirSync(dirname(this.path), { recursive: true });
+      writeFileSync(temporary, bytes, { flag: "wx", mode: 0o600 });
+      if (create) {
+        linkSync(temporary, this.path);
+      } else {
+        renameSync(temporary, this.path);
+      }
+    } catch {
+      this.warn();
+      if (create) {
+        this.path = undefined;
+      }
+    } finally {
+      try {
+        rmSync(temporary, { force: true });
+      } catch {
+        this.warn();
+      }
+    }
+  }
+
+  workflowStage(name: DiagnosticChildName): DiagnosticStageName {
+    return name === "pluginNpm"
+      ? "pluginNpmRun"
+      : name === "pluginClawHub"
+        ? "pluginClawHubRun"
+        : name;
+  }
+
+  observeRun(name: DiagnosticChildName, run: JsonRecord, failedJobCount: number) {
+    const child = this.data.children[name];
+    child.status =
+      diagnosticValue(diagnosticSchema.shape.children.valueType.shape.status, run.status) ??
+      "unknown";
+    child.conclusion = diagnosticValue(diagnosticOutcome, run.conclusion) ?? "unknown";
+    child.runAttempt =
+      diagnosticValue(
+        diagnosticId,
+        typeof run.attempt === "number" ? String(run.attempt) : run.attempt,
+      ) ?? child.runAttempt;
+    child.failedJobCount = Math.min(10000, failedJobCount);
+    this.save();
+  }
+
+  start(stage: DiagnosticStageName) {
+    this.packageName = undefined;
+    this.data.currentStage = stage;
+    this.data.stages[stage].state = "started";
+    // Collecting later observations must not erase an already observed failure.
+    if (
+      !["evidence", "binding", "assets"].includes(stage) &&
+      this.data.verification !== "failure"
+    ) {
+      this.data.verification = "started";
+    }
+    this.save();
+  }
+
+  success(stage: DiagnosticStageName, publication = false) {
+    this.data.stages[stage].state = "success";
+    if (publication) {
+      this.data.stages[stage].publication = "observed";
+    }
+    this.packageName = undefined;
+    this.save();
+  }
+
+  observeNpmPublication(scope: NpmDiagnosticScope) {
+    const stage = this.data.stages[scope.stage];
+    const entry =
+      scope.stage === "coreNpm"
+        ? stage
+        : stage.packages.find((item) => item.name === scope.packageName);
+    if (entry) {
+      entry.publication = "observed";
+      this.save();
+    }
+  }
+
+  packages(stage: "pluginNpm" | "clawHub", packages: readonly { packageName: string }[]) {
+    this.data.stages[stage].packages = packages
+      .slice(0, DIAGNOSTIC_MAX_PACKAGES)
+      .filter((plugin) => diagnosticPackage.shape.name.safeParse(plugin.packageName).success)
+      .map((plugin) => ({
+        name: plugin.packageName,
+        state: "unattempted",
+        publication: "unknown",
+        error: null,
+      }));
+    this.data.stages[stage].packagesTruncated =
+      this.data.stages[stage].packages.length !== packages.length;
+    this.save();
+  }
+
+  package(stage: "pluginNpm" | "clawHub", name: string, state: "started" | "success") {
+    this.packageName = name;
+    const entry = this.data.stages[stage].packages.find((item) => item.name === name);
+    if (entry) {
+      entry.state = state;
+      if (state === "success") {
+        entry.publication = "observed";
+      }
+    }
+    this.save();
+  }
+
+  fail(error: unknown, scope?: NpmDiagnosticScope) {
+    if (scope) {
+      this.data.currentStage = scope.stage;
+      this.packageName = scope.stage === "pluginNpm" ? scope.packageName : undefined;
+    }
+    const stage = this.data.currentStage;
+    if (!stage) {
+      return;
+    }
+    const entry = this.data.stages[stage];
+    entry.state = "failure";
+    entry.error = diagnosticFailure(error, stage);
+    const item = entry.packages.find((candidate) => candidate.name === this.packageName);
+    if (item) {
+      item.state = "failure";
+      item.error = entry.error;
+    }
+    if (!["evidence", "binding", "assets"].includes(stage)) {
+      this.data.verification = "failure";
+    }
+    this.save();
+  }
+}
+
+// Called only by the existing publish helper. This records local observations;
+// it cannot invoke a registry, GitHub mutation, retry, or publication command.
+function recordReleasePublishDiagnostics(event: string): void {
+  try {
+    const env = process.env;
+    if (!env.POSTPUBLISH_EVIDENCE_DIR) {
+      return;
+    }
+    const args = parseReleaseVerifyBetaArgs([
+      env.RELEASE_TAG?.replace(/^v/u, "") ?? "",
+      "--evidence-out",
+      resolve(env.POSTPUBLISH_EVIDENCE_DIR, "release-postpublish-evidence.json"),
+      "--skip-github-release",
+    ]);
+    args.repo = env.GITHUB_REPOSITORY ?? DEFAULT_REPO;
+    args.distTag = env.RELEASE_NPM_DIST_TAG ?? "";
+    args.releaseSha = env.TARGET_SHA;
+    args.pluginSelection = parsePluginReleaseSelection(env.PLUGINS);
+    args.workflowRef = env.CHILD_WORKFLOW_REF;
+    args.skipClawHub = env.WAIT_FOR_CLAWHUB === "false";
+    args.workflowRuns = {
+      openclawNpm: env.CHILD_OPENCLAW_NPM_RUN_ID,
+      pluginNpm: env.CHILD_PLUGIN_NPM_RUN_ID,
+      pluginClawHub: env.CHILD_PLUGIN_CLAWHUB_RUN_ID,
+      pluginClawHubBootstrap: env.CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID,
+      npmTelegram: env.NPM_TELEGRAM_RUN_ID,
+    };
+    const diagnostic = new PostpublishDiagnostics(
+      args,
+      ".",
+      event === "initialize" ? "initialize" : "observe",
+    );
+    if (event === "binding-start") {
+      diagnostic.start("binding");
+    } else if (event === "binding-success") {
+      diagnostic.success("binding");
+    } else if (event === "assets-start") {
+      diagnostic.start("assets");
+    } else if (event === "assets-success") {
+      diagnostic.success("assets");
+    } else if (event === "terminal") {
+      diagnostic.data.stepOutcomes = {
+        coreStart: diagnosticValue(diagnosticOutcome, env.CORE_START_OUTCOME) ?? "unknown",
+        completion: diagnosticValue(diagnosticOutcome, env.COMPLETION_OUTCOME) ?? "unknown",
+      };
+      diagnostic.data.jobOutcomeBeforeArtifactUploads =
+        diagnosticValue(diagnosticOutcome, env.PUBLISH_JOB_STATUS) ?? "unknown";
+      const stage = diagnostic.data.currentStage;
+      if (stage && diagnostic.data.stages[stage].state === "started") {
+        // A failed parent cannot prove a registry check or publication failed.
+        if (
+          (stage === "binding" || stage === "assets") &&
+          diagnostic.data.stepOutcomes.completion === "failure"
+        ) {
+          diagnostic.data.stages[stage].state = "failure";
+          diagnostic.data.stages[stage].error = { class: "command-failure", status: null };
+        } else {
+          diagnostic.data.stages[stage].state = "unknown";
+        }
+        if (diagnostic.data.verification === "started") {
+          diagnostic.data.verification = "unknown";
+        }
+      }
+      diagnostic.save();
+    }
+  } catch {
+    console.error("Warning: postpublish diagnostics unavailable; primary result unchanged.");
+  }
 }
 
 function requireString(value: unknown, label: string): string {
-  const stringValue = readString(value);
+  const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined) {
     throw new Error(`${label} is missing.`);
   }
   return stringValue;
 }
 
-function runCommand(command: string, args: string[], options: { cwd?: string } = {}): string {
+function readTrustedClawHubToolchainIdentity() {
+  const lockPath = resolve(TRUSTED_TOOLING_ROOT, ".github/release/clawhub-cli/package-lock.json");
+  const lockBytes = readFileSync(lockPath);
+  const lock = parseJson(lockBytes.toString("utf8"), "trusted ClawHub CLI package-lock.json");
+  if (!isJsonRecord(lock) || !isJsonRecord(lock.packages)) {
+    throw new Error("Trusted ClawHub CLI package-lock.json is invalid.");
+  }
+  const clawhub = lock.packages["node_modules/clawhub"];
+  if (!isJsonRecord(clawhub)) {
+    throw new Error("Trusted ClawHub CLI package-lock.json is missing clawhub.");
+  }
+  const clawhubToolchainIntegrity = requireString(
+    clawhub.integrity,
+    "trusted ClawHub CLI integrity",
+  );
+  if (!SHA512_INTEGRITY_PATTERN.test(clawhubToolchainIntegrity)) {
+    throw new Error("Trusted ClawHub CLI integrity is invalid.");
+  }
+  return {
+    clawhubToolchainIntegrity,
+    clawhubToolchainSha256: createHash("sha256").update(lockBytes).digest("hex"),
+    clawhubToolchainVersion: requireString(clawhub.version, "trusted ClawHub CLI version"),
+  };
+}
+
+export function runReleaseVerifierCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; maxBufferBytes?: number; timeoutMs?: number } = {},
+): string {
   return execFileSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    killSignal: "SIGKILL",
+    maxBuffer: options.maxBufferBytes ?? RELEASE_COMMAND_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: options.timeoutMs ?? RELEASE_COMMAND_TIMEOUT_MS,
   }).trim();
 }
 
-function runCommandInherited(command: string, args: string[]): void {
-  execFileSync(command, args, {
-    stdio: "inherit",
-  });
+function isNpmPropagationError(error: unknown): boolean {
+  if (!isJsonRecord(error)) {
+    return false;
+  }
+  const details = [error.code, error.message, error.stderr]
+    .map((value) =>
+      Buffer.isBuffer(value) ? value.toString("utf8") : typeof value === "string" ? value : "",
+    )
+    .join("\n");
+  return /\b(?:E404|ETARGET)\b|No match found for version/u.test(details);
 }
 
 export async function runNpmViewWithRetry(
@@ -101,27 +590,41 @@ export async function runNpmViewWithRetry(
     run?: (args: string[]) => string;
   } = {},
 ): Promise<string> {
-  const attempts = options.attempts ?? NPM_VIEW_ATTEMPTS;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
+  const deadlineMs = npmRegistryReadbackDeadline();
+  const attempts = options.attempts ?? Infinity;
+  const delay = options.delay ?? sleep;
+  const run =
+    options.run ??
+    ((npmArgs: string[]) =>
+      runReleaseVerifierCommand("npm", npmArgs, {
+        timeoutMs: Math.min(RELEASE_COMMAND_TIMEOUT_MS, Math.max(1, deadlineMs - Date.now())),
       }));
-  const run = options.run ?? ((npmArgs: string[]) => runCommand("npm", npmArgs));
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return run([...args, "--prefer-online"]);
     } catch (error) {
+      if (!isNpmPropagationError(error)) {
+        throw error;
+      }
       lastError = error;
     }
     if (attempt < attempts) {
-      await delay(Math.min(attempt * 1000, NPM_VIEW_RETRY_MAX_DELAY_MS));
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      await delay(Math.min(10_000, remainingMs));
+      if (Date.now() >= deadlineMs) {
+        break;
+      }
     }
   }
 
+  if (lastError instanceof Error) {
+    lastError.message += "; verification pending. Retry readback, not publication.";
+  }
   throw lastError;
 }
 
@@ -134,26 +637,32 @@ function parseJson(raw: string, label: string): unknown {
   }
 }
 
-export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields {
-  const parsed = parseJson(raw, "npm view");
+export function parseNpmViewFields(raw: string, distTag: string) {
+  const value = parseJson(raw, "npm view");
+  const entries = resolveNpmJsonEntries(value);
+  const parsed = entries.length === 1 && isJsonRecord(entries[0]) ? entries[0] : value;
   if (Array.isArray(parsed)) {
     return {
-      version: readString(parsed[0]),
-      distTagVersion: readString(parsed[1]),
-      integrity: readString(parsed[2]),
-      tarball: readString(parsed[3]),
+      version: normalizeOptionalString(parsed[0]),
+      distTagVersion: normalizeOptionalString(parsed[1]),
+      integrity: normalizeOptionalString(parsed[2]),
+      tarball: normalizeOptionalString(parsed[3]),
     };
   }
-  if (!isRecord(parsed)) {
+  if (!isJsonRecord(parsed)) {
     throw new Error("npm view returned an unsupported JSON shape.");
   }
-  const distTags = isRecord(parsed["dist-tags"]) ? parsed["dist-tags"] : undefined;
-  const dist = isRecord(parsed.dist) ? parsed.dist : undefined;
+  const distTags = isJsonRecord(parsed["dist-tags"]) ? parsed["dist-tags"] : undefined;
+  const dist = isJsonRecord(parsed.dist) ? parsed.dist : undefined;
   return {
-    version: readString(parsed.version),
-    distTagVersion: readString(parsed[`dist-tags.${distTag}`]) ?? readString(distTags?.[distTag]),
-    integrity: readString(parsed["dist.integrity"]) ?? readString(dist?.integrity),
-    tarball: readString(parsed["dist.tarball"]) ?? readString(dist?.tarball),
+    version: normalizeOptionalString(parsed.version),
+    distTagVersion:
+      normalizeOptionalString(parsed[`dist-tags.${distTag}`]) ??
+      normalizeOptionalString(distTags?.[distTag]),
+    integrity:
+      normalizeOptionalString(parsed["dist.integrity"]) ?? normalizeOptionalString(dist?.integrity),
+    tarball:
+      normalizeOptionalString(parsed["dist.tarball"]) ?? normalizeOptionalString(dist?.tarball),
   };
 }
 
@@ -165,7 +674,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--clawhub-workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
+      "Usage: pnpm release:verify-beta -- <version> [--release-sha SHA] [--workflow-ref REF] [--clawhub-workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID --clawhub-bootstrap-plugins NAMES] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
     );
   }
 
@@ -175,10 +684,13 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     distTag: "beta",
     repo: DEFAULT_REPO,
     registry: DEFAULT_CLAWHUB_REGISTRY,
+    releaseSha: undefined,
     workflowRef: undefined,
     clawHubWorkflowRef: undefined,
     pluginSelection: [],
+    clawHubBootstrapPlugins: [],
     evidenceOut: undefined,
+    postpublishVerifier: undefined,
     skipPostpublish: false,
     skipGitHubRelease: false,
     skipClawHub: false,
@@ -186,153 +698,217 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     workflowRuns: {},
   };
 
-  for (let index = 0; index < values.length; index += 1) {
-    const arg = values[index];
-    const next = () => {
-      const value = values[index + 1];
-      if (value === undefined || value.startsWith("-")) {
-        throw new Error(`${arg} requires a value.`);
-      }
-      index += 1;
-      return value;
-    };
-
-    switch (arg) {
-      case "--tag":
-        parsed.tag = next();
-        break;
-      case "--dist-tag":
-        parsed.distTag = next();
-        break;
-      case "--repo":
-        parsed.repo = next();
-        break;
-      case "--registry":
-        parsed.registry = next();
-        break;
-      case "--workflow-ref":
-        parsed.workflowRef = next();
-        break;
-      case "--clawhub-workflow-ref":
-        parsed.clawHubWorkflowRef = next();
-        break;
-      case "--plugins":
-        parsed.pluginSelection = parsePluginReleaseSelection(next());
-        if (parsed.pluginSelection.length === 0) {
-          throw new Error("--plugins requires at least one plugin package name.");
+  const valueFlag = (flag: string, key: string, transform?: (value: string) => unknown) =>
+    stringFlag<ReleaseVerifyBetaArgs>(flag, key, {
+      allowEmpty: true,
+      allowInline: false,
+      missingValueMessage: `${flag} requires a value.`,
+      rejectShortOptions: true,
+      repeatable: true,
+      transform,
+    });
+  parseFlagArgs(
+    values,
+    parsed,
+    [
+      ...(
+        [
+          ["--tag", "tag"],
+          ["--dist-tag", "distTag"],
+          ["--repo", "repo"],
+          ["--registry", "registry"],
+          ["--workflow-ref", "workflowRef"],
+          ["--clawhub-workflow-ref", "clawHubWorkflowRef"],
+          ["--evidence-out", "evidenceOut"],
+          ["--postpublish-verifier", "postpublishVerifier"],
+        ] as const
+      ).map(([flag, key]) => valueFlag(flag, key)),
+      ...(
+        [
+          ["--full-release-validation-run", "fullReleaseValidation"],
+          ["--openclaw-npm-run", "openclawNpm"],
+          ["--plugin-npm-run", "pluginNpm"],
+          ["--plugin-clawhub-run", "pluginClawHub"],
+          ["--plugin-clawhub-bootstrap-run", "pluginClawHubBootstrap"],
+          ["--npm-telegram-run", "npmTelegram"],
+        ] as const
+      ).map(([flag, key]) =>
+        valueFlag(flag, "workflowRuns", (value) => ({ ...parsed.workflowRuns, [key]: value })),
+      ),
+      ...(
+        [
+          ["--skip-postpublish", "skipPostpublish"],
+          ["--skip-github-release", "skipGitHubRelease"],
+          ["--skip-clawhub", "skipClawHub"],
+          ["--rerun-failed-clawhub", "rerunFailedClawHub"],
+        ] as const
+      ).map(([flag, key]) => booleanFlag(flag, key, true, { repeatable: true })),
+      valueFlag("--release-sha", "releaseSha", (value) => {
+        if (!COMMIT_SHA_PATTERN.test(value)) {
+          throw new Error("--release-sha must be a full 40-character lowercase commit SHA.");
         }
-        break;
-      case "--evidence-out":
-        parsed.evidenceOut = next();
-        break;
-      case "--full-release-validation-run":
-        parsed.workflowRuns.fullReleaseValidation = next();
-        break;
-      case "--openclaw-npm-run":
-        parsed.workflowRuns.openclawNpm = next();
-        break;
-      case "--plugin-npm-run":
-        parsed.workflowRuns.pluginNpm = next();
-        break;
-      case "--plugin-clawhub-run":
-        parsed.workflowRuns.pluginClawHub = next();
-        break;
-      case "--plugin-clawhub-bootstrap-run":
-        parsed.workflowRuns.pluginClawHubBootstrap = next();
-        break;
-      case "--npm-telegram-run":
-        parsed.workflowRuns.npmTelegram = next();
-        break;
-      case "--skip-postpublish":
-        parsed.skipPostpublish = true;
-        break;
-      case "--skip-github-release":
-        parsed.skipGitHubRelease = true;
-        break;
-      case "--skip-clawhub":
-        parsed.skipClawHub = true;
-        break;
-      case "--rerun-failed-clawhub":
-        parsed.rerunFailedClawHub = true;
-        break;
-      default:
+        return value;
+      }),
+      ...(
+        [
+          ["--plugins", "pluginSelection", "at least one plugin package name"],
+          ["--clawhub-bootstrap-plugins", "clawHubBootstrapPlugins", "at least one package name"],
+        ] as const
+      ).map(([flag, key, required]) =>
+        valueFlag(flag, key, (value) => {
+          const packages = parsePluginReleaseSelection(value);
+          if (packages.length === 0) {
+            throw new Error(`${flag} requires ${required}.`);
+          }
+          return packages;
+        }),
+      ),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
         throw new Error(`Unknown argument: ${arg}`);
+      },
+    },
+  );
+
+  if (parsed.skipPostpublish && parsed.postpublishVerifier !== undefined) {
+    throw new Error("--postpublish-verifier cannot be combined with --skip-postpublish.");
+  }
+
+  if (parsed.workflowRuns.pluginClawHubBootstrap !== undefined) {
+    if (parsed.releaseSha === undefined) {
+      throw new Error("--plugin-clawhub-bootstrap-run requires --release-sha.");
     }
+    if (parsed.clawHubBootstrapPlugins.length === 0) {
+      throw new Error("--plugin-clawhub-bootstrap-run requires --clawhub-bootstrap-plugins.");
+    }
+  } else if (parsed.clawHubBootstrapPlugins.length > 0) {
+    throw new Error("--clawhub-bootstrap-plugins requires --plugin-clawhub-bootstrap-run.");
   }
 
   return parsed;
 }
 
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit,
-  attempts: number,
-): Promise<FetchWithRetryResult> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const signal = AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS);
-      const response = await fetch(url, {
-        ...options,
-        signal,
-      });
-      if (response.status !== 429 && response.status < 500) {
-        return { response, signal };
-      }
-      await cancelResponseBody(response);
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < attempts) {
-      await new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, attempt * 1000);
-      });
-    }
+export function resolveOpenClawNpmPostpublishVerifier(rootDir: string, override?: string): string {
+  if (override === undefined) {
+    return resolve(rootDir, "scripts/openclaw-npm-postpublish-verify.ts");
   }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${url} did not return a stable response: ${message}`);
+  const verifier = resolve(override);
+  if (verifier !== resolve(TRUSTED_TOOLING_ROOT, "scripts/openclaw-npm-postpublish-verify.ts")) {
+    throw new Error("--postpublish-verifier must select the trusted tooling verifier.");
+  }
+  return verifier;
 }
 
 async function cancelResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
 }
 
-async function fetchJsonWithRetry(url: string): Promise<unknown> {
-  const { response, signal } = await fetchWithRetry(
-    url,
-    { headers: { accept: "application/json" } },
-    5,
-  );
-  if (!response.ok) {
-    throw new Error(`${url} returned HTTP ${response.status}.`);
-  }
-  return await readBoundedJsonResponse(response, url, undefined, { signal });
+function retryReleaseClawHubRead<T extends { response: Response }>(
+  url: string,
+  request: () => Promise<T>,
+  delay?: (delayMs: number) => Promise<void>,
+): Promise<T> {
+  return retryClawHubRead(request, {
+    disposeRetry: ({ response }) => cancelResponseBody(response),
+    retryRateLimit: true,
+    sleep: delay,
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${url}: ${message}. Retry readback, not publication.`, { cause: error });
+  });
 }
 
-export async function readBoundedJsonResponse(
-  response: Response,
-  label: string,
-  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
-  options: { signal?: AbortSignal } = {},
+export async function fetchJsonWithRetry(
+  url: string,
+  options: {
+    delay?: (delayMs: number) => Promise<void>;
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
 ): Promise<unknown> {
-  return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
+  const { response: reply, body: text } = await retryReleaseClawHubRead(
+    url,
+    async () => {
+      const signal = AbortSignal.timeout(options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS);
+      const response = await (options.fetchImpl ?? fetch)(url, {
+        headers: { accept: "application/json" },
+        signal,
+      });
+      try {
+        const body = response.ok
+          ? await readBoundedResponseText(response, url, CLAWHUB_RESPONSE_BODY_MAX_BYTES, {
+              signal,
+            })
+          : undefined;
+        return { response, body };
+      } catch (error) {
+        await cancelResponseBody(response);
+        throw error;
+      }
+    },
+    options.delay,
+  );
+  if (!reply.ok) {
+    await cancelResponseBody(reply);
+    throw new Error(`${url} returned HTTP ${reply.status}. Retry readback, not publication.`);
+  }
+  // Parsing belongs after transport recovery: a complete invalid document is
+  // terminal, not a reason to repeat publication or hide unaccepted evidence.
+  return parseJson(text ?? "", url);
 }
 
 export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  try {
-    return response.status;
-  } finally {
-    await cancelResponseBody(response);
-  }
+  const { response } = await retryReleaseClawHubRead(url, async () => ({
+    response: await fetch(url, {
+      method,
+      redirect: "manual",
+      signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+    }),
+  }));
+  await cancelResponseBody(response);
+  return response.status;
 }
 
-async function verifyNpmPackage(
+async function readNpmBetaFloorError(
   packageName: string,
   version: string,
-  distTag: string,
-): Promise<NpmViewFields> {
+): Promise<string | undefined> {
+  const entries = resolveNpmJsonEntries(
+    parseJson(
+      await runNpmViewWithRetry(["view", `${packageName}@${version}`, "dist-tags", "--json"]),
+      `npm view ${packageName}@${version} dist-tags`,
+    ),
+  );
+  const tags = entries.length === 1 ? entries[0] : undefined;
+  if (!isJsonRecord(tags)) {
+    throw new Error(`${packageName}: npm dist-tags returned an unsupported JSON shape.`);
+  }
+  // A package published only to beta has no stable floor yet.
+  if (tags.latest === undefined) {
+    return undefined;
+  }
+  const latest = normalizeOptionalString(tags.latest);
+  const beta = normalizeOptionalString(tags.beta);
+  const observed = `${packageName}: beta=${beta ?? JSON.stringify(tags.beta) ?? "<missing>"}, latest=${latest ?? JSON.stringify(tags.latest)}`;
+  if (
+    latest === undefined ||
+    !validSemver(latest) ||
+    (tags.beta !== undefined && (beta === undefined || !validSemver(beta)))
+  ) {
+    return `${observed} (invalid semver dist-tag)`;
+  }
+  return beta === undefined || semverLt(beta, latest) ? observed : undefined;
+}
+
+function createNpmBetaFloorError(errors: readonly string[]): Error {
+  return new Error(
+    `npm beta must be at or above latest; release verification failed:\n${errors.join("\n")}\nFor each listed stale package, run:\nnpm dist-tag add <pkg>@<latest> beta\nUse that package's current latest version, preserve newer beta tags, then verify again.`,
+  );
+}
+
+async function verifyNpmPackage(packageName: string, version: string, distTag: string) {
   const raw = await runNpmViewWithRetry([
     "view",
     `${packageName}@${version}`,
@@ -363,11 +939,11 @@ async function verifyNpmPackage(
 }
 
 function readClawHubTags(detail: unknown): Record<string, string> {
-  if (!isRecord(detail)) {
+  if (!isJsonRecord(detail)) {
     return {};
   }
-  const packageDetail = isRecord(detail.package) ? detail.package : undefined;
-  const tags = isRecord(packageDetail?.tags) ? packageDetail.tags : undefined;
+  const packageDetail = isJsonRecord(detail.package) ? detail.package : undefined;
+  const tags = isJsonRecord(packageDetail?.tags) ? packageDetail.tags : undefined;
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(tags ?? {})) {
     if (typeof value === "string") {
@@ -410,7 +986,7 @@ async function verifyClawHubPackage(params: {
 }
 
 function verifyGitHubRelease(params: ReleaseVerifyBetaArgs): string {
-  const raw = runCommand("gh", [
+  const raw = runReleaseVerifierCommand("gh", [
     "release",
     "view",
     params.tag,
@@ -420,7 +996,7 @@ function verifyGitHubRelease(params: ReleaseVerifyBetaArgs): string {
     "tagName,isPrerelease,url",
   ]);
   const release = parseJson(raw, "gh release view");
-  if (!isRecord(release)) {
+  if (!isJsonRecord(release)) {
     throw new Error("GitHub release returned an unsupported JSON shape.");
   }
   if (release.tagName !== params.tag) {
@@ -440,35 +1016,52 @@ function verifyWorkflowRun(params: {
   repo: string;
   expectedWorkflowName: string;
   expectedHeadBranch?: string;
+  expectedRunAttempt?: number;
+  expectedHeadSha?: string;
   allowedHeadBranches?: string[];
-  rerunFailed: boolean;
-}): WorkflowRunSummary {
-  const raw = runCommand("gh", [
+  rerunFailed?: boolean;
+  acceptFailedRun?: (run: JsonRecord, jobs: JsonRecord[]) => boolean;
+  observe?: (run: JsonRecord, failedJobCount: number) => void;
+}) {
+  const raw = runReleaseVerifierCommand("gh", [
     "run",
     "view",
     params.id,
     "--repo",
     params.repo,
     "--json",
-    "workflowName,headBranch,event,status,conclusion,url,createdAt,updatedAt,jobs",
+    "workflowName,headBranch,headSha,databaseId,attempt,event,status,conclusion,url,createdAt,updatedAt,jobs",
+    ...(params.expectedRunAttempt === undefined
+      ? []
+      : ["--attempt", String(params.expectedRunAttempt)]),
   ]);
   const run = parseJson(raw, `gh run view ${params.id}`);
-  if (!isRecord(run)) {
+  if (!isJsonRecord(run)) {
     throw new Error(`${params.label}: workflow run returned an unsupported JSON shape.`);
   }
-  const workflowName = readString(run.workflowName);
+  if (
+    params.expectedRunAttempt !== undefined &&
+    (run.attempt !== params.expectedRunAttempt ||
+      run.databaseId !== Number(params.id) ||
+      run.headSha !== params.expectedHeadSha)
+  ) {
+    throw new Error(
+      `${params.label}: historical publisher identity does not match its signed attempt.`,
+    );
+  }
+  const workflowName = normalizeOptionalString(run.workflowName);
   if (workflowName !== params.expectedWorkflowName) {
     throw new Error(
       `${params.label}: run ${params.id} workflow is ${workflowName ?? "<missing>"}, expected ${params.expectedWorkflowName}.`,
     );
   }
-  const event = readString(run.event);
+  const event = normalizeOptionalString(run.event);
   if (event !== "workflow_dispatch") {
     throw new Error(
       `${params.label}: run ${params.id} event is ${event ?? "<missing>"}, expected workflow_dispatch.`,
     );
   }
-  const headBranch = readString(run.headBranch);
+  const headBranch = normalizeOptionalString(run.headBranch);
   const allowedHeadBranches =
     params.allowedHeadBranches ??
     (params.expectedHeadBranch !== undefined ? [params.expectedHeadBranch] : []);
@@ -477,29 +1070,37 @@ function verifyWorkflowRun(params: {
       `${params.label}: run ${params.id} branch is ${headBranch ?? "<missing>"}, expected ${allowedHeadBranches.join(" or ")}.`,
     );
   }
-  const status = readString(run.status);
-  const conclusion = readString(run.conclusion);
-  const jobs = Array.isArray(run.jobs) ? run.jobs.filter(isRecord) : [];
+  const status = normalizeOptionalString(run.status);
+  const conclusion = normalizeOptionalString(run.conclusion);
+  const jobs = Array.isArray(run.jobs) ? run.jobs.filter(isJsonRecord) : [];
   const failedJobs = jobs.filter((job) => {
-    const jobConclusion = readString(job.conclusion);
+    const jobConclusion = normalizeOptionalString(job.conclusion);
     return (
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
-  if (failedJobs.length > 0 && params.rerunFailed) {
-    runCommandInherited("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
+  const acceptedFailure = conclusion === "failure" && params.acceptFailedRun?.(run, jobs) === true;
+  params.observe?.(run, failedJobs.length);
+  if (failedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
+    runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
-  if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
-    const failedNames = failedJobs.map((job) => readString(job.name) ?? "<unnamed>").join(", ");
+  if (
+    status !== "completed" ||
+    (conclusion !== "success" && !acceptedFailure) ||
+    (failedJobs.length > 0 && !acceptedFailure)
+  ) {
+    const failedNames = failedJobs
+      .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
+      .join(", ");
     throw new Error(
       `${params.label}: run ${params.id} is ${status ?? "<missing>"}/${conclusion ?? "<missing>"}${failedNames ? `; failed jobs: ${failedNames}` : ""}.`,
     );
   }
-  const createdAt = readString(run.createdAt);
-  const updatedAt = readString(run.updatedAt);
+  const createdAt = normalizeOptionalString(run.createdAt);
+  const updatedAt = normalizeOptionalString(run.updatedAt);
   const createdMs = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
   const updatedMs = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
   const durationSeconds =
@@ -508,10 +1109,561 @@ function verifyWorkflowRun(params: {
       : undefined;
   return {
     id: params.id,
+    ...(params.expectedRunAttempt === undefined ? {} : { runAttempt: params.expectedRunAttempt }),
     label: params.label,
-    url: readString(run.url),
+    url: normalizeOptionalString(run.url),
     durationSeconds,
   };
+}
+
+function requirePositiveIntegerString(value: unknown, label: string): string {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+    return String(value);
+  }
+  const stringValue = normalizeOptionalString(value);
+  if (stringValue === undefined || !POSITIVE_INTEGER_PATTERN.test(stringValue)) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return stringValue;
+}
+
+function requirePositiveSafeInteger(value: unknown, label: string): number {
+  const stringValue = requirePositiveIntegerString(value, label);
+  const numberValue = Number(stringValue);
+  if (!Number.isSafeInteger(numberValue)) {
+    throw new Error(`${label} must be a positive safe integer.`);
+  }
+  return numberValue;
+}
+
+function requireCommitSha(value: unknown, label: string): string {
+  const sha = requireString(value, label);
+  if (!COMMIT_SHA_PATTERN.test(sha)) {
+    throw new Error(`${label} must be a full 40-character lowercase commit SHA.`);
+  }
+  return sha;
+}
+
+function requireSha256(value: unknown, label: string): string {
+  const sha = requireString(value, label);
+  if (!SHA256_PATTERN.test(sha)) {
+    throw new Error(`${label} must be a lowercase SHA-256 digest.`);
+  }
+  return sha;
+}
+
+function requireArtifactDigest(value: unknown, label: string): string {
+  const digest = requireString(value, label);
+  const match = /^sha256:([a-f0-9]{64})$/u.exec(digest);
+  if (!match?.[1]) {
+    throw new Error(`${label} must be a sha256 artifact digest.`);
+  }
+  return match[1];
+}
+
+function requireStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new Error(`${label} must be a string array.`);
+  }
+  return value
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .toSorted(compareCodeUnits);
+}
+
+function requireArtifactWorkflowRun(
+  artifact: JsonRecord,
+  params: { label: string; runId: string; headSha: string },
+): void {
+  if (artifact.expired !== false) {
+    throw new Error(`${params.label} is expired or missing its immutable state.`);
+  }
+  const workflowRun = artifact.workflow_run;
+  if (!isJsonRecord(workflowRun)) {
+    throw new Error(`${params.label} is missing workflow_run metadata.`);
+  }
+  if (
+    requirePositiveIntegerString(workflowRun.id, `${params.label} workflow run id`) !== params.runId
+  ) {
+    throw new Error(`${params.label} belongs to a different workflow run.`);
+  }
+  if (
+    requireCommitSha(workflowRun.head_sha, `${params.label} workflow head SHA`) !== params.headSha
+  ) {
+    throw new Error(`${params.label} belongs to a different workflow head SHA.`);
+  }
+  if (requireString(workflowRun.head_branch, `${params.label} workflow head branch`) !== "main") {
+    throw new Error(`${params.label} was not produced by trusted main.`);
+  }
+}
+
+function requireClawHubBootstrapRunBinding(run: unknown, expectedRunId: string) {
+  if (!isJsonRecord(run)) {
+    throw new Error("Plugin ClawHub New run metadata is invalid.");
+  }
+  const runId = requirePositiveSafeInteger(run.id, "Plugin ClawHub New run id");
+  if (String(runId) !== expectedRunId) {
+    throw new Error(`Plugin ClawHub New run id is ${runId}, expected ${expectedRunId}.`);
+  }
+  if (run.name !== "Plugin ClawHub New") {
+    throw new Error("Plugin ClawHub New run has an unexpected workflow name.");
+  }
+  if (run.event !== "workflow_dispatch") {
+    throw new Error("Plugin ClawHub New run was not workflow_dispatch.");
+  }
+  if (run.head_branch !== "main") {
+    throw new Error("Plugin ClawHub New run was not dispatched from trusted main.");
+  }
+  const headSha = requireCommitSha(run.head_sha, "Plugin ClawHub New head SHA");
+  const runAttempt = requirePositiveSafeInteger(run.run_attempt, "Plugin ClawHub New run attempt");
+  const workflowPath = requireString(run.path, "Plugin ClawHub New workflow path").replace(
+    /@.*$/u,
+    "",
+  );
+  if (workflowPath !== CLAWHUB_BOOTSTRAP_WORKFLOW_PATH) {
+    throw new Error("Plugin ClawHub New run has an unexpected workflow path.");
+  }
+  if (run.status !== "completed" || run.conclusion !== "success") {
+    throw new Error("Plugin ClawHub New run is not completed/success.");
+  }
+  return {
+    headSha,
+    run,
+    runAttempt,
+    runId,
+    terminalRunAttempt: String(runAttempt),
+    workflowPath,
+  };
+}
+
+function requireClawHubReadbackArtifactBinding(
+  artifact: unknown,
+  run: ReturnType<typeof requireClawHubBootstrapRunBinding>,
+) {
+  if (!isJsonRecord(artifact)) {
+    throw new Error("Plugin ClawHub New readback artifact metadata is invalid.");
+  }
+  const artifactName = `clawhub-bootstrap-readback-${run.runId}-${run.terminalRunAttempt}`;
+  if (artifact.name !== artifactName) {
+    throw new Error("Plugin ClawHub New readback artifact name does not bind the run attempt.");
+  }
+  requireArtifactWorkflowRun(artifact, {
+    label: "Plugin ClawHub New readback artifact",
+    runId: String(run.runId),
+    headSha: run.headSha,
+  });
+  return {
+    artifactDigest: `sha256:${requireArtifactDigest(
+      artifact.digest,
+      "Plugin ClawHub New readback artifact digest",
+    )}`,
+    artifactId: requirePositiveSafeInteger(artifact.id, "Plugin ClawHub New readback artifact id"),
+    artifactName,
+    artifactSizeBytes: requirePositiveSafeInteger(
+      artifact.size_in_bytes,
+      "Plugin ClawHub New readback artifact size",
+    ),
+  };
+}
+
+function validateBootstrapPackageEvidence(
+  value: unknown,
+  params: { packageName: string; version: string },
+): void {
+  if (!isJsonRecord(value)) {
+    throw new Error(`${params.packageName} bootstrap evidence is invalid.`);
+  }
+  if (
+    requireString(value.packageName, `${params.packageName} package name`) !== params.packageName
+  ) {
+    throw new Error(`${params.packageName} bootstrap evidence package mismatch.`);
+  }
+  if (requireString(value.version, `${params.packageName} version`) !== params.version) {
+    throw new Error(`${params.packageName} bootstrap evidence version mismatch.`);
+  }
+  const expectedSha256 = requireSha256(
+    value.expectedSha256,
+    `${params.packageName} expected sha256`,
+  );
+  if (
+    requireSha256(value.registrySha256, `${params.packageName} registry sha256`) !== expectedSha256
+  ) {
+    throw new Error(
+      `${params.packageName} registry artifact digest differs from the packed artifact.`,
+    );
+  }
+  const expectedSize = value.expectedSize;
+  const registrySize = value.registrySize;
+  if (
+    typeof expectedSize !== "number" ||
+    !Number.isSafeInteger(expectedSize) ||
+    expectedSize <= 0 ||
+    registrySize !== expectedSize
+  ) {
+    throw new Error(
+      `${params.packageName} registry artifact size differs from the packed artifact.`,
+    );
+  }
+  const npmIntegrity = requireString(value.npmIntegrity, `${params.packageName} npm integrity`);
+  const npmShasum = requireString(value.npmShasum, `${params.packageName} npm shasum`);
+  const metadata = value.artifactMetadata;
+  if (!isJsonRecord(metadata)) {
+    throw new Error(`${params.packageName} artifact metadata evidence is invalid.`);
+  }
+  if (metadata.kind !== "npm-pack") {
+    throw new Error(`${params.packageName} artifact metadata is not npm-pack.`);
+  }
+  if (
+    requireString(metadata.packageName, `${params.packageName} metadata package name`) !==
+      params.packageName ||
+    requireString(metadata.version, `${params.packageName} metadata version`) !== params.version
+  ) {
+    throw new Error(`${params.packageName} artifact metadata identity mismatch.`);
+  }
+  if (
+    requireSha256(metadata.sha256, `${params.packageName} metadata sha256`) !== expectedSha256 ||
+    metadata.size !== expectedSize ||
+    metadata.npmIntegrity !== npmIntegrity ||
+    metadata.npmShasum !== npmShasum
+  ) {
+    throw new Error(`${params.packageName} artifact metadata does not match downloaded bytes.`);
+  }
+}
+
+export function validateClawHubBootstrapEvidence(params: {
+  repo: string;
+  runId: string;
+  releaseSha: string;
+  expectedVersion: string;
+  expectedPackages: string[];
+  run: unknown;
+  readbackArtifact: unknown;
+  readbackArchiveSha256: string;
+  packageArtifact: unknown;
+  evidence: unknown;
+}) {
+  const runBinding = requireClawHubBootstrapRunBinding(params.run, params.runId);
+  const { headSha, terminalRunAttempt, workflowPath } = runBinding;
+  const runId = String(runBinding.runId);
+  const readbackBinding = requireClawHubReadbackArtifactBinding(
+    params.readbackArtifact,
+    runBinding,
+  );
+  const readbackArtifactId = String(readbackBinding.artifactId);
+  const readbackArtifactDigest = requireArtifactDigest(
+    readbackBinding.artifactDigest,
+    "Plugin ClawHub New readback artifact digest",
+  );
+  if (
+    requireSha256(params.readbackArchiveSha256, "Downloaded readback artifact sha256") !==
+    readbackArtifactDigest
+  ) {
+    throw new Error("Downloaded Plugin ClawHub New readback artifact digest mismatch.");
+  }
+
+  if (!isJsonRecord(params.evidence)) {
+    throw new Error("Plugin ClawHub New readback evidence is invalid.");
+  }
+  if (params.evidence.schemaVersion !== 2 || params.evidence.verificationMode !== "postpublish") {
+    throw new Error("Plugin ClawHub New readback evidence schema or mode is invalid.");
+  }
+  if (params.evidence.repository !== params.repo) {
+    throw new Error("Plugin ClawHub New readback evidence repository mismatch.");
+  }
+  if (
+    requireCommitSha(params.evidence.targetSha, "Plugin ClawHub New target SHA") !==
+    params.releaseSha
+  ) {
+    throw new Error("Plugin ClawHub New readback evidence target SHA mismatch.");
+  }
+  if (
+    requireCommitSha(params.evidence.workflowSha, "Plugin ClawHub New workflow SHA") !== headSha
+  ) {
+    throw new Error("Plugin ClawHub New readback evidence workflow SHA mismatch.");
+  }
+  const evidenceRunId = requirePositiveIntegerString(
+    params.evidence.runId,
+    "Plugin ClawHub New evidence run id",
+  );
+  const producerRunAttempt = requirePositiveIntegerString(
+    params.evidence.producerRunAttempt,
+    "Plugin ClawHub New evidence producer run attempt",
+  );
+  const evidenceTerminalRunAttempt = requirePositiveIntegerString(
+    params.evidence.terminalRunAttempt,
+    "Plugin ClawHub New evidence terminal run attempt",
+  );
+  if (evidenceRunId !== runId || evidenceTerminalRunAttempt !== terminalRunAttempt) {
+    throw new Error("Plugin ClawHub New readback evidence run tuple mismatch.");
+  }
+  if (BigInt(producerRunAttempt) > BigInt(terminalRunAttempt)) {
+    throw new Error("Plugin ClawHub New producer attempt is newer than its terminal attempt.");
+  }
+  const expectedToolchain = readTrustedClawHubToolchainIdentity();
+  for (const [key, expected] of Object.entries(expectedToolchain)) {
+    if (params.evidence[key] !== expected) {
+      throw new Error(`Plugin ClawHub New ${key} mismatch.`);
+    }
+  }
+
+  const expectedPackages = [...new Set(params.expectedPackages)].toSorted(compareCodeUnits);
+  if (expectedPackages.length === 0) {
+    throw new Error("Plugin ClawHub New expected package set is empty.");
+  }
+  if (
+    JSON.stringify(
+      requireStringArray(params.evidence.requestedPlugins, "requested bootstrap plugins"),
+    ) !== JSON.stringify(expectedPackages)
+  ) {
+    throw new Error("Plugin ClawHub New requested package set mismatch.");
+  }
+  if (!Array.isArray(params.evidence.packages)) {
+    throw new Error("Plugin ClawHub New package evidence is invalid.");
+  }
+  const evidencePackages = params.evidence.packages
+    .map((entry) =>
+      isJsonRecord(entry) ? requireString(entry.packageName, "bootstrap package name") : "",
+    )
+    .toSorted(compareCodeUnits);
+  if (JSON.stringify(evidencePackages) !== JSON.stringify(expectedPackages)) {
+    throw new Error("Plugin ClawHub New terminal package set mismatch.");
+  }
+  for (const packageName of expectedPackages) {
+    validateBootstrapPackageEvidence(
+      params.evidence.packages.find(
+        (entry) => isJsonRecord(entry) && entry.packageName === packageName,
+      ),
+      { packageName, version: params.expectedVersion },
+    );
+  }
+
+  if (!isJsonRecord(params.packageArtifact)) {
+    throw new Error("Plugin ClawHub New package artifact metadata is invalid.");
+  }
+  const packageArtifactId = requirePositiveIntegerString(
+    params.packageArtifact.id,
+    "Plugin ClawHub New package artifact id",
+  );
+  if (
+    packageArtifactId !==
+    requirePositiveIntegerString(
+      params.evidence.artifactId,
+      "Plugin ClawHub New evidence package artifact id",
+    )
+  ) {
+    throw new Error("Plugin ClawHub New package artifact id mismatch.");
+  }
+  if (
+    params.packageArtifact.name !==
+    requireString(params.evidence.artifactName, "Plugin ClawHub New package artifact name")
+  ) {
+    throw new Error("Plugin ClawHub New package artifact name mismatch.");
+  }
+  requireArtifactWorkflowRun(params.packageArtifact, {
+    label: "Plugin ClawHub New package artifact",
+    runId,
+    headSha,
+  });
+  const packageArtifactDigest = requireArtifactDigest(
+    params.packageArtifact.digest,
+    "Plugin ClawHub New package artifact digest",
+  );
+  if (
+    packageArtifactDigest !==
+    requireSha256(
+      params.evidence.artifactDigest,
+      "Plugin ClawHub New evidence package artifact digest",
+    )
+  ) {
+    throw new Error("Plugin ClawHub New package artifact digest mismatch.");
+  }
+  const expectedPackageArtifactName = `clawhub-bootstrap-${params.releaseSha.slice(0, 12)}-${runId}-${producerRunAttempt}`;
+  if (params.packageArtifact.name !== expectedPackageArtifactName) {
+    throw new Error(
+      "Plugin ClawHub New package artifact name does not bind the target and attempt.",
+    );
+  }
+
+  const createdAt = normalizeOptionalString(runBinding.run.created_at);
+  const updatedAt = normalizeOptionalString(runBinding.run.updated_at);
+  const createdMs = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
+  const updatedMs = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
+  return {
+    id: runId,
+    label: "Plugin ClawHub New",
+    url: normalizeOptionalString(runBinding.run.html_url),
+    durationSeconds:
+      Number.isFinite(createdMs) && Number.isFinite(updatedMs)
+        ? Math.max(0, Math.round((updatedMs - createdMs) / 1000))
+        : undefined,
+    bootstrapEvidence: {
+      targetSha: params.releaseSha,
+      workflowSha: headSha,
+      workflowPath,
+      producerRunAttempt,
+      terminalRunAttempt,
+      readbackArtifactId,
+      readbackArtifactDigest,
+      packageArtifactId,
+      packageArtifactDigest,
+      packageCount: expectedPackages.length,
+      ...expectedToolchain,
+    },
+  };
+}
+
+function readGitHubApiJson(repo: string, endpoint: string, label: string): unknown {
+  return parseJson(runReleaseVerifierCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
+}
+
+function readGitHubToken(): string {
+  return requireString(
+    process.env.GH_TOKEN ??
+      process.env.GITHUB_TOKEN ??
+      runReleaseVerifierCommand("gh", ["auth", "token"]),
+    "GitHub token",
+  );
+}
+
+function decodeUtf8Exact(bytes: Uint8Array, label: string): string {
+  let value: string;
+  try {
+    value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(`${label} is not valid UTF-8.`, { cause: error });
+  }
+  if (!Buffer.from(value, "utf8").equals(bytes)) {
+    throw new Error(`${label} is not canonically encoded UTF-8.`);
+  }
+  return value;
+}
+
+export async function downloadClawHubBootstrapReadback(params: {
+  repo: string;
+  runId: string;
+  run: unknown;
+  readbackArtifact: unknown;
+  token: string;
+  fetchImpl?: typeof fetch;
+  retryAttempts?: number;
+  retryDelayMs?: number;
+  timeoutMs?: number;
+}): Promise<{ value: unknown; archiveSha256: string }> {
+  const runBinding = requireClawHubBootstrapRunBinding(params.run, params.runId);
+  const artifactBinding = requireClawHubReadbackArtifactBinding(
+    params.readbackArtifact,
+    runBinding,
+  );
+  const downloaded = await readPublicationArtifactArchive({
+    archivePolicy: {
+      expectedEntries: [CLAWHUB_BOOTSTRAP_READBACK_FILE],
+      maxArchiveBytes: CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES,
+      maxExpandedBytes: CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+      maxCompressedEntryBytes: () => CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES,
+      maxEntryBytes: () => CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+    },
+    expected: {
+      artifactDigest: artifactBinding.artifactDigest,
+      artifactId: artifactBinding.artifactId,
+      artifactName: artifactBinding.artifactName,
+      artifactSizeBytes: artifactBinding.artifactSizeBytes,
+      repository: params.repo,
+      runStatePolicy: "completed-success",
+      runAttempt: runBinding.runAttempt,
+      runId: runBinding.runId,
+      workflowEvent: "workflow_dispatch",
+      workflowHeadBranch: "main",
+      workflowPath: runBinding.workflowPath,
+      workflowSha: runBinding.headSha,
+    },
+    fetchImpl: params.fetchImpl,
+    maxArchiveBytes: CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES,
+    retryAttempts: params.retryAttempts,
+    retryDelayMs: params.retryDelayMs,
+    timeoutMs: params.timeoutMs,
+    token: params.token,
+  });
+  const bytes = downloaded.files.get(CLAWHUB_BOOTSTRAP_READBACK_FILE);
+  if (!bytes) {
+    throw new Error("Plugin ClawHub New readback artifact is missing its evidence file.");
+  }
+  return {
+    value: parseJson(
+      decodeUtf8Exact(bytes, "Plugin ClawHub New readback artifact"),
+      "Plugin ClawHub New readback artifact",
+    ),
+    archiveSha256: requireArtifactDigest(
+      sha256Digest(downloaded.archiveBytes),
+      "Downloaded Plugin ClawHub New readback artifact digest",
+    ),
+  };
+}
+
+async function verifyClawHubBootstrapRun(params: {
+  repo: string;
+  runId: string;
+  releaseSha: string;
+  version: string;
+  expectedPackages: string[];
+  observeAttempt?: (run: ReturnType<typeof requireClawHubBootstrapRunBinding>) => void;
+}) {
+  const run = readGitHubApiJson(
+    params.repo,
+    `actions/runs/${params.runId}`,
+    "Plugin ClawHub New run",
+  );
+  const runBinding = requireClawHubBootstrapRunBinding(run, params.runId);
+  params.observeAttempt?.(runBinding);
+  const terminalRunAttempt = runBinding.terminalRunAttempt;
+  const readbackName = `clawhub-bootstrap-readback-${params.runId}-${terminalRunAttempt}`;
+  const artifactList = readGitHubApiJson(
+    params.repo,
+    `actions/runs/${params.runId}/artifacts?per_page=100&name=${encodeURIComponent(readbackName)}`,
+    "Plugin ClawHub New readback artifact list",
+  );
+  if (!isJsonRecord(artifactList) || !Array.isArray(artifactList.artifacts)) {
+    throw new Error("Plugin ClawHub New readback artifact list is invalid.");
+  }
+  const readbackArtifacts = artifactList.artifacts.filter(
+    (artifact) => isJsonRecord(artifact) && artifact.name === readbackName,
+  );
+  if (readbackArtifacts.length !== 1 || !isJsonRecord(readbackArtifacts[0])) {
+    throw new Error(
+      `Plugin ClawHub New run must have exactly one ${readbackName} artifact; found ${readbackArtifacts.length}.`,
+    );
+  }
+  const readbackArtifact = readbackArtifacts[0];
+  const downloaded = await downloadClawHubBootstrapReadback({
+    repo: params.repo,
+    runId: params.runId,
+    run,
+    readbackArtifact,
+    token: readGitHubToken(),
+  });
+  if (!isJsonRecord(downloaded.value)) {
+    throw new Error("Plugin ClawHub New readback evidence is invalid.");
+  }
+  const packageArtifactId = requirePositiveIntegerString(
+    downloaded.value.artifactId,
+    "Plugin ClawHub New package artifact id",
+  );
+  const packageArtifact = readGitHubApiJson(
+    params.repo,
+    `actions/artifacts/${packageArtifactId}`,
+    "Plugin ClawHub New package artifact",
+  );
+  return validateClawHubBootstrapEvidence({
+    repo: params.repo,
+    runId: params.runId,
+    releaseSha: params.releaseSha,
+    expectedVersion: params.version,
+    expectedPackages: params.expectedPackages,
+    run,
+    readbackArtifact,
+    readbackArchiveSha256: downloaded.archiveSha256,
+    packageArtifact,
+    evidence: downloaded.value,
+  });
 }
 
 function readRootPackageVersion(rootDir: string): string {
@@ -519,7 +1671,7 @@ function readRootPackageVersion(rootDir: string): string {
     readFileSync(resolve(rootDir, "package.json"), "utf8"),
     "package.json",
   );
-  if (!isRecord(packageJson)) {
+  if (!isJsonRecord(packageJson)) {
     throw new Error("package.json returned an unsupported JSON shape.");
   }
   return requireString(packageJson.version, "package.json version");
@@ -551,180 +1703,305 @@ function assertSelectedPackagesResolved(params: {
 
 export async function verifyBetaRelease(
   args: ReleaseVerifyBetaArgs,
-  options: { rootDir?: string } = {},
+  options: {
+    rootDir?: string;
+    pluginNpmReadback?: {
+      // Resolves to an informational note for a superseded published version.
+      verify: (
+        packageName: string,
+        version: string,
+        distTag: string,
+      ) => Promise<string | undefined>;
+      evidence: Record<string, unknown>[];
+    };
+  } = {},
 ): Promise<string[]> {
   const rootDir = options.rootDir ?? resolve(".");
-  const rootVersion = readRootPackageVersion(rootDir);
-  if (rootVersion !== args.version) {
-    throw new Error(`package.json version is ${rootVersion}; expected ${args.version}.`);
-  }
-
-  const lines: string[] = [];
-  const releaseUrl = args.skipGitHubRelease ? undefined : verifyGitHubRelease(args);
-  if (releaseUrl === undefined) {
-    lines.push("GitHub release skipped: final release page is created after verification");
-  } else {
-    lines.push(`GitHub release OK: ${releaseUrl}`);
-  }
-
-  const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
-  lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
-
-  if (!args.skipPostpublish) {
-    runCommandInherited("node", [
-      "--import",
-      "tsx",
-      "scripts/openclaw-npm-postpublish-verify.ts",
-      args.version,
-    ]);
-    lines.push("openclaw postpublish verifier OK");
-  }
-
-  const npmPlugins = collectPublishablePluginPackages(rootDir, {
-    packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
-  });
-  assertSelectedPackagesResolved({
-    label: "npm plugin",
-    selection: args.pluginSelection,
-    packages: npmPlugins,
-  });
-  for (const plugin of npmPlugins) {
-    await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
-  }
-  lines.push(`plugin npm OK: ${npmPlugins.length}`);
-
-  const clawHubPlugins = args.skipClawHub
-    ? []
-    : collectClawHubPublishablePluginPackages(rootDir, {
-        packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
-      });
-  if (args.skipClawHub) {
-    lines.push("ClawHub skipped");
-  } else {
-    assertSelectedPackagesResolved({
-      label: "ClawHub plugin",
-      selection: args.pluginSelection,
-      packages: clawHubPlugins,
-    });
-    for (const plugin of clawHubPlugins) {
-      await verifyClawHubPackage({
-        registry: args.registry,
-        packageName: plugin.packageName,
-        version: args.version,
-        distTag: args.distTag,
-      });
+  const diagnostic = new PostpublishDiagnostics(args, rootDir, "verify");
+  const betaFloorErrors: { scope: NpmDiagnosticScope; message: string }[] = [];
+  let betaFloorFailureScope: NpmDiagnosticScope | undefined;
+  try {
+    diagnostic.start("checkout");
+    const rootVersion = readRootPackageVersion(rootDir);
+    if (rootVersion !== args.version) {
+      throw new Error(`package.json version is ${rootVersion}; expected ${args.version}.`);
     }
-    lines.push(`ClawHub OK: ${clawHubPlugins.length}`);
-  }
+    if (args.releaseSha !== undefined) {
+      const checkedOutSha = runReleaseVerifierCommand("git", ["rev-parse", "HEAD"], {
+        cwd: rootDir,
+      });
+      if (checkedOutSha !== args.releaseSha) {
+        throw new Error(`release checkout SHA is ${checkedOutSha}; expected ${args.releaseSha}.`);
+      }
+    }
+    diagnostic.success("checkout");
 
-  const workflowRuns: WorkflowRunSummary[] = [];
-  if (args.workflowRuns.fullReleaseValidation !== undefined) {
-    workflowRuns.push(
-      verifyWorkflowRun({
-        id: args.workflowRuns.fullReleaseValidation,
-        label: "Full Release Validation",
-        repo: args.repo,
-        expectedWorkflowName: "Full Release Validation",
-        allowedHeadBranches: ["main", args.workflowRef],
-        rerunFailed: false,
-      }),
-    );
-  }
-  if (args.workflowRuns.pluginNpm !== undefined) {
-    workflowRuns.push(
-      verifyWorkflowRun({
-        id: args.workflowRuns.pluginNpm,
-        label: "Plugin NPM Release",
-        repo: args.repo,
-        expectedWorkflowName: "Plugin NPM Release",
-        expectedHeadBranch: args.workflowRef,
-        rerunFailed: false,
-      }),
-    );
-  }
-  if (args.workflowRuns.pluginClawHub !== undefined) {
-    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
-    workflowRuns.push(
-      verifyWorkflowRun({
-        id: args.workflowRuns.pluginClawHub,
-        label: "Plugin ClawHub Release",
-        repo: args.repo,
-        expectedWorkflowName: "Plugin ClawHub Release",
-        expectedHeadBranch: clawHubWorkflowRef,
-        rerunFailed: args.rerunFailedClawHub,
-      }),
-    );
-  }
-  if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
-    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
-    workflowRuns.push(
-      verifyWorkflowRun({
-        id: args.workflowRuns.pluginClawHubBootstrap,
-        label: "Plugin ClawHub New",
-        repo: args.repo,
-        expectedWorkflowName: "Plugin ClawHub New",
-        expectedHeadBranch: clawHubWorkflowRef,
-        rerunFailed: false,
-      }),
-    );
-  }
-  if (args.workflowRuns.openclawNpm !== undefined) {
-    workflowRuns.push(
-      verifyWorkflowRun({
-        id: args.workflowRuns.openclawNpm,
-        label: "OpenClaw NPM Release",
-        repo: args.repo,
-        expectedWorkflowName: "OpenClaw NPM Release",
-        expectedHeadBranch: args.workflowRef,
-        rerunFailed: false,
-      }),
-    );
-  }
-  if (args.workflowRuns.npmTelegram !== undefined) {
-    workflowRuns.push(
-      verifyWorkflowRun({
-        id: args.workflowRuns.npmTelegram,
-        label: "NPM Telegram Beta E2E",
-        repo: args.repo,
-        expectedWorkflowName: "NPM Telegram Beta E2E",
-        allowedHeadBranches: ["main", args.workflowRef],
-        rerunFailed: false,
-      }),
-    );
-  }
-  for (const run of workflowRuns) {
-    lines.push(
-      `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
-    );
-  }
+    const lines: string[] = [];
+    if (!args.skipGitHubRelease) {
+      diagnostic.start("githubRelease");
+    }
+    const releaseUrl = args.skipGitHubRelease ? undefined : verifyGitHubRelease(args);
+    if (!args.skipGitHubRelease) {
+      diagnostic.success("githubRelease", true);
+    }
+    if (releaseUrl === undefined) {
+      lines.push("GitHub release skipped: final release page is created after verification");
+    } else {
+      lines.push(`GitHub release OK: ${releaseUrl}`);
+    }
 
-  if (args.evidenceOut !== undefined) {
-    const evidencePath = resolve(rootDir, args.evidenceOut);
-    mkdirSync(dirname(evidencePath), { recursive: true });
-    writeFileSync(
-      evidencePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          releaseVersion: args.version,
-          releaseTag: args.tag,
-          npmDistTag: args.distTag,
-          pluginSelection: args.pluginSelection,
-          openclawNpmIntegrity: openclawNpm.integrity,
-          openclawNpmTarball: openclawNpm.tarball,
-          npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
-          npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
-          githubReleaseUrl: releaseUrl ?? null,
-          pluginNpmPackageCount: npmPlugins.length,
-          clawHubPackageCount: clawHubPlugins.length,
-          workflowRuns,
+    diagnostic.start("coreNpm");
+    const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
+    diagnostic.observeNpmPublication({ stage: "coreNpm" });
+    const corePackages = collectPublishableCorePackages(rootDir);
+    // Core versions can be reused without retagging; only enforce their beta floor.
+    for (const name of ["openclaw", ...corePackages.map((pkg) => pkg.name)]) {
+      const error = await readNpmBetaFloorError(name, args.version);
+      if (error !== undefined) {
+        betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: error });
+        diagnostic.fail(createNpmBetaFloorError([error]));
+      }
+    }
+    const coreBetaFloorFailed = betaFloorErrors.length > 0;
+    if (!coreBetaFloorFailed) {
+      diagnostic.success("coreNpm");
+      lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
+      lines.push(`core npm beta floors OK: ${corePackages.length}`);
+    }
+
+    if (!args.skipPostpublish && !coreBetaFloorFailed) {
+      diagnostic.start("postpublish");
+      const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(
+        rootDir,
+        args.postpublishVerifier,
+      );
+      execFileSync("node", ["--import", "tsx", postpublishVerifier, args.version], {
+        stdio: "inherit",
+      });
+      lines.push("openclaw postpublish verifier OK");
+      diagnostic.success("postpublish");
+    }
+
+    diagnostic.start("pluginNpm");
+    const npmPlugins = collectPublishablePluginPackages(rootDir, {
+      packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
+    });
+    diagnostic.packages("pluginNpm", npmPlugins);
+    assertSelectedPackagesResolved({
+      label: "npm plugin",
+      selection: args.pluginSelection,
+      packages: npmPlugins,
+    });
+    for (const plugin of npmPlugins) {
+      diagnostic.package("pluginNpm", plugin.packageName, "started");
+      // Full publication owns tarball readback, including prior-parent publishes.
+      // Only standalone health checks retain metadata verification.
+      if (options.pluginNpmReadback) {
+        const note = await options.pluginNpmReadback.verify(
+          plugin.packageName,
+          args.version,
+          args.distTag,
+        );
+        if (note !== undefined) {
+          lines.push(`plugin npm WARN: ${note}`);
+        }
+      } else {
+        await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+      }
+      const scope: NpmDiagnosticScope = { stage: "pluginNpm", packageName: plugin.packageName };
+      diagnostic.observeNpmPublication(scope);
+      const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
+      if (betaFloorError !== undefined) {
+        betaFloorErrors.push({ scope, message: betaFloorError });
+        diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
+      } else {
+        diagnostic.package("pluginNpm", plugin.packageName, "success");
+      }
+    }
+    if (!betaFloorErrors.some(({ scope }) => scope.stage === "pluginNpm")) {
+      diagnostic.success("pluginNpm");
+    }
+    const firstBetaFloorError = betaFloorErrors[0];
+    if (firstBetaFloorError) {
+      // The final catch must not overwrite the last healthy package or stage.
+      betaFloorFailureScope = firstBetaFloorError.scope;
+      throw createNpmBetaFloorError(betaFloorErrors.map(({ message }) => message));
+    }
+    lines.push(`plugin npm OK: ${npmPlugins.length}`);
+
+    if (!args.skipClawHub) {
+      diagnostic.start("clawHub");
+    }
+    const clawHubPlugins = args.skipClawHub
+      ? []
+      : collectClawHubPublishablePluginPackages(rootDir, {
+          packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
+        });
+    if (args.skipClawHub) {
+      lines.push("ClawHub skipped");
+    } else {
+      diagnostic.packages("clawHub", clawHubPlugins);
+      assertSelectedPackagesResolved({
+        label: "ClawHub plugin",
+        selection: args.pluginSelection,
+        packages: clawHubPlugins,
+      });
+      for (const plugin of clawHubPlugins) {
+        diagnostic.package("clawHub", plugin.packageName, "started");
+        await verifyClawHubPackage({
+          registry: args.registry,
+          packageName: plugin.packageName,
+          version: args.version,
+          distTag: args.distTag,
+        });
+        diagnostic.package("clawHub", plugin.packageName, "success");
+      }
+      diagnostic.success("clawHub");
+      lines.push(`ClawHub OK: ${clawHubPlugins.length}`);
+    }
+
+    const workflowRuns: WorkflowRunSummary[] = [];
+    const verifyChild = (
+      name: Exclude<DiagnosticChildName, "pluginClawHubBootstrap">,
+      label: string,
+      workflowOptions: () => Omit<
+        Parameters<typeof verifyWorkflowRun>[0],
+        "id" | "label" | "repo" | "expectedWorkflowName" | "observe"
+      >,
+    ) => {
+      const id = args.workflowRuns[name];
+      if (id === undefined) {
+        return;
+      }
+      const stage = diagnostic.workflowStage(name);
+      diagnostic.start(stage);
+      workflowRuns.push(
+        verifyWorkflowRun({
+          ...workflowOptions(),
+          id,
+          label,
+          repo: args.repo,
+          expectedWorkflowName: label,
+          observe: (run, count) => diagnostic.observeRun(name, run, count),
+        }),
+      );
+      diagnostic.success(stage);
+    };
+    const allowedReleaseWorkflowHeadBranches = args.workflowRef
+      ? ["main", args.workflowRef]
+      : ["main"];
+    verifyChild("fullReleaseValidation", "Full Release Validation", () => ({
+      allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
+    }));
+    verifyChild("pluginNpm", "Plugin NPM Release", () => ({
+      expectedHeadBranch: args.workflowRef,
+    }));
+    verifyChild("pluginClawHub", "Plugin ClawHub Release", () => ({
+      expectedHeadBranch: args.clawHubWorkflowRef ?? args.workflowRef,
+      rerunFailed: args.rerunFailedClawHub,
+    }));
+    if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
+      diagnostic.start("pluginClawHubBootstrap");
+      const run = await verifyClawHubBootstrapRun({
+        repo: args.repo,
+        runId: args.workflowRuns.pluginClawHubBootstrap,
+        releaseSha: requireCommitSha(args.releaseSha, "release SHA"),
+        version: args.version,
+        expectedPackages: args.clawHubBootstrapPlugins,
+        observeAttempt: (attempt) => {
+          Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
+            runAttempt: attempt.terminalRunAttempt,
+            status: "completed",
+            conclusion: "success",
+          });
+          diagnostic.save();
         },
-        null,
-        2,
-      )}\n`,
-    );
-    lines.push(`release evidence written: ${args.evidenceOut}`);
-  }
+      });
+      workflowRuns.push(run);
+      const bootstrap = run.bootstrapEvidence;
+      Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
+        runAttempt: bootstrap.terminalRunAttempt,
+        producerRunAttempt: bootstrap.producerRunAttempt,
+        readbackArtifactId: bootstrap.readbackArtifactId,
+        packageArtifactId: bootstrap.packageArtifactId,
+        status: "completed",
+        conclusion: "success",
+      });
+      diagnostic.success("pluginClawHubBootstrap");
+    }
+    verifyChild("openclawNpm", "OpenClaw NPM Release", () => {
+      const originalAttempt = normalizeOptionalString(
+        process.env.OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT,
+      );
+      return {
+        expectedRunAttempt:
+          originalAttempt === undefined
+            ? undefined
+            : requirePositiveSafeInteger(originalAttempt, "original npm publisher attempt"),
+        expectedHeadSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+        acceptFailedRun:
+          originalAttempt === undefined
+            ? undefined
+            : (_run, jobs) => isRecoverableOpenClawNpmRegistryReadbackFailure(jobs),
+        expectedHeadBranch:
+          process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF?.replace(/^refs\/(?:tags|heads)\//u, "") ??
+          args.workflowRef,
+      };
+    });
+    verifyChild("npmTelegram", "NPM Telegram Beta E2E", () => ({
+      allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
+    }));
+    for (const run of workflowRuns) {
+      lines.push(
+        `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
+      );
+    }
 
-  return lines;
+    diagnostic.data.verification = "success";
+    diagnostic.save();
+    if (args.evidenceOut !== undefined) {
+      diagnostic.start("evidence");
+      const evidencePath = resolve(rootDir, args.evidenceOut);
+      mkdirSync(dirname(evidencePath), { recursive: true });
+      writeFileSync(
+        evidencePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            releaseVersion: args.version,
+            releaseTag: args.tag,
+            npmDistTag: args.distTag,
+            pluginSelection: args.pluginSelection,
+            openclawNpmIntegrity: openclawNpm.integrity,
+            openclawNpmTarball: openclawNpm.tarball,
+            npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
+            npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
+            githubReleaseUrl: releaseUrl ?? null,
+            pluginNpmPackageCount: npmPlugins.length,
+            ...(options.pluginNpmReadback
+              ? { pluginNpmPublicationReadbacks: options.pluginNpmReadback.evidence }
+              : {}),
+            clawHubPackageCount: clawHubPlugins.length,
+            workflowRuns,
+            clawHubBootstrapEvidence:
+              workflowRuns.find((run) => run.bootstrapEvidence)?.bootstrapEvidence ?? null,
+          },
+          null,
+          2,
+        )}\n`,
+        { flag: "wx" },
+      );
+      diagnostic.success("evidence");
+      lines.push(`release evidence written: ${args.evidenceOut}`);
+    }
+
+    return lines;
+  } catch (error) {
+    diagnostic.fail(error, betaFloorFailureScope);
+    throw error;
+  }
+}
+
+if (import.meta.main) {
+  recordReleasePublishDiagnostics(process.argv[2] ?? "");
 }

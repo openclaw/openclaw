@@ -1,0 +1,429 @@
+/** Frozen backup ownership and resource policy shared by archive traversal and SQLite discovery. */
+import { realpathSync, statSync, type Dirent, type Stats } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
+import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
+import { isTransientBackupPath, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { walkDirectory } from "../infra/fs-safe.js";
+import { isUpdateCapturePath } from "../infra/update-capture-paths.js";
+import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+
+export type BackupAgentRoot = Readonly<{
+  agentId: string;
+  sourcePath: string;
+  databasePath: string;
+}>;
+
+export type BackupRegenerableKind =
+  | "agent temporary files"
+  | "managed state"
+  | "plugin skills"
+  | "plugin resource"
+  | "plugin dependencies";
+
+type BackupRegenerableRoot = Readonly<{
+  kind: BackupRegenerableKind;
+  sourcePath: string;
+}>;
+
+export type BackupCoreDatabase = Readonly<
+  {
+    sourcePath: string;
+    identity?: Stats;
+  } & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string })
+>;
+
+/** Ephemeral coverage of a captured canonical image; never part of the archive manifest. */
+export type BackupSqliteSnapshotFact = Readonly<
+  { sourcePath: string; dev: number; ino: number } & (
+    | { role: "global" }
+    | { role: "agent"; agentId: string }
+  )
+>;
+
+type BackupResourcePolicy = Readonly<{
+  stateDir: string;
+  agentRoots: readonly BackupAgentRoot[];
+  regenerableRoots: readonly BackupRegenerableRoot[];
+  isIncluded: (sourcePath: string) => boolean;
+  isTraversable: (sourcePath: string) => boolean;
+  isPackageContent: (sourcePath: string) => boolean;
+  isVolatile: (sourcePath: string) => boolean;
+}>;
+
+export type BackupResourcePlan = BackupResourcePolicy &
+  Readonly<{
+    protectedPaths: readonly string[];
+    excludedPaths: readonly string[];
+    pluginResourceRoots: readonly string[];
+  }>;
+
+export type BackupResourceInventory = BackupResourcePolicy &
+  Readonly<{
+    coreDatabases: readonly BackupCoreDatabase[];
+    coreDatabaseSourcePaths: readonly string[];
+    resolveSqliteSource: (
+      sourcePath: string,
+      identity?: Stats,
+    ) => BackupCoreDatabase | { role: "plugin" } | { role: "unresolvable-link" } | undefined;
+  }>;
+
+const MANAGED_STATE_ROOTS = ["dev", "git", "npm", "npm-runtime", "tmp", "tools"] as const;
+
+async function listDefaultAgentTemporaryRoots(
+  stateDir: string,
+  agentRoots: readonly BackupAgentRoot[],
+): Promise<string[]> {
+  // Name-based scratch ownership belongs only to the shipped default layout;
+  // a configured custom root keeps its durable tmp trees even when nested there.
+  const customAgentRoots = agentRoots.filter(
+    ({ agentId, sourcePath }) => sourcePath !== path.join(stateDir, "agents", agentId, "agent"),
+  );
+  const isCustomAgentPath = (candidate: string) =>
+    customAgentRoots.some(({ sourcePath }) => isPathInside(sourcePath, candidate));
+  const temporaryRoots: string[] = [];
+  let agentDirectories: Dirent[];
+  try {
+    agentDirectories = await fs.readdir(path.join(stateDir, "agents"), { withFileTypes: true });
+  } catch (error) {
+    if (isNotFoundPathError(error)) {
+      return temporaryRoots;
+    }
+    throw error;
+  }
+  for (const directory of agentDirectories) {
+    const agentRoot = path.join(stateDir, "agents", directory.name, "agent");
+    if (!directory.isDirectory() || isCustomAgentPath(agentRoot)) {
+      continue;
+    }
+    const scan = await walkDirectory(agentRoot, {
+      symlinks: "skip",
+      include: (entry) =>
+        entry.kind === "directory" &&
+        (entry.name === "tmp" || entry.name === ".tmp") &&
+        !isCustomAgentPath(entry.path),
+      descend: (entry) =>
+        entry.name !== "tmp" && entry.name !== ".tmp" && !isCustomAgentPath(entry.path),
+    });
+    const failure = scan.failedDirs.find(({ error }) => !isNotFoundPathError(error));
+    if (failure) {
+      throw failure.error;
+    }
+    temporaryRoots.push(...scan.entries.map((entry) => entry.path));
+  }
+  return temporaryRoots;
+}
+
+/** Prepare declared backup resources without opening live SQLite databases. */
+export async function createBackupResourcePlan(params: {
+  stateDir: string;
+  configPaths: readonly string[];
+  oauthDirs: readonly string[];
+  workspaceDirs: readonly string[];
+  excludedWorkspaceDirs: readonly string[];
+  agentRoots: readonly BackupAgentRoot[];
+  pluginResources: readonly ResolvedPluginBackupResource[];
+  pluginRoots: readonly string[];
+  onlyConfig?: boolean;
+}): Promise<BackupResourcePlan> {
+  const stateDir = path.resolve(params.stateDir);
+  const pluginResourceRoots: string[] = [];
+  const configPaths = new Set(params.configPaths.map((configPath) => path.resolve(configPath)));
+  const agentRoots = Object.freeze(
+    params.agentRoots.map((root) =>
+      Object.freeze({
+        agentId: root.agentId,
+        sourcePath: path.resolve(root.sourcePath),
+        databasePath: path.resolve(root.databasePath),
+      }),
+    ),
+  );
+  const protectedPathSet = new Set<string>([
+    ...configPaths,
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
+  ]);
+  const regenerableRoots: BackupRegenerableRoot[] = [];
+  const exclude = (kind: BackupRegenerableKind, sourcePath: string): void => {
+    regenerableRoots.push({ kind, sourcePath: path.resolve(sourcePath) });
+  };
+
+  if (!params.onlyConfig) {
+    for (const directory of [...params.oauthDirs, ...params.workspaceDirs]) {
+      protectedPathSet.add(path.resolve(directory));
+    }
+    for (const root of agentRoots) {
+      protectedPathSet.add(root.sourcePath);
+      protectedPathSet.add(root.databasePath);
+    }
+    for (const root of MANAGED_STATE_ROOTS) {
+      exclude("managed state", path.join(stateDir, root));
+    }
+    for (const temporaryRoot of await listDefaultAgentTemporaryRoots(stateDir, agentRoots)) {
+      exclude("agent temporary files", temporaryRoot);
+    }
+    exclude("plugin skills", path.join(stateDir, "plugin-skills"));
+
+    for (const resource of params.pluginResources) {
+      const anchors = resource.scope === "state" ? [{ sourcePath: stateDir }] : agentRoots;
+      for (const anchor of anchors) {
+        const sourcePath = path.resolve(anchor.sourcePath, ...resource.relativePath.split("/"));
+        if (!isPathInside(anchor.sourcePath, sourcePath)) {
+          throw new Error(
+            `Plugin ${resource.pluginId} backup resource escapes its ${resource.scope} root: ${resource.relativePath}`,
+          );
+        }
+        if (resource.disposition === "include") {
+          protectedPathSet.add(sourcePath);
+          pluginResourceRoots.push(sourcePath);
+        } else {
+          exclude("plugin resource", sourcePath);
+        }
+      }
+    }
+    for (const pluginRoot of params.pluginRoots) {
+      exclude("plugin dependencies", path.join(pluginRoot, "node_modules"));
+    }
+  }
+
+  const uniqueRegenerableRoots = Object.freeze(
+    dedupeByKey(
+      regenerableRoots.toSorted(
+        (left, right) =>
+          left.sourcePath.localeCompare(right.sourcePath) || left.kind.localeCompare(right.kind),
+      ),
+      (resource) => `${resource.kind}\0${resource.sourcePath}`,
+    ),
+  );
+  const protectedPaths = Object.freeze([...protectedPathSet].toSorted());
+  // Workspace exclusions stop traversal but are not regenerable resources;
+  // protected nested owners remain reachable through isIncluded below.
+  const excludedPaths = Object.freeze(
+    [
+      ...uniqueRegenerableRoots.map((resource) => resource.sourcePath),
+      ...new Set(params.excludedWorkspaceDirs.map((dir) => path.resolve(dir))),
+    ].toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
+  );
+
+  const resources = {
+    stateDir,
+    agentRoots,
+    regenerableRoots: uniqueRegenerableRoots,
+    protectedPaths,
+    excludedPaths,
+    pluginResourceRoots: Object.freeze(pluginResourceRoots),
+  };
+  return Object.freeze({ ...resources, ...createBackupPathPolicy(resources) });
+}
+
+function createBackupPathPolicy({
+  stateDir,
+  agentRoots,
+  regenerableRoots,
+  protectedPaths,
+  excludedPaths,
+}: Pick<
+  BackupResourcePlan,
+  "stateDir" | "agentRoots" | "regenerableRoots" | "protectedPaths" | "excludedPaths"
+>): BackupResourcePolicy {
+  const isIncluded = (sourcePath: string): boolean => {
+    const candidate = path.resolve(sourcePath);
+    if (isUpdateCapturePath(candidate, stateDir)) {
+      return false;
+    }
+    const exclusion = excludedPaths.find((excludedPath) => isPathInside(excludedPath, candidate));
+    if (!exclusion) {
+      return true;
+    }
+    // Broad state/agent roots cannot resurrect a narrower owner exclusion;
+    // only an explicit include inside the excluded subtree overrides it.
+    return protectedPaths.some(
+      (protectedPath) =>
+        isPathInside(protectedPath, candidate) && isPathInside(exclusion, protectedPath),
+    );
+  };
+  const isTraversable = (sourcePath: string): boolean => {
+    const candidate = path.resolve(sourcePath);
+    if (isUpdateCapturePath(candidate, stateDir)) {
+      return false;
+    }
+    return (
+      isIncluded(candidate) ||
+      protectedPaths.some((protectedPath) => isPathInside(candidate, protectedPath))
+    );
+  };
+  const isPackageContent = (sourcePath: string): boolean => {
+    const candidate = path.resolve(sourcePath);
+    // Explicit config, workspace, agent, and plugin ownership may live inside
+    // node_modules; keep both those paths and their traversal ancestors.
+    if (
+      protectedPaths.some(
+        (protectedPath) =>
+          isPathInside(protectedPath, candidate) || isPathInside(candidate, protectedPath),
+      )
+    ) {
+      return false;
+    }
+    if (!isPathInside(stateDir, candidate)) {
+      return false;
+    }
+    const segments = path.relative(stateDir, candidate).split(path.sep);
+    // Default-layout agent ids can themselves be node_modules. Preserve the
+    // canonical database, its sidecars, and traversal ancestors as agent state.
+    if (
+      segments[0] === "agents" &&
+      segments[1] &&
+      (segments.length === 2 ||
+        (segments[2] === "agent" &&
+          (segments.length === 3 ||
+            (segments.length === 4 &&
+              /^openclaw-agent\.sqlite(?:-wal|-shm|-journal)?$/u.test(segments[3] ?? "")))))
+    ) {
+      return false;
+    }
+    return segments.includes("node_modules");
+  };
+  const volatilePlan = { stateDirs: [stateDir] };
+  const isVolatile = (sourcePath: string): boolean => {
+    const candidate = path.resolve(sourcePath);
+    // State-specific rules do not apply inside explicit owners. Transient names
+    // apply everywhere, while selected paths and their ancestors stay reachable.
+    const ownedPath = protectedPaths.some((protectedPath) =>
+      isPathInside(protectedPath, candidate),
+    );
+    return (
+      (candidate !== stateDir &&
+        !protectedPaths.some((protectedPath) => isPathInside(candidate, protectedPath)) &&
+        isTransientBackupPath(candidate)) ||
+      (!ownedPath && isVolatileBackupPath(candidate, volatilePlan))
+    );
+  };
+
+  return {
+    stateDir,
+    agentRoots,
+    regenerableRoots,
+    isIncluded,
+    isTraversable,
+    isPackageContent,
+    isVolatile,
+  };
+}
+
+/** Bind archive ownership to the registrations captured in its online root snapshot. */
+export function sealBackupResourceInventory(
+  resources: BackupResourcePlan,
+  coreDatabases: readonly BackupCoreDatabase[],
+): BackupResourceInventory {
+  const owners: BackupCoreDatabase[] = [];
+  const ownersByPath = new Map<string, BackupCoreDatabase>();
+  const ownersByRealpath = new Map<string, BackupCoreDatabase>();
+  for (const database of coreDatabases) {
+    const sourcePath = path.resolve(normalizeWindowsNamespaceAlias(database.sourcePath));
+    const realPath = database.identity ? realpathSync(sourcePath) : sourcePath;
+    const previous =
+      ownersByRealpath.get(realPath) ??
+      owners.find(
+        (owner) =>
+          owner.identity &&
+          database.identity &&
+          sameFileIdentity(owner.identity, database.identity),
+      );
+    if (
+      previous &&
+      (previous.role !== database.role ||
+        (previous.role === "agent" &&
+          database.role === "agent" &&
+          previous.agentId !== database.agentId))
+    ) {
+      throw new Error(`SQLite path aliases multiple core database owners: ${sourcePath}`);
+    }
+    // Registry rows can spell the same owner's path differently. Keep one owner
+    // and retain every distinct archive name so aliases reuse its verified snapshot.
+    // `\\?\` and `\\.\` prefixes encode as that drive or UNC path, so they share its key.
+    const owner = previous ?? Object.freeze({ ...database, sourcePath });
+    const archiveOwner = ownersByPath.get(sourcePath);
+    if (archiveOwner && archiveOwner !== owner) {
+      throw new Error(`SQLite path aliases multiple core database owners: ${sourcePath}`);
+    }
+    if (!previous) {
+      owners.push(owner);
+    }
+    ownersByPath.set(sourcePath, owner);
+    ownersByRealpath.set(realPath, owner);
+  }
+  const protectedPaths = Object.freeze(
+    [...new Set([...resources.protectedPaths, ...ownersByPath.keys()])].toSorted(),
+  );
+  const resolveSqliteSource: BackupResourceInventory["resolveSqliteSource"] = (
+    sourcePath,
+    identity,
+  ) => {
+    const candidate = path.resolve(normalizeWindowsNamespaceAlias(sourcePath));
+    const exact = ownersByPath.get(candidate);
+    let current = identity;
+    let unresolvableLink = false;
+    if (!exact && !current) {
+      try {
+        current = statSync(candidate, { throwIfNoEntry: false });
+      } catch (error) {
+        if (!hasErrnoCode(error, "ELOOP")) {
+          throw error;
+        }
+        unresolvableLink = true;
+      }
+    }
+    const owner =
+      exact ??
+      (current
+        ? owners.find(
+            (database) => database.identity && sameFileIdentity(database.identity, current),
+          )
+        : undefined);
+    return (
+      owner ??
+      (resources.pluginResourceRoots.some((root) => isPathInside(root, candidate))
+        ? { role: "plugin" }
+        : unresolvableLink
+          ? { role: "unresolvable-link" }
+          : undefined)
+    );
+  };
+
+  return Object.freeze({
+    ...createBackupPathPolicy({ ...resources, protectedPaths }),
+    coreDatabases: Object.freeze(owners),
+    coreDatabaseSourcePaths: Object.freeze(
+      [...ownersByPath].filter(([, owner]) => owner.identity).map(([sourcePath]) => sourcePath),
+    ),
+    resolveSqliteSource,
+  });
+}
+
+/** Report only canonical sources present in the completed snapshot generation. */
+export function describeCapturedBackupSqliteSnapshots(
+  inventory: BackupResourceInventory,
+  capturedSourcePaths: readonly string[],
+): readonly BackupSqliteSnapshotFact[] {
+  const capturedPaths = new Set(capturedSourcePaths);
+  return Object.freeze(
+    inventory.coreDatabases.flatMap((owner) =>
+      owner.role !== "quarantine" && owner.identity && capturedPaths.has(owner.sourcePath)
+        ? [
+            Object.freeze({
+              sourcePath: owner.sourcePath,
+              dev: owner.identity.dev,
+              ino: owner.identity.ino,
+              ...(owner.role === "agent"
+                ? { role: "agent" as const, agentId: owner.agentId }
+                : { role: "global" as const }),
+            }),
+          ]
+        : [],
+    ),
+  );
+}

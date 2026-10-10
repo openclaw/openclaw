@@ -53,7 +53,7 @@ describe("kilocode provider plugin", () => {
 
     const wrappedAuto = provider.wrapStreamFn?.({
       provider: "kilocode",
-      modelId: "kilo/auto",
+      modelId: "kilo-auto/balanced",
       thinkingLevel: "high",
       streamFn: baseStreamFn,
     } as never);
@@ -62,42 +62,13 @@ describe("kilocode provider plugin", () => {
       {
         api: "openai-completions",
         provider: "kilocode",
-        id: "kilo/auto",
+        id: "kilo-auto/balanced",
       } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     );
 
     expect(capturedPayload).not.toHaveProperty("reasoning");
-  });
-
-  it("normalizes string stop to array in plugin-owned stream hook", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = { stop: "\n" };
-      options?.onPayload?.(payload as never, model as never);
-      payloads.push(payload);
-      return {} as never;
-    };
-
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "kilocode",
-      modelId: "deepseek/deepseek-v4-flash",
-      streamFn: baseStreamFn,
-    } as never);
-
-    void wrapped?.(
-      {
-        api: "openai-completions",
-        provider: "kilocode",
-        id: "deepseek/deepseek-v4-flash",
-      } as Model<"openai-completions">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(payloads[0]?.stop).toEqual(["\n"]);
   });
 
   it("normalizes string stop after caller payload hooks", async () => {

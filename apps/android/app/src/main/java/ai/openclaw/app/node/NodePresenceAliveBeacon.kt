@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.takeUtf16Safe
 import android.os.Build
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
@@ -37,8 +37,6 @@ internal object NodePresenceAliveBeacon {
     val reason: String?,
   )
 
-  private val json = Json { ignoreUnknownKeys = true }
-
   /** Skips sends after a recent successful presence update. */
   fun shouldSkipRecentSuccess(
     nowMs: Long,
@@ -52,7 +50,7 @@ internal object NodePresenceAliveBeacon {
   }
 
   /** Human-readable Android version label included in presence payloads. */
-  fun androidPlatformLabel(): String {
+  fun androidPlatformMetadata(): String {
     val release =
       Build.VERSION.RELEASE
         ?.trim()
@@ -89,12 +87,7 @@ internal object NodePresenceAliveBeacon {
     // Bound log/IPC responses before JSON parsing to avoid memory spikes from
     // malformed gateway replies.
     if (raw.length > MAX_RESPONSE_JSON_CHARS) return null
-    val obj =
-      try {
-        json.parseToJsonElement(raw).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val obj = parseJsonParamsObject(raw) ?: return null
     return ResponsePayload(
       ok = parseJsonBooleanFlag(obj, "ok"),
       event = parseJsonString(obj, "event"),
@@ -109,6 +102,6 @@ internal object NodePresenceAliveBeacon {
     return value
       .map { ch -> if (ch.isISOControl()) ' ' else ch }
       .joinToString("")
-      .take(200)
+      .takeUtf16Safe(200)
   }
 }

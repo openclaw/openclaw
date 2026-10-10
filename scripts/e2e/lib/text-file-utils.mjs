@@ -1,11 +1,57 @@
 // Text file tail helpers for E2E assertions.
 import fs from "node:fs";
 
+export function textFileContains(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(64 * 1024, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      const pattern = needle instanceof RegExp;
+      if (pattern ? needle.test(text) : text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-(pattern ? 256 : Math.max(256, needle.length - 1)));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function decodeUtf8Tail(buffer, truncated) {
+  let start = 0;
+  if (truncated) {
+    while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
+      start += 1;
+    }
+  }
+  return buffer.subarray(start).toString("utf8");
+}
+
 export function tailText(text, maxBytes) {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) {
     return text;
   }
-  return Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
+  return decodeUtf8Tail(Buffer.from(text, "utf8").subarray(-maxBytes), true);
 }
 
 export function readTextFileTail(file, maxBytes) {
@@ -26,7 +72,7 @@ export function readTextFileTail(file, maxBytes) {
     fd = fs.openSync(file, "r");
     const buffer = Buffer.alloc(length);
     const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
+    return decodeUtf8Tail(buffer.subarray(0, bytesRead), start > 0);
   } catch {
     return "";
   } finally {

@@ -1,0 +1,115 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS,
+  type SlackQaApprovalDecision,
+  type SlackApprovalCheckpointState,
+  type SlackApprovalCheckpointAck,
+  SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV,
+  SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV,
+  type SlackMessage,
+} from "./slack-live.contracts.js";
+import { buildSlackApprovalCheckpointMessage } from "./slack-live.observations.js";
+
+function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.env) {
+  const checkpointDir = env[SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV]?.trim();
+  if (!checkpointDir) {
+    return undefined;
+  }
+  const rawTimeout = env[SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV]?.trim();
+  const timeoutMs = rawTimeout
+    ? parseStrictPositiveInteger(rawTimeout)
+    : SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS;
+  if (timeoutMs === undefined) {
+    throw new Error(`${SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV} must be a positive integer.`);
+  }
+  return {
+    checkpointDir,
+    timeoutMs,
+  };
+}
+
+async function waitForSlackApprovalCheckpointAck(params: {
+  ackPath: string;
+  timeoutMs: number;
+}): Promise<SlackApprovalCheckpointAck> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(params.ackPath, "utf8")) as {
+        capturedAt?: unknown;
+        error?: unknown;
+        screenshotPath?: unknown;
+      };
+      if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+        throw new Error(`Slack approval checkpoint watcher failed: ${parsed.error}`);
+      }
+      return {
+        capturedAt: typeof parsed.capturedAt === "string" ? parsed.capturedAt : undefined,
+        screenshotPath:
+          typeof parsed.screenshotPath === "string" ? parsed.screenshotPath : undefined,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    await sleep(500);
+  }
+  throw new Error(`timed out after ${params.timeoutMs}ms waiting for ${params.ackPath}`);
+}
+
+export async function writeSlackApprovalCheckpoint(params: {
+  approvalId: string;
+  approvalKind: ChannelApprovalKind;
+  channelId: string;
+  decision?: SlackQaApprovalDecision;
+  message: SlackMessage;
+  observedAt: string;
+  scenarioId: string;
+  state: SlackApprovalCheckpointState;
+}) {
+  const config = resolveSlackApprovalCheckpointConfig();
+  if (!config) {
+    return undefined;
+  }
+  await fs.mkdir(config.checkpointDir, { recursive: true });
+  const checkpointPath = path.join(
+    config.checkpointDir,
+    `${params.scenarioId}.${params.state}.json`,
+  );
+  const ackPath = path.join(config.checkpointDir, `${params.scenarioId}.${params.state}.ack.json`);
+  await fs.rm(ackPath, { force: true }).catch(() => {});
+  await fs.writeFile(
+    checkpointPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        scenarioId: params.scenarioId,
+        approvalKind: params.approvalKind,
+        state: params.state,
+        approvalId: params.approvalId,
+        channelId: params.channelId,
+        messageTs: params.message.ts,
+        threadTs: params.message.thread_ts ?? null,
+        decision: params.decision ?? null,
+        observedAt: params.observedAt,
+        message: buildSlackApprovalCheckpointMessage(params.message),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const ack = await waitForSlackApprovalCheckpointAck({
+    ackPath,
+    timeoutMs: config.timeoutMs,
+  });
+  return {
+    ackPath,
+    checkpointPath,
+    screenshotPath: ack.screenshotPath,
+  };
+}

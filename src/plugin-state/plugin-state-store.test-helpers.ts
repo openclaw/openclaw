@@ -1,8 +1,12 @@
-// Plugin state test helpers seed SQLite plugin state fixtures.
-import { seedPluginStateDatabaseEntriesForTests } from "./plugin-state-store.sqlite.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { runWriteTransaction } from "./plugin-state-store.database.js";
+import {
+  bindPluginStateEntry,
+  getPluginStateKysely,
+  upsertPluginStateEntry,
+} from "./plugin-state-store.kernel.js";
+import { optionPolicy } from "./plugin-state-store.validation.js";
 
-// Test-only seed helpers for plugin state. Values are serialized through the
-// same JSON storage path used by the production sqlite store.
 type PluginStateSeedEntry = {
   pluginId: string;
   namespace: string;
@@ -12,26 +16,36 @@ type PluginStateSeedEntry = {
   expiresAt?: number | null;
 };
 
+export function clearPluginStateStoreForTests(): void {
+  runWriteTransaction("clear", ({ db }) => {
+    executeSqliteQuerySync(db, getPluginStateKysely(db).deleteFrom("plugin_state_entries"));
+  });
+  optionPolicy.clear();
+}
+
 /** Seeds plugin state entries for tests without opening public store handles. */
 export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]): void {
   if (entries.length === 0) {
     return;
   }
-
-  seedPluginStateDatabaseEntriesForTests(
-    entries.map((entry) => {
-      const valueJson = JSON.stringify(entry.value);
-      if (valueJson == null) {
-        throw new Error("plugin state seed value must be JSON serializable");
-      }
-      return {
-        pluginId: entry.pluginId,
-        namespace: entry.namespace,
-        key: entry.key,
-        valueJson,
-        ...(entry.createdAt != null ? { createdAt: entry.createdAt } : {}),
-        ...(entry.expiresAt !== undefined ? { expiresAt: entry.expiresAt } : {}),
-      };
-    }),
-  );
+  const rows = entries.map(({ value, ...entry }) => {
+    const valueJson = JSON.stringify(value);
+    if (valueJson == null) {
+      throw new Error("plugin state seed value must be JSON serializable");
+    }
+    return { ...entry, valueJson };
+  });
+  const now = Date.now();
+  runWriteTransaction("register", ({ db }) => {
+    for (const [index, entry] of rows.entries()) {
+      upsertPluginStateEntry(
+        db,
+        bindPluginStateEntry({
+          ...entry,
+          createdAt: entry.createdAt ?? now + index,
+          expiresAt: entry.expiresAt ?? null,
+        }),
+      );
+    }
+  });
 }

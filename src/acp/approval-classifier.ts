@@ -1,7 +1,7 @@
-/** Classifies ACP tool permission requests into auto-approved and prompt-required risk buckets. */
 import { homedir } from "node:os";
 import path from "node:path";
-import { asRecord } from "@openclaw/acp-core/record-shared";
+import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,6 +9,7 @@ import {
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 
 const SAFE_SEARCH_TOOL_IDS = new Set(["search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
@@ -29,7 +30,7 @@ const CONTROL_PLANE_TOOL_IDS = new Set([
   "session_status",
 ]);
 
-export type AcpApprovalClass =
+type AcpApprovalClass =
   | "readonly_scoped"
   | "readonly_search"
   | "mutating"
@@ -45,23 +46,21 @@ type AcpApprovalClassification = {
   autoApprove: boolean;
 };
 
+type AcpApprovalToolCall = {
+  title?: string | null;
+  _meta?: unknown;
+  rawInput?: unknown;
+  locations?: unknown;
+};
+
 function readFirstStringValue(
   source: Record<string, unknown> | undefined,
   keys: string[],
 ): string | undefined {
-  if (!source) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const value = normalizeOptionalString(source[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return source ? readTrimmedStringAlias(source, keys) : undefined;
 }
 
-function normalizeToolName(value: string): string | undefined {
+function normalizeToolPolicyName(value: string): string | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized || normalized.length > 128) {
     return undefined;
@@ -74,26 +73,26 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
     return undefined;
   }
   const head = normalizeOptionalString(title.split(":", 1)[0]);
-  return head ? normalizeToolName(head) : undefined;
+  return head ? normalizeToolPolicyName(head) : undefined;
 }
 
-function resolveToolNameForPermission(params: {
-  toolCall?: {
-    title?: string | null;
-    _meta?: unknown;
-    rawInput?: unknown;
-  };
-}): string | undefined {
-  const toolCall = params.toolCall;
-  const toolMeta = asRecord(toolCall?.["_meta"]);
-  const rawInput = asRecord(toolCall?.rawInput);
-
-  const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
-  const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
-  const fromTitle = parseToolNameFromTitle(toolCall?.title);
-  const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
-  const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
-  const titleName = fromTitle;
+function resolveToolNameForPermission(
+  toolCall: AcpApprovalToolCall | undefined,
+): string | undefined {
+  const fromMeta = readFirstStringValue(asRecord(toolCall?.["_meta"]), [
+    "toolName",
+    "tool_name",
+    "name",
+  ]);
+  const fromRawInput = readFirstStringValue(asRecord(toolCall?.rawInput), [
+    "tool",
+    "toolName",
+    "tool_name",
+    "name",
+  ]);
+  const metaName = fromMeta ? normalizeToolPolicyName(fromMeta) : undefined;
+  const rawInputName = fromRawInput ? normalizeToolPolicyName(fromRawInput) : undefined;
+  const titleName = parseToolNameFromTitle(toolCall?.title);
   if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
     return undefined;
   }
@@ -124,25 +123,28 @@ function extractPathFromToolTitle(
   if (!tail) {
     return undefined;
   }
-  const keyedMatch = tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/);
+  const keyedMatch =
+    toolName === "read"
+      ? tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/)
+      : tail.match(/^(?:path|file_path|filePath)\s*:\s*([^,]+)/);
   if (keyedMatch?.[1]) {
     return keyedMatch[1].trim();
   }
   return toolName === "read" ? tail : undefined;
 }
 
-function resolveToolPathCandidate(
-  params: {
-    toolCall?: { rawInput?: unknown };
-  },
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-): string | undefined {
-  const rawInput = asRecord(params.toolCall?.rawInput);
-  return (
-    readFirstStringValue(rawInput, ["path", "file_path", "filePath"]) ??
-    extractPathFromToolTitle(toolTitle, toolName)
-  );
+function resolveToolPathCandidates(
+  toolCall: AcpApprovalToolCall | undefined,
+  toolName: string,
+): string[] {
+  const locations =
+    toolName !== "read" && Array.isArray(toolCall?.locations) ? toolCall.locations : [];
+  const pathKeys = ["path", "file_path", "filePath"];
+  return [
+    readFirstStringValue(asRecord(toolCall?.rawInput), pathKeys),
+    extractPathFromToolTitle(toolCall?.title ?? undefined, toolName),
+    ...locations.map((location) => readFirstStringValue(asRecord(location), pathKeys)),
+  ].filter((value): value is string => value !== undefined);
 }
 
 function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
@@ -150,11 +152,10 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
   if (!candidate) {
     return undefined;
   }
-  if (candidate.startsWith("file://")) {
-    try {
-      const parsed = new URL(candidate);
-      candidate = decodeURIComponent(parsed.pathname || "");
-    } catch {
+  // Parse every file-scheme spelling first; alternate URL forms otherwise look cwd-relative.
+  if (/^file:/i.test(candidate)) {
+    candidate = trySafeFileURLToPath(candidate) ?? "";
+    if (!candidate) {
       return undefined;
     }
   }
@@ -166,19 +167,7 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
   return path.isAbsolute(candidate) ? path.normalize(candidate) : path.resolve(cwd, candidate);
 }
 
-function isReadToolCallScopedToCwd(
-  params: { toolCall?: { rawInput?: unknown } },
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-  cwd: string,
-): boolean {
-  if (toolName !== "read") {
-    return false;
-  }
-  const rawPath = resolveToolPathCandidate(params, toolName, toolTitle);
-  if (!rawPath) {
-    return false;
-  }
+function isToolPathScopedToCwd(rawPath: string, cwd: string): boolean {
   const absolutePath = resolveAbsoluteScopedPath(rawPath, cwd);
   if (!absolutePath) {
     return false;
@@ -188,34 +177,29 @@ function isReadToolCallScopedToCwd(
 
 /** Resolves the ACP approval class for one tool call, failing closed on spoofed tool identity. */
 export function classifyAcpToolApproval(params: {
-  toolCall?: {
-    title?: string | null;
-    _meta?: unknown;
-    rawInput?: unknown;
-  };
+  toolCall?: AcpApprovalToolCall;
   cwd: string;
 }): AcpApprovalClassification {
-  const toolName = resolveToolNameForPermission(params);
+  const toolName = resolveToolNameForPermission(params.toolCall);
   if (!toolName) {
     return { toolName: undefined, approvalClass: "unknown", autoApprove: false };
   }
 
   const isTrustedToolId = isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName);
-  if (toolName === "read" && isTrustedToolId) {
-    const autoApprove = isReadToolCallScopedToCwd(
-      params,
-      toolName,
-      params.toolCall?.title ?? undefined,
-      params.cwd,
-    );
+  if (isTrustedToolId && (toolName === "read" || SAFE_SEARCH_TOOL_IDS.has(toolName))) {
+    const rawPaths = resolveToolPathCandidates(params.toolCall, toolName);
+    const autoApprove =
+      (toolName !== "read" || rawPaths.length > 0) &&
+      rawPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));
     return {
       toolName,
-      approvalClass: autoApprove ? "readonly_scoped" : "other",
+      approvalClass: autoApprove
+        ? toolName === "read"
+          ? "readonly_scoped"
+          : "readonly_search"
+        : "other",
       autoApprove,
     };
-  }
-  if (SAFE_SEARCH_TOOL_IDS.has(toolName) && isTrustedToolId) {
-    return { toolName, approvalClass: "readonly_search", autoApprove: true };
   }
   if (EXEC_CAPABLE_TOOL_IDS.has(toolName)) {
     return { toolName, approvalClass: "exec_capable", autoApprove: false };

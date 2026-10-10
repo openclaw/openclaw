@@ -1,176 +1,123 @@
-// Memory Core plugin module implements manager sync control behavior.
-import type { DatabaseSync } from "node:sqlite";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type {
   MemorySessionSyncTarget,
   MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
-const log = createSubsystemLogger("memory");
-
-export type MemoryReadonlyRecoveryState = {
-  closed: boolean;
-  db: DatabaseSync;
-  vector: {
-    dims?: number;
-  };
-  readonlyRecoveryAttempts: number;
-  readonlyRecoverySuccesses: number;
-  readonlyRecoveryFailures: number;
-  readonlyRecoveryLastError?: string;
-  runSync: (params?: {
-    reason?: string;
-    force?: boolean;
-    sessions?: MemorySessionSyncTarget[];
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }) => Promise<void>;
-  openDatabase: () => DatabaseSync;
-  closeDatabase: (db: DatabaseSync) => void;
-  resetVectorState: () => void;
-  ensureSchema: () => void;
-  readMeta: () => { vectorDims?: number } | undefined;
-};
-
-export function isMemoryReadonlyDbError(err: unknown): boolean {
-  const readonlyPattern =
-    /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
-  const messages = new Set<string>();
-
-  const pushValue = (value: unknown): void => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const normalized = value.trim();
-    if (!normalized) {
-      return;
-    }
-    messages.add(normalized);
-  };
-
-  pushValue(formatErrorMessage(err));
-  if (err && typeof err === "object") {
-    const record = err as Record<string, unknown>;
-    pushValue(record.message);
-    pushValue(record.code);
-    pushValue(record.name);
-    if (record.cause && typeof record.cause === "object") {
-      const cause = record.cause as Record<string, unknown>;
-      pushValue(cause.message);
-      pushValue(cause.code);
-      pushValue(cause.name);
-    }
-  }
-
-  return [...messages].some((value) => readonlyPattern.test(value));
+export function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boolean {
+  return Boolean(
+    params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
+    params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+  );
 }
 
-export function extractMemoryErrorReason(err: unknown): string {
-  if (err instanceof Error && err.message.trim()) {
-    return err.message;
-  }
-  if (err && typeof err === "object") {
-    const record = err as Record<string, unknown>;
-    if (typeof record.message === "string" && record.message.trim()) {
-      return record.message;
-    }
-    if (typeof record.code === "string" && record.code.trim()) {
-      return record.code;
-    }
-  }
-  return String(err);
-}
+export class MemoryTargetedSessionSyncQueue {
+  readonly archiveFiles = new Set<string>();
+  readonly sessions = new Map<string, MemorySessionSyncTarget>();
+  readonly progressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
+  force = false;
+  pending: Promise<void> | null = null;
 
-export async function runMemorySyncWithReadonlyRecovery(
-  state: MemoryReadonlyRecoveryState,
-  params?: MemorySyncParams,
-): Promise<void> {
-  try {
-    await state.runSync(params);
-  } catch (err) {
-    if (!isMemoryReadonlyDbError(err) || state.closed) {
-      throw err;
-    }
-    const reason = extractMemoryErrorReason(err);
-    state.readonlyRecoveryAttempts += 1;
-    state.readonlyRecoveryLastError = reason;
-    log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
-    try {
-      state.closeDatabase(state.db);
-    } catch {}
-    const previousVectorDims = state.vector.dims;
-    state.db = state.openDatabase();
-    state.resetVectorState();
-    state.ensureSchema();
-    const meta = state.readMeta();
-    state.vector.dims = meta?.vectorDims ?? previousVectorDims;
-    try {
-      await state.runSync(params);
-      state.readonlyRecoverySuccesses += 1;
-    } catch (retryErr) {
-      state.readonlyRecoveryFailures += 1;
-      throw retryErr;
-    }
-  }
-}
+  constructor(
+    private readonly owner: {
+      isClosed: () => boolean;
+      getSyncing: () => Promise<void> | null;
+      sync: (params?: MemorySyncParams) => Promise<void>;
+    },
+  ) {}
 
-export function enqueueMemoryTargetedSessionSync(
-  state: {
-    isClosed: () => boolean;
-    getSyncing: () => Promise<void> | null;
-    getQueuedSessionFiles: () => Set<string>;
-    getQueuedSessions: () => Map<string, MemorySessionSyncTarget>;
-    getQueuedSessionSync: () => Promise<void> | null;
-    setQueuedSessionSync: (value: Promise<void> | null) => void;
-    sync: (params?: MemorySyncParams) => Promise<void>;
-  },
-  targets?: Pick<MemorySyncParams, "sessions" | "sessionFiles">,
-): Promise<void> {
-  const queuedSessionFiles = state.getQueuedSessionFiles();
-  for (const sessionFile of targets?.sessionFiles ?? []) {
-    const trimmed = sessionFile.trim();
-    if (trimmed) {
-      queuedSessionFiles.add(trimmed);
+  get hasPending(): boolean {
+    return this.pending !== null || this.archiveFiles.size > 0 || this.sessions.size > 0;
+  }
+
+  clear(): void {
+    this.archiveFiles.clear();
+    this.sessions.clear();
+    this.force = false;
+    this.progressCallbacks.clear();
+  }
+
+  enqueue(
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles" | "force" | "progress">,
+  ): Promise<void> {
+    for (const sessionFile of targets?.archiveFiles ?? []) {
+      const trimmed = sessionFile.trim();
+      if (trimmed) {
+        this.archiveFiles.add(trimmed);
+      }
     }
-  }
-  const queuedSessions = state.getQueuedSessions();
-  for (const session of targets?.sessions ?? []) {
-    const normalized = normalizeQueuedMemorySessionSyncTarget(session);
-    if (normalized) {
-      queuedSessions.set(memorySessionSyncTargetKey(normalized), normalized);
+    for (const session of targets?.sessions ?? []) {
+      const normalized = normalizeQueuedMemorySessionSyncTarget(session);
+      if (normalized) {
+        this.sessions.set(memorySessionSyncTargetKey(normalized), normalized);
+      }
     }
-  }
-  if (queuedSessionFiles.size === 0 && queuedSessions.size === 0) {
-    return state.getSyncing() ?? Promise.resolve();
-  }
-  if (!state.getQueuedSessionSync()) {
-    state.setQueuedSessionSync(
-      (async () => {
+    if (this.archiveFiles.size === 0 && this.sessions.size === 0) {
+      return this.owner.getSyncing() ?? Promise.resolve();
+    }
+    if (targets?.force) {
+      this.force = true;
+    }
+    if (targets?.progress) {
+      this.progressCallbacks.add(targets.progress);
+    }
+    if (!this.pending) {
+      this.pending = (async () => {
         try {
-          await state.getSyncing()?.catch(() => undefined);
-          while (
-            !state.isClosed() &&
-            (state.getQueuedSessionFiles().size > 0 || state.getQueuedSessions().size > 0)
-          ) {
-            const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
-            const pendingSessions = Array.from(state.getQueuedSessions().values());
-            state.getQueuedSessionFiles().clear();
-            state.getQueuedSessions().clear();
-            await state.sync({
-              reason: "queued-sessions",
-              sessions: pendingSessions,
-              sessionFiles: pendingSessionFiles,
-            });
+          await this.owner.getSyncing()?.catch(() => undefined);
+          while (!this.owner.isClosed() && (this.archiveFiles.size > 0 || this.sessions.size > 0)) {
+            const pendingArchiveFiles = Array.from(this.archiveFiles);
+            const pendingSessions = Array.from(this.sessions.values());
+            const pendingForce = this.force;
+            const pendingProgressCallbacks = Array.from(this.progressCallbacks);
+            this.clear();
+            const progress =
+              pendingProgressCallbacks.length > 0
+                ? (update: MemorySyncProgressUpdate) => {
+                    for (const callback of pendingProgressCallbacks) {
+                      callback(update);
+                    }
+                  }
+                : undefined;
+            try {
+              await this.owner.sync({
+                reason: "queued-sessions",
+                ...(pendingForce ? { force: true } : {}),
+                sessions: pendingSessions,
+                archiveFiles: pendingArchiveFiles,
+                ...(progress ? { progress } : {}),
+              });
+            } catch (err) {
+              // Merge the failed batch with arrivals queued during sync so the
+              // next trigger can retry every target instead of dropping work.
+              for (const archiveFile of pendingArchiveFiles) {
+                this.archiveFiles.add(archiveFile);
+              }
+              for (const session of pendingSessions) {
+                this.sessions.set(memorySessionSyncTargetKey(session), session);
+              }
+              if (pendingForce) {
+                this.force = true;
+              }
+              // Every caller awaiting this queue owner receives the rejection.
+              // Do not retain callbacks that could otherwise fire after their
+              // originating promise has already failed.
+              this.progressCallbacks.clear();
+              throw err;
+            }
           }
         } finally {
-          state.setQueuedSessionSync(null);
+          if (this.owner.isClosed()) {
+            // A closed manager cannot drain retained work. Release every
+            // manager-owned target and caller closure with the queue owner.
+            this.clear();
+          }
+          this.pending = null;
         }
-      })(),
-    );
+      })();
+    }
+    return this.pending ?? Promise.resolve();
   }
-  return state.getQueuedSessionSync() ?? Promise.resolve();
 }
 
 function normalizeQueuedMemorySessionSyncTarget(
@@ -189,6 +136,6 @@ function normalizeQueuedMemorySessionSyncTarget(
   };
 }
 
-function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
+export function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
   return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
 }

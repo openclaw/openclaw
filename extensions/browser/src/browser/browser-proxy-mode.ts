@@ -1,9 +1,3 @@
-/**
- * Chrome proxy-mode detection for browser navigation control.
- *
- * Keeps proxy environment variables and Chrome flags from accidentally changing
- * whether OpenClaw-owned browser traffic is direct or explicitly proxied.
- */
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import type { BrowserNavigationProxyMode } from "./navigation-guard.js";
 
@@ -30,13 +24,11 @@ function chromeArgName(arg: string): string {
   return arg.trim().split("=", 1)[0]?.toLowerCase() ?? "";
 }
 
-/** Return true when Chrome args contain any proxy control flag. */
 export function hasChromeProxyControlArg(args: readonly string[]): boolean {
   return args.some((arg) => PROXY_CONTROL_CHROME_ARGS.has(chromeArgName(arg)));
 }
 
-/** Return true when Chrome args route traffic through an explicit proxy. */
-export function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
+function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
   return args.some((arg) => PROXY_ROUTING_CHROME_ARGS.has(chromeArgName(arg)));
 }
 
@@ -49,14 +41,14 @@ export function omitChromeProxyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return next;
 }
 
-/** Resolve the navigation proxy mode used by SSRF/navigation guards. */
 export function resolveBrowserNavigationProxyMode(params: {
   resolved: Pick<ResolvedBrowserConfig, "extraArgs">;
-  profile: Pick<ResolvedBrowserProfile, "cdpIsLoopback" | "driver">;
+  profile: Pick<ResolvedBrowserProfile, "attachOnly" | "cdpIsLoopback" | "driver">;
 }): BrowserNavigationProxyMode {
   if (
     params.profile.driver === "openclaw" &&
     params.profile.cdpIsLoopback &&
+    !params.profile.attachOnly &&
     hasExplicitChromeProxyRoutingArg(params.resolved.extraArgs)
   ) {
     return "explicit-browser-proxy";

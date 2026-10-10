@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import { resolveStableNodePath } from "./stable-node-path.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { resolveLaunchableNodePath, resolveStableNodePath } from "./stable-node-path.js";
 
 describe("resolveStableNodePath", () => {
   it("returns non-cellar paths unchanged", async () => {
@@ -11,9 +11,9 @@ describe("resolveStableNodePath", () => {
   });
 
   it("prefers the Homebrew opt symlink for default and versioned formulas", async () => {
-    await withTempDir({ prefix: "openclaw-stable-node-" }, async (prefix) => {
-      const defaultNode = path.join(prefix, "Cellar", "node", "25.7.0", "bin", "node");
-      const versionedNode = path.join(prefix, "Cellar", "node@22", "22.19.0", "bin", "node");
+    await withTestDir({ prefix: "openclaw-stable-node-" }, async (prefix) => {
+      const defaultNode = path.join(prefix, "Cellar", "node", "25.9.0", "bin", "node");
+      const versionedNode = path.join(prefix, "Cellar", "node@22", "22.22.3", "bin", "node");
       const optDefault = path.join(prefix, "opt", "node", "bin", "node");
       const optVersioned = path.join(prefix, "opt", "node@22", "bin", "node");
 
@@ -28,9 +28,9 @@ describe("resolveStableNodePath", () => {
   });
 
   it("falls back to the bin symlink for the default formula, otherwise original path", async () => {
-    await withTempDir({ prefix: "openclaw-stable-node-" }, async (prefix) => {
-      const defaultNode = path.join(prefix, "Cellar", "node", "25.7.0", "bin", "node");
-      const versionedNode = path.join(prefix, "Cellar", "node@22", "22.19.0", "bin", "node");
+    await withTestDir({ prefix: "openclaw-stable-node-" }, async (prefix) => {
+      const defaultNode = path.join(prefix, "Cellar", "node", "25.9.0", "bin", "node");
+      const versionedNode = path.join(prefix, "Cellar", "node@22", "22.22.3", "bin", "node");
       const binNode = path.join(prefix, "bin", "node");
 
       await fs.mkdir(path.dirname(binNode), { recursive: true });
@@ -38,6 +38,27 @@ describe("resolveStableNodePath", () => {
 
       await expect(resolveStableNodePath(defaultNode)).resolves.toBe(binNode);
       await expect(resolveStableNodePath(versionedNode)).resolves.toBe(versionedNode);
+      await fs.rm(binNode);
+      await expect(resolveStableNodePath(defaultNode)).resolves.toBe(defaultNode);
+    });
+  });
+});
+
+describe("resolveLaunchableNodePath", () => {
+  it("keeps the running Cellar executable until an upgrade removes it", async () => {
+    await withTestDir({ prefix: "openclaw-launchable-node-" }, async (prefix) => {
+      const cellarNode = path.join(prefix, "Cellar", "node", "26.8.1", "bin", "node");
+      const optNode = path.join(prefix, "opt", "node", "bin", "node");
+      await fs.mkdir(path.dirname(cellarNode), { recursive: true });
+      await fs.mkdir(path.dirname(optNode), { recursive: true });
+      await fs.writeFile(cellarNode, "", "utf8");
+      await fs.writeFile(optNode, "", "utf8");
+
+      expect(resolveLaunchableNodePath(cellarNode)).toBe(cellarNode);
+      await fs.rm(cellarNode);
+      expect(resolveLaunchableNodePath(cellarNode)).toBe(optNode);
+      await fs.rm(optNode);
+      expect(resolveLaunchableNodePath(cellarNode)).toBe(cellarNode);
     });
   });
 });

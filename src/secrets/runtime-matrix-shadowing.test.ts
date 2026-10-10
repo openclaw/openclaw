@@ -9,6 +9,10 @@ import {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function envRef(id: string) {
+  return { source: "env", provider: "default", id } as const;
+}
+
 function requireMatrixConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
   const config = snapshot.config.channels?.matrix;
   if (!config) {
@@ -36,11 +40,7 @@ describe("secrets runtime snapshot matrix shadowing", () => {
           matrix: {
             accounts: {
               ops: {
-                password: {
-                  source: "env",
-                  provider: "default",
-                  id: "MATRIX_OPS_PASSWORD",
-                },
+                password: envRef("MATRIX_OPS_PASSWORD"),
               },
             },
           },
@@ -56,52 +56,20 @@ describe("secrets runtime snapshot matrix shadowing", () => {
     expect(
       (snapshot.config.channels?.matrix?.accounts?.ops as { password?: unknown } | undefined)
         ?.password,
-    ).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MATRIX_OPS_PASSWORD",
-    });
+    ).toEqual(envRef("MATRIX_OPS_PASSWORD"));
     expectInactiveSurfaceWarning(snapshot, "channels.matrix.accounts.ops.password");
   });
 
   it.each([
     {
-      name: "channels.matrix.accounts.default.accessToken config",
-      config: {
-        channels: {
-          matrix: {
-            password: {
-              source: "env",
-              provider: "default",
-              id: "MATRIX_PASSWORD",
-            },
-            accounts: {
-              default: {
-                accessToken: "default-token",
-              },
-            },
-          },
-        },
-      },
-      env: {},
-    },
-    {
       name: "channels.matrix.accounts.default.accessToken SecretRef config",
       config: {
         channels: {
           matrix: {
-            password: {
-              source: "env",
-              provider: "default",
-              id: "MATRIX_PASSWORD",
-            },
+            password: envRef("MATRIX_PASSWORD"),
             accounts: {
               default: {
-                accessToken: {
-                  source: "env",
-                  provider: "default",
-                  id: "MATRIX_DEFAULT_ACCESS_TOKEN_REF",
-                },
+                accessToken: envRef("MATRIX_DEFAULT_ACCESS_TOKEN_REF"),
               },
             },
           },
@@ -112,15 +80,27 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       },
     },
     {
+      name: "channels.matrix.accounts.default.password config",
+      config: {
+        channels: {
+          matrix: {
+            password: envRef("MATRIX_PASSWORD"),
+            accounts: {
+              default: {
+                password: "fixture",
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    },
+    {
       name: "MATRIX_DEFAULT_ACCESS_TOKEN env auth",
       config: {
         channels: {
           matrix: {
-            password: {
-              source: "env",
-              provider: "default",
-              id: "MATRIX_PASSWORD",
-            },
+            password: envRef("MATRIX_PASSWORD"),
           },
         },
       },
@@ -136,52 +116,47 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(requireMatrixConfig(snapshot).password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MATRIX_PASSWORD",
-    });
+    expect(requireMatrixConfig(snapshot).password).toEqual(envRef("MATRIX_PASSWORD"));
     expectInactiveSurfaceWarning(snapshot, "channels.matrix.password");
   });
 
-  it.each([
-    {
-      name: "top-level Matrix accessToken config",
-      config: {
+  it("ignores a top-level accessToken ref shadowed by the default account", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
         channels: {
           matrix: {
-            accessToken: "default-token",
+            accessToken: envRef("MISSING_MATRIX_ROOT_ACCESS_TOKEN"),
             accounts: {
               default: {
-                password: {
-                  source: "env",
-                  provider: "default",
-                  id: "MATRIX_DEFAULT_PASSWORD",
-                },
+                accessToken: "fixture",
               },
             },
           },
         },
-      },
+      }),
       env: {},
-    },
+      allowUnavailableSecretOwners: true,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+    });
+
+    expect(requireMatrixConfig(snapshot).accessToken).toEqual(
+      envRef("MISSING_MATRIX_ROOT_ACCESS_TOKEN"),
+    );
+    expect(snapshot.degradedOwners).toStrictEqual([]);
+    expectInactiveSurfaceWarning(snapshot, "channels.matrix.accessToken");
+  });
+
+  it.each([
     {
       name: "top-level Matrix accessToken SecretRef config",
       config: {
         channels: {
           matrix: {
-            accessToken: {
-              source: "env",
-              provider: "default",
-              id: "MATRIX_ACCESS_TOKEN_REF",
-            },
+            accessToken: envRef("MATRIX_ACCESS_TOKEN_REF"),
             accounts: {
               default: {
-                password: {
-                  source: "env",
-                  provider: "default",
-                  id: "MATRIX_DEFAULT_PASSWORD",
-                },
+                password: envRef("MATRIX_DEFAULT_PASSWORD"),
               },
             },
           },
@@ -198,11 +173,7 @@ describe("secrets runtime snapshot matrix shadowing", () => {
           matrix: {
             accounts: {
               default: {
-                password: {
-                  source: "env",
-                  provider: "default",
-                  id: "MATRIX_DEFAULT_PASSWORD",
-                },
+                password: envRef("MATRIX_DEFAULT_PASSWORD"),
               },
             },
           },
@@ -223,11 +194,7 @@ describe("secrets runtime snapshot matrix shadowing", () => {
     expect(
       (snapshot.config.channels?.matrix?.accounts?.default as { password?: unknown } | undefined)
         ?.password,
-    ).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MATRIX_DEFAULT_PASSWORD",
-    });
+    ).toEqual(envRef("MATRIX_DEFAULT_PASSWORD"));
     expectInactiveSurfaceWarning(snapshot, "channels.matrix.accounts.default.password");
   });
 });

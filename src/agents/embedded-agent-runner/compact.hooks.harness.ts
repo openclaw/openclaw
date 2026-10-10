@@ -1,34 +1,51 @@
-/**
- * Test harness mocks for embedded-agent compaction hook coverage.
- */
+import { join } from "node:path";
 import { vi, type Mock } from "vitest";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import type { ContextEngine } from "../../context-engine/types.js";
+import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
+import type { AgentHarness } from "../harness/types.js";
+import type { ModelAuthMode } from "../model-auth.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
-import type { CompactionTranscriptRotation } from "./compaction-successor-transcript.js";
+import {
+  agentSessionAutomaticCompaction,
+  agentSessionSetContextReplacementHook,
+} from "../sessions/agent-session-compaction.js";
+import type { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
+import {
+  getMemoryProviderMock,
+  getMemorySearchManagerMock,
+  resetCompactMemoryMocks,
+  getMemoryProviderRuntimeMock,
+  resolveMemorySearchConfigMock,
+} from "./compact.hooks.memory.test-support.js";
+import {
+  acquireCompactHooksPreparedModelRuntime,
+  createCompactHooksResolvedModel,
+  emptyPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshotMock,
+  mockCompactHooksPluginMetadata,
+  resolveCompactHooksApiKeyMock,
+  type CompactHooksQueuedCompaction,
+  type MockResolvedModel,
+} from "./compact.hooks.metadata.test-support.js";
+import {
+  mockCompactHooksSkills,
+  mockCompactHooksTools,
+} from "./compact.hooks.tools.test-support.js";
+import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
+import type { resolveModelAsync } from "./model.js";
+import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
-type MockResolvedModel = {
-  model: { provider: string; api: string; id: string; input: unknown[] };
-  error: null;
-  authStorage: { setRuntimeApiKey: Mock<(provider?: string, apiKey?: string) => void> };
-  modelRegistry: Record<string, never>;
-};
-type MockMemorySearchManager = {
-  manager: {
-    sync: (params?: unknown) => Promise<void>;
-  };
-};
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
 
-export const contextEngineCompactMock = vi.fn(async () => ({
+export const contextEngineCompactMock: Mock<ContextEngine["compact"]> = vi.fn(async () => ({
   ok: true as boolean,
   compacted: true as boolean,
   reason: undefined as string | undefined,
-  result: { summary: "engine-summary", tokensAfter: 50 } as
-    | { summary: string; tokensAfter: number }
-    | undefined,
+  result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
 }));
 
 export const hookRunner = {
@@ -37,51 +54,86 @@ export const hookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const ensureRuntimePluginsLoaded: Mock<(params?: unknown) => void> = vi.fn();
 export const resolveContextEngineMock = vi.fn(async () => ({
   info: { ownsCompaction: true as boolean },
   compact: contextEngineCompactMock,
 }));
 export const resolveModelMock: Mock<
   (provider?: string, modelId?: string, agentDir?: string, cfg?: unknown) => MockResolvedModel
-> = vi.fn((_provider?: string, _modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
-  model: { provider: "openai", api: "responses", id: "fake", input: [] },
-  error: null,
-  authStorage: { setRuntimeApiKey: vi.fn() },
-  modelRegistry: {},
-}));
+> = vi.fn(createCompactHooksResolvedModel);
+export const resolveModelAsyncMock = vi.fn(
+  async (
+    provider: string,
+    modelId: string,
+    agentDir?: string,
+    cfg?: unknown,
+    _options?: Parameters<typeof resolveModelAsync>[4],
+  ) => resolveModelMock(provider, modelId, agentDir, cfg),
+);
 export const sessionCompactImpl = vi.fn(async () => ({
   summary: "summary",
   firstKeptEntryId: "entry-1",
   tokensBefore: 120,
   details: { ok: true },
 }));
-export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
+export const getHistoryLimitFromSessionKeyMock = vi.fn<
+  typeof import("./history.js").getHistoryLimitFromSessionKey
+>(() => undefined);
+export const limitHistoryTurnsMock = vi.fn<typeof import("./history.js").limitHistoryTurns>(
+  (messages) => messages.slice(0, 2),
+);
+export const sessionManualCompactionMock = vi.fn();
+export const sessionAutomaticCompactionMock = vi.fn();
+// Bootstrap context for prepared compaction. Returns the production
+// BootstrapContext shape so the budget chain runs; tests override with
+// mockResolvedValueOnce to inject aggregate-exhaustion scenarios.
+export const resolveBootstrapContextForRunMock = vi.fn<
+  typeof import("../bootstrap-files.js").resolveBootstrapContextForRun
+>(async () => ({
+  bootstrapFiles: [],
+  contextFiles: [],
+}));
+export const attemptServerEndpointCompactionMock: Mock<
+  (params: Parameters<typeof attemptServerEndpointCompaction>[0]) => Promise<unknown>
+> = vi.fn(async () => undefined);
+export const triggerInternalHookMock: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
-export const getMemorySearchManagerMock: Mock<
-  (params?: unknown) => Promise<MockMemorySearchManager>
-> = vi.fn(async () => ({
-  manager: {
-    sync: vi.fn(async (_params?: unknown) => {}),
-  },
-}));
-export const resolveMemorySearchConfigMock = vi.fn(() => ({
-  sources: ["sessions"],
-  sync: {
-    sessions: {
-      postCompactionForce: true,
-    },
-  },
-}));
-export const resolveSessionAgentIdMock = vi.fn(() => "main");
-export const resolveSessionAgentIdsMock = vi.fn(() => ({
-  defaultAgentId: "main",
-  sessionAgentId: "main",
-}));
+const validateReplayTurnsMock = vi.fn(async ({ messages }: { messages: unknown[] }) => messages);
+export const resolveSessionAgentIdMock = vi.fn<
+  typeof import("../agent-scope.js").resolveSessionAgentId
+>(() => "main");
+const resolveSessionAgentIdsMock = vi.fn<typeof import("../agent-scope.js").resolveSessionAgentIds>(
+  () => ({
+    defaultAgentId: "main",
+    sessionAgentId: "main",
+  }),
+);
+const resolveAgentConfigMock = vi.fn((_config?: unknown, _agentId?: string): unknown => undefined);
+let fixture: { workspaceDir: string; sessionId: string };
+const resolveDefaultAgentDirMock = vi.fn<() => string>();
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
+function createSelectedAgentHarnessMock(params: {
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
+}): AgentHarness {
+  const configured = resolveAgentHarnessPolicyMock() as { runtime?: string };
+  const id =
+    params.agentHarnessId ?? params.agentHarnessRuntimeOverride ?? configured.runtime ?? "openclaw";
+  return {
+    id,
+    label: `${id} test harness`,
+    ...(id === "codex" ? { authBootstrap: "harness" as const } : {}),
+    supports: () => ({ supported: true }),
+    runAttempt: vi.fn(),
+  };
+}
+export const selectAgentHarnessMock = vi.fn(createSelectedAgentHarnessMock);
+export const selectAgentHarnessForPreparedModelProvidersMock = vi.fn(
+  createSelectedAgentHarnessMock,
+);
 export const resolveContextWindowInfoMock = vi.fn(() => ({ tokens: 128_000 }));
 function createDefaultSessionMessages(): unknown[] {
   return [
@@ -98,10 +150,18 @@ function createDefaultSessionMessages(): unknown[] {
   ];
 }
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
-export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+export const runCliAgentMock = vi.fn(async () => ({
+  meta: {
+    durationMs: 1,
+    agentMeta: { sessionId: "native-session", provider: "claude-cli", model: "opus" },
+  },
+}));
+export const resolveCliBackendConfigMock = vi.fn(() => null as Record<string, unknown> | null);
 function createMockCompactionSession() {
+  let onContextReplaced: ((tokensAfter: number, tokensBefore: number) => void) | undefined;
   const session = {
-    sessionId: "session-1",
+    sessionId: fixture.sessionId,
     messages: sessionMessages.map((message) => structuredClone(message)),
     agent: {
       streamFn: vi.fn(),
@@ -117,9 +177,20 @@ function createMockCompactionSession() {
       },
     },
     compact: vi.fn(async () => {
-      session.messages.splice(1);
-      return await sessionCompactImpl();
+      sessionManualCompactionMock();
+      return (await completeCompaction()).result;
     }),
+    [agentSessionAutomaticCompaction]: vi.fn(
+      async (customInstructions, requestState, summaryOutputPolicy) => {
+        sessionAutomaticCompactionMock(customInstructions, requestState, summaryOutputPolicy);
+        return { status: "completed" as const, ...(await completeCompaction()) };
+      },
+    ),
+    [agentSessionSetContextReplacementHook]: (
+      callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
+    ) => {
+      onContextReplaced = callback;
+    },
     setActiveToolsByName: vi.fn(),
     setBaseSystemPrompt: vi.fn((systemPrompt: string) => {
       session.agent.state.systemPrompt = systemPrompt;
@@ -127,30 +198,32 @@ function createMockCompactionSession() {
     abortCompaction: sessionAbortCompactionMock,
     dispose: vi.fn(),
   };
+  async function completeCompaction() {
+    const result = await sessionCompactImpl();
+    session.messages.splice(1);
+    const tokensAfter = session.messages.reduce<number>(
+      (tokens, message) => tokens + estimateTokensMock(message),
+      0,
+    );
+    onContextReplaced?.(tokensAfter, result.tokensBefore);
+    return { result, tokensAfter };
+  }
   return session;
 }
-export const createAgentSessionMock = vi.fn(async (_options?: unknown) => ({
+export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?]) => ({
   session: createMockCompactionSession(),
 }));
-function createMockToolDefinitions(tools: unknown[] = []) {
-  return tools.map((tool) => {
-    const source = tool && typeof tool === "object" ? (tool as Record<string, unknown>) : {};
-    const name = typeof source.name === "string" && source.name.length > 0 ? source.name : "tool";
-    return {
-      name,
-      label: source.label ?? name,
-      description: source.description ?? "",
-      parameters: source.parameters,
-      execute: source.execute ?? vi.fn(),
-    };
-  });
-}
-export const createOpenClawCodingToolsMock = vi.fn(() => []);
-export const guardSessionManagerMock = vi.fn(() => ({
-  flushPendingToolResults: vi.fn(),
+export const createOpenClawCodingToolsMock = vi.fn<typeof createOpenClawCodingToolsInternal>(
+  () => [],
+);
+const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
+const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
+  ...sessionManager,
+  flushPendingToolResultsAsync: vi.fn(async () => undefined),
 }));
-export const applyAgentCompactionSettingsFromConfigMock = vi.fn();
-export const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
+const applyAgentCompactionSettingsFromConfigMock = vi.fn();
+const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
   getGlobalSettings: vi.fn(() => ({})),
 }));
 export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
@@ -160,24 +233,67 @@ export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { sur
       ? ["ACP compact command guidance."]
       : ["Main compact command guidance."],
 );
-export const buildEmbeddedSystemPromptMock = vi.fn(() => "");
-export const resolveEmbeddedAgentStreamFnMock: Mock<
-  (params?: unknown) => MockEmbeddedAgentStreamFn
-> = vi.fn((_params?: unknown) => vi.fn());
+export const buildConfiguredAgentSystemPromptMock = vi.fn<typeof buildConfiguredAgentSystemPrompt>(
+  () => "",
+);
+export const resolveSkillsPromptMock = vi.fn<
+  typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt
+>(async () => "");
+export const resolveEmbeddedAgentStreamMock: Mock<
+  (params?: unknown) => { streamFn: MockEmbeddedAgentStreamFn; strategy: string }
+> = vi.fn((_params?: unknown) => ({ streamFn: vi.fn(), strategy: "session-custom" }));
+const getModelRegistryRuntimeMock = vi.fn(() => ({
+  apiRegistry: {},
+  llmRuntime: { streamSimple: vi.fn() },
+}));
+export const getApiKeyForModelMock: Mock<
+  (params?: { profileId?: string; allowAuthProfileFallback?: boolean }) => Promise<{
+    apiKey: string;
+    mode: ModelAuthMode;
+    source: string;
+    profileId?: string;
+  }>
+> = vi.fn(async (params?: { profileId?: string }) => ({
+  apiKey: "test",
+  mode: "api-key",
+  source: params?.profileId ? `profile:${params.profileId}` : "test harness",
+  ...(params?.profileId ? { profileId: params.profileId } : {}),
+}));
+export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown> = vi.fn(() => ({
+  kind: "none",
+}));
+const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
+function createDefaultCompactionAuthStore(): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      "openai:test": {
+        type: "api_key",
+        provider: "openai",
+        key: "test",
+      },
+    },
+    order: { openai: ["openai:test"] },
+  };
+}
+
+export const ensureAuthProfileStoreMock: Mock<() => AuthProfileStore> = vi.fn(
+  createDefaultCompactionAuthStore,
+);
+const ensureAuthProfileStoreWithoutExternalProfilesMock: Mock<() => AuthProfileStore> = vi.fn(
+  createDefaultCompactionAuthStore,
+);
 const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> = vi.fn(
   () => undefined,
 );
-export const resolveSandboxContextMock = vi.fn(async () => null);
+export const resolveSandboxContextMock = vi.fn<
+  typeof import("../sandbox/context.js").resolveSandboxContext
+>(async () => null);
 export const maybeCompactAgentHarnessSessionMock: Mock<
   (params?: unknown, options?: unknown) => Promise<unknown>
 > = vi.fn(async () => undefined);
-export const rotateTranscriptAfterCompactionMock: Mock<
-  (_params?: unknown) => Promise<CompactionTranscriptRotation>
-> = vi.fn(async () => ({
-  rotated: false,
-}));
 export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
@@ -188,7 +304,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
     preserveNativeAnthropicToolUseIds: false,
     repairToolUseResultPairing: false,
     preserveSignatures: false,
-    sanitizeThinkingSignatures: false,
     dropThinkingBlocks: false,
     applyGoogleTurnOrdering: false,
     validateGeminiTurns: false,
@@ -203,12 +318,26 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       ...(modelApi ? { modelApi } : {}),
       ...(params.resolvedTransport ? { transport: params.resolvedTransport } : {}),
     },
+    providerRuntimeHandle: params.providerRuntimeHandle,
     auth: {
       providerForAuth: params.provider,
       authProfileProviderForAuth: params.authProfileProvider ?? params.provider,
       ...(params.sessionAuthProfileId
         ? { forwardedAuthProfileId: params.sessionAuthProfileId }
         : {}),
+      ...(params.sessionAuthProfileId && params.sessionAuthProfileSource
+        ? {
+            // Person-linked pins forward at user-pin strength, matching
+            // buildAgentRuntimeAuthPlan.
+            forwardedAuthProfileSource:
+              params.sessionAuthProfileSource === "auto" ? ("auto" as const) : ("user" as const),
+          }
+        : {}),
+      ...(params.sessionAuthProfileCandidateIds?.length
+        ? { forwardedAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds }
+        : {}),
+      ...(params.authProfileMode ? { selectedAuthMode: params.authProfileMode } : {}),
+      ...(params.modelRoute ? { modelRoute: params.modelRoute } : {}),
     },
     prompt: {
       provider: params.provider,
@@ -217,9 +346,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       transformSystemPrompt: vi.fn((context: { systemPrompt: string }) => context.systemPrompt),
     },
     tools: {
-      preparedPlanning: {
-        loadMetadataSnapshot: () => ({}),
-      },
       normalize: vi.fn((tools) => tools),
       logDiagnostics: vi.fn(),
     },
@@ -249,84 +375,83 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
   };
 }
 
-const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
-  policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
-  registryDiagnostics: [],
-  manifestRegistry: { plugins: [], diagnostics: [] },
-  plugins: [],
-  diagnostics: [],
-  byPluginId: new Map(),
-  normalizePluginId: (pluginId: string) => pluginId,
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-  },
-  metrics: {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  },
-};
+export const buildAgentRuntimePlanMock = vi.fn((params: BuildAgentRuntimePlanParams) =>
+  createCompactHooksRuntimePlan(params),
+);
+
+export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
+  acquireCompactHooksPreparedModelRuntime,
+);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
   sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
     return params.messages;
   });
+  validateReplayTurnsMock.mockReset();
+  validateReplayTurnsMock.mockImplementation(async ({ messages }: { messages: unknown[] }) => {
+    return messages;
+  });
+  buildEmbeddedExtensionFactoriesMock.mockReset();
+  buildEmbeddedExtensionFactoriesMock.mockReturnValue([]);
 
-  getMemorySearchManagerMock.mockReset();
-  getMemorySearchManagerMock.mockResolvedValue({
-    manager: {
-      sync: vi.fn(async () => {}),
-    },
-  });
-  resolveMemorySearchConfigMock.mockReset();
-  resolveMemorySearchConfigMock.mockReturnValue({
-    sources: ["sessions"],
-    sync: {
-      sessions: {
-        postCompactionForce: true,
-      },
-    },
-  });
+  resetCompactMemoryMocks();
   resolveSessionAgentIdMock.mockReset();
   resolveSessionAgentIdMock.mockReturnValue("main");
   resolveSessionAgentIdsMock.mockReset();
   resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
+  resolveAgentConfigMock.mockReset();
+  resolveAgentConfigMock.mockReturnValue(undefined);
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
   sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
   sessionAbortCompactionMock.mockReset();
+  sessionManualCompactionMock.mockReset();
+  sessionAutomaticCompactionMock.mockReset();
+  resolveBootstrapContextForRunMock.mockReset();
+  resolveBootstrapContextForRunMock.mockResolvedValue({
+    bootstrapFiles: [],
+    contextFiles: [],
+  });
+  attemptServerEndpointCompactionMock.mockReset();
+  attemptServerEndpointCompactionMock.mockResolvedValue(undefined);
+  resolveEffectiveCompactionModeMock.mockReset();
+  resolveEffectiveCompactionModeMock.mockReturnValue("default");
   createAgentSessionMock.mockReset();
   createAgentSessionMock.mockImplementation(async () => ({
     session: createMockCompactionSession(),
   }));
-  resolveEmbeddedAgentStreamFnMock.mockReset();
-  resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  resolveEmbeddedAgentStreamMock.mockReset();
+  resolveEmbeddedAgentStreamMock.mockImplementation((_params?: unknown) => ({
+    streamFn: vi.fn(),
+    strategy: "session-custom",
+  }));
+  getModelRegistryRuntimeMock.mockReset();
+  getModelRegistryRuntimeMock.mockReturnValue({
+    apiRegistry: {},
+    llmRuntime: { streamSimple: vi.fn() },
+  });
+  getApiKeyForModelMock.mockReset();
+  getApiKeyForModelMock.mockImplementation(async (params?: { profileId?: string }) => ({
+    apiKey: "test",
+    mode: "api-key",
+    source: params?.profileId ? `profile:${params.profileId}` : "test harness",
+    ...(params?.profileId ? { profileId: params.profileId } : {}),
+  }));
+  resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
+  resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
+  shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
+  shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
   registerProviderStreamForModelMock.mockReset();
   registerProviderStreamForModelMock.mockReturnValue(undefined);
   applyExtraParamsToAgentMock.mockReset();
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
+  ensureAuthProfileStoreMock.mockReset();
+  ensureAuthProfileStoreMock.mockImplementation(createDefaultCompactionAuthStore);
+  ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();
+  ensureAuthProfileStoreWithoutExternalProfilesMock.mockImplementation(
+    createDefaultCompactionAuthStore,
+  );
   resolveAgentTransportOverrideMock.mockReset();
   resolveAgentTransportOverrideMock.mockReturnValue(undefined);
   resolveSandboxContextMock.mockReset();
@@ -335,10 +460,14 @@ export function resetCompactSessionStateMocks(): void {
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
   resolveAgentHarnessPolicyMock.mockReset();
   resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
+  selectAgentHarnessMock.mockReset();
+  selectAgentHarnessMock.mockImplementation(createSelectedAgentHarnessMock);
+  selectAgentHarnessForPreparedModelProvidersMock.mockReset();
+  selectAgentHarnessForPreparedModelProvidersMock.mockImplementation(
+    createSelectedAgentHarnessMock,
+  );
   resolveContextWindowInfoMock.mockReset();
   resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
-  rotateTranscriptAfterCompactionMock.mockReset();
-  rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   enqueueCommandInLaneMock.mockReset();
   enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
@@ -349,11 +478,21 @@ export function resetCompactSessionStateMocks(): void {
         ? ["ACP compact command guidance."]
         : ["Main compact command guidance."],
   );
-  buildEmbeddedSystemPromptMock.mockReset();
-  buildEmbeddedSystemPromptMock.mockReturnValue("");
+  buildAgentRuntimePlanMock.mockReset();
+  buildAgentRuntimePlanMock.mockImplementation((params: BuildAgentRuntimePlanParams) =>
+    createCompactHooksRuntimePlan(params),
+  );
+  buildConfiguredAgentSystemPromptMock.mockReset();
+  buildConfiguredAgentSystemPromptMock.mockReturnValue("");
+  resolveSkillsPromptMock.mockReset();
+  resolveSkillsPromptMock.mockResolvedValue("");
 }
 
-export function resetCompactHooksHarnessMocks(): void {
+export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = "session-1"): void {
+  fixture = { workspaceDir, sessionId };
+  runCliAgentMock.mockClear();
+  resolveCliBackendConfigMock.mockReset();
+  resolveCliBackendConfigMock.mockReturnValue(null);
   clearAgentHarnesses();
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
@@ -362,7 +501,11 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockReset();
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
-  ensureRuntimePluginsLoaded.mockReset();
+  acquireAgentRunPreparedModelRuntimeMock.mockClear();
+  resolveDefaultAgentDirMock.mockReset();
+  resolveDefaultAgentDirMock.mockReturnValue(join(workspaceDir, "agents/main/agent"));
+  getCurrentPluginMetadataSnapshotMock.mockReset();
+  getCurrentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot);
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -374,16 +517,21 @@ export function resetCompactHooksHarnessMocks(): void {
     ok: true,
     compacted: true,
     reason: undefined,
-    result: { summary: "engine-summary", tokensAfter: 50 },
+    result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
   });
 
   resolveModelMock.mockReset();
-  resolveModelMock.mockReturnValue({
-    model: { provider: "openai", api: "responses", id: "fake", input: [] },
-    error: null,
-    authStorage: { setRuntimeApiKey: vi.fn() },
-    modelRegistry: {},
-  });
+  resolveModelMock.mockImplementation(createCompactHooksResolvedModel);
+  resolveModelAsyncMock.mockReset();
+  resolveModelAsyncMock.mockImplementation(
+    async (
+      provider: string,
+      modelId: string,
+      agentDir?: string,
+      cfg?: unknown,
+      _options?: Parameters<typeof resolveModelAsync>[4],
+    ) => resolveModelMock(provider, modelId, agentDir, cfg),
+  );
   resolveAgentHarnessPolicyMock.mockReset();
   resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
   resolveContextWindowInfoMock.mockReset();
@@ -397,14 +545,15 @@ export function resetCompactHooksHarnessMocks(): void {
     details: { ok: true },
   });
 
-  triggerInternalHook.mockReset();
+  triggerInternalHookMock.mockReset();
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
   guardSessionManagerMock.mockReset();
-  guardSessionManagerMock.mockReturnValue({
-    flushPendingToolResults: vi.fn(),
-  });
+  guardSessionManagerMock.mockImplementation((sessionManager) => ({
+    ...sessionManager,
+    flushPendingToolResultsAsync: vi.fn(async () => undefined),
+  }));
   applyAgentCompactionSettingsFromConfigMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReturnValue({
@@ -412,14 +561,29 @@ export function resetCompactHooksHarnessMocks(): void {
   });
 }
 
-export async function loadCompactHooksHarness(): Promise<{
+export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
-  compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
-  testing: typeof import("./compact.js").testing;
+  compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
+  onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
-  resetCompactHooksHarnessMocks();
   vi.resetModules();
+  if (options.durableSession) {
+    vi.doUnmock("./server-endpoint-compaction.js");
+    vi.doUnmock("../sessions/model-registry-runtime.js");
+    vi.doUnmock("../sessions/resource-loader.js");
+    vi.doUnmock("../sessions/index.js");
+    vi.doUnmock("../sessions/sdk.js");
+    vi.doUnmock("../session-tool-result-guard-wrapper.js");
+    vi.doUnmock("../agent-settings.js");
+    vi.doUnmock("../agent-project-settings.js");
+  }
+
+  if (!options.durableSession) {
+    vi.doMock("./server-endpoint-compaction.js", () => ({
+      attemptServerEndpointCompaction: attemptServerEndpointCompactionMock,
+    }));
+  }
 
   vi.doMock("../../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => hookRunner,
@@ -430,56 +594,46 @@ export async function loadCompactHooksHarness(): Promise<{
     runGlobalGatewayStopSafely: vi.fn(async () => undefined),
   }));
 
-  vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded,
-  }));
+  mockCompactHooksPluginMetadata();
 
-  vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-    captureCurrentPluginMetadataSnapshotState: vi.fn(() => ({
-      snapshot: undefined,
-      configFingerprint: undefined,
-      compatiblePolicyHashes: undefined,
-      compatibleConfigFingerprints: undefined,
-    })),
-    clearCurrentPluginMetadataSnapshot: vi.fn(),
-    getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
-    resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
-    restoreCurrentPluginMetadataSnapshotState: vi.fn(),
-    setCurrentPluginMetadataSnapshot: vi.fn(),
+  vi.doMock("../../plugins/command-registry-state.js", () => ({
+    clearPluginCommands: vi.fn(),
+    isTrustedReservedCommandOwner: vi.fn(() => false),
+    listRegisteredPluginAgentPromptGuidance: listRegisteredPluginAgentPromptGuidanceMock,
   }));
-
-  vi.doMock("../../plugins/command-registry-state.js", () => {
-    const pluginCommands = new Map<string, unknown>();
-    return {
-      clearPluginCommands: vi.fn(() => pluginCommands.clear()),
-      clearPluginCommandsForPlugin: vi.fn(),
-      isPluginCommandRegistryLocked: vi.fn(() => false),
-      isTrustedReservedCommandOwner: vi.fn(() => false),
-      listRegisteredPluginCommands: vi.fn(() => []),
-      listRegisteredPluginAgentPromptGuidance: listRegisteredPluginAgentPromptGuidanceMock,
-      pluginCommands,
-      restorePluginCommands: vi.fn(),
-      setPluginCommandRegistryLocked: vi.fn(),
-    };
-  });
 
   vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
   }));
+  vi.doMock("../cli-runner.js", () => ({ runCliAgent: runCliAgentMock }));
+  vi.doMock("../cli-backends.js", async () => {
+    const actual = await vi.importActual<typeof import("../cli-backends.js")>("../cli-backends.js");
+    return { ...actual, resolveCliBackendConfig: resolveCliBackendConfigMock };
+  });
 
   vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
-
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
   }));
+
+  vi.doMock("../harness/selection.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../harness/selection.js")>("../harness/selection.js");
+    return {
+      ...actual,
+      selectAgentHarness: selectAgentHarnessMock,
+      selectAgentHarnessForPreparedModelProviders: selectAgentHarnessForPreparedModelProvidersMock,
+    };
+  });
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: vi.fn(async () => ({ resolvedApiKey: undefined })),
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSystemPromptContribution: vi.fn(() => undefined),
     resolveProviderTextTransforms: vi.fn(() => undefined),
+    shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
     transformProviderSystemPrompt: vi.fn(
       (params: { systemPrompt?: string; context?: { systemPrompt?: string } }) =>
         params.context?.systemPrompt ?? params.systemPrompt,
@@ -490,84 +644,94 @@ export async function loadCompactHooksHarness(): Promise<{
     registerProviderStreamForModel: registerProviderStreamForModelMock,
   }));
 
+  if (!options.durableSession) {
+    vi.doMock("../sessions/model-registry-runtime.js", () => ({
+      getModelRegistryRuntime: getModelRegistryRuntimeMock,
+    }));
+  }
+
   vi.doMock("../../hooks/internal-hooks.js", async () => {
     const actual = await vi.importActual<typeof import("../../hooks/internal-hooks.js")>(
       "../../hooks/internal-hooks.js",
     );
     return {
       ...actual,
-      triggerInternalHook,
+      triggerInternalHook: triggerInternalHookMock,
     };
   });
 
-  vi.doMock("../sessions/index.js", () => ({
-    AuthStorage: function AuthStorage() {},
-    ModelRegistry: function ModelRegistry() {},
-    createAgentSession: createAgentSessionMock,
-    DefaultResourceLoader: function DefaultResourceLoader() {
-      return {
-        reload: vi.fn(async () => undefined),
-      };
-    },
-    SessionManager: {
-      open: vi.fn(() => ({
-        buildSessionContext: vi.fn(() => ({ messages: sessionMessages })),
-      })),
-    },
-    SettingsManager: {
-      create: vi.fn(() => ({})),
-    },
-    estimateTokens: estimateTokensMock,
-    generateSummary: vi.fn(async () => "summary"),
-  }));
+  if (!options.durableSession) {
+    vi.doMock("../sessions/resource-loader.js", () => ({
+      DefaultResourceLoader: function DefaultResourceLoader() {
+        return {
+          reload: vi.fn(async () => undefined),
+        };
+      },
+    }));
 
-  vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
-    guardSessionManager: guardSessionManagerMock,
-  }));
+    vi.doMock("../sessions/index.js", () => ({
+      AuthStorage: function AuthStorage() {},
+      ModelRegistry: function ModelRegistry() {},
+      SessionManager: createCompactionSessionManagerMock(sessionMessages),
+      SettingsManager: {
+        create: vi.fn(() => ({})),
+      },
+      estimateTokens: estimateTokensMock,
+      generateSummary: vi.fn(async () => "summary"),
+    }));
 
-  vi.doMock("../agent-settings.js", () => ({
-    applyAgentAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
-    applyAgentCompactionSettingsFromConfig: applyAgentCompactionSettingsFromConfigMock,
-    isSilentOverflowProneModel: vi.fn(() => false),
-  }));
+    // mock-isolation: Keep durable session state outside the lightweight compaction fixture.
+    vi.doMock("../sessions/sdk.js", () => ({
+      createAgentSession: createAgentSessionMock,
+    }));
+
+    vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
+      guardSessionManager: guardSessionManagerMock,
+    }));
+
+    vi.doMock("../agent-settings.js", () => ({
+      applyAgentAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
+      applyAgentCompactionSettingsFromConfig: applyAgentCompactionSettingsFromConfigMock,
+      isSilentOverflowProneModel: vi.fn(() => false),
+      resolveEffectiveCompactionMode: resolveEffectiveCompactionModeMock,
+    }));
+  }
 
   vi.doMock("../models-config.js", () => ({
     ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
+  vi.doMock("../prepared-model-runtime.js", () => ({
+    activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    acquireAgentRunPreparedModelRuntime: acquireAgentRunPreparedModelRuntimeMock,
+    prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+    loadPreparedModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+  }));
+
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
-    ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({})),
+    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreWithoutExternalProfiles:
+      ensureAuthProfileStoreWithoutExternalProfilesMock,
     formatMissingAuthError: vi.fn(
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
     ),
-    getApiKeyForModel: vi.fn(async () => ({
-      apiKey: "test",
-      mode: "env",
-      source: "test harness",
-    })),
+    getApiKeyForModelCore: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
+      getApiKeyForModelMock(params),
+    hasUsableCustomProviderApiKey: vi.fn(() => false),
+    resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
     resolveModelAuthMode: vi.fn(() => "env"),
+    shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
   vi.doMock("../sandbox.js", () => ({
     resolveSandboxContext: resolveSandboxContextMock,
-  }));
-
-  vi.doMock("../session-file-repair.js", () => ({
-    repairSessionFileIfNeeded: vi.fn(async () => {}),
-  }));
-
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
-    resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
-    resolveSessionWriteLockOptions: vi.fn(() => ({
-      timeoutMs: 60_000,
-      staleMs: 1_800_000,
-      maxHoldMs: 300_000,
-    })),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
@@ -577,11 +741,19 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: resolveContextEngineMock,
     resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
+    resolveLogicalTurnContextEngines: async () => {
+      const engine = await resolveContextEngineMock();
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    },
   }));
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: enqueueCommandInLaneMock,
     clearCommandLane: vi.fn(() => 0),
+    GatewayDrainingError: class GatewayDrainingError extends Error {},
+    isGatewayDraining: vi.fn(() => false),
+    isCommandLaneTaskTimeoutError: vi.fn(() => false),
   }));
 
   vi.doMock("./lanes.js", () => ({
@@ -597,10 +769,10 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../bootstrap-files.js", () => ({
     makeBootstrapWarn: vi.fn(() => () => {}),
     resolveContextInjectionMode: vi.fn(() => "always"),
-    resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
+    resolveBootstrapContextForRun: resolveBootstrapContextForRunMock,
   }));
 
-  vi.doMock("../bundle-mcp-tools.js", () => ({
+  vi.doMock("../agent-bundle-mcp-tools.js", () => ({
     retireSessionMcpRuntime: vi.fn(async () => true),
     createBundleMcpToolRuntime: vi.fn(async () => ({
       tools: [],
@@ -608,7 +780,7 @@ export async function loadCompactHooksHarness(): Promise<{
     })),
   }));
 
-  vi.doMock("../bundle-lsp-runtime.js", () => ({
+  vi.doMock("../agent-bundle-lsp-runtime.js", () => ({
     createBundleLspToolRuntime: vi.fn(async () => ({
       tools: [],
       sessions: [],
@@ -628,35 +800,17 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveChannelMessageToolHints: vi.fn(() => undefined),
   }));
 
-  vi.doMock("../agent-tools.js", () => ({
-    createOpenClawCodingTools: createOpenClawCodingToolsMock,
-    resolveProcessToolScopeKey: ({
-      scopeKey,
-      sessionKey,
-      sessionId,
-      agentId,
-    }: {
-      scopeKey?: string;
-      sessionKey?: string;
-      sessionId?: string;
-      agentId?: string;
-    }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
-  }));
+  mockCompactHooksTools(createOpenClawCodingToolsMock);
 
   vi.doMock("./replay-history.js", () => ({
     sanitizeSessionHistory: sanitizeSessionHistoryMock,
-    validateReplayTurns: vi.fn(async ({ messages }: { messages: unknown[] }) => messages),
-  }));
-
-  vi.doMock("./tool-schema-runtime.js", () => ({
-    logProviderToolSchemaDiagnostics: vi.fn(),
-    normalizeProviderToolSchemas: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+    validateReplayTurns: validateReplayTurnsMock,
   }));
 
   vi.doMock("./stream-resolution.js", () => ({
-    resolveEmbeddedAgentApiKey: vi.fn(async () => "test-api-key"),
+    resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
     resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
-    resolveEmbeddedAgentStreamFn: resolveEmbeddedAgentStreamFnMock,
+    resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
   }));
 
   vi.doMock("./extra-params.js", () => ({
@@ -665,78 +819,15 @@ export async function loadCompactHooksHarness(): Promise<{
     resolvePreparedExtraParams: vi.fn(() => ({})),
   }));
 
-  vi.doMock("./tool-split.js", () => ({
-    splitSdkTools: vi.fn(({ tools }: { tools?: unknown[] }) => ({
-      customTools: createMockToolDefinitions(tools),
-    })),
-  }));
-
-  vi.doMock("./compaction-safety-timeout.js", () => {
-    const compactWithSafetyTimeout = vi.fn(
-      async (
-        compact: () => Promise<unknown>,
-        _timeoutMs?: number,
-        opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
-      ) => {
-        const abortSignal = opts?.abortSignal;
-        if (!abortSignal) {
-          return await compact();
-        }
-        const cancelAndCreateError = () => {
-          opts?.onCancel?.();
-          const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
-          if (reason instanceof Error) {
-            return reason;
-          }
-          const err = new Error("aborted");
-          err.name = "AbortError";
-          return err;
-        };
-        if (abortSignal.aborted) {
-          throw cancelAndCreateError();
-        }
-        return await Promise.race([
-          compact(),
-          new Promise<never>((_, reject) => {
-            abortSignal.addEventListener(
-              "abort",
-              () => {
-                reject(cancelAndCreateError());
-              },
-              { once: true },
-            );
-          }),
-        ]);
-      },
+  vi.doMock("./compaction-safety-timeout.js", async () => {
+    const actual = await vi.importActual<typeof import("./compaction-safety-timeout.js")>(
+      "./compaction-safety-timeout.js",
     );
     return {
-      compactWithSafetyTimeout,
+      compactWithSafetyTimeout: actual.compactWithSafetyTimeout,
       resolveCompactionTimeoutMs: vi.fn(() => 30_000),
-      // Mirror the real wrapper: bound the engine's compact() with the
-      // (mocked) safety timeout and thread the abort signal into its params.
-      compactContextEngineWithSafetyTimeout: vi.fn(
-        (
-          contextEngine: { compact: (params: Record<string, unknown>) => Promise<unknown> },
-          params: Record<string, unknown>,
-          timeoutMs?: number,
-          abortSignal?: AbortSignal,
-        ) =>
-          compactWithSafetyTimeout(
-            () => contextEngine.compact(abortSignal ? { ...params, abortSignal } : params),
-            timeoutMs,
-            abortSignal ? { abortSignal } : undefined,
-          ),
-      ),
-    };
-  });
-
-  vi.doMock("./compaction-successor-transcript.js", async () => {
-    const actual = await vi.importActual<typeof import("./compaction-successor-transcript.js")>(
-      "./compaction-successor-transcript.js",
-    );
-    return {
-      ...actual,
-      rotateTranscriptAfterCompaction: rotateTranscriptAfterCompactionMock,
+      // Exercise delegate tagging, progress resets, and caller cancellation at their real owner.
+      compactContextEngineWithSafetyTimeout: vi.fn(actual.compactContextEngineWithSafetyTimeout),
     };
   });
 
@@ -753,61 +844,78 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./extensions.js", () => ({
-    buildEmbeddedExtensionFactories: vi.fn(() => []),
+    buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
   }));
 
   vi.doMock("./history.js", () => ({
-    getHistoryLimitFromSessionKey: vi.fn(() => undefined),
-    limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
+    getHistoryLimitFromSessionKey: getHistoryLimitFromSessionKeyMock,
+    limitHistoryTurns: limitHistoryTurnsMock,
   }));
 
-  vi.doMock("../../skills/runtime/env-overrides.js", () => ({
-    applySkillEnvOverrides: vi.fn(() => () => {}),
-    applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
-  }));
+  mockCompactHooksSkills(resolveSkillsPromptMock);
 
-  vi.doMock("../../skills/loading/workspace.js", () => ({
-    loadWorkspaceSkillEntries: vi.fn(() => []),
-    resolveSkillsPromptForRun: vi.fn(() => undefined),
-  }));
+  vi.doMock("../agent-scope.js", async () => {
+    const { listAgentIds } = await import("../agent-scope-config.js");
+    return {
+      listAgentEntries: vi.fn(() => []),
+      listAgentEntriesWithSource: vi.fn(() => []),
+      listAgentIds,
+      resolveAgentConfig: resolveAgentConfigMock,
+      resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
+        join(fixture.workspaceDir, "agents", agentId, "agent"),
+      ),
+      resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
+      resolveAgentWorkspaceDir: vi.fn(() => fixture.workspaceDir),
+      resolveDefaultAgentDir: resolveDefaultAgentDirMock,
+      resolveDefaultAgentId: vi.fn(() => "main"),
+      resolveAgentIdFromSessionKey: vi.fn(
+        (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
+      ),
+      resolveRunModelFallbacksOverride: vi.fn(() => undefined),
+      resolveSessionAgentId: resolveSessionAgentIdMock,
+      resolveSessionAgentIds: resolveSessionAgentIdsMock,
+    };
+  });
 
-  vi.doMock("../agent-scope.js", () => ({
-    listAgentEntries: vi.fn(() => []),
-    resolveAgentConfig: vi.fn(() => undefined),
-    resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
-    resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
-    resolveDefaultAgentId: vi.fn(() => "main"),
-    resolveAgentIdFromSessionKey: vi.fn(
-      (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-    ),
-    resolveRunModelFallbacksOverride: vi.fn(() => undefined),
-    resolveSessionAgentId: resolveSessionAgentIdMock,
-    resolveSessionAgentIds: resolveSessionAgentIdsMock,
-  }));
-
+  // mock-isolation: Compaction hook fixtures exercise lifecycle behavior without credential-source admission.
   vi.doMock("../auth-profiles/source-check.js", () => ({
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+    hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
   }));
 
   vi.doMock("../memory-search.js", () => ({
-    resolveMemorySearchConfig: resolveMemorySearchConfigMock,
+    resolveMemorySearchIndexConfig: resolveMemorySearchConfigMock,
   }));
 
   vi.doMock("../runtime-plan/build.js", () => ({
-    buildAgentRuntimePlan: vi.fn((params: BuildAgentRuntimePlanParams) =>
-      createCompactHooksRuntimePlan(params),
+    buildAgentRuntimePlan: buildAgentRuntimePlanMock,
+    resolvePreparedProviderRuntimeHandle: vi.fn(
+      ({ providerRuntimeHandle, provider, modelId, workspaceDir }: BuildAgentRuntimePlanParams) =>
+        providerRuntimeHandle ?? { provider, modelId, workspaceDir, prepared: true },
     ),
   }));
 
   vi.doMock("../../plugins/memory-runtime.js", () => ({
-    getActiveMemorySearchManager: getMemorySearchManagerMock,
+    getActiveMemoryProviderCore: getMemoryProviderMock,
+    getActiveMemorySearchManagerCore: getMemorySearchManagerMock,
   }));
 
-  vi.doMock("../date-time.js", () => ({
-    formatUserTime: vi.fn(() => ""),
-    resolveUserTimeFormat: vi.fn(() => ""),
-    resolveUserTimezone: vi.fn(() => ""),
+  vi.doMock("../../plugins/memory-state.js", async () => ({
+    ...(await vi.importActual<typeof import("../../plugins/memory-state.js")>(
+      "../../plugins/memory-state.js",
+    )),
+    resolveLoadedMemoryProviderKind: () => (getMemoryProviderRuntimeMock() ? "native" : undefined),
   }));
+
+  vi.doMock("../date-time.js", async () => {
+    const actual = await vi.importActual<typeof import("../date-time.js")>("../date-time.js");
+    return {
+      ...actual,
+      formatDateStamp: vi.fn(() => "2026-01-01"),
+      formatUserTime: vi.fn(() => ""),
+      resolveUserTimeFormat: vi.fn(() => ""),
+      resolveUserTimezone: vi.fn(() => ""),
+    };
+  });
 
   vi.doMock("../defaults.js", () => ({
     DEFAULT_MODEL: "fake-model",
@@ -837,20 +945,21 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../embedded-agent-helpers.js", () => ({
-    ensureSessionHeader: vi.fn(async () => {}),
-    pickFallbackThinkingLevel: vi.fn((params: { message?: string; attempted?: Set<string> }) =>
-      params.message?.includes("Reasoning is mandatory") && !params.attempted?.has("minimal")
-        ? "minimal"
-        : undefined,
-    ),
-    validateAnthropicTurns: vi.fn((m: unknown[]) => m),
-    validateGeminiTurns: vi.fn((m: unknown[]) => m),
-  }));
+  vi.doMock("../embedded-agent-helpers.js", async () => {
+    const { pickFallbackThinkingLevel } = await import("../embedded-agent-helpers/thinking.js");
+    return {
+      ensureSessionHeader: vi.fn(async () => {}),
+      pickFallbackThinkingLevel,
+      validateAnthropicTurns: vi.fn((m: unknown[]) => m),
+      validateGeminiTurns: vi.fn((m: unknown[]) => m),
+    };
+  });
 
-  vi.doMock("../agent-project-settings.js", () => ({
-    createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerMock,
-  }));
+  if (!options.durableSession) {
+    vi.doMock("../agent-project-settings.js", () => ({
+      createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerMock,
+    }));
+  }
 
   vi.doMock("./sandbox-info.js", () => ({
     buildEmbeddedSandboxInfo: vi.fn(() => undefined),
@@ -860,24 +969,12 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("./model.js", () => ({
     buildModelAliasLines: vi.fn(() => []),
     resolveModel: resolveModelMock,
-    resolveModelAsync: vi.fn(
-      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
-        resolveModelMock(provider, modelId, agentDir, cfg),
-    ),
+    resolveModelAsync: resolveModelAsyncMock,
   }));
 
-  vi.doMock("./session-manager-cache.js", () => ({
-    prewarmSessionFile: vi.fn(async () => {}),
-    trackSessionManagerAccess: vi.fn(),
-  }));
-
-  vi.doMock("./system-prompt.js", () => ({
-    applySystemPromptToSession: vi.fn(
-      (session: { setBaseSystemPrompt: (systemPrompt: string) => void }, systemPrompt: string) => {
-        session.setBaseSystemPrompt(systemPrompt);
-      },
-    ),
-    buildEmbeddedSystemPrompt: buildEmbeddedSystemPromptMock,
+  // mock-isolation: Compaction fixtures capture prepared prompt inputs without loading ambient prompt owners.
+  vi.doMock("../system-prompt-config.js", () => ({
+    buildConfiguredAgentSystemPrompt: buildConfiguredAgentSystemPromptMock,
   }));
 
   vi.doMock("./utils.js", async () => {
@@ -898,7 +995,16 @@ export async function loadCompactHooksHarness(): Promise<{
 
   return {
     ...compactModule,
-    compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
+    compactEmbeddedAgentSession: (params, host = {}) =>
+      compactQueuedModule.compactEmbeddedAgentSession(params, {
+        ...host,
+        sourceAuthority: host.sourceAuthority ?? {
+          assertActive: host.assertActive ?? (() => {}),
+          operatorAuthority: undefined,
+        },
+      }),
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
+    onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

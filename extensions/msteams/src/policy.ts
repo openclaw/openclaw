@@ -1,6 +1,5 @@
-// Msteams plugin module implements policy behavior.
+import { resolveScopeToolsPolicy } from "openclaw/plugin-sdk/channel-policy";
 import type {
-  AllowlistMatch,
   ChannelGroupContext,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
@@ -11,23 +10,23 @@ import type {
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
-  resolveAllowlistMatchSimple,
-  resolveToolsBySender,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-  isDangerousNameMatchingEnabled,
 } from "../runtime-api.js";
 
-type MSTeamsResolvedRouteConfig = {
-  teamConfig?: MSTeamsTeamConfig;
-  channelConfig?: MSTeamsChannelConfig;
-  allowlistConfigured: boolean;
-  allowed: boolean;
-  teamKey?: string;
-  channelKey?: string;
-  channelMatchKey?: string;
-  channelMatchSource?: "direct" | "wildcard";
-};
+function matchMSTeamsPolicyEntry<T>(entries: Record<string, T>, ...keys: (string | undefined)[]) {
+  return resolveChannelEntryMatchWithFallback({
+    entries,
+    keys: buildChannelKeyCandidates(...keys),
+    wildcardKey: "*",
+    normalizeKey: normalizeChannelSlug,
+  });
+}
+
+function selectMSTeamsPolicyEntry<T>(entries: Record<string, T>, key?: string | null) {
+  const match = matchMSTeamsPolicyEntry(entries, key?.trim());
+  return (match.matchKey ?? match.key) ? match.entry : undefined;
+}
 
 export function resolveMSTeamsRouteConfig(params: {
   cfg?: MSTeamsConfig;
@@ -36,38 +35,28 @@ export function resolveMSTeamsRouteConfig(params: {
   conversationId?: string | null | undefined;
   channelName?: string | null | undefined;
   allowNameMatching?: boolean;
-}): MSTeamsResolvedRouteConfig {
+}) {
   const teamId = params.teamId?.trim();
   const teamName = params.teamName?.trim();
   const conversationId = params.conversationId?.trim();
   const channelName = params.channelName?.trim();
   const teams = params.cfg?.teams ?? {};
   const allowlistConfigured = Object.keys(teams).length > 0;
-  const teamCandidates = buildChannelKeyCandidates(
+  const teamMatch = matchMSTeamsPolicyEntry(
+    teams,
     teamId,
     params.allowNameMatching ? teamName : undefined,
     params.allowNameMatching && teamName ? normalizeChannelSlug(teamName) : undefined,
   );
-  const teamMatch = resolveChannelEntryMatchWithFallback({
-    entries: teams,
-    keys: teamCandidates,
-    wildcardKey: "*",
-    normalizeKey: normalizeChannelSlug,
-  });
   const teamConfig = teamMatch.entry;
   const channels = teamConfig?.channels ?? {};
   const channelAllowlistConfigured = Object.keys(channels).length > 0;
-  const channelCandidates = buildChannelKeyCandidates(
+  const channelMatch = matchMSTeamsPolicyEntry(
+    channels,
     conversationId,
     params.allowNameMatching ? channelName : undefined,
     params.allowNameMatching && channelName ? normalizeChannelSlug(channelName) : undefined,
   );
-  const channelMatch = resolveChannelEntryMatchWithFallback({
-    entries: channels,
-    keys: channelCandidates,
-    wildcardKey: "*",
-    normalizeKey: normalizeChannelSlug,
-  });
   const channelConfig = channelMatch.entry;
 
   const allowed = resolveNestedAllowlistDecision({
@@ -99,124 +88,44 @@ export function resolveMSTeamsGroupToolPolicy(
   if (!cfg) {
     return undefined;
   }
-  const groupId = params.groupId?.trim();
-  const groupChannel = params.groupChannel?.trim();
-  const groupSpace = params.groupSpace?.trim();
-  const allowNameMatching = isDangerousNameMatchingEnabled(cfg);
-
-  const resolved = resolveMSTeamsRouteConfig({
-    cfg,
-    teamId: groupSpace,
-    teamName: groupSpace,
-    conversationId: groupId,
-    channelName: groupChannel,
-    allowNameMatching,
-  });
-
-  if (resolved.channelConfig) {
-    const senderPolicy = resolveToolsBySender({
-      toolsBySender: resolved.channelConfig.toolsBySender,
+  const teams = cfg.teams ?? {};
+  const team = selectMSTeamsPolicyEntry(teams, params.groupSpace);
+  const channel = team && selectMSTeamsPolicyEntry(team.channels ?? {}, params.groupId);
+  // Only selected nodes participate in policy resolution; fixed local keys avoid
+  // materializing the whole config tree or encoding user-provided scope names.
+  const resolve = (selectedTeam?: MSTeamsTeamConfig, selectedChannel?: MSTeamsChannelConfig) =>
+    resolveScopeToolsPolicy({
+      tree: { scopes: { team: selectedTeam ?? {}, channel: selectedChannel ?? {} } },
+      path: ["team", "channel"],
+      // No messageProvider: channel-prefixed sender keys were historically dead here.
+      senderPolicyMode: params.senderPolicyMode,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
     });
-    if (senderPolicy) {
-      return senderPolicy;
-    }
-    if (resolved.channelConfig.tools) {
-      return resolved.channelConfig.tools;
-    }
-    const teamSenderPolicy = resolveToolsBySender({
-      toolsBySender: resolved.teamConfig?.toolsBySender,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    });
-    if (teamSenderPolicy) {
-      return teamSenderPolicy;
-    }
-    return resolved.teamConfig?.tools;
+  const resolved = resolve(team, channel);
+  // A policy-less team falls through to the first cross-team channel match;
+  // a matched channel never does, even when neither selected node has policy.
+  if (resolved !== undefined || channel) {
+    return resolved;
   }
-  if (resolved.teamConfig) {
-    const teamSenderPolicy = resolveToolsBySender({
-      toolsBySender: resolved.teamConfig.toolsBySender,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    });
-    if (teamSenderPolicy) {
-      return teamSenderPolicy;
-    }
-    if (resolved.teamConfig.tools) {
-      return resolved.teamConfig.tools;
-    }
-  }
-
-  if (!groupId) {
-    return undefined;
-  }
-
-  const channelCandidates = buildChannelKeyCandidates(
-    groupId,
-    allowNameMatching ? groupChannel : undefined,
-    allowNameMatching && groupChannel ? normalizeChannelSlug(groupChannel) : undefined,
-  );
-  for (const teamConfig of Object.values(cfg.teams ?? {})) {
-    const match = resolveChannelEntryMatchWithFallback({
-      entries: teamConfig?.channels ?? {},
-      keys: channelCandidates,
-      wildcardKey: "*",
-      normalizeKey: normalizeChannelSlug,
-    });
-    if (match.entry) {
-      const senderPolicy = resolveToolsBySender({
-        toolsBySender: match.entry.toolsBySender,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      });
-      if (senderPolicy) {
-        return senderPolicy;
+  if (params.groupId?.trim()) {
+    for (const candidate of Object.values(teams)) {
+      const matched = selectMSTeamsPolicyEntry(candidate.channels ?? {}, params.groupId);
+      if (matched) {
+        return resolve(candidate, matched);
       }
-      if (match.entry.tools) {
-        return match.entry.tools;
-      }
-      const teamSenderPolicy = resolveToolsBySender({
-        toolsBySender: teamConfig?.toolsBySender,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      });
-      if (teamSenderPolicy) {
-        return teamSenderPolicy;
-      }
-      return teamConfig?.tools;
     }
   }
-
   return undefined;
 }
 
 type MSTeamsReplyPolicy = {
   requireMention: boolean;
+  requireMentionInBotThreads?: boolean;
   replyStyle: MSTeamsReplyStyle;
 };
-
-type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
-
-export function resolveMSTeamsAllowlistMatch(params: {
-  allowFrom: Array<string | number>;
-  senderId: string;
-  senderName?: string | null;
-  allowNameMatching?: boolean;
-}): MSTeamsAllowlistMatch {
-  return resolveAllowlistMatchSimple(params);
-}
 
 export function resolveMSTeamsReplyPolicy(params: {
   isDirectMessage: boolean;
@@ -238,9 +147,17 @@ export function resolveMSTeamsReplyPolicy(params: {
     params.channelConfig?.replyStyle ??
     params.teamConfig?.replyStyle ??
     params.globalConfig?.replyStyle;
+  const requireMentionInBotThreads =
+    params.channelConfig?.requireMentionInBotThreads ??
+    params.teamConfig?.requireMentionInBotThreads ??
+    params.globalConfig?.requireMentionInBotThreads;
 
   const replyStyle: MSTeamsReplyStyle =
     explicitReplyStyle ?? (requireMention ? "thread" : "top-level");
 
-  return { requireMention, replyStyle };
+  return {
+    requireMention,
+    replyStyle,
+    ...(requireMentionInBotThreads === undefined ? {} : { requireMentionInBotThreads }),
+  };
 }

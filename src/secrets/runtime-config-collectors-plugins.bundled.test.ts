@@ -5,12 +5,18 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/config.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
+import { resolveSecretRefValues } from "./resolve.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
-import { createResolverContext } from "./runtime-shared.js";
+import { applyResolvedAssignments, createResolverContext } from "./runtime-shared.js";
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
+
+const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
+  entries: { main: {} },
+};
+const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
@@ -24,6 +30,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "appServer.headers.*", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           codex: {
@@ -47,7 +54,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       resolvePluginConfigContractsById({
         config,
         workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: {},
+        env: isolatedEnv,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["codex"],
@@ -59,7 +66,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     ]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({
@@ -93,6 +100,117 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
+  it("resolves only explicitly referenced Google web-search headers", async () => {
+    expect(
+      findBundledPluginMetadataById("google", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "webSearch.headers.*", expected: "string" }]);
+    const config = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          google: {
+            enabled: true,
+            config: {
+              webSearch: {
+                headers: {
+                  "X-Routing-Target": "staging",
+                  "X-Gateway-Token": envRef("GEMINI_GATEWAY_TOKEN"),
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const env = { ...isolatedEnv, GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
+    const context = createResolverContext({ sourceConfig: config, env });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["google", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.google.config.webSearch.headers.X-Gateway-Token",
+    ]);
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      { config, env, cache: context.cache },
+    );
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    expect(config.plugins?.entries?.google?.config).toMatchObject({
+      webSearch: {
+        headers: {
+          "X-Routing-Target": "staging",
+          "X-Gateway-Token": "resolved-gateway-token",
+        },
+      },
+    });
+  });
+
+  it("materializes Tavily tool credentials from the plugin secret contract", async () => {
+    expect(
+      findBundledPluginMetadataById("tavily", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "webSearch.apiKey", expected: "string", ownerKind: "capability" }]);
+    const sourceConfig = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          tavily: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: envRef("TAVILY_API_KEY"),
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const env = { ...isolatedEnv, TAVILY_API_KEY: "resolved-tavily-key" };
+    const context = createResolverContext({ sourceConfig, env });
+
+    collectPluginConfigAssignments({
+      config: runtimeConfig,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["tavily", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.tavily.config.webSearch.apiKey",
+    ]);
+    expect(context.assignments).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "plugins.entries.tavily.config.webSearch.apiKey",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+    expect(context.assignments[0]?.ownerContractDigest).toBeUndefined();
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      { config: sourceConfig, env, cache: context.cache },
+    );
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    expect(sourceConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: envRef("TAVILY_API_KEY") },
+    });
+    expect(runtimeConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: "resolved-tavily-key" },
+    });
+  });
+
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("voice-call", {
@@ -106,6 +224,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "tts.providers.*.apiKey", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           "voice-call": {
@@ -147,7 +266,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       resolvePluginConfigContractsById({
         config,
         workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: {},
+        env: isolatedEnv,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["voice-call"],
@@ -161,7 +280,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     ]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({
@@ -191,6 +310,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       new URL("../../extensions/google-meet", import.meta.url),
     );
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         load: { paths: [googleMeetPluginDir] },
         entries: {
@@ -215,13 +335,13 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        env: {},
+        env: isolatedEnv,
         pluginIds: ["google-meet"],
       }).get("google-meet")?.configContracts.secretInputs?.paths,
     ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({

@@ -1,43 +1,48 @@
-// Local notification command for paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
+import { type Command, Option } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
-  callGatewayCli,
+  buildNodeInvokeParams,
+  callNodesGatewayCli,
   nodesCallOpts,
-  parseOptionalNodePositiveInteger,
-  resolveNodeId,
+  parseOptionalNodeInteger,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node notification command. */
 export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
     nodes
       .command("notify")
-      .description("Send a local notification on a node (mac only)")
+      .description("Send a local notification on a node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--title <text>", "Notification title")
       .option("--body <text>", "Notification body")
       .option("--sound <name>", "Notification sound")
-      .option("--priority <passive|active|timeSensitive>", "Notification priority")
-      .option("--delivery <system|overlay|auto>", "Delivery mode", "system")
+      .addOption(
+        new Option("--priority <passive|active|timeSensitive>", "Notification priority").choices([
+          "passive",
+          "active",
+          "timeSensitive",
+        ]),
+      )
+      .addOption(
+        new Option("--delivery <system|overlay|auto>", "Delivery mode")
+          .choices(["system", "overlay", "auto"])
+          .default("system"),
+      )
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("notify", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const title = normalizeOptionalString(opts.title) ?? "";
           const body = normalizeOptionalString(opts.body) ?? "";
           if (!title && !body) {
             throw new Error("missing --title or --body");
           }
-          const invokeTimeout = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
-          const invokeParams: Record<string, unknown> = {
+          const invokeTimeout = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "system.notify",
             params: {
@@ -47,13 +52,11 @@ export function registerNodesNotifyCommand(nodes: Command) {
               priority: opts.priority,
               delivery: opts.delivery,
             },
-            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
-          };
-          if (typeof invokeTimeout === "number" && Number.isFinite(invokeTimeout)) {
-            invokeParams.timeoutMs = invokeTimeout;
-          }
+            idempotencyKey: opts.idempotencyKey,
+            timeoutMs: invokeTimeout,
+          });
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
             defaultRuntime.writeJson(result);
             return;

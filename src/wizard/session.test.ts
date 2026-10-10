@@ -1,18 +1,53 @@
 // Wizard session tests cover session creation and state transitions.
-import { describe, expect, test } from "vitest";
-import { WizardSession } from "./session.js";
 
-function noteRunner() {
-  return new WizardSession(async (prompter) => {
-    await prompter.note("Welcome");
-    const name = await prompter.text({ message: "Name" });
-    await prompter.note(`Hello ${name}`);
-  });
+import { describe, expect, test, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import { DEVICE_CODE_PHISHING_WARNING, type WizardPrompter } from "./prompts.js";
+import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
+
+function assertStep(step: WizardStep | undefined): asserts step is WizardStep {
+  if (!step) {
+    throw new Error("expected wizard step");
+  }
 }
 
 describe("WizardSession", () => {
+  test.each([true, false, "false"])(
+    "only literal true confirms a wire answer (%j)",
+    async (answer) => {
+      let confirmed: boolean | undefined;
+      const session = new WizardSession(async (prompter) => {
+        confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
+      });
+      const step = (await session.next()).step;
+      assertStep(step);
+      await session.answer(step.id, answer);
+      await session.whenSettled();
+      expect(confirmed).toBe(answer === true);
+    },
+  );
+
+  test.each([
+    ["select", undefined, true],
+    ["multiselect", undefined, true],
+    ["text", undefined, true],
+    ["confirm", undefined, true],
+    ["action", "client", true],
+    ["action", "gateway", false],
+    ["note", undefined, false],
+    ["progress", undefined, false],
+  ] as const satisfies ReadonlyArray<
+    readonly [WizardStep["type"], WizardStep["executor"], boolean]
+  >)("classifies whether %s/%s awaits user input", (type, executor, expected) => {
+    expect(wizardStepAwaitsInput({ id: "step", type, executor })).toBe(expected);
+  });
+
   test("steps progress in order", async () => {
-    const session = noteRunner();
+    const session = new WizardSession(async (prompter) => {
+      await prompter.note("Welcome");
+      const name = await prompter.text({ message: "Name" });
+      await prompter.note(`Hello ${name}`);
+    });
 
     const first = await session.next();
     expect(first.done).toBe(false);
@@ -21,26 +56,20 @@ describe("WizardSession", () => {
     const secondPeek = await session.next();
     expect(secondPeek.step?.id).toBe(first.step?.id);
 
-    if (!first.step) {
-      throw new Error("expected first step");
-    }
+    assertStep(first.step);
     await session.answer(first.step.id, null);
 
     const second = await session.next();
     expect(second.done).toBe(false);
     expect(second.step?.type).toBe("text");
 
-    if (!second.step) {
-      throw new Error("expected second step");
-    }
+    assertStep(second.step);
     await session.answer(second.step.id, "Peter");
 
     const third = await session.next();
     expect(third.step?.type).toBe("note");
 
-    if (!third.step) {
-      throw new Error("expected third step");
-    }
+    assertStep(third.step);
     await session.answer(third.step.id, null);
 
     const done = await session.next();
@@ -54,9 +83,7 @@ describe("WizardSession", () => {
     });
 
     const first = await session.next();
-    if (!first.step) {
-      throw new Error("expected plain note");
-    }
+    assertStep(first.step);
     expect(first.step.type).toBe("note");
     expect(first.step.message).toBe('{"ok":true}');
     expect(first.step.format).toBe("plain");
@@ -65,14 +92,224 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
-  test("invalid answers throw", async () => {
-    const session = noteRunner();
+  test.each(["prepared", "activated", "utility"] as const)(
+    "returns the exact %s model only on the successful terminal result",
+    async (kind) => {
+      const modelRef = "ollama/qwen3:0.6b";
+      const session = new WizardSession(async (prompter, _signal, owner) => {
+        if (kind === "prepared") {
+          owner.setPreparedModelRef(modelRef);
+        } else {
+          owner.setModelActivation({
+            modelRef,
+            ...(kind === "utility" ? { modelTarget: "utility" } : {}),
+          });
+        }
+        await prompter.note("Finishing setup");
+      });
+      const first = await session.next();
+      expect(first).not.toHaveProperty("modelActivation");
+      expect(first).not.toHaveProperty("preparedModelRef");
+      assertStep(first.step);
+      await session.answer(first.step.id, null);
+      await expect(session.next()).resolves.toEqual({
+        done: true,
+        status: "done",
+        ...(kind === "prepared"
+          ? { preparedModelRef: modelRef }
+          : {
+              modelActivation: {
+                modelRef,
+                ...(kind === "utility" ? { modelTarget: "utility" } : {}),
+              },
+            }),
+      });
+    },
+  );
+
+  test.each(["error", "cancelled"] as const)(
+    "withholds model outcomes after %s, even on late completion",
+    async (status) => {
+      const gate = createDeferredCore();
+      const session = new WizardSession(async (_prompter, _signal, owner) => {
+        await gate.promise;
+        owner.setPreparedModelRef("ollama/qwen3:0.6b");
+        owner.setModelActivation({
+          modelRef: "ollama/qwen3:0.6b",
+          modelTarget: "utility",
+          gatewayRestartRequired: true,
+        });
+        if (status === "error") {
+          throw new Error("activation setup failed");
+        }
+      });
+      if (status === "cancelled") {
+        session.cancel();
+      }
+      gate.resolve();
+      await session.whenSettled();
+      const result = await session.next();
+      expect(result).toMatchObject({
+        done: true,
+        status,
+      });
+      expect(result).not.toHaveProperty("modelActivation");
+      expect(result).not.toHaveProperty("preparedModelRef");
+    },
+  );
+
+  test("attaches an explicit browser destination to the next client step", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.openUrl?.("https://provider.example/oauth?state=state-1");
+      await prompter.text({ message: "Paste the redirect URL" });
+    });
+
     const first = await session.next();
-    await expect(session.answer("bad-id", null)).rejects.toThrow(/wizard: no pending step/i);
-    if (!first.step) {
-      throw new Error("expected first step");
-    }
-    await session.answer(first.step.id, null);
+    expect(first.step?.externalUrl).toBe("https://provider.example/oauth?state=state-1");
+    expect(first.step?.type).toBe("text");
+    assertStep(first.step);
+    await session.answer(first.step.id, "http://localhost/callback?code=done");
+    expect((await session.next()).status).toBe("done");
+  });
+
+  test.each(["done", "cancelled"] as const)(
+    "keeps a browser waiting link through progress until %s without an answer",
+    async (status) => {
+      const callback = createDeferredCore();
+      const ready = createDeferredCore<WizardPrompter>();
+      const destination = "https://provider.example/oauth?state=state-1";
+      const session = new WizardSession(async (prompter) => {
+        await prompter.openUrl?.(destination);
+        ready.resolve(prompter);
+        await callback.promise;
+      });
+      const next = session.next();
+      const delivered = vi.fn();
+      void next.then(delivered);
+
+      try {
+        await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
+        const first = await next;
+        expect(first).toMatchObject({
+          done: false,
+          status: "running",
+          step: {
+            type: "progress",
+            executor: "gateway",
+            externalUrl: destination,
+          },
+        });
+        if (!first.step) {
+          throw new Error("expected browser sign-in progress");
+        }
+        expect(wizardStepAwaitsInput(first.step)).toBe(false);
+
+        const prompter = await ready.promise;
+        const progress = prompter.progress("Waiting for approval");
+        const approval = await session.next();
+        expect(approval.step).toMatchObject({
+          type: "progress",
+          executor: "gateway",
+          message: "Waiting for approval",
+          externalUrl: destination,
+        });
+        for (const message of ["Approval received", "Finishing sign-in"]) {
+          progress.update(message);
+          const update = await session.next();
+          expect(update.step).toMatchObject({
+            type: "progress",
+            executor: "gateway",
+            message,
+            externalUrl: destination,
+          });
+        }
+
+        if (status === "cancelled") {
+          session.cancel();
+        }
+        callback.resolve();
+        await session.whenSettled();
+        expect(await session.next()).toMatchObject({ done: true, status });
+      } finally {
+        session.cancel();
+        callback.resolve();
+        await session.whenSettled();
+        await next;
+      }
+    },
+  );
+
+  test("carries device-code presentation without parsing provider prose", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.openUrl?.("https://provider.example/device");
+      await prompter.deviceCode?.({
+        title: "Provider sign-in",
+        code: "ABCD-1234",
+        expiresInMinutes: 15,
+        message: "Enter this one-time code in your browser.",
+      });
+    });
+
+    const first = await session.next();
+    expect(first.step).toMatchObject({
+      type: "progress",
+      executor: "gateway",
+      title: "Provider sign-in",
+      message: [
+        "Enter this one-time code in your browser.",
+        "https://provider.example/device",
+        "Code: ABCD-1234",
+        "Code expires in 15 minutes.",
+        DEVICE_CODE_PHISHING_WARNING,
+      ].join("\n"),
+      externalUrl: "https://provider.example/device",
+      deviceCode: {
+        code: "ABCD-1234",
+        expiresInMinutes: 15,
+        message: "Enter this one-time code in your browser.",
+      },
+    });
+    await session.whenSettled();
+    expect(await session.next()).toMatchObject({ done: true, status: "done" });
+  });
+
+  test("keeps a validated text step pending after an invalid answer", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({
+        message: "Port",
+        validate: (value) => (value === "18789" ? undefined : "Enter the expected port"),
+      });
+    });
+
+    const first = await session.next();
+    assertStep(first.step);
+    await expect(session.answer(first.step.id, "banana")).resolves.toBe("Enter the expected port");
+    expect(session.getStatus()).toBe("running");
+    expect((await session.next()).step?.id).toBe(first.step.id);
+
+    await session.answer(first.step.id, "18789");
+    expect((await session.next()).status).toBe("done");
+  });
+
+  test("rejects non-scalar text answers before validation and resolution", async () => {
+    let resolved: string | undefined;
+    const session = new WizardSession(async (prompter) => {
+      resolved = await prompter.text({
+        message: "Token",
+        validate: (value) => (value.length > 0 ? undefined : "Token is required"),
+      });
+    });
+
+    const first = await session.next();
+    assertStep(first.step);
+    await expect(session.answer(first.step.id, ["token"])).resolves.toBe(
+      "wizard: text answer must be a scalar value",
+    );
+    expect((await session.next()).step?.id).toBe(first.step.id);
+
+    await session.answer(first.step.id, "token");
+    expect((await session.next()).status).toBe("done");
+    expect(resolved).toBe("token");
   });
 
   test("cancel marks session and unblocks", async () => {
@@ -88,6 +325,146 @@ describe("WizardSession", () => {
     const done = await session.next();
     expect(done.done).toBe(true);
     expect(done.status).toBe("cancelled");
+    expect(session.signal.aborted).toBe(true);
+  });
+
+  test("returns cancellation when progress is retired before a waiting next resumes", async () => {
+    const proceed = createDeferredCore();
+    const session = new WizardSession(async (prompter, _signal, owner) => {
+      await proceed.promise;
+      prompter.progress("Starting the test");
+      owner.cancel();
+    });
+    const pending = session.next();
+    proceed.resolve();
+    try {
+      await expect(pending).resolves.toMatchObject({ done: true, status: "cancelled" });
+    } finally {
+      await session.whenSettled();
+    }
+  });
+
+  test.each(["before prompting", "while pending"])(
+    "retires a manual prompt aborted %s without cancelling the wizard",
+    async (when) => {
+      const controller = new AbortController();
+      const reason = new Error("browser callback completed");
+      const rejected = vi.fn();
+      if (when === "before prompting") {
+        controller.abort(reason);
+      }
+      const session = new WizardSession(async (prompter) => {
+        await prompter
+          .text({ message: "Paste callback", signal: controller.signal })
+          .catch(rejected);
+        await prompter.note("Connected");
+      });
+      try {
+        let retiredStep: WizardStep | undefined;
+        if (when === "while pending") {
+          retiredStep = (await session.next()).step;
+          expect(retiredStep?.message).toBe("Paste callback");
+          controller.abort(reason);
+        }
+        const next = await session.next();
+        expect(next.step).toMatchObject({ type: "note", message: "Connected" });
+        expect(rejected).toHaveBeenCalledWith(reason);
+        expect(session.signal.aborted).toBe(false);
+        if (retiredStep) {
+          await expect(session.answer(retiredStep.id, "late-code")).rejects.toThrow(
+            "no pending step",
+          );
+        }
+        assertStep(next.step);
+        await session.answer(next.step.id, undefined);
+        await session.whenSettled();
+        expect((await session.next()).status).toBe("done");
+      } finally {
+        session.cancel();
+        await session.whenSettled();
+      }
+    },
+  );
+
+  test.each(["done", "error"])(
+    "retires unanswered prompts when the runner is %s",
+    async (status) => {
+      const finish = createDeferredCore();
+      const promptFinished = createDeferredCore<unknown>();
+      const session = new WizardSession(async (prompter) => {
+        void prompter
+          .text({ message: "Optional manual callback" })
+          .then(() => promptFinished.resolve("answered"), promptFinished.resolve);
+        await finish.promise;
+        if (status === "error") {
+          throw new Error("provider exchange failed");
+        }
+      });
+      const step = (await session.next()).step;
+      assertStep(step);
+      finish.resolve();
+      await session.whenSettled();
+      expect(await session.next()).toMatchObject({ done: true, status });
+      await expect(session.answer(step.id, "late-code")).rejects.toThrow("no pending step");
+      await expect(promptFinished.promise).resolves.toMatchObject({ name: "WizardCancelledError" });
+    },
+  );
+
+  test("refuses cancellation after the durable commit point", async () => {
+    const gate = createDeferredCore();
+    const session = new WizardSession(async () => {
+      await gate.promise;
+    });
+
+    session.lockCancellation();
+    expect(session.cancel()).toBe(false);
+    expect(session.getStatus()).toBe("running");
+    expect(session.signal.aborted).toBe(false);
+    expect(() => session.assertPersistentEffectCurrent()).not.toThrow();
+
+    gate.resolve();
+    expect((await session.next()).status).toBe("done");
+    expect(() => session.assertPersistentEffectCurrent()).toThrow(
+      "Setup session is no longer active",
+    );
+  });
+
+  test("expires an abandoned interactive session", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new WizardSession(
+        async (prompter) => {
+          await prompter.text({ message: "Name" });
+        },
+        { timeoutMs: 1_000 },
+      );
+
+      expect((await session.next()).step?.type).toBe("text");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const done = await session.next();
+      expect(done.status).toBe("cancelled");
+      expect(session.signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a cancelled runner stays cancelled on late commit", async () => {
+    const gate = createDeferredCore();
+    let committed = false;
+    const session = new WizardSession(async (_prompter, _signal, owner) => {
+      await gate.promise;
+      owner.lockCancellation();
+      committed = true;
+    });
+
+    session.cancel();
+    gate.resolve();
+    await session.whenSettled();
+
+    expect((await session.next()).status).toBe("cancelled");
+    expect(committed).toBe(false);
   });
 
   test("does not lose terminal completion when the last answer finishes the runner immediately", async () => {
@@ -97,9 +474,7 @@ describe("WizardSession", () => {
 
     const first = await session.next();
     expect(first.step?.type).toBe("text");
-    if (!first.step) {
-      throw new Error("expected first step");
-    }
+    assertStep(first.step);
 
     await session.answer(first.step.id, "ok");
     await Promise.resolve();
@@ -118,17 +493,71 @@ describe("WizardSession", () => {
     const sensitiveStep = (await session.next()).step;
     expect(sensitiveStep?.type).toBe("text");
     expect(sensitiveStep?.sensitive).toBe(true);
-    if (!sensitiveStep) {
-      throw new Error("expected sensitive step");
-    }
+    assertStep(sensitiveStep);
     await session.answer(sensitiveStep.id, "fake-key-aa11");
 
     const plainStep = (await session.next()).step;
     expect(plainStep?.type).toBe("text");
     expect(plainStep?.sensitive).toBeUndefined();
-    if (!plainStep) {
-      throw new Error("expected plain step");
-    }
+    assertStep(plainStep);
     await session.answer(plainStep.id, "alice");
+  });
+
+  test("bridges confirm, progress updates, and notes in order", async () => {
+    const initialUpdateQueued = createDeferredCore();
+    const halfway = createDeferredCore();
+    const done = createDeferredCore();
+    const session = new WizardSession(async (prompter) => {
+      await prompter.confirm({ message: "Download model?", initialValue: false });
+      const progress = prompter.progress("Starting download");
+      progress.update("Downloading model... 10%");
+      initialUpdateQueued.resolve();
+      await halfway.promise;
+      progress.update("Downloading model... 50%");
+      await done.promise;
+      progress.stop("Model downloaded");
+      await prompter.note("Ready to use", "Prepared");
+    });
+
+    const confirm = await session.next();
+    expect(confirm.step).toMatchObject({
+      type: "confirm",
+      message: "Download model?",
+      initialValue: false,
+    });
+    assertStep(confirm.step);
+    await session.answer(confirm.step.id, true);
+    await initialUpdateQueued.promise;
+
+    expect(await session.next()).toMatchObject({
+      step: {
+        type: "progress",
+        message: "Starting download",
+        executor: "gateway",
+      },
+    });
+
+    expect(await session.next()).toMatchObject({
+      step: { type: "progress", message: "Downloading model... 10%" },
+    });
+
+    const halfwayStep = session.next();
+    halfway.resolve();
+    expect(await halfwayStep).toMatchObject({
+      step: { type: "progress", message: "Downloading model... 50%" },
+    });
+
+    const doneStep = session.next();
+    done.resolve();
+    const completedProgress = await doneStep;
+    expect(completedProgress).toMatchObject({
+      step: { type: "progress", message: "Model downloaded" },
+    });
+    assertStep(completedProgress.step);
+    await expect(session.answer(completedProgress.step.id, undefined)).resolves.toBeUndefined();
+
+    expect(await session.next()).toMatchObject({
+      step: { type: "note", title: "Prepared", message: "Ready to use" },
+    });
   });
 });

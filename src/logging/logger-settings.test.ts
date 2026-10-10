@@ -5,8 +5,14 @@ import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 let logging: typeof import("../logging.js");
+let loggingConfig: typeof import("./config.js");
+let applyLoggingConfig: typeof import("./logger.js").applyLoggingConfig;
 
 beforeAll(async () => {
+  // Bind the observer and both settings consumers to the same module generation.
+  vi.resetModules();
+  loggingConfig = await import("./config.js");
+  ({ applyLoggingConfig } = await import("./logger.js"));
   logging = await import("../logging.js");
 });
 
@@ -23,14 +29,12 @@ afterEach(() => {
   envSnapshot = undefined;
   logging.resetLogger();
   logging.setLoggerOverride(null);
-  logging.setLoggerConfigLoaderForTests();
   vi.restoreAllMocks();
 });
 
 describe("getResolvedLoggerSettings", () => {
   it("uses a silent fast path in default Vitest mode without config reads", () => {
-    const readLoggingConfig = vi.fn(() => undefined);
-    logging.setLoggerConfigLoaderForTests(readLoggingConfig);
+    const readLoggingConfig = vi.spyOn(loggingConfig, "readLoggingConfig");
 
     const settings = logging.getResolvedLoggerSettings();
 
@@ -40,14 +44,16 @@ describe("getResolvedLoggerSettings", () => {
 
   it("reads logging config when test file logging is explicitly enabled", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
-    logging.setLoggerConfigLoaderForTests(() => ({
+    const readLoggingConfig = vi.spyOn(loggingConfig, "readLoggingConfig");
+    applyLoggingConfig({
       level: "debug",
       file: "/tmp/openclaw-configured.log",
       maxFileBytes: 2048,
-    }));
+    });
 
     const settings = logging.getResolvedLoggerSettings();
 
+    expect(readLoggingConfig).toHaveBeenCalledOnce();
     expect(settings.level).toBe("debug");
     expect(settings.file).toBe("/tmp/openclaw-configured.log");
     expect(settings.maxFileBytes).toBe(2048);
@@ -55,7 +61,7 @@ describe("getResolvedLoggerSettings", () => {
 
   it("uses defaults when no logging config is available", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
-    logging.setLoggerConfigLoaderForTests(() => undefined);
+    applyLoggingConfig(undefined);
 
     const settings = logging.getResolvedLoggerSettings();
 

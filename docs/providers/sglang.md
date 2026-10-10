@@ -43,7 +43,7 @@ OpenClaw also **auto-discovers** available models from SGLang when you opt in wi
   </Step>
   <Step title="Run onboarding or set a model directly">
     ```bash
-    openclaw onboard
+    openclaw onboard --auth-choice sglang
     ```
 
     Or configure the model manually:
@@ -64,11 +64,11 @@ OpenClaw also **auto-discovers** available models from SGLang when you opt in wi
 ## Model discovery (implicit provider)
 
 When `SGLANG_API_KEY` is set (or an auth profile exists) and you **do not**
-define `models.providers.sglang`, OpenClaw will query:
+define `models.providers.sglang`, OpenClaw queries:
 
 - `GET http://127.0.0.1:30000/v1/models`
 
-and convert the returned IDs into model entries.
+and converts the returned IDs into model entries.
 
 <Note>
 If you set `models.providers.sglang` explicitly, OpenClaw uses your declared

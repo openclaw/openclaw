@@ -3,10 +3,33 @@
  * transport interface.
  */
 import { EventEmitter } from "node:events";
+import net from "node:net";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import WebSocket, { type RawData } from "ws";
-import type { CodexAppServerStartOptions } from "./config.js";
+import { StringDecoder } from "node:string_decoder";
+import { type ClientOptions, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
+
+const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
+const WEBSOCKET_PING_INTERVAL_MS = 20_000;
+const WEBSOCKET_PONG_TIMEOUT_MS = 20_000;
+const MAX_CONSECUTIVE_MISSED_WEBSOCKET_PONGS = 5;
+
+/** Only the transport can prove that its buffered initialize never reached a peer. */
+export function isCodexWebSocketOpenFailure(error: unknown): boolean {
+  const seen = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED") {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
 
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
@@ -24,9 +47,89 @@ export function createWebSocketTransport(
     ...options.headers,
     ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
   };
-  const socket = new WebSocket(options.url, { headers });
+  const websocketOptions: ClientOptions = {
+    headers,
+    // Codex app-server closes Unix upgrade handshakes that offer compression.
+    perMessageDeflate: false,
+    ...(options.transport === "websocket"
+      ? { handshakeTimeout: WEBSOCKET_HANDSHAKE_TIMEOUT_MS }
+      : {}),
+  };
+  const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
+  const socket = unixSocketPath
+    ? new WebSocket("ws://localhost/", {
+        ...websocketOptions,
+        createConnection: () => connectCodexAppServerUnixSocket(unixSocketPath),
+      })
+    : new WebSocket(options.url, websocketOptions);
   const pendingFrames: string[] = [];
+  const stdinDecoder = new StringDecoder("utf8");
+  let pendingLine = "";
+  let opened = false;
   let killed = false;
+  let exitCode: number | null = null;
+  let pingTimeout: NodeJS.Timeout | undefined;
+  let pongTimeout: NodeJS.Timeout | undefined;
+  let expectedPong: Buffer | undefined;
+  let consecutiveMissedPongs = 0;
+  let heartbeatSequence = 0;
+
+  const clearConnectionHealthTimers = () => {
+    clearTimeout(pingTimeout);
+    pingTimeout = undefined;
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
+    expectedPong = undefined;
+  };
+
+  const sendHeartbeatPing = () => {
+    if (socket.readyState !== WebSocket.OPEN || pongTimeout) {
+      return;
+    }
+
+    const payload = Buffer.from(`openclaw-codex-${++heartbeatSequence}`);
+    expectedPong = payload;
+    pongTimeout = setTimeout(() => {
+      pongTimeout = undefined;
+      expectedPong = undefined;
+      consecutiveMissedPongs += 1;
+      if (consecutiveMissedPongs >= MAX_CONSECUTIVE_MISSED_WEBSOCKET_PONGS) {
+        socket.terminate();
+        return;
+      }
+      sendHeartbeatPing();
+    }, WEBSOCKET_PONG_TIMEOUT_MS);
+    pongTimeout.unref();
+    socket.ping(payload, undefined, (error) => {
+      if (error) {
+        socket.terminate();
+      }
+    });
+  };
+
+  const scheduleHeartbeatPing = () => {
+    if (
+      options.transport !== "websocket" ||
+      socket.readyState !== WebSocket.OPEN ||
+      pingTimeout ||
+      pongTimeout
+    ) {
+      return;
+    }
+    pingTimeout = setTimeout(() => {
+      pingTimeout = undefined;
+      sendHeartbeatPing();
+    }, WEBSOCKET_PING_INTERVAL_MS);
+    pingTimeout.unref();
+  };
+
+  const recordConnectionActivity = () => {
+    consecutiveMissedPongs = 0;
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
+    expectedPong = undefined;
+    scheduleHeartbeatPing();
+  };
 
   const sendFrame = (frame: string) => {
     const trimmed = frame.trim();
@@ -43,25 +146,75 @@ export function createWebSocketTransport(
   // `initialize` can be written before the WebSocket open event fires. Buffer
   // whole JSON-RPC frames so stdio and websocket transports share call timing.
   socket.once("open", () => {
+    opened = true;
     for (const frame of pendingFrames.splice(0)) {
       socket.send(frame);
     }
+    scheduleHeartbeatPing();
   });
-  socket.once("error", (error) => events.emit("error", error));
+  socket.on("pong", (payload) => {
+    if (expectedPong?.equals(payload)) {
+      recordConnectionActivity();
+    }
+  });
+  socket.once("error", (error) => {
+    clearConnectionHealthTimers();
+    const code = "code" in error ? error.code : undefined;
+    if (
+      options.transport === "websocket" &&
+      !opened &&
+      (code === "ECONNREFUSED" ||
+        code === "ECONNRESET" ||
+        code === "ETIMEDOUT" ||
+        error.message === "Opening handshake has timed out")
+    ) {
+      events.emit(
+        "error",
+        Object.assign(new Error(error.message, { cause: error }), {
+          code: "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED",
+        }),
+      );
+      return;
+    }
+    events.emit("error", error);
+  });
   socket.once("close", (code, reason) => {
+    clearConnectionHealthTimers();
     killed = true;
+    exitCode = code;
     events.emit("exit", code, reason.toString("utf8"));
   });
   socket.on("message", (data) => {
-    const text = websocketFrameToText(data);
-    stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    if (options.transport === "websocket") {
+      recordConnectionActivity();
+    }
+    const frame = codexWebSocketDataToBuffer(data);
+    const writable = stdout.write(frame);
+    const delimited = frame.at(-1) === 10 || stdout.write(Buffer.from("\n"));
+    if (!writable || !delimited) {
+      socket.pause();
+    }
+  });
+
+  stdout.on("drain", () => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.resume();
+    }
   });
 
   const stdin = new Writable({
     write(chunk, _encoding, callback) {
-      for (const frame of chunk.toString("utf8").split("\n")) {
+      pendingLine += stdinDecoder.write(chunk);
+      const lines = pendingLine.split("\n");
+      pendingLine = lines.pop() ?? "";
+      for (const frame of lines) {
         sendFrame(frame);
       }
+      callback();
+    },
+    final(callback) {
+      sendFrame(pendingLine + stdinDecoder.end());
+      pendingLine = "";
       callback();
     },
   });
@@ -75,29 +228,56 @@ export function createWebSocketTransport(
   stdin.once("close", closeSocket);
 
   return {
+    // Codex uses tungstenite defaults: one uncompressed frame is limited to 16 MiB.
+    maxFrameBytes: 16 * 1024 * 1024,
     stdin,
     stdout,
     stderr,
     get killed() {
       return killed;
     },
-    kill: () => {
+    get exitCode() {
+      return exitCode;
+    },
+    kill: (signal) => {
       killed = true;
-      socket.close();
+      clearConnectionHealthTimers();
+      if (signal === "SIGKILL") {
+        socket.terminate();
+      } else {
+        socket.close();
+      }
     },
     once: (event, listener) => events.once(event, listener),
+    off: (event, listener) => events.off(event, listener),
   };
 }
 
-function websocketFrameToText(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
+/** Named local-only socket boundary for the egress classifier. */
+function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
+  return net.createConnection(socketPath);
+}
+
+export function resolveCodexAppServerUnixSocketPath(
+  options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
+): string | undefined {
+  if (options.transport !== "unix") {
+    if (options.url?.startsWith("unix://")) {
+      throw new Error("codex app-server unix URL requires unix transport");
+    }
+    return undefined;
   }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
+  const url = options.url ?? "unix://";
+  if (!url.startsWith("unix://")) {
+    throw new Error("codex app-server unix transport requires a unix:// URL");
   }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
+  const configuredPath = url.slice("unix://".length);
+  return (
+    configuredPath ||
+    path.join(
+      resolveCodexAppServerUserHomeDir(options.env ?? process.env),
+      "app-server-control",
+      "app-server-control.sock",
+    )
+  );
 }

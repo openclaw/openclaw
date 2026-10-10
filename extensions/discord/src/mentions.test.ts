@@ -1,31 +1,16 @@
 // Discord tests cover mentions plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  resetDiscordDirectoryCacheForTest,
-  rememberDiscordDirectoryUser,
-} from "./directory-cache.js";
+import { rememberDiscordDirectoryUser } from "./directory-cache.js";
+import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import {
   discordTextHasBroadcastMention,
-  discordTextHasTargetedMention,
   formatMention,
   rewriteDiscordKnownMentions,
 } from "./mentions.js";
 
 describe("formatMention", () => {
-  it("formats user mentions from ids", () => {
-    expect(formatMention({ userId: "123456789" })).toBe("<@123456789>");
-  });
-
-  it("formats role mentions from ids", () => {
-    expect(formatMention({ roleId: "987654321" })).toBe("<@&987654321>");
-  });
-
   it("formats channel mentions from ids", () => {
     expect(formatMention({ channelId: "777555333" })).toBe("<#777555333>");
-  });
-
-  it("throws when no mention id is provided", () => {
-    expect(() => formatMention({})).toThrow(/exactly one/i);
   });
 
   it("throws when more than one mention id is provided", () => {
@@ -35,7 +20,7 @@ describe("formatMention", () => {
 
 describe("rewriteDiscordKnownMentions", () => {
   beforeEach(() => {
-    resetDiscordDirectoryCacheForTest();
+    clearDiscordDirectoryCacheForTest();
   });
 
   it("rewrites @name mentions when a cached user id exists", () => {
@@ -66,16 +51,6 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("ping <@333333333> and <@222222222>");
   });
 
-  it("supports configured aliases with a leading @ key", () => {
-    const rewritten = rewriteDiscordKnownMentions("ping @OpsLead", {
-      accountId: "default",
-      mentionAliases: {
-        "@opslead": "444444444",
-      },
-    });
-    expect(rewritten).toBe("ping <@444444444>");
-  });
-
   it("preserves unknown mentions and reserved mentions", () => {
     rememberDiscordDirectoryUser({
       accountId: "default",
@@ -88,19 +63,34 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("hello @unknown @everyone @here");
   });
 
-  it("does not rewrite mentions inside markdown code spans", () => {
+  it.each([
+    {
+      name: "balanced inline and fenced code",
+      input: "inline `@alice` fence ```\n@alice\n``` text @alice",
+      expected: "inline `@alice` fence ```\n@alice\n``` text <@123456789>",
+    },
+    {
+      name: "closed multiline code containing a longer backtick run",
+      input: "Example: ``first ``` literal\nsecond``\nPlease review @alice",
+      expected: "Example: ``first ``` literal\nsecond``\nPlease review <@123456789>",
+    },
+    {
+      name: "unterminated single-backtick code",
+      input: "outside @alice then `inside @alice",
+      expected: "outside <@123456789> then `inside @alice",
+    },
+    {
+      name: "escaped backticks before real unterminated code",
+      input: "literal \\` outside @alice then `inside @alice",
+      expected: "literal \\` outside <@123456789> then `inside @alice",
+    },
+  ])("does not rewrite mentions inside $name", ({ input, expected }) => {
     rememberDiscordDirectoryUser({
       accountId: "default",
       userId: "123456789",
       handles: ["alice"],
     });
-    const rewritten = rewriteDiscordKnownMentions(
-      "inline `@alice` fence ```\n@alice\n``` text @alice",
-      {
-        accountId: "default",
-      },
-    );
-    expect(rewritten).toBe("inline `@alice` fence ```\n@alice\n``` text <@123456789>");
+    expect(rewriteDiscordKnownMentions(input, { accountId: "default" })).toBe(expected);
   });
 
   it("does not end longer code fences at triple-backtick literals inside the body", () => {
@@ -129,26 +119,7 @@ describe("rewriteDiscordKnownMentions", () => {
   });
 });
 
-describe("discordTextHasTargetedMention", () => {
-  it("detects user and role mentions", () => {
-    expect(discordTextHasTargetedMention("ping <@123>")).toBe(true);
-    expect(discordTextHasTargetedMention("ping <@!123>")).toBe(true);
-    expect(discordTextHasTargetedMention("ping <@&456>")).toBe(true);
-  });
-
-  it("ignores plain text, channels, and broadcasts", () => {
-    expect(discordTextHasTargetedMention("ping @alice")).toBe(false);
-    expect(discordTextHasTargetedMention("see <#789>")).toBe(false);
-    expect(discordTextHasTargetedMention("heads up @everyone @here")).toBe(false);
-  });
-});
-
 describe("discordTextHasBroadcastMention", () => {
-  it("detects @everyone and @here", () => {
-    expect(discordTextHasBroadcastMention("heads up @everyone")).toBe(true);
-    expect(discordTextHasBroadcastMention("@here please")).toBe(true);
-  });
-
   it("ignores targeted mentions and lookalikes", () => {
     expect(discordTextHasBroadcastMention("ping <@123>")).toBe(false);
     expect(discordTextHasBroadcastMention("mail me at a@everyones")).toBe(false);

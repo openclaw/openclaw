@@ -1,7 +1,6 @@
 // Snapshots script supports OpenClaw repository automation.
 import { die, run } from "./host-command.ts";
-import type { Mode } from "./types.ts";
-import type { SnapshotInfo } from "./types.ts";
+import type { Mode, SnapshotInfo } from "./types.ts";
 
 const SNAPSHOT_LIST_TIMEOUT_MS = 120_000;
 export const SKIP_SNAPSHOT_RESTORE_ENV = "OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE";
@@ -29,7 +28,6 @@ export function currentRunningSnapshotInfo(vmName: string): SnapshotInfo {
 
 export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
   const output = run("prlctl", ["snapshot-list", vmName, "--json"], {
-    quiet: true,
     timeoutMs: SNAPSHOT_LIST_TIMEOUT_MS,
   }).stdout;
   if (!output.trim()) {
@@ -37,9 +35,13 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
       `prlctl snapshot-list ${vmName} --json returned no snapshots; create/restore a snapshot or set ${SKIP_SNAPSHOT_RESTORE_ENV}=1 for an already-started guest`,
     );
   }
-  const payload = JSON.parse(output) as Record<string, { name?: string; state?: string }>;
+  const payload = JSON.parse(output) as Record<
+    string,
+    { date?: string; name?: string; state?: string }
+  >;
   let best: SnapshotInfo | null = null;
   let bestScore = -1;
+  let bestDate = "";
   const aliases = (name: string): string[] => {
     const values = [name];
     for (const pattern of [/^(.*)-poweroff$/, /^(.*)-poweroff-\d{4}-\d{2}-\d{2}$/]) {
@@ -77,8 +79,12 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
     if ((meta.state ?? "").toLowerCase() === "poweroff") {
       score += 0.5;
     }
-    if (score > bestScore) {
+    const date = (meta.date ?? "").trim();
+    // Parallels lists snapshots oldest-first. Prefer the newest reusable baseline when fuzzy
+    // names tie, while preserving the original order when date metadata is unavailable.
+    if (score > bestScore || (score === bestScore && bestDate && date && date > bestDate)) {
       bestScore = score;
+      bestDate = date;
       best = { id, name, state: (meta.state ?? "").trim() };
     }
   }
@@ -88,28 +94,23 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
   return best;
 }
 
-export function stringSimilarity(a: string, b: string): number {
+function stringSimilarity(a: string, b: string): number {
   if (a === b) {
     return 1;
   }
-  const rows = a.length + 1;
-  const cols = b.length + 1;
-  const matrix = Array.from({ length: rows }, () => Array<number>(cols).fill(0));
-  for (let i = 0; i < rows; i++) {
-    matrix[i][0] = i;
-  }
-  for (let j = 0; j < cols; j++) {
-    matrix[0][j] = j;
-  }
-  for (let i = 1; i < rows; i++) {
-    for (let j = 1; j < cols; j++) {
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = row[0]!;
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = row[j]!;
+      row[j] = Math.min(
+        above + 1,
+        row[j - 1]! + 1,
+        diagonal + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1),
       );
+      diagonal = above;
     }
   }
-  const distance = matrix[a.length][b.length];
-  return 1 - distance / Math.max(a.length, b.length, 1);
+  return 1 - row[b.length]! / Math.max(a.length, b.length, 1);
 }

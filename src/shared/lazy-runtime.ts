@@ -1,19 +1,19 @@
-// Lazy runtime helpers expose dynamic imports through cached runtime surfaces.
+import { createLazyPromiseLoader } from "./lazy-promise.js";
+
+export { createLazyPromise, createLazyPromiseLoader } from "./lazy-promise.js";
+
 export function createLazyRuntimeSurface<TModule, TSurface>(
   importer: () => Promise<TModule>,
   select: (module: TModule) => TSurface,
-): () => Promise<TSurface> {
-  let cached: Promise<TSurface> | null = null;
-  return () => {
-    cached ??= importer().then(select);
-    return cached;
-  };
+) {
+  const loader = createLazyPromiseLoader(() => importer().then(select), {
+    cacheRejections: true,
+  });
+  return Object.assign(loader.load, { peek: loader.peek, clear: loader.clear });
 }
 
 /** Cache the raw dynamically imported runtime module behind a stable loader. */
-export function createLazyRuntimeModule<TModule>(
-  importer: () => Promise<TModule>,
-): () => Promise<TModule> {
+export function createLazyRuntimeModule<TModule>(importer: () => Promise<TModule>) {
   return createLazyRuntimeSurface(importer, (module) => module);
 }
 
@@ -29,11 +29,10 @@ export function createLazyRuntimeMethod<TSurface, TArgs extends unknown[], TResu
   load: () => Promise<TSurface>,
   select: (surface: TSurface) => (...args: TArgs) => TResult,
 ): (...args: TArgs) => Promise<Awaited<TResult>> {
-  const invoke = async (...args: TArgs): Promise<Awaited<TResult>> => {
+  return async (...args: TArgs): Promise<Awaited<TResult>> => {
     const method = select(await load());
     return await method(...args);
   };
-  return invoke;
 }
 
 export function createLazyRuntimeMethodBinder<TSurface>(load: () => Promise<TSurface>) {

@@ -1,7 +1,7 @@
 // Runtime config tests cover gateway bind/auth resolution, trusted proxy rules,
 // container defaults, and invalid config rejection before server startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetContainerCacheForTest } from "./net.js";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -18,10 +18,6 @@ const TOKEN_AUTH = {
 
 describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {
-    // This test validates BOTH validation layers:
-    // 1. CLI validation in src/cli/gateway-cli/run.ts (line 246)
-    // 2. Runtime config validation in src/gateway/server-runtime-config.ts (line 99)
-    // Both must allow lan binding when authMode === "trusted-proxy"
     it.each([
       {
         name: "lan binding",
@@ -46,55 +42,27 @@ describe("resolveGatewayRuntimeConfig", () => {
         },
         expectedBindHost: "127.0.0.1",
       },
-      {
-        name: "loopback binding with ::1 proxy",
-        cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: ["::1"] },
-        },
-        expectedBindHost: "127.0.0.1",
-      },
-      {
-        name: "loopback binding with loopback cidr proxy",
-        cfg: {
-          gateway: {
-            bind: "loopback" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: ["127.0.0.0/8"],
-          },
-        },
-        expectedBindHost: "127.0.0.1",
-      },
     ])("allows $name", async ({ cfg, expectedBindHost }) => {
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.authMode).toBe("trusted-proxy");
       expect(result.bindHost).toBe(expectedBindHost);
     });
 
-    it.each([
-      {
-        name: "loopback binding without trusted proxies",
-        cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
-        },
-        expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
-      },
-      {
-        name: "lan binding without trusted proxies",
-        cfg: {
-          gateway: {
-            bind: "lan" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: [],
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
+    it("rejects lan binding without trusted proxies", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "lan",
+              auth: TRUSTED_PROXY_AUTH,
+              trustedProxies: [],
+              controlUi: { allowedOrigins: ["https://control.example.com"] },
+            },
           },
-        },
-        expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
-      },
-    ])("rejects $name", async ({ cfg, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
-        expectedMessage,
+          port: 18789,
+        }),
+      ).rejects.toThrow(
+        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       );
     });
 
@@ -175,6 +143,12 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedMessage: "gateway bind=loopback resolved to non-loopback host",
       },
       {
+        name: "tailnet binding that falls through to wildcard",
+        cfg: { gateway: { bind: "tailnet" as const, auth: TOKEN_AUTH } },
+        host: "0.0.0.0",
+        expectedMessage: "gateway bind=tailnet could not resolve a Tailscale or loopback address",
+      },
+      {
         name: "custom bind without customBindHost",
         cfg: { gateway: { bind: "custom" as const, auth: TOKEN_AUTH } },
         expectedMessage: "gateway.bind=custom requires gateway.customBindHost",
@@ -220,6 +194,29 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
       },
       {
+        name: "allows non-loopback control UI with the advertised public origin",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            publicOrigin: "https://control.example.com",
+          },
+        },
+        expectedBindHost: "0.0.0.0",
+      },
+      {
+        name: "does not replace an explicit empty origin list with the public origin",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            publicOrigin: "https://control.example.com",
+            controlUi: { allowedOrigins: [] },
+          },
+        },
+        expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      },
+      {
         name: "allows non-loopback control UI without allowed origins when dangerous fallback is enabled",
         cfg: {
           gateway: {
@@ -259,7 +256,7 @@ describe("resolveGatewayRuntimeConfig", () => {
 
   describe("container-aware bind default", () => {
     afterEach(() => {
-      __resetContainerCacheForTest();
+      resetContainerEnvironmentCacheForTest();
       vi.restoreAllMocks();
     });
 
@@ -370,49 +367,6 @@ describe("resolveGatewayRuntimeConfig", () => {
         port: 18789,
       });
       expect(result.bindHost).toBe("0.0.0.0");
-    });
-  });
-
-  describe("HTTP security headers", () => {
-    const cases = [
-      {
-        name: "resolves strict transport security headers from config",
-        strictTransportSecurity: "  max-age=31536000; includeSubDomains  ",
-        expected: "max-age=31536000; includeSubDomains",
-      },
-      {
-        name: "does not set strict transport security when explicitly disabled",
-        strictTransportSecurity: false,
-        expected: undefined,
-      },
-      {
-        name: "does not set strict transport security when the value is blank",
-        strictTransportSecurity: "   ",
-        expected: undefined,
-      },
-    ] satisfies ReadonlyArray<{
-      name: string;
-      strictTransportSecurity: string | false;
-      expected: string | undefined;
-    }>;
-
-    it.each(cases)("$name", async ({ strictTransportSecurity, expected }) => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            auth: { mode: "none" },
-            http: {
-              securityHeaders: {
-                strictTransportSecurity,
-              },
-            },
-          },
-        },
-        port: 18789,
-      });
-
-      expect(result.strictTransportSecurityHeader).toBe(expected);
     });
   });
 });

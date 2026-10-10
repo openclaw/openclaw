@@ -1,0 +1,101 @@
+// Resolves plugin-owned `channels add` CLI options from bundled and catalog metadata.
+import { Option } from "commander";
+import { listBundledPackageChannelMetadata } from "../../plugins/bundled-package-channel-metadata.js";
+import type {
+  PluginPackageChannel,
+  PluginPackageChannelCliOption,
+} from "../../plugins/manifest.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
+import { listRawChannelPluginCatalogEntries } from "./catalog.js";
+
+export type ChannelSetupCliOptionValueMetadata = {
+  longFlag: string;
+  valueType: NonNullable<PluginPackageChannelCliOption["valueType"]>;
+};
+
+// Commander rejects a second option whose long/short switch matches an existing
+// one even when the value placeholder differs, so dedupe by switch identity or
+// one plugin's `--url <server>` next to another's `--url <url>` would throw and
+// break `channels add` registration entirely.
+function channelCliOptionSwitchKey(flags: string): string {
+  const option = new Option(flags);
+  return option.long ?? option.short ?? option.flags;
+}
+
+function compareChannels(left: PluginPackageChannel, right: PluginPackageChannel): number {
+  const leftOrder = left.order ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = right.order ?? Number.MAX_SAFE_INTEGER;
+  return leftOrder === rightOrder
+    ? (left.id ?? "").localeCompare(right.id ?? "")
+    : leftOrder - rightOrder;
+}
+
+function channelSetupOptions(channel: PluginPackageChannel): PluginPackageChannelCliOption[] {
+  // A migrating plugin may publish both surfaces so older cores keep working.
+  // The modern contract owns parsing here, so only its options may register;
+  // concatenating both would register flags that parseInput then rejects.
+  if (channel.setup) {
+    return channel.setup.fields.map((field) => field.cli);
+  }
+  return [...(channel.cliAddOptions ?? [])];
+}
+
+export function resolveChannelSetupCliOptionMetadata(
+  channelId?: string,
+  params: { includeAll?: boolean } = {},
+) {
+  const bundledChannels = listBundledPackageChannelMetadata().toSorted(compareChannels);
+  const catalogChannels = listRawChannelPluginCatalogEntries({
+    excludeWorkspace: true,
+    excludeOrigins: ["bundled"],
+  })
+    .flatMap((entry) => (entry.channel ? [entry.channel] : []))
+    .toSorted(compareChannels);
+  const orderedChannels = [...bundledChannels, ...catalogChannels];
+  const normalizedChannelId = channelId?.trim().toLowerCase();
+  const selectedChannel = normalizedChannelId
+    ? (orderedChannels.find((channel) => channel.id?.toLowerCase() === normalizedChannelId) ??
+      orderedChannels.find((channel) =>
+        channel.aliases?.some((alias) => alias.toLowerCase() === normalizedChannelId),
+      ))
+    : undefined;
+  const channels = params.includeAll ? orderedChannels : selectedChannel ? [selectedChannel] : [];
+  // Keep pre-dedupe candidates available to detect cross-channel flag-arity conflicts.
+  const optionCandidates = channels.flatMap(channelSetupOptions);
+  const options = dedupeByKey(optionCandidates, (option) =>
+    channelCliOptionSwitchKey(option.flags),
+  );
+  const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
+  // Value coercion metadata is a legacy-options mechanism; modern contracts
+  // type their fields, and their cliAddOptions never register above.
+  if (selectedChannel && !selectedChannel.setup) {
+    for (const option of selectedChannel.cliAddOptions ?? []) {
+      if (!option.valueType) {
+        continue;
+      }
+      const commanderOption = new Option(option.flags);
+      valueMetadataByAttributeName.set(commanderOption.attributeName(), {
+        longFlag: commanderOption.long ?? option.flags,
+        valueType: option.valueType,
+      });
+    }
+  }
+
+  return { options, optionCandidates, selectedChannel, valueMetadataByAttributeName };
+}
+
+/**
+ * True only when a selected channel resolved and its registered option set leaves
+ * `--use-env` out: core adds that flag to the legacy option list, while a channel
+ * publishing its own `setup` contract has to declare the matching field. Unselected
+ * and unknown ids stay false so the generic advice is untouched for them.
+ */
+export function channelOmitsEnvBackedSetupOption(channelId?: string): boolean {
+  const { selectedChannel } = resolveChannelSetupCliOptionMetadata(channelId);
+  if (!selectedChannel?.setup) {
+    return false;
+  }
+  return !selectedChannel.setup.fields.some(
+    (field) => channelCliOptionSwitchKey(field.cli.flags) === "--use-env",
+  );
+}

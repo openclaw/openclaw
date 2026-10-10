@@ -1,7 +1,7 @@
-// Together plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyTogetherConfig, TOGETHER_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildTogetherProvider } from "./provider-catalog.js";
+import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
+import { applyTogetherConnectionConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildTogetherVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "together";
@@ -10,28 +10,22 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Together Provider",
   description: "Bundled Together provider plugin",
+  manifest,
   provider: {
     label: "Together",
     docsPath: "/providers/together",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Together AI API key",
-        hint: "API key",
-        optionKey: "togetherApiKey",
-        flagName: "--together-api-key",
-        envVar: "TOGETHER_API_KEY",
-        promptMessage: "Enter Together AI API key",
-        defaultModel: TOGETHER_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyTogetherConfig(cfg),
-        wizard: {
-          groupLabel: "Together AI",
-        },
-      },
-    ],
-    catalog: {
-      buildProvider: buildTogetherProvider,
-    },
+    manifestAuth: { applyConfig: applyTogetherConnectionConfig },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
+    normalizeResolvedModel: ({ model }) =>
+      model.api === "openai-completions" &&
+      ["https://api.together.xyz/v1", "https://api.together.ai/v1"].includes(
+        model.baseUrl.trim().replace(/\/+$/u, ""),
+      )
+        ? applyModelCompatPatch(model, {
+            supportsPromptCacheKey: model.compat?.supportsPromptCacheKey ?? true,
+            supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? false,
+          })
+        : model,
     classifyFailoverReason: ({ errorMessage }) =>
       /\bconcurrency limit\b.*\b(?:breached|reached)\b/i.test(errorMessage)
         ? "rate_limit"

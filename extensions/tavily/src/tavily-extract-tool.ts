@@ -1,14 +1,14 @@
-// Tavily plugin module implements tavily extract tool behavior.
+import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
   readPositiveIntegerParam,
+  readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
 import { runTavilyExtract } from "./tavily-client.js";
 import { resolveTavilyToolConfig, type TavilyToolConfigContext } from "./tavily-tool-config.js";
-import { optionalStringEnum } from "./tavily-tool-schema.js";
 
 const TavilyExtractToolSchema = Type.Object(
   {
@@ -45,13 +45,17 @@ export function createTavilyExtractTool(api: OpenClawPluginApi, ctx?: TavilyTool
   return {
     name: "tavily_extract",
     label: "Tavily Extract",
+    resultContentSource: "network" as const,
     description:
       "Extract clean content from one or more URLs using Tavily. Handles JS-rendered pages. Supports query-focused chunking.",
     parameters: TavilyExtractToolSchema,
-    execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
-      const urls = Array.isArray(rawParams.urls)
-        ? (rawParams.urls as string[]).filter(Boolean)
-        : [];
+    execute: async (
+      _toolCallId: string,
+      rawParams: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signal?.throwIfAborted();
+      const urls = readStringArrayParam(rawParams, "urls") ?? [];
       if (urls.length === 0) {
         throw new Error("tavily_extract requires at least one URL.");
       }
@@ -74,6 +78,7 @@ export function createTavilyExtractTool(api: OpenClawPluginApi, ctx?: TavilyTool
           extractDepth,
           chunksPerSource,
           includeImages,
+          ...(signal ? { signal } : {}),
         }),
       );
     },

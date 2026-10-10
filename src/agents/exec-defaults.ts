@@ -3,17 +3,17 @@
  */
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecToolConfig } from "../config/types.tools.js";
 import {
   loadExecApprovals,
   type ExecAsk,
+  type ExecApprovalsFile,
   type ExecHost,
   type ExecMode,
   type ExecSecurity,
   type ExecTarget,
   maxAsk,
   minSecurity,
-  normalizeExecAsk,
-  normalizeExecSecurity,
   normalizeExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
@@ -21,66 +21,46 @@ import {
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
-import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveSessionPermissionExecPolicy } from "./session-permission-exec-mode.js";
 
-// Resolved exec config layers come from global config, agent config, legacy
-// session fields, and per-call overrides.
-type ResolvedExecConfig = {
-  host?: ExecTarget;
-  mode?: ExecMode;
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  node?: string;
-};
+/** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
+export type ExecSessionDefaults = Pick<
+  SessionEntry,
+  "execHost" | "execNode" | "execCwd" | "permissionMode" | "sandbox"
+>;
 
-type ExecOverridesConfig = Omit<ResolvedExecConfig, "mode">;
+// Resolved exec config layers come from global config, agent config, and per-call overrides.
+export type ExecPolicyOverrides = Pick<
+  ExecToolConfig,
+  "host" | "mode" | "security" | "ask" | "node"
+>;
 
-// Layering keeps the most specific mode/security/ask while preserving policy
-// bounds from approvals and sandbox availability later in resolution.
-type LayeredExecPolicy = {
-  mode?: ExecMode;
-  security: ExecSecurity;
-  ask: ExecAsk;
-};
-
-function applySessionLegacyExecPolicyLayer(
-  base: LayeredExecPolicy,
-  sessionEntry?: SessionEntry,
-): LayeredExecPolicy {
-  const security = normalizeExecSecurity(sessionEntry?.execSecurity);
-  const ask = normalizeExecAsk(sessionEntry?.execAsk);
-  if (security !== null || ask !== null) {
-    return {
-      security: security ?? base.security,
-      ask: ask ?? base.ask,
-    };
-  }
-  return base;
-}
-
-// Gather the shared config state once so canExecRequestNode and
-// resolveExecDefaults stay aligned on agent/global/session precedence.
-function resolveExecConfigState(params: {
-  cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
-  agentId?: string;
-  sessionKey?: string;
-}): {
+// Gather the shared config state once so exec resolution applies one
+// agent/global/session precedence order.
+export function resolveExecConfigState(
+  params: Omit<
+    ResolveExecDefaultsParams,
+    "execApprovals" | "sandboxAvailable" | "elevatedRequested"
+  >,
+): {
   cfg: OpenClawConfig;
   host: ExecTarget;
   agentId: string | undefined;
-  agentExec?: ResolvedExecConfig;
-  globalExec?: ResolvedExecConfig;
+  agentExec?: ExecPolicyOverrides;
+  globalExec?: ExecPolicyOverrides;
 } {
   const cfg = params.cfg ?? {};
   const resolvedAgentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: cfg,
-    });
+    params.scope?.kind === "defaults"
+      ? undefined
+      : (params.agentId ??
+        resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: cfg,
+        }));
   const globalExec = cfg.tools?.exec;
   const agentExec = resolvedAgentId
     ? resolveAgentConfig(cfg, resolvedAgentId)?.tools?.exec
@@ -100,53 +80,35 @@ function resolveExecConfigState(params: {
   };
 }
 
-function resolveExecSandboxAvailability(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  sandboxAvailable?: boolean;
-}) {
-  return (
-    params.sandboxAvailable ??
-    (params.sessionKey
-      ? resolveSandboxRuntimeStatus({
-          cfg: params.cfg,
-          sessionKey: params.sessionKey,
-        }).sandboxed
-      : false)
+/** Resolves whether node exec is usable and any effective node binding. */
+export function resolveNodeExecEligibility(
+  params: Omit<ResolveExecDefaultsParams, "scope" | "elevatedRequested">,
+  preparedDefaults?: ResolvedExecDefaults,
+): { canExec: boolean; node?: string } {
+  const defaults = preparedDefaults ?? resolveExecDefaults(params);
+  const systemRunDenied = params.cfg?.gateway?.nodes?.commands?.deny?.some(
+    (command) => command.trim() === "system.run",
   );
+  return {
+    canExec: defaults.canRequestNode && defaults.security !== "deny" && !systemRunDenied,
+    ...(defaults.node ? { node: defaults.node } : {}),
+  };
 }
 
-/** Returns whether the current exec policy allows requesting host node execution. */
-export function canExecRequestNode(params: {
+export type ResolveExecDefaultsParams = {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
+  execApprovals?: ExecApprovalsFile;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
-  sandboxAvailable?: boolean;
-}): boolean {
-  const { cfg, host } = resolveExecConfigState(params);
-  return isRequestedExecTargetAllowed({
-    configuredTarget: host,
-    requestedTarget: "node",
-    sandboxAvailable: resolveExecSandboxAvailability({
-      cfg,
-      sessionKey: params.sessionKey,
-      sandboxAvailable: params.sandboxAvailable,
-    }),
-  });
-}
-
-/** Resolves effective exec host, mode, approval policy, and node availability. */
-export function resolveExecDefaults(params: {
-  cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
-  agentId?: string;
-  sessionKey?: string;
+  /** Resolve agents.defaults/tools.exec without applying any roster entry override. */
+  scope?: { kind: "defaults" };
   sandboxAvailable?: boolean;
   elevatedRequested?: boolean;
-}): {
+};
+
+export type ResolvedExecDefaults = {
   host: ExecTarget;
   effectiveHost: ExecHost;
   mode: ExecMode;
@@ -154,7 +116,21 @@ export function resolveExecDefaults(params: {
   ask: ExecAsk;
   node?: string;
   canRequestNode: boolean;
-} {
+};
+
+type ExecDefaultsPreparation =
+  | { kind: "resolved"; defaults: ResolvedExecDefaults }
+  | {
+      kind: "needs-approvals";
+      suppliedApprovals: ExecApprovalsFile | undefined;
+      resolve: (file: ExecApprovalsFile) => ResolvedExecDefaults;
+    };
+
+/** Resolve policy inputs first; only the host-floor branch requests approval state. */
+export function prepareExecDefaults(
+  params: ResolveExecDefaultsParams,
+  preparedSandbox?: ReturnType<typeof resolveSandboxRuntimeStatus>,
+): ExecDefaultsPreparation {
   const {
     cfg,
     host,
@@ -162,69 +138,115 @@ export function resolveExecDefaults(params: {
     agentExec,
     globalExec,
   } = resolveExecConfigState(params);
-  const sandboxAvailable = resolveExecSandboxAvailability({
-    cfg,
-    sessionKey: params.sessionKey,
-    sandboxAvailable: params.sandboxAvailable,
-  });
+  const sandboxRuntime = params.sessionKey
+    ? (preparedSandbox ??
+      resolveSandboxRuntimeStatus({
+        cfg,
+        agentId: resolvedAgentId,
+        sessionKey: params.sessionKey,
+      }))
+    : undefined;
+  const sandboxRequired =
+    params.sessionEntry?.sandbox === "required" || sandboxRuntime?.sandboxRequired === true;
+  const sandboxAvailable = params.sandboxAvailable ?? sandboxRuntime?.sandboxed ?? false;
   const resolved = resolveExecTarget({
     configuredTarget: host,
-    elevatedRequested: params.elevatedRequested === true,
+    elevatedRequested: params.elevatedRequested === true && !sandboxRequired,
     sandboxAvailable,
+    sandboxRequired,
   });
   const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
-  const approvalDefaults =
-    resolved.effectiveHost === "sandbox"
-      ? undefined
-      : resolveExecApprovalsFromFile({
-          file: loadExecApprovals(),
-          agentId: resolvedAgentId,
-          overrides: {
-            security: defaultSecurity,
-            ask: "off",
-          },
-        }).agent;
-  const basePolicy: LayeredExecPolicy = {
-    security: approvalDefaults?.security ?? defaultSecurity,
-    ask: approvalDefaults?.ask ?? "off",
+  const sessionPermissionPolicy = params.sessionEntry?.permissionMode
+    ? resolveSessionPermissionExecPolicy(
+        { mode: params.sessionEntry.permissionMode },
+        params.execOverrides,
+      )
+    : undefined;
+  // Full sessions bypass host floors only while effective security remains full;
+  // ask-only tightening still applies without restoring those floors.
+  const bypassHostApprovalFloors =
+    params.sessionEntry?.permissionMode === "full" && sessionPermissionPolicy?.security === "full";
+  const resolve = (
+    approvalDefaults: ReturnType<typeof resolveExecApprovalsFromFile>["agent"] | undefined,
+  ): ResolvedExecDefaults => {
+    const layeredPolicy =
+      sessionPermissionPolicy ??
+      applyExecPolicyLayer(
+        applyExecPolicyLayer(
+          applyExecPolicyLayer(
+            {
+              security: approvalDefaults?.security ?? defaultSecurity,
+              ask: approvalDefaults?.ask ?? "off",
+            },
+            globalExec,
+          ),
+          agentExec,
+        ),
+        params.execOverrides,
+      );
+    const modePolicy = resolveExecModePolicy(layeredPolicy);
+    // Approval files bound every policy source except explicit admin-only full sessions.
+    const security =
+      approvalDefaults?.security !== undefined
+        ? minSecurity(modePolicy.security, approvalDefaults.security)
+        : modePolicy.security;
+    const ask =
+      approvalDefaults?.ask !== undefined
+        ? maxAsk(modePolicy.ask, approvalDefaults.ask)
+        : modePolicy.ask;
+    const mode =
+      security === modePolicy.security && ask === modePolicy.ask
+        ? modePolicy.mode
+        : resolveExecModeFromPolicy({ security, ask });
+    return {
+      host: resolved.configuredTarget,
+      effectiveHost: resolved.effectiveHost,
+      mode,
+      security,
+      ask,
+      node:
+        params.execOverrides?.node ??
+        params.sessionEntry?.execNode ??
+        agentExec?.node ??
+        globalExec?.node,
+      canRequestNode: isRequestedExecTargetAllowed({
+        configuredTarget: resolved.configuredTarget,
+        requestedTarget: "node",
+        sandboxAvailable,
+      }),
+    };
   };
-  const layeredPolicy = applyExecPolicyLayer(
-    applySessionLegacyExecPolicyLayer(
-      applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, globalExec), agentExec),
-      params.sessionEntry,
-    ),
-    params.execOverrides,
-  );
-  const modePolicy = resolveExecModePolicy(layeredPolicy);
-  // Approval files are safety bounds: they can only reduce security/ask from
-  // config-derived policy, never grant a less restrictive effective mode.
-  const security =
-    approvalDefaults?.security !== undefined
-      ? minSecurity(modePolicy.security, approvalDefaults.security)
-      : modePolicy.security;
-  const ask =
-    approvalDefaults?.ask !== undefined
-      ? maxAsk(modePolicy.ask, approvalDefaults.ask)
-      : modePolicy.ask;
-  const mode =
-    security === modePolicy.security && ask === modePolicy.ask
-      ? modePolicy.mode
-      : resolveExecModeFromPolicy({ security, ask });
+  if (resolved.effectiveHost === "sandbox" || bypassHostApprovalFloors) {
+    return { kind: "resolved", defaults: resolve(undefined) };
+  }
   return {
-    host,
-    effectiveHost: resolved.effectiveHost,
-    mode,
-    security,
-    ask,
-    node:
-      params.execOverrides?.node ??
-      params.sessionEntry?.execNode ??
-      agentExec?.node ??
-      globalExec?.node,
-    canRequestNode: isRequestedExecTargetAllowed({
-      configuredTarget: host,
-      requestedTarget: "node",
-      sandboxAvailable,
-    }),
+    kind: "needs-approvals",
+    suppliedApprovals: params.execApprovals,
+    resolve: (file) =>
+      resolve(
+        resolveExecApprovalsFromFile({
+          file,
+          agentId: resolvedAgentId,
+          overrides: { security: defaultSecurity, ask: "off" },
+        }).agent,
+      ),
   };
+}
+
+/** Resolves effective exec host, mode, approval policy, and node availability. */
+export function resolveExecDefaults(params: ResolveExecDefaultsParams): ResolvedExecDefaults {
+  const preparation = prepareExecDefaults(params);
+  return preparation.kind === "resolved"
+    ? preparation.defaults
+    : preparation.resolve(preparation.suppliedApprovals ?? loadExecApprovals());
+}
+
+/** Called inside retained session-reader scopes, before synchronous tool construction. */
+export async function resolvePreparedExecDefaultsAsync(
+  preparation: ExecDefaultsPreparation,
+  loadApprovals: () => Promise<ExecApprovalsFile>,
+): Promise<ResolvedExecDefaults> {
+  return preparation.kind === "resolved"
+    ? preparation.defaults
+    : preparation.resolve(preparation.suppliedApprovals ?? (await loadApprovals()));
 }

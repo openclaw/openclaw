@@ -41,12 +41,12 @@ function canIgnorePrivateChmodError(target: string, code: string | undefined): b
   if (code && CHMOD_UNSUPPORTED_CODES.has(code)) {
     return true;
   }
-  if (code !== "EPERM") {
+  if (code !== "EROFS" && code !== "EPERM") {
     return false;
   }
-  // EPERM is ambiguous: keep restrictive targets usable, otherwise prove the
-  // containing filesystem also rejects chmod before weakening fail-closed behavior.
-  return hasRestrictivePermissions(target) || filesystemRejectsChmod(target);
+  // WSL's EROFS only admits already-private paths. Ambiguous EPERM can also
+  // admit a broad path when its filesystem demonstrably rejects chmod.
+  return hasRestrictivePermissions(target) || (code === "EPERM" && filesystemRejectsChmod(target));
 }
 
 /**

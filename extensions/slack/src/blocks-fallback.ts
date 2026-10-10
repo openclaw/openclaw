@@ -1,96 +1,171 @@
-// Slack plugin module implements blocks fallback behavior.
-import type { Block, KnownBlock } from "@slack/web-api";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { renderSlackDataTableFallbackText, renderSlackTableFallbackText } from "./data-table.js";
+import { renderSlackDataVisualizationFallbackText } from "./data-visualization.js";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { renderSlackRichText } from "./rich-text.js";
 
-type PlainTextObject = { text?: string };
+type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
 
-type SlackBlockWithFields = {
-  type?: string;
-  text?: PlainTextObject & { type?: string };
-  title?: PlainTextObject;
-  alt_text?: string;
-  elements?: Array<{ text?: string; type?: string }>;
+type RenderSlackBlockFallbackOptions = {
+  includeSelectOptions?: boolean;
+  nativeDataFormat?: SlackNativeDataFallbackFormat;
+  nativeReferenceFormat?: SlackNativeDataFallbackFormat;
 };
 
-function cleanCandidate(value: string | undefined): string | undefined {
-  if (typeof value !== "string") {
+const SLACK_SELECT_ELEMENT_TYPES = new Set([
+  "static_select",
+  "multi_static_select",
+  "external_select",
+  "multi_external_select",
+  "users_select",
+  "multi_users_select",
+  "conversations_select",
+  "multi_conversations_select",
+  "channels_select",
+  "multi_channels_select",
+]);
+
+function readTextObject(
+  value: unknown,
+  options: RenderSlackBlockFallbackOptions = {},
+): string | undefined {
+  const record = asOptionalRecord(value);
+  const text = normalizeOptionalString(record?.text);
+  if (!text) {
     return undefined;
   }
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > 0 ? normalized : undefined;
+  return record?.type === "plain_text" && options.nativeDataFormat !== "plain"
+    ? escapeSlackMrkdwn(text)
+    : text;
 }
 
-function readSectionText(block: SlackBlockWithFields): string | undefined {
-  return cleanCandidate(block.text?.text);
+function readAltText(value: unknown): string | undefined {
+  const text = normalizeOptionalString(value);
+  return text ? escapeSlackMrkdwn(text) : undefined;
 }
 
-function readHeaderText(block: SlackBlockWithFields): string | undefined {
-  return cleanCandidate(block.text?.text);
+function readControlElementText(
+  value: unknown,
+  options: RenderSlackBlockFallbackOptions = {},
+): string | undefined {
+  const element = asOptionalRecord(value);
+  const type = normalizeOptionalString(element?.type);
+  if (type === "button" || type === "workflow_button") {
+    return normalizeOptionalString(element?.text) ?? readTextObject(element?.text, options);
+  }
+  if (type && SLACK_SELECT_ELEMENT_TYPES.has(type)) {
+    if (!options.includeSelectOptions) {
+      return readTextObject(element?.placeholder, options);
+    }
+    const choices = Array.isArray(element?.options) ? element.options : [];
+    return [
+      readTextObject(element?.placeholder, options),
+      ...choices.map((choice) => readTextObject(asOptionalRecord(choice)?.text, options)),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return undefined;
 }
 
-function readImageText(block: SlackBlockWithFields): string | undefined {
-  return cleanCandidate(block.alt_text) ?? cleanCandidate(block.title?.text);
+function readControlElementsText(
+  values: readonly unknown[],
+  options: RenderSlackBlockFallbackOptions = {},
+): string | undefined {
+  const labels = values.map((value) => readControlElementText(value, options)).filter(Boolean);
+  return [...new Set(labels)].join("\n") || undefined;
 }
 
-function readVideoText(block: SlackBlockWithFields): string | undefined {
-  return cleanCandidate(block.title?.text) ?? cleanCandidate(block.alt_text);
+function readTextLayout(
+  block: Record<string, unknown>,
+  options: RenderSlackBlockFallbackOptions = {},
+): string | undefined {
+  const context = block.type === "context";
+  const parts = context
+    ? (Array.isArray(block.elements) ? block.elements : []).map((element) => {
+        const record = asOptionalRecord(element);
+        return readTextObject(record, options) ?? readAltText(record?.alt_text);
+      })
+    : [
+        readTextObject(block.text, options),
+        ...(Array.isArray(block.fields)
+          ? block.fields.map((field) => readTextObject(field, options))
+          : []),
+        readControlElementText(block.accessory, options),
+      ];
+  return parts.filter(Boolean).join(context ? " " : "\n") || undefined;
 }
 
-function readContextText(block: SlackBlockWithFields): string | undefined {
-  if (!Array.isArray(block.elements)) {
+/** Read only user-visible text from one Slack block. */
+export function renderSlackBlockFallbackText(
+  raw: unknown,
+  options: RenderSlackBlockFallbackOptions = {},
+): string | undefined {
+  const block = asOptionalRecord(raw);
+  if (!block) {
     return undefined;
   }
-  const textParts = block.elements
-    .map((element) => cleanCandidate(element.text))
-    .filter((value): value is string => Boolean(value));
-  return textParts.length > 0 ? textParts.join(" ") : undefined;
+  switch (block.type) {
+    case "rich_text":
+      // Inbound references must survive for name resolution; literal text stays escaped
+      // so token-shaped text cannot become a native mention. Outbound remains escaped.
+      return normalizeOptionalString(
+        renderSlackRichText(
+          block.elements,
+          options.nativeReferenceFormat === "plain" ? "native-reference" : "escaped",
+          "\n",
+        ),
+      );
+    case "header":
+      return readTextObject(block.text, options);
+    case "section":
+    case "context":
+      return readTextLayout(block, options);
+    case "image":
+      return readAltText(block.alt_text) ?? readTextObject(block.title) ?? "Shared an image";
+    case "video":
+      return (
+        readTextObject(block.title, options) ?? readAltText(block.alt_text) ?? "Shared a video"
+      );
+    case "file":
+      return "Shared a file";
+    case "actions":
+      return Array.isArray(block.elements)
+        ? readControlElementsText(block.elements, options)
+        : undefined;
+    case "data_visualization":
+      return renderSlackDataVisualizationFallbackText(block, options.nativeDataFormat !== "plain");
+    case "data_table":
+      return renderSlackDataTableFallbackText(block, options.nativeDataFormat !== "plain");
+    case "table":
+      return renderSlackTableFallbackText(block, options.nativeDataFormat !== "plain");
+    default:
+      return undefined;
+  }
 }
 
-export function buildSlackBlocksFallbackText(blocks: (Block | KnownBlock)[]): string {
-  for (const raw of blocks) {
-    const block = raw as SlackBlockWithFields;
-    switch (block.type) {
-      case "header": {
-        const text = readHeaderText(block);
-        if (text) {
-          return text;
-        }
-        break;
-      }
-      case "section": {
-        const text = readSectionText(block);
-        if (text) {
-          return text;
-        }
-        break;
-      }
-      case "image": {
-        const text = readImageText(block);
-        if (text) {
-          return text;
-        }
-        return "Shared an image";
-      }
-      case "video": {
-        const text = readVideoText(block);
-        if (text) {
-          return text;
-        }
-        return "Shared a video";
-      }
-      case "file": {
-        return "Shared a file";
-      }
-      case "context": {
-        const text = readContextText(block);
-        if (text) {
-          return text;
-        }
-        break;
-      }
-      default:
-        break;
+export function buildSlackBlocksFallbackText(blocks: readonly unknown[]): string {
+  for (const block of blocks) {
+    const text = renderSlackBlockFallbackText(block);
+    if (text) {
+      return text;
     }
   }
 
   return "Shared a Block Kit message";
+}
+
+export function buildSlackCompleteBlocksFallbackText(
+  blocks: readonly unknown[],
+  options: RenderSlackBlockFallbackOptions = {},
+): string {
+  const text = blocks
+    .map((block) => renderSlackBlockFallbackText(block, options))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || buildSlackBlocksFallbackText(blocks);
 }

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
 
 const appServer = {
   start: {},
@@ -47,6 +47,71 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     );
   });
 
+  it.each([
+    { configuredProvider: "copilot", expectedProvider: "copilot", matches: true },
+    { configuredProvider: "different-provider", expectedProvider: "copilot", matches: false },
+    { configuredProvider: undefined, expectedProvider: "copilot", matches: false },
+    { configuredProvider: undefined, expectedProvider: "openai", matches: true },
+    { configuredProvider: null, expectedProvider: "openai", matches: true },
+  ])(
+    "uses native capabilities only for matching configured identity ($configuredProvider / $expectedProvider)",
+    async ({ configuredProvider, expectedProvider, matches }) => {
+      const request = vi.fn(async (method: string) =>
+        method === "config/read"
+          ? { config: { model_provider: configuredProvider } }
+          : { webSearch: true },
+      );
+      const client = { request } as unknown as CodexAppServerClient;
+      const clientFactory = vi.fn(async () => client);
+      const result = await resolveCodexProviderWebSearchSupport({
+        clientFactory,
+        appServer,
+        authProfileId: undefined,
+        agentDir: "/tmp/agent",
+        config: undefined,
+        modelProviderOverride: undefined,
+        expectedNativeModelProvider: expectedProvider,
+        signal: new AbortController().signal,
+      });
+      expect(result).toBe(matches ? "supported" : "unknown");
+      expect(request.mock.calls.map(([method]) => method)).toEqual(
+        matches ? ["config/read", "modelProvider/capabilities/read"] : ["config/read"],
+      );
+    },
+  );
+
+  it("forwards one prepared auth handoff to capability startup", async () => {
+    const { clientFactory } = createClientFactory(true);
+    const preparedAuth = {
+      kind: "api-key" as const,
+      apiKey: "prepared-platform-key",
+    };
+
+    await expect(
+      resolveCodexProviderWebSearchSupport({
+        clientFactory,
+        appServer,
+        authProfileId: "openai:decoy",
+        preparedAuth,
+        agentDir: "/tmp/agent",
+        config: undefined,
+        modelProviderOverride: undefined,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBe("supported");
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({ preparedAuth }));
+    const factoryCalls = (
+      clientFactory as unknown as {
+        mock: { calls: Array<[{ preparedAuth?: unknown }]> };
+      }
+    ).mock.calls;
+    expect(factoryCalls[0]?.[0].preparedAuth).toBe(preparedAuth);
+    expect(clientFactory).not.toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: expect.anything() }),
+    );
+  });
+
   it("reports unknown support when app-server startup fails", async () => {
     const clientFactory = vi.fn(async () => {
       throw new Error("old app-server");
@@ -66,17 +131,11 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("keeps managed search when the configured provider reports no hosted support", async () => {
-    const { clientFactory, request } = createClientFactory(false);
-
-    await expect(resolveSupport(clientFactory)).resolves.toBe("unsupported");
-    expect(request).toHaveBeenCalledOnce();
-  });
-
   it("uses hosted search for the built-in OpenAI provider override", async () => {
     const { clientFactory, request } = createClientFactory(false);
 
     await expect(resolveSupport(clientFactory, " OpenAI ")).resolves.toBe("supported");
+    expect(clientFactory).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -85,6 +144,8 @@ describe("resolveCodexProviderWebSearchSupport", () => {
 
     await expect(resolveSupport(clientFactory, "amazon-bedrock")).resolves.toBe("unsupported");
     await expect(resolveSupport(clientFactory, "custom-provider")).resolves.toBe("unsupported");
+    await expect(resolveSupport(clientFactory, "lmstudio")).resolves.toBe("unsupported");
+    expect(clientFactory).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 });

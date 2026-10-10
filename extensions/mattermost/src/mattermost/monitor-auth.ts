@@ -1,58 +1,18 @@
-// Mattermost plugin module implements monitor auth behavior.
-import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
-import {
-  type ChannelIngressDecision,
-  type ChannelIngressEventInput,
-  type ChannelIngressIdentifierKind,
-  resolveStableChannelMessageIngress,
-  type StableChannelIngressIdentityParams,
+import type {
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+  resolveChannelContextVisibilityMode,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import { mattermostIngressIdentity, normalizeMattermostAllowEntry } from "./ingress-identity.js";
+import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveAllowlistMatchSimple } from "./runtime-api.js";
-
-const MATTERMOST_USER_NAME_KIND =
-  "plugin:mattermost-user-name" as const satisfies ChannelIngressIdentifierKind;
-const mattermostIngressIdentity = {
-  key: "sender-id",
-  normalize: normalizeMattermostAllowEntry,
-  aliases: [
-    {
-      key: "sender-name",
-      kind: MATTERMOST_USER_NAME_KIND,
-      normalizeEntry: normalizeMattermostAllowEntry,
-      normalizeSubject: normalizeMattermostAllowEntry,
-      dangerous: true,
-    },
-  ],
-  isWildcardEntry: (entry) => normalizeMattermostAllowEntry(entry) === "*",
-  resolveEntryId: ({ entryIndex, fieldKey }) =>
-    `mattermost-entry-${entryIndex + 1}:${fieldKey === "sender-name" ? "name" : "user"}`,
-} satisfies StableChannelIngressIdentityParams;
-
-export function normalizeMattermostAllowEntry(entry: string): string {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  const accessGroupName = parseAccessGroupAllowFromEntry(trimmed);
-  if (accessGroupName) {
-    return `accessGroup:${accessGroupName}`;
-  }
-  const normalized = trimmed
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .trim();
-  return normalized ? normalizeLowercaseStringOrEmpty(normalized) : "";
-}
 
 export function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
   const normalized = entries
@@ -81,9 +41,6 @@ export function isMattermostSenderAllowed(params: {
   allowNameMatching?: boolean;
 }): boolean {
   const allowFrom = normalizeMattermostAllowList(params.allowFrom);
-  if (allowFrom.length === 0) {
-    return false;
-  }
   const match = resolveAllowlistMatchSimple({
     allowFrom,
     senderId: normalizeMattermostAllowEntry(params.senderId),
@@ -93,8 +50,11 @@ export function isMattermostSenderAllowed(params: {
   return match.allowed;
 }
 
-function mapMattermostChannelKind(channelType?: string | null): "direct" | "group" | "channel" {
+function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   const normalized = channelType?.trim().toUpperCase();
+  if (!normalized) {
+    return "direct";
+  }
   if (normalized === "D") {
     return "direct";
   }
@@ -104,39 +64,22 @@ function mapMattermostChannelKind(channelType?: string | null): "direct" | "grou
   return "channel";
 }
 
-export type MattermostCommandAuthDecision =
-  | {
-      ok: true;
-      commandAuthorized: boolean;
-      channelInfo: MattermostChannel;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
-    }
-  | {
-      ok: false;
-      denyReason:
-        | "unknown-channel"
-        | "dm-disabled"
-        | "dm-pairing"
-        | "unauthorized"
-        | "channels-disabled"
-        | "channel-no-allowlist";
-      commandAuthorized: false;
-      channelInfo: MattermostChannel | null;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
-    };
+export function resolveMattermostTrustedChatKind(params: {
+  channelType?: string | null;
+  fallback?: ChatType;
+}): ChatType {
+  const channelType = params.channelType?.trim();
+  return channelType
+    ? mapMattermostChannelTypeToChatType(channelType)
+    : (params.fallback ?? "direct");
+}
 
-type MattermostCommandDenyReason = Extract<
-  MattermostCommandAuthDecision,
-  { ok: false }
->["denyReason"];
+type MattermostCommandDenyReason =
+  | "dm-disabled"
+  | "dm-pairing"
+  | "unauthorized"
+  | "channels-disabled"
+  | "channel-no-allowlist";
 
 export async function resolveMattermostMonitorInboundAccess(params: {
   account: ResolvedMattermostAccount;
@@ -172,7 +115,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   const readStoreAllowFrom =
     params.readStoreAllowFrom ??
     (storeAllowFrom != null ? async () => [...storeAllowFrom] : undefined);
-  const ingress = await resolveStableChannelMessageIngress({
+  return await getMattermostRuntime().channel.inbound.ingress.resolveStable({
     channelId: "mattermost",
     accountId: account.accountId,
     identity: mattermostIngressIdentity,
@@ -206,7 +149,29 @@ export async function resolveMattermostMonitorInboundAccess(params: {
       directGroupAllowFrom: kind === "direct" ? "effective" : "none",
     },
   });
-  return ingress;
+}
+
+/** Live and recovered history share the same trigger-versus-visibility policy. */
+export function shouldRetainMattermostSenderHistory(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  kind: ChatType;
+  ingress: ChannelIngressDecision;
+}): boolean {
+  return (
+    params.ingress.decision === "allow" ||
+    (params.kind !== "direct" &&
+      params.ingress.reasonCode === "group_policy_not_allowlisted" &&
+      shouldIncludeSupplementalContext({
+        mode: resolveChannelContextVisibilityMode({
+          cfg: params.cfg,
+          channel: "mattermost",
+          accountId: params.accountId,
+        }),
+        kind: "history",
+        senderAllowed: false,
+      }))
+  );
 }
 
 function resolveMattermostCommandDenyReason(params: {
@@ -250,7 +215,7 @@ export async function authorizeMattermostCommandInvocation(params: {
   readStoreAllowFrom?: () => Promise<Array<string | number>>;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
-}): Promise<MattermostCommandAuthDecision> {
+}) {
   const {
     account,
     cfg,
@@ -266,19 +231,19 @@ export async function authorizeMattermostCommandInvocation(params: {
 
   if (!channelInfo?.type) {
     return {
-      ok: false,
-      denyReason: "unknown-channel",
-      commandAuthorized: false,
+      ok: false as const,
+      denyReason: "unknown-channel" as const,
+      commandAuthorized: false as const,
       channelInfo,
-      kind: "channel",
-      chatType: "channel",
+      kind: "channel" as const,
+      chatType: "channel" as const,
       channelName: "",
       channelDisplay: "",
       roomLabel: `#${channelId}`,
     };
   }
 
-  const kind = mapMattermostChannelKind(channelInfo.type);
+  const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
   const chatType = kind;
   const channelName = channelInfo.name ?? "";
   const channelDisplay = channelInfo.display_name ?? channelName;
@@ -308,28 +273,15 @@ export async function authorizeMattermostCommandInvocation(params: {
     dmPolicy: account.config.dmPolicy ?? "pairing",
   });
 
-  if (denyReason) {
-    return {
-      ok: false,
-      denyReason,
-      commandAuthorized: false,
-      channelInfo,
-      kind,
-      chatType,
-      channelName,
-      channelDisplay,
-      roomLabel,
-    };
-  }
-
   return {
-    ok: true,
-    commandAuthorized: ingress.commandAccess.authorized,
     channelInfo,
     kind,
     chatType,
     channelName,
     channelDisplay,
     roomLabel,
+    ...(denyReason
+      ? { ok: false as const, denyReason, commandAuthorized: false as const }
+      : { ok: true as const, commandAuthorized: ingress.commandAccess.authorized }),
   };
 }

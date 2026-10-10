@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Test Skip Inventory reports skipped, conditional, todo, and focused tests.
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { collectFilesSync, isCodeFile, toPosixPath } from "./check-file-utils.js";
+import * as ts from "typescript/unstable/ast";
+import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type SkipInventoryKind = "alias" | "call";
 type SkipInventoryReason =
@@ -20,7 +21,7 @@ type SkipInventoryReason =
 
 type SkipInventoryTarget = "describe" | "it" | "test" | "unknown";
 
-export type TestSkipInventoryFinding = {
+type TestSkipInventoryFinding = {
   excerpt: string;
   file: string;
   kind: SkipInventoryKind;
@@ -42,16 +43,6 @@ export type TestSkipInventoryReport = {
   };
 };
 
-const DEFAULT_SCAN_ROOTS = ["src", "test", "extensions", "packages", "ui", "scripts"];
-const DEFAULT_SKIPPED_DIR_NAMES = new Set([
-  ".artifacts",
-  ".generated",
-  "coverage",
-  "dist",
-  "fixtures",
-  "node_modules",
-  "vendor",
-]);
 const EMPTY_REASON_COUNTS: Record<SkipInventoryReason, number> = {
   "conditional-skip": 0,
   "explicit-skip": 0,
@@ -64,55 +55,6 @@ const EMPTY_REASON_COUNTS: Record<SkipInventoryReason, number> = {
 const SKIP_METHODS = new Set(["only", "runIf", "skip", "skipIf", "todo"]);
 const TEST_TARGETS = new Set(["describe", "it", "test"]);
 const TRANSPARENT_CHAIN_METHODS = new Set(["concurrent", "each", "sequential"]);
-
-function isTestRelatedFile(relativePath: string): boolean {
-  return (
-    /(?:^|[/.])(?:test|spec)\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /\.(?:e2e|live)\.test\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /\.(?:test-helpers|test-utils|test-harness|test-support)\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /-(?:test-helpers|test-utils|test-harness|test-support)\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /(?:^|\/)(?:test|tests|test-helpers|test-utils|test-harness|test-support)\//u.test(
-      relativePath,
-    ) ||
-    relativePath.startsWith("scripts/e2e/") ||
-    /^scripts\/.*-(?:client|e2e|harness|probe|smoke)\.[cm]?[jt]s$/u.test(relativePath)
-  );
-}
-
-function listGitFiles(repoRoot: string): string[] | null {
-  try {
-    const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...DEFAULT_SCAN_ROOTS], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return stdout.split(/\r?\n/u).filter(Boolean);
-  } catch {
-    return null;
-  }
-}
-
-function listCandidateFiles(repoRoot: string): string[] {
-  const gitFiles = listGitFiles(repoRoot);
-  const relativeFiles =
-    gitFiles ??
-    DEFAULT_SCAN_ROOTS.flatMap((root) => {
-      const absoluteRoot = path.join(repoRoot, root);
-      if (!fs.existsSync(absoluteRoot)) {
-        return [];
-      }
-      return collectFilesSync(absoluteRoot, {
-        includeFile: isCodeFile,
-        skipDirNames: DEFAULT_SKIPPED_DIR_NAMES,
-      }).map((filePath) => toPosixPath(path.relative(repoRoot, filePath)));
-    });
-  return relativeFiles
-    .filter((file) => isCodeFile(file) && isTestRelatedFile(file))
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function expressionText(sourceFile: ts.SourceFile, node: ts.Node): string {
-  return node.getText(sourceFile);
-}
 
 function targetFromExpression(expression: ts.Expression): SkipInventoryTarget {
   if (ts.isIdentifier(expression) && TEST_TARGETS.has(expression.text)) {
@@ -187,8 +129,8 @@ function methodReason(params: {
     return "focused-only";
   }
 
-  const sourceText = expressionText(params.sourceFile, params.textNode).toLowerCase();
-  const text = `${params.file}\n${sourceText}`.toLowerCase();
+  const sourceText = params.textNode.getText(params.sourceFile).toLowerCase();
+  const text = `${params.file.toLowerCase()}\n${sourceText}`;
   if (
     sourceText.includes("process.platform") ||
     sourceText.includes("win32") ||
@@ -230,50 +172,12 @@ function containsConditionalExpression(node: ts.Node): boolean {
   if (ts.isConditionalExpression(node)) {
     return true;
   }
-  return node.getChildren().some((child) => containsConditionalExpression(child));
+  return node.forEachChild((child) => containsConditionalExpression(child) || undefined) ?? false;
 }
 
-function createFinding(params: {
-  file: string;
-  kind: SkipInventoryKind;
-  lines: string[];
-  method: TestSkipInventoryFinding["method"];
-  node: ts.Node;
-  reasonNode: ts.Node;
-  sourceFile: ts.SourceFile;
-  target: SkipInventoryTarget;
-}): TestSkipInventoryFinding {
-  const { line } = params.sourceFile.getLineAndCharacterOfPosition(params.node.getStart());
-  return {
-    excerpt: params.lines[line]?.trim() ?? "",
-    file: params.file,
-    kind: params.kind,
-    line: line + 1,
-    method: params.method,
-    reason: methodReason({
-      file: params.file,
-      method: params.method,
-      sourceFile: params.sourceFile,
-      textNode: params.reasonNode,
-    }),
-    target: params.target,
-  };
-}
-
-function skipAliasInitializer(
-  initializer: ts.Expression | undefined,
-): { method: TestSkipInventoryFinding["method"]; target: SkipInventoryTarget } | null {
-  if (!initializer) {
-    return null;
-  }
-  return skipMethodFromExpression(initializer);
-}
-
-function scanFile(params: { file: string; repoRoot: string }): TestSkipInventoryFinding[] {
-  const absolutePath = path.join(params.repoRoot, params.file);
-  const source = fs.readFileSync(absolutePath, "utf8");
-  const sourceFile = ts.createSourceFile(params.file, source, ts.ScriptTarget.Latest, true);
-  const lines = source.split(/\r?\n/u);
+function scanFile(params: { file: string; sourceFile: ts.SourceFile }): TestSkipInventoryFinding[] {
+  const { sourceFile } = params;
+  const lines = sourceFile.text.split(/\r?\n/u);
   const findings: TestSkipInventoryFinding[] = [];
 
   function addFinding(details: {
@@ -283,23 +187,26 @@ function scanFile(params: { file: string; repoRoot: string }): TestSkipInventory
     reasonNode: ts.Node;
     target: SkipInventoryTarget;
   }): void {
-    findings.push(
-      createFinding({
+    const { line } = sourceFile.getLineAndCharacterOfPosition(details.node.getStart());
+    findings.push({
+      excerpt: lines[line]?.trim() ?? "",
+      file: params.file,
+      kind: details.kind,
+      line: line + 1,
+      method: details.method,
+      reason: methodReason({
         file: params.file,
-        kind: details.kind,
-        lines,
         method: details.method,
-        node: details.node,
-        reasonNode: details.reasonNode,
         sourceFile,
-        target: details.target,
+        textNode: details.reasonNode,
       }),
-    );
+      target: details.target,
+    });
   }
 
   function visit(node: ts.Node): void {
     if (ts.isVariableDeclaration(node)) {
-      const alias = skipAliasInitializer(node.initializer);
+      const alias = node.initializer && skipMethodFromExpression(node.initializer);
       if (alias) {
         addFinding({
           kind: "alias",
@@ -323,7 +230,7 @@ function scanFile(params: { file: string; repoRoot: string }): TestSkipInventory
         });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -342,8 +249,23 @@ export function collectTestSkipInventoryReport(
   params: { repoRoot?: string } = {},
 ): TestSkipInventoryReport {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const files = listCandidateFiles(repoRoot);
-  const findings = files.flatMap((file) => scanFile({ file, repoRoot }));
+  const files = listRepoFilesSync(repoRoot, {
+    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
+  });
+  const findings: TestSkipInventoryFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  try {
+    const sources = files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const file = path.relative(repoRoot, sourceFile.fileName).split(path.sep).join("/");
+      findings.push(...scanFile({ file, sourceFile }));
+    }
+  } finally {
+    parser.close();
+  }
   const reasonCounts = { ...EMPTY_REASON_COUNTS };
   for (const finding of findings) {
     reasonCounts[finding.reason] += 1;
@@ -361,60 +283,16 @@ export function collectTestSkipInventoryReport(
   };
 }
 
-function groupFindingsByFile(
-  findings: TestSkipInventoryFinding[],
-): Map<string, TestSkipInventoryFinding[]> {
-  const grouped = new Map<string, TestSkipInventoryFinding[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
-  return grouped;
-}
-
-function renderReasonCounts(reasonCounts: Record<SkipInventoryReason, number>): string {
-  return Object.entries(reasonCounts)
-    .filter(([, count]) => count > 0)
-    .map(([reason, count]) => `${reason}: ${count}`)
-    .join(", ");
-}
-
-function renderFindingGroups(findings: TestSkipInventoryFinding[], limit: number): string[] {
-  const lines: string[] = [];
-  let shown = 0;
-  for (const [file, fileFindings] of groupFindingsByFile(findings)) {
-    if (shown >= limit) {
-      break;
-    }
-    lines.push(`- ${file} (${fileFindings.length})`);
-    for (const finding of fileFindings) {
-      if (shown >= limit) {
-        break;
-      }
-      lines.push(
-        `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
-      );
-      shown += 1;
-    }
-  }
-  if (findings.length > shown) {
-    lines.push(
-      `... ${findings.length - shown} more finding(s) not shown; pass --limit 0 to show all.`,
-    );
-  }
-  return lines;
-}
-
 export function renderTestSkipInventoryReport(
   report: TestSkipInventoryReport,
   options: { limit?: number } = {},
 ): string {
   const limit = options.limit === 0 ? Number.POSITIVE_INFINITY : (options.limit ?? 120);
-  const reasonCounts = renderReasonCounts(report.summary.reasonCounts) || "none";
+  const reasonCounts =
+    Object.entries(report.summary.reasonCounts)
+      .filter(([, count]) => count > 0)
+      .map(([reason, count]) => `${reason}: ${count}`)
+      .join(", ") || "none";
   const lines = [
     "OpenClaw test skip inventory",
     `Scanned files: ${report.summary.scannedFileCount}`,
@@ -427,65 +305,17 @@ export function renderTestSkipInventoryReport(
     lines.push("Findings: none");
   } else {
     lines.push("Findings:");
-    lines.push(...renderFindingGroups(report.findings, limit));
+    lines.push(
+      ...renderFindingGroups(
+        report.findings,
+        limit,
+        (finding) =>
+          `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
+      ),
+    );
   }
 
   return `${lines.join("\n")}\n`;
-}
-
-function readNonNegativeIntArg(raw: string | undefined): number {
-  if (!raw || raw.startsWith("--") || !/^\d+$/u.test(raw)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  return value;
-}
-
-function parseArgs(argv: string[]): {
-  help: boolean;
-  json: boolean;
-  limit: number;
-  repoRoot: string;
-} {
-  let help = false;
-  let json = false;
-  let limit = 120;
-  let repoRoot = process.cwd();
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      help = true;
-      continue;
-    }
-    if (arg === "--json") {
-      json = true;
-      continue;
-    }
-    if (arg === "--limit") {
-      limit = readNonNegativeIntArg(argv[index + 1]);
-      index += 1;
-      continue;
-    }
-    if (arg === "--repo-root") {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error("--repo-root expects a path");
-      }
-      repoRoot = value;
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return { help, json, limit, repoRoot };
 }
 
 function printHelp(): void {
@@ -503,7 +333,7 @@ Options:
 }
 
 export function main(argv = process.argv.slice(2)): number {
-  const args = parseArgs(argv);
+  const args = parseInventoryReportCliArgs(argv);
   if (args.help) {
     printHelp();
     return 0;

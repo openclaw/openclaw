@@ -4,6 +4,17 @@
 # They centralize temporary log naming and the small success/failure print
 # pattern used by Docker scenario scripts.
 
+docker_e2e_lifecycle_trace_enabled() {
+  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
+    1 | true | TRUE | yes | YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 docker_e2e_normalize_positive_int_value() {
   local label="${1:?missing value label}"
   local value="${2-}"
@@ -24,9 +35,30 @@ docker_e2e_read_positive_int_env() {
   docker_e2e_normalize_positive_int_value "$name" "$value"
 }
 
+docker_e2e_restore_signal_traps() {
+  local signal
+  for signal in INT TERM HUP; do
+    if [ -n "$1" ]; then
+      eval "$1"
+    else
+      trap - "$signal"
+    fi
+    shift
+  done
+}
+
 run_logged() {
-  local label="$1"
-  shift
+  docker_e2e_run_logged 0 "$@"
+}
+
+run_logged_print() {
+  docker_e2e_run_logged 1 "$@"
+}
+
+docker_e2e_run_logged() {
+  local print_success="$1"
+  local label="$2"
+  shift 2
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
@@ -38,31 +70,31 @@ run_logged() {
       return "$print_status"
     fi
     return 1
+  fi
+  if [ "$print_success" = 1 ]; then
+    docker_e2e_print_log "$log_file" || {
+      local print_status="$?"
+      rm -f "$log_file"
+      return "$print_status"
+    }
   fi
   rm -f "$log_file"
 }
 
-run_logged_print() {
+docker_e2e_maybe_print_log_heartbeat() {
   local label="$1"
-  shift
-  docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
-  local log_file
-  log_file="$(docker_e2e_run_log "$label")"
-  if ! "$@" >"$log_file" 2>&1; then
-    local print_status=0
-    docker_e2e_print_log "$log_file" || print_status="$?"
-    rm -f "$log_file"
-    if [ "$print_status" -ne 0 ]; then
-      return "$print_status"
-    fi
+  local elapsed_seconds="$2"
+  local next_heartbeat="$3"
+  local log_file="$4"
+  if [ "$elapsed_seconds" -lt "$next_heartbeat" ]; then
     return 1
   fi
-  docker_e2e_print_log "$log_file" || {
-    local print_status="$?"
-    rm -f "$log_file"
-    return "$print_status"
-  }
-  rm -f "$log_file"
+  local log_bytes="0"
+  if [ -f "$log_file" ]; then
+    log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+    log_bytes="${log_bytes//[[:space:]]/}"
+  fi
+  echo "still running $label (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)"
 }
 
 run_logged_print_heartbeat() {
@@ -99,23 +131,6 @@ run_logged_print_heartbeat() {
     done
     kill -KILL "$command_pid" 2>/dev/null || true
   }
-  restore_heartbeat_traps() {
-    if [ -n "$previous_int_trap" ]; then
-      eval "$previous_int_trap"
-    else
-      trap - INT
-    fi
-    if [ -n "$previous_term_trap" ]; then
-      eval "$previous_term_trap"
-    else
-      trap - TERM
-    fi
-    if [ -n "$previous_hup_trap" ]; then
-      eval "$previous_hup_trap"
-    else
-      trap - HUP
-    fi
-  }
   cleanup_heartbeat_command() {
     local cleanup_status="${1:-$?}"
     if [ "$cleanup_done" = "1" ]; then
@@ -127,8 +142,11 @@ run_logged_print_heartbeat() {
       terminate_heartbeat_command
       wait "$command_pid" 2>/dev/null || true
     fi
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$log_file" || true
+    fi
     rm -f "$log_file"
-    restore_heartbeat_traps
+    docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
     if [ "$cleanup_status" -ge 128 ]; then
       exit "$cleanup_status"
     fi
@@ -137,21 +155,17 @@ run_logged_print_heartbeat() {
   trap 'cleanup_heartbeat_command 130' INT
   trap 'cleanup_heartbeat_command 143' TERM
   trap 'cleanup_heartbeat_command 129' HUP
-  "$@" >"$log_file" 2>&1 &
+  "$@" <&0 >"$log_file" 2>&1 &
   command_pid=$!
   local started_at="$SECONDS"
   local next_heartbeat=$interval_seconds
   local status=0
   while kill -0 "$command_pid" 2>/dev/null; do
-    /bin/sleep 1
+    # Poll promptly so short commands do not pay a one-second wrapper tax.
+    /bin/sleep 0.1
     local elapsed_seconds=$((SECONDS - started_at))
-    if [ "$elapsed_seconds" -ge "$next_heartbeat" ] && kill -0 "$command_pid" 2>/dev/null; then
-      local log_bytes="0"
-      if [ -f "$log_file" ]; then
-        log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
-        log_bytes="${log_bytes//[[:space:]]/}"
-      fi
-      echo "still running $label (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)"
+    if kill -0 "$command_pid" 2>/dev/null && \
+      docker_e2e_maybe_print_log_heartbeat "$label" "$elapsed_seconds" "$next_heartbeat" "$log_file"; then
       next_heartbeat=$((elapsed_seconds + interval_seconds))
     fi
   done

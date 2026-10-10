@@ -1,0 +1,320 @@
+import crypto from "node:crypto";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
+import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
+import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
+import { createAbortError } from "../../infra/abort-signal.js";
+import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../../infra/exec-approvals.js";
+import type { RunExit } from "../../process/supervisor/types.js";
+import type {
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
+} from "../bash-tools.exec-approval-request.js";
+import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
+import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
+
+const NODE_CLI_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+const NODE_CLI_OMIT_BARE_ARGS = new Set([
+  "--strict-mcp-config",
+  // The Gateway's version probe says nothing about the paired node's Claude binary.
+  // Omit the optimization instead of making an older node reject every turn.
+  "--exclude-dynamic-system-prompt-sections",
+]);
+const NODE_CLI_OMIT_VALUE_ARGS = new Set([
+  "--permission-mode",
+  "--plugin-dir",
+  "--plugin-dir-no-mcp",
+]);
+// --tools and --disallowedTools stay: they carry the gateway's native tool
+// policy onto the node. --allowedTools is stripped because Claude treats it as
+// auto-approval, which must never cross the node's own approval boundary.
+const NODE_CLI_OMIT_VARIADIC_ARGS = new Set(["--mcp-config", "--allowedTools", "--allowed-tools"]);
+
+/** Remove Gateway-local file, plugin, MCP, and allow-list arguments. */
+export function stripGatewayLocalClaudeArgs(args: readonly string[]): string[] {
+  const result: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    const equalsIndex = arg.indexOf("=");
+    const name = equalsIndex > 0 ? arg.slice(0, equalsIndex) : arg;
+    if (NODE_CLI_OMIT_BARE_ARGS.has(name)) {
+      continue;
+    }
+    if (NODE_CLI_OMIT_VALUE_ARGS.has(name)) {
+      if (equalsIndex < 0) {
+        index += 1;
+      }
+      continue;
+    }
+    if (NODE_CLI_OMIT_VARIADIC_ARGS.has(name)) {
+      if (equalsIndex < 0) {
+        while (typeof args[index + 1] === "string" && !args[index + 1]?.startsWith("-")) {
+          index += 1;
+        }
+      }
+      continue;
+    }
+    result.push(arg);
+  }
+  return result;
+}
+
+function parseNodeClaudeResultPayload(result: { payload?: unknown; payloadJSON?: string | null }): {
+  exitCode: number;
+  stderrTail: string;
+  truncated: boolean;
+  timeoutKind?: "hard" | "idle";
+} {
+  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("paired node returned an invalid Claude CLI result");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    !Number.isInteger(record.exitCode) ||
+    typeof record.stderrTail !== "string" ||
+    typeof record.truncated !== "boolean" ||
+    (record.timeoutKind !== undefined &&
+      record.timeoutKind !== "hard" &&
+      record.timeoutKind !== "idle")
+  ) {
+    throw new Error("paired node returned an invalid Claude CLI result");
+  }
+  return {
+    exitCode: record.exitCode as number,
+    stderrTail: record.stderrTail,
+    truncated: record.truncated,
+    ...(record.timeoutKind ? { timeoutKind: record.timeoutKind as "hard" | "idle" } : {}),
+  };
+}
+
+type NodeClaudeApprovalRequired = {
+  systemRunPlan: SystemRunApprovalPlan;
+  security: ExecSecurity;
+  ask: ExecAsk;
+};
+
+function parseNodeClaudeApprovalRequired(result: {
+  ok: boolean;
+  payload?: unknown;
+  payloadJSON?: string | null;
+}): NodeClaudeApprovalRequired | null {
+  if (!result.ok) {
+    return null;
+  }
+  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.approvalRequired !== true ||
+    !record.systemRunPlan ||
+    typeof record.systemRunPlan !== "object" ||
+    Array.isArray(record.systemRunPlan) ||
+    (record.security !== "deny" && record.security !== "allowlist" && record.security !== "full") ||
+    (record.ask !== "off" && record.ask !== "on-miss" && record.ask !== "always")
+  ) {
+    return null;
+  }
+  return {
+    systemRunPlan: record.systemRunPlan as SystemRunApprovalPlan,
+    security: record.security,
+    ask: record.ask,
+  };
+}
+
+export function createCliAbortError(): Error {
+  return createAbortError("CLI run aborted");
+}
+
+type ExecuteNodeClaudeRunDeps = {
+  invokeNodeClaudeCliRun: typeof invokeNodeClaudeCliRun;
+  registerExecApprovalRequestForHostOrThrow: typeof registerExecApprovalRequestForHostOrThrow;
+  resolveRegisteredExecApprovalDecision: typeof resolveRegisteredExecApprovalDecision;
+};
+
+export async function executeNodeClaudeRun(params: {
+  context: PreparedCliRunContext;
+  nodePlacement: NodeClaudePlacement;
+  executionArgs: string[];
+  stdinPayload: string;
+  nodeSystemPrompt?: string;
+  nodeEnv?: Record<string, string>;
+  nodeClearEnv?: string[];
+  noOutputTimeoutMs: number;
+  consumeStdout: (chunk: string) => void;
+  consumeStderr: (chunk: string) => void;
+  deps: ExecuteNodeClaudeRunDeps;
+}): Promise<{
+  result: RunExit;
+  nodeRunAbortSignal: AbortSignal;
+  nodeRunTruncated: boolean;
+}> {
+  const contextParams = params.context.params;
+  const startedAt = Date.now();
+  const hardTimeoutMs = Math.min(contextParams.timeoutMs, NODE_CLI_MAX_TIMEOUT_MS);
+  const hardDeadlineAt = startedAt + hardTimeoutMs;
+  const nodeAbortController = new AbortController();
+  const nodeRunAbortSignal = nodeAbortController.signal;
+  const assertCurrent = createCliRunCurrentAssertion(contextParams, nodeRunAbortSignal);
+  let hardDeadlineReached = false;
+  const hardDeadlineTimer = setTimeout(() => {
+    hardDeadlineReached = true;
+    nodeAbortController.abort();
+  }, hardTimeoutMs);
+  const abortNodeRun = () => nodeAbortController.abort();
+  contextParams.abortSignal?.addEventListener("abort", abortNodeRun, { once: true });
+  if (contextParams.abortSignal?.aborted) {
+    abortNodeRun();
+  }
+  const detachReplyBackend = attachCliReplyBackend(contextParams, abortNodeRun);
+  const hardTimeoutResult = () => ({
+    ok: false,
+    error: {
+      code: "TIMEOUT",
+      message: "paired-node Claude CLI invocation exceeded its hard timeout",
+    },
+  });
+  let nodeResult: Awaited<ReturnType<typeof invokeNodeClaudeCliRun>>;
+  let skillRuntime: Awaited<ReturnType<typeof prepareNodeClaudeSkillRuntime>>;
+  try {
+    assertCurrent();
+    skillRuntime = await prepareNodeClaudeSkillRuntime(params.context, nodeRunAbortSignal);
+    const invokeNode = async (approval?: {
+      decision: "allow-once" | "allow-always";
+      plan: SystemRunApprovalPlan;
+    }) => {
+      const remainingTimeoutMs = hardDeadlineAt - Date.now();
+      if (remainingTimeoutMs <= 0) {
+        hardDeadlineReached = true;
+        nodeAbortController.abort();
+        return hardTimeoutResult();
+      }
+      assertCurrent();
+      return await params.deps.invokeNodeClaudeCliRun({
+        assertCurrent,
+        nodeId: params.nodePlacement.nodeId,
+        argv: params.executionArgs,
+        stdin: params.stdinPayload,
+        ...(params.nodePlacement.cwd ? { cwd: params.nodePlacement.cwd } : {}),
+        ...(params.nodeSystemPrompt !== undefined ? { systemPrompt: params.nodeSystemPrompt } : {}),
+        ...(params.nodeEnv ? { env: params.nodeEnv } : {}),
+        ...(params.nodeClearEnv ? { clearEnv: params.nodeClearEnv } : {}),
+        ...(contextParams.agentId ? { agentId: contextParams.agentId } : {}),
+        ...(contextParams.sessionKey ? { sessionKey: contextParams.sessionKey } : {}),
+        ...(approval
+          ? {
+              approvalDecision: approval.decision,
+              systemRunPlan: approval.plan,
+            }
+          : {}),
+        timeoutMs: remainingTimeoutMs,
+        idleTimeoutMs: Math.max(
+          1_000,
+          Math.min(params.noOutputTimeoutMs, NODE_CLI_MAX_IDLE_TIMEOUT_MS),
+        ),
+        onProgress: params.consumeStdout,
+        signal: skillRuntime?.signal ?? nodeAbortController.signal,
+        ...(skillRuntime ? { skillRuntime } : {}),
+      });
+    };
+    nodeResult = await invokeNode();
+    const approval = parseNodeClaudeApprovalRequired(nodeResult);
+    if (approval) {
+      skillRuntime?.assertCurrent();
+      const approvalId = crypto.randomUUID();
+      const registration = await racePromiseWithAbortSignal(
+        () =>
+          params.deps.registerExecApprovalRequestForHostOrThrow({
+            approvalId,
+            command: approval.systemRunPlan.commandText,
+            commandArgv: approval.systemRunPlan.argv,
+            systemRunPlan: approval.systemRunPlan,
+            workdir: approval.systemRunPlan.cwd ?? undefined,
+            host: "node",
+            nodeId: params.nodePlacement.nodeId,
+            security: approval.security,
+            ask: approval.ask,
+            unavailableDecisions: ["allow-always"],
+            agentId: contextParams.agentId,
+            sessionKey: contextParams.sessionKey,
+            ...(contextParams.approvalReviewerDeviceId
+              ? { approvalReviewerDeviceIds: [contextParams.approvalReviewerDeviceId] }
+              : {}),
+          }),
+        skillRuntime?.signal ?? nodeAbortController.signal,
+        createCliAbortError,
+      );
+      const decision = await racePromiseWithAbortSignal(
+        () =>
+          params.deps.resolveRegisteredExecApprovalDecision({
+            approvalId: registration.id,
+            preResolvedDecision: registration.finalDecision,
+          }),
+        skillRuntime?.signal ?? nodeAbortController.signal,
+        createCliAbortError,
+      );
+      if (decision === "allow-once" || decision === "allow-always") {
+        nodeResult = await invokeNode({ decision, plan: approval.systemRunPlan });
+      } else {
+        nodeResult = {
+          ok: false,
+          error: {
+            code: "PERMISSION_DENIED",
+            message: "paired-node Claude CLI agent run was not approved",
+          },
+        };
+      }
+    }
+  } catch (error) {
+    if (!hardDeadlineReached) {
+      throw error;
+    }
+    nodeResult = hardTimeoutResult();
+  } finally {
+    if (skillRuntime?.signal.aborted) {
+      nodeAbortController.abort();
+    }
+    await skillRuntime?.close();
+    clearTimeout(hardDeadlineTimer);
+    detachReplyBackend?.();
+    contextParams.abortSignal?.removeEventListener("abort", abortNodeRun);
+  }
+  if (hardDeadlineReached) {
+    nodeResult = hardTimeoutResult();
+  }
+  const errorCode = nodeResult.ok ? undefined : nodeResult.error?.code;
+  const failureDurationMs = nodeResult.ok ? undefined : Date.now() - startedAt;
+  const payload = nodeResult.ok
+    ? parseNodeClaudeResultPayload(nodeResult)
+    : {
+        exitCode: 1,
+        stderrTail: nodeResult.error?.message ?? "paired-node Claude CLI invocation failed",
+        truncated: false,
+        timeoutKind:
+          errorCode === "IDLE_TIMEOUT" ? "idle" : errorCode === "TIMEOUT" ? "hard" : undefined,
+      };
+  if (!nodeResult.ok || payload.stderrTail) {
+    params.consumeStderr(payload.stderrTail);
+  }
+  const result: RunExit = {
+    reason:
+      payload.timeoutKind === "idle"
+        ? "no-output-timeout"
+        : payload.timeoutKind === "hard"
+          ? "overall-timeout"
+          : errorCode === "ABORTED"
+            ? "manual-cancel"
+            : "exit",
+    exitCode: payload.timeoutKind || errorCode === "ABORTED" ? null : payload.exitCode,
+    exitSignal: null,
+    durationMs: failureDurationMs ?? Date.now() - startedAt,
+    stdout: "",
+    stderr: payload.stderrTail,
+    timedOut: payload.timeoutKind !== undefined,
+    noOutputTimedOut: payload.timeoutKind === "idle",
+  };
+  return { result, nodeRunAbortSignal, nodeRunTruncated: payload.truncated };
+}

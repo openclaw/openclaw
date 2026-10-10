@@ -1,9 +1,3 @@
-// Line plugin module implements group keys behavior.
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
-import type { LineConfig, LineGroupConfig } from "./types.js";
-
 export function resolveLineGroupLookupIds(groupId?: string | null): string[] {
   const normalized = groupId?.trim();
   if (!normalized) {
@@ -16,47 +10,35 @@ export function resolveLineGroupLookupIds(groupId?: string | null): string[] {
   return [normalized, `group:${normalized}`, `room:${normalized}`];
 }
 
-export function resolveLineGroupConfigEntry<T>(
+export function resolveLineGroupConfigEntry<T extends object>(
   groups: Record<string, T | undefined> | undefined,
   params: { groupId?: string | null; roomId?: string | null },
 ): T | undefined {
   if (!groups) {
     return undefined;
   }
-  for (const candidate of resolveLineGroupLookupIds(params.groupId)) {
+  // `*` is the defaults node, not a rival entry: a room's own entry overrides it
+  // field by field. Returning the matched entry alone would drop every setting the
+  // operator only wrote on `*`, and would disagree with the scope-tree resolution
+  // this channel already reports through `resolveLineGroupRequireMention`.
+  const defaults = groups["*"];
+  for (const candidate of [
+    ...resolveLineGroupLookupIds(params.groupId),
+    ...resolveLineGroupLookupIds(params.roomId),
+  ]) {
     const hit = groups[candidate];
     if (hit) {
-      return hit;
+      return defaults && defaults !== hit ? { ...defaults, ...hit } : hit;
     }
   }
-  for (const candidate of resolveLineGroupLookupIds(params.roomId)) {
-    const hit = groups[candidate];
-    if (hit) {
-      return hit;
-    }
-  }
-  return groups["*"];
-}
-
-export function resolveLineGroupsConfig(
-  cfg: OpenClawConfig,
-  accountId?: string | null,
-): Record<string, LineGroupConfig | undefined> | undefined {
-  const lineConfig = cfg.channels?.line as LineConfig | undefined;
-  if (!lineConfig) {
-    return undefined;
-  }
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const accountGroups = resolveAccountEntry(lineConfig.accounts, normalizedAccountId)?.groups;
-  return accountGroups ?? lineConfig.groups;
+  return defaults;
 }
 
 export function resolveExactLineGroupConfigKey(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
+  groups: Record<string, unknown> | undefined;
   groupId?: string | null;
 }): string | undefined {
-  const groups = resolveLineGroupsConfig(params.cfg, params.accountId);
+  const { groups } = params;
   if (!groups) {
     return undefined;
   }

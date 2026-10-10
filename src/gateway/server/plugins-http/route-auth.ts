@@ -1,5 +1,7 @@
-// Plugin HTTP route auth helpers decide when gateway auth must protect a plugin route path.
-import type { PluginRegistry } from "../../../plugins/registry.js";
+import type {
+  PluginHttpRouteRegistration,
+  PluginRegistry,
+} from "../../../plugins/registry-types.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
@@ -7,11 +9,8 @@ import {
 } from "./path-context.js";
 import { findMatchingPluginHttpRoutes } from "./route-match.js";
 
-/**
- * Gateway-auth decisions for plugin HTTP routes.
- */
 export function matchedPluginRoutesRequireGatewayAuth(
-  routes: readonly Pick<NonNullable<PluginRegistry["httpRoutes"]>[number], "auth">[],
+  routes: readonly Pick<PluginHttpRouteRegistration, "auth">[],
 ): boolean {
   return routes.some((route) => route.auth === "gateway");
 }
@@ -32,4 +31,24 @@ export function shouldEnforceGatewayAuthForPluginPath(
     return true;
   }
   return matchedPluginRoutesRequireGatewayAuth(findMatchingPluginHttpRoutes(registry, pathContext));
+}
+
+/** Returns true only when an existing route owns authentication entirely inside its plugin. */
+export function isPluginAuthenticatedRoutePath(
+  registry: PluginRegistry,
+  pathnameOrContext: string | PluginRoutePathContext,
+): boolean {
+  const pathContext =
+    typeof pathnameOrContext === "string"
+      ? resolvePluginRoutePathContext(pathnameOrContext)
+      : pathnameOrContext;
+  if (
+    pathContext.malformedEncoding ||
+    pathContext.decodePassLimitReached ||
+    isProtectedPluginRoutePathFromContext(pathContext)
+  ) {
+    return false;
+  }
+  const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+  return matchedRoutes.length > 0 && matchedRoutes.every((route) => route.auth === "plugin");
 }

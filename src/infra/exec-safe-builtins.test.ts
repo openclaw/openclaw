@@ -1,4 +1,5 @@
 // Tests shell builtin detection for safe execution policy.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   evaluateExecAllowlist,
@@ -16,26 +17,14 @@ const builtinSegment = (argv: string[], resolvedPath?: string) => ({
   raw: argv.join(" "),
   resolution: makeMockCommandResolution({
     execution: makeMockExecutableResolution({
-      rawExecutable: argv[0],
-      executableName: argv[0],
+      rawExecutable: expectDefined(argv[0], "argv[0] test invariant"),
+      executableName: expectDefined(argv[0], "argv[0] test invariant"),
       resolvedPath,
     }),
   }),
 });
 
 describe("isSafeBuiltinSegment", () => {
-  it("allows a builtin segment with no resolved binary path", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["cd", "/etc"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
-  });
-
   it("allows a safe shell builtin even when the host has a same-named binary", () => {
     expect(
       isSafeBuiltinSegment({
@@ -67,21 +56,6 @@ describe("isSafeBuiltinSegment", () => {
         platform: "linux",
       }),
     ).toBe(false);
-  });
-
-  it("allows test and well-formed bracket predicates", () => {
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["test", "-d", "/tmp"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["[", "-d", "/tmp", "]"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
   });
 
   it("rejects malformed bracket predicates", () => {

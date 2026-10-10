@@ -1,40 +1,66 @@
 // Gateway websocket E2E harness.
 // Starts an unauthenticated loopback gateway and opens connected test clients.
 import { WebSocket } from "ws";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  connectOk,
-  getFreePort,
-  startGatewayServer,
-  trackConnectChallengeNonce,
-} from "./test-helpers.js";
+import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
+import { connectOk, startTestGatewayServer, trackConnectChallengeNonce } from "./test-helpers.js";
+import { reserveGatewayTestListener } from "./test-helpers.listener.js";
 
-export type GatewayWsClient = {
+type GatewayWsClient = {
   ws: WebSocket;
   hello: unknown;
 };
 
 export type GatewayServerHarness = {
   port: number;
-  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  server: Awaited<ReturnType<typeof startTestGatewayServer>>;
   openClient: (opts?: Parameters<typeof connectOk>[1]) => Promise<GatewayWsClient>;
   close: () => Promise<void>;
 };
 
 /** Start a loopback Gateway server with a helper for opening authenticated test clients. */
 export async function startGatewayServerHarness(): Promise<GatewayServerHarness> {
+  gatewayFixtureLifetime.assertAdmission();
+  const reservation = await reserveGatewayTestListener();
+  try {
+    gatewayFixtureLifetime.assertAdmission();
+  } catch (error) {
+    return await runQaGatewayFixture(async (): Promise<never> => {
+      throw error;
+    }, reservation.closeUnadopted);
+  }
+  const { port } = reservation;
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const clients = new Set<WebSocket>();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  const port = await getFreePort();
-  const server = await startGatewayServer(port, {
-    auth: { mode: "none" },
-    bind: "loopback",
-    controlUiEnabled: false,
-  });
+  const server = await reservation
+    .start(() =>
+      startTestGatewayServer(
+        { port, release: reservation.closeUnadopted },
+        { auth: { mode: "none" }, bind: "loopback", controlUiEnabled: false },
+      ),
+    )
+    .catch((error: unknown) =>
+      runQaGatewayFixture(
+        async (): Promise<never> => {
+          throw error;
+        },
+        reservation.closeUnadopted,
+        () => {
+          // Failed startup must not restore over another closing owner.
+          if (gatewayFixtureLifetime.canAdmit()) {
+            envSnapshot.restore();
+          }
+        },
+      ),
+    );
 
   const openClient = async (opts?: Parameters<typeof connectOk>[1]): Promise<GatewayWsClient> => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}`,
+      opts?.browserOrigin ? { headers: { origin: opts.browserOrigin } } : {},
+    );
     clients.add(ws);
     ws.once("close", () => clients.delete(ws));
     trackConnectChallengeNonce(ws);
@@ -63,7 +89,9 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
       await server.close();
     } finally {
       clearTimeout(forceCloseTimer);
-      envSnapshot.restore();
+      if (gatewayFixtureLifetime.canReleaseState(server)) {
+        envSnapshot.restore();
+      }
     }
   };
 

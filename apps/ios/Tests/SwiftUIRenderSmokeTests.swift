@@ -3,8 +3,9 @@ import SwiftUI
 import Testing
 import UIKit
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
-@Suite struct SwiftUIRenderSmokeTests {
+struct SwiftUIRenderSmokeTests {
     @MainActor private static func host(_ view: some View, size: CGSize? = nil) -> UIWindow {
         let frame = CGRect(origin: .zero, size: size ?? UIScreen.main.bounds.size)
         let window = UIWindow(frame: frame)
@@ -15,75 +16,262 @@ import UIKit
         return window
     }
 
-    @Test @MainActor func settingsProTabBuildsAViewHierarchy() {
-        let appModel = NodeAppModel()
-        let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+    @Test @MainActor func `settings hub fallback builds in light and dark mode`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
 
-        let root = SettingsProTab()
-            .environment(appModel)
-            .environment(appModel.voiceWake)
-            .environment(gatewayController)
-
-        _ = Self.host(root)
-    }
-
-    @Test @MainActor func settingsProTabBuildsInLightAndDarkMode() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab()
+            let root = SettingsHubScreen(navigationPath: .constant([]))
+                .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
                 .preferredColorScheme(scheme)
 
-            _ = Self.host(root)
+            windows.append(Self.host(root))
         }
     }
 
-    @Test @MainActor func hostedPushRelayDisclosureBuildsAViewHierarchy() {
-        for typeSize in [DynamicTypeSize.large, .accessibility5] {
-            let root = HostedPushRelayDisclosureSheet(
-                message: "Enabling this sends delivery data through OpenClaw's hosted push relay.",
-                onContinue: {})
+    @Test @MainActor func `settings About destination builds in light and dark mode`() {
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .about)
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
                 .environment(\.dynamicTypeSize, typeSize)
+                .preferredColorScheme(scheme)
 
-            _ = Self.host(root, size: CGSize(width: 402, height: 450))
+                _ = Self.host(root, size: CGSize(width: 320, height: 852))
+            }
         }
     }
 
-    @Test @MainActor func rootTabsBuildsDeviceOrientationShellMatrix() {
-        for scenario in Self.rootTabsShellScenarios() {
+    @Test @MainActor func `settings Licenses destination builds in light and dark mode`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = RootTabs()
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .environment(\.rootTabsUserInterfaceIdiomOverride, scenario.idiom)
-                .environment(\.horizontalSizeClass, scenario.horizontalSizeClass)
-                .environment(\.verticalSizeClass, scenario.verticalSizeClass)
+            let root = NavigationStack {
+                SettingsProTab(directRoute: .licenses)
+            }
+            .environment(AppAppearanceModel())
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(gatewayController)
+            .preferredColorScheme(scheme)
 
-            _ = Self.host(root, size: scenario.size)
+            windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
         }
     }
 
-    @Test @MainActor func rootTabsBuildGatewayStateViewHierarchies() {
-        for appModel in Self.rootTabsGatewayStateModels() {
-            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+    @Test @MainActor func `display math builds valid and fallback view hierarchies`() {
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = VStack {
+                ChatMarkdownRenderer(
+                    text: #"Inline math \(E = mc^2\) stays inside prose."#,
+                    context: .assistant,
+                    variant: .standard,
+                    textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"\notARealCommand{"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: "α + β = γ",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: String(repeating: "{", count: 65) + "x",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: String(repeating: #"\bar"#, count: 129) + "x",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"x\textcolor{#fff}{}"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+            }
+            .environment(\.dynamicTypeSize, typeSize)
 
-            let root = RootTabs()
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-
-            _ = Self.host(root)
+            _ = Self.host(root, size: CGSize(width: 393, height: 240))
         }
     }
 
-    @Test @MainActor func gatewayTrustPromptAlertPresentsWhenPromptAppearsAfterInitialRender() async {
+    @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
+        let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
+        let message = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: nil)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMessageBubble(
+                message: message,
+                style: .standard,
+                markdownVariant: .standard,
+                userAccent: nil,
+                displayOptions: [],
+                assistantName: "OpenClaw",
+                assistantAvatarText: "OC",
+                assistantAvatarTint: nil,
+                showsAssistantAvatar: true,
+                isClean: false,
+                contextWindowTokens: nil,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _, _ in nil })
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 320, height: 420))
+        }
+    }
+
+    @Test @MainActor func `managed assistant image starts its artifact load`() async throws {
+        let artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111"
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "image",
+                text: nil,
+                mimeType: "image/png",
+                fileName: nil,
+                artifactId: artifactId,
+                url: "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
+                alt: "Managed preview",
+                content: nil)],
+            timestamp: 1)
+        var requestedArtifactId: String?
+        let root = ChatMessageBubble(
+            message: message,
+            style: .standard,
+            markdownVariant: .standard,
+            userAccent: nil,
+            displayOptions: [],
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false,
+            contextWindowTokens: nil,
+            userMessageExpanded: false,
+            onToggleUserMessageExpanded: {},
+            inlineWidgetResolverReady: true,
+            inlineWidgetResourceResolver: { _, _ in nil },
+            mediaArtifactResolverReady: true,
+            mediaPlaybackAllowed: { true },
+            loadMediaArtifact: { requested, kind, _ in
+                requestedArtifactId = requested
+                #expect(kind == .image)
+                return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
+                    data: Data(base64Encoded:
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
+                            "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                    mimeType: "image/png"))
+            })
+        let window = Self.host(root, size: CGSize(width: 393, height: 420))
+        defer { window.isHidden = true }
+
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while requestedArtifactId == nil, ContinuousClock().now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(requestedArtifactId == artifactId)
+    }
+
+    @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
+        let text = """
+        Earlier prose stays visible.
+
+        ```swift
+        let answer = 42
+        ```
+
+        Trailing streamed words fade in.
+        """
+
+        let root = ChatStreamingAssistantBubble(
+            text: ChatStreamingAssistantText(sourceText: text, includesThinking: false),
+            markdownVariant: .standard,
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false)
+
+        _ = Self.host(root, size: CGSize(width: 393, height: 400))
+    }
+
+    @Test @MainActor func `assistant usage footer builds across dynamic type sizes`() throws {
+        let usage = try JSONDecoder().decode(
+            OpenClawChatUsage.self,
+            from: Data(#"{"input":12000,"output":300,"cacheRead":438400,"cacheWrite":307000,"cost":{"total":0.0123}}"#
+                .utf8))
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: "A completed assistant response with per-run usage.",
+                thinking: nil,
+                thinkingSignature: nil,
+                mimeType: nil,
+                fileName: nil,
+                content: nil,
+                id: nil,
+                name: nil,
+                arguments: nil)],
+            timestamp: nil,
+            usage: usage)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMessageBubble(
+                message: message,
+                style: .standard,
+                markdownVariant: .standard,
+                userAccent: nil,
+                displayOptions: [],
+                assistantName: "OpenClaw",
+                assistantAvatarText: "OC",
+                assistantAvatarTint: nil,
+                showsAssistantAvatar: true,
+                isClean: false,
+                contextWindowTokens: 1_000_000,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _, _ in nil })
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 320, height: 280))
+        }
+    }
+
+    @Test @MainActor func `gateway trust prompt alert presents when prompt appears after initial render`() async {
         let appModel = NodeAppModel()
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
@@ -97,7 +285,38 @@ import UIKit
         #expect(window.rootViewController?.presentedViewController is UIAlertController)
     }
 
-    @Test @MainActor func rootPromptAlertStackPresentsGatewayTrustPrompt() async {
+    @Test @MainActor func `exec approval dialog builds on compact screens with accessibility text`() throws {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        let layouts: [(CGSize, DynamicTypeSize)] = [
+            (CGSize(width: 320, height: 568), .accessibility5),
+            (CGSize(width: 568, height: 320), .accessibility3),
+        ]
+        for (size, typeSize) in layouts {
+            let appModel = NodeAppModel()
+            let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-layout",
+                commandText: String(repeating: "/usr/bin/find /private/var/mobile/Documents ", count: 12),
+                warningText: String(
+                    repeating: "This command can modify files outside the current workspace. ",
+                    count: 12),
+                allowedDecisions: ["allow-once", "allow-always", "deny"],
+                host: "gateway.example.com",
+                nodeId: "node-mobile",
+                agentId: "main",
+                expiresAtMs: Int64.max))
+            appModel._test_presentExecApprovalPrompt(prompt)
+
+            let root = Color.clear
+                .execApprovalPromptDialog()
+                .environment(appModel)
+                .environment(\.dynamicTypeSize, typeSize)
+            windows.append(Self.host(root, size: size))
+        }
+    }
+
+    @Test @MainActor func `root prompt alert stack presents gateway trust prompt`() async {
         let appModel = NodeAppModel()
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
@@ -113,9 +332,9 @@ import UIKit
         #expect(window.rootViewController?.presentedViewController is UIAlertController)
     }
 
-    @Test @MainActor func rootPromptAlertStackStillPresentsDeepLinkPrompt() async throws {
+    @Test @MainActor func `root prompt alert stack still presents deep link prompt`() async throws {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
             .gatewayTrustPromptAlert()
@@ -151,135 +370,11 @@ import UIKit
         await controller.connectManual(host: host, port: port, useTLS: true)
     }
 
-    @Test @MainActor func phoneControlHubBuildsGatewayStateViewHierarchies() {
-        for appModel in Self.rootTabsGatewayStateModels() {
-            let root = RootTabsPhoneControlHub(
-                groups: RootTabs.phoneControlGroups,
-                initialDestination: nil,
-                openRootDestination: { _ in })
-                .environment(appModel)
-
-            _ = Self.host(root)
-        }
-    }
-
-    @Test @MainActor func phoneControlHubBuildsLandscapeCompactState() {
-        let appModel = NodeAppModel()
-        let root = RootTabsPhoneControlHub(
-            groups: RootTabs.phoneControlGroups,
-            initialDestination: nil,
-            openRootDestination: { _ in })
-            .environment(appModel)
-            .environment(\.horizontalSizeClass, .regular)
-            .environment(\.verticalSizeClass, .compact)
-
-        _ = Self.host(root)
-    }
-
-    @Test @MainActor func routedSidebarScreensBuildOfflineStates() {
-        let appModel = NodeAppModel()
-        let screens: [AnyView] = [
-            AnyView(CommandCenterTab(openChat: {}, openSettings: {})),
-            AnyView(IPadActivityScreen(openChat: {}, openSettings: {})),
-            AnyView(OpenClawDocsScreen()),
-            AnyView(IPadWorkboardScreen(openChat: {}, openSettings: {})),
-            AnyView(IPadSkillWorkshopScreen(openSettings: {})),
-            AnyView(AgentProTab(directRoute: .agents)),
-            AnyView(AgentProTab(directRoute: .instances)),
-            AnyView(CommandSessionsScreen(openChat: {})),
-            AnyView(AgentProTab(directRoute: .dreaming)),
-            AnyView(AgentProTab(directRoute: .usage)),
-            AnyView(AgentProTab(directRoute: .cron)),
-        ]
-
-        for screen in screens {
-            let root = NavigationStack { screen }
-                .environment(appModel)
-            _ = Self.host(root)
-        }
-    }
-
-    @Test @MainActor func taskScreensBuildPhoneLandscapeCompactStates() {
-        let appModel = NodeAppModel()
-        let screens: [AnyView] = [
-            AnyView(IPadWorkboardScreen(openChat: {}, openSettings: {})),
-            AnyView(IPadSkillWorkshopScreen(openSettings: {})),
-        ]
-
-        for screen in screens {
-            let root = NavigationStack { screen }
-                .environment(appModel)
-                .environment(\.horizontalSizeClass, .regular)
-                .environment(\.verticalSizeClass, .compact)
-
-            _ = Self.host(root)
-        }
-    }
-
-    @Test @MainActor func voiceWakeWordsViewBuildsAViewHierarchy() {
-        let appModel = NodeAppModel()
-        let root = NavigationStack { VoiceWakeWordsSettingsView() }
-            .environment(appModel)
-        _ = Self.host(root)
-    }
-
-    @Test @MainActor func voiceWakeToastBuildsAViewHierarchy() {
-        let root = VoiceWakeToast(command: "openclaw: do something")
-        _ = Self.host(root)
-    }
-
     @MainActor private static func waitForPresentedAlert(in window: UIWindow) async {
-        for _ in 0 ..< 10 {
+        for _ in 0..<10 {
             if window.rootViewController?.presentedViewController != nil { return }
             await Task.yield()
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
-    }
-
-    @MainActor private static func rootTabsGatewayStateModels() -> [NodeAppModel] {
-        let offlineModel = NodeAppModel()
-
-        let connectingModel = NodeAppModel()
-        connectingModel.gatewayStatusText = "Connecting..."
-
-        let connectedModel = NodeAppModel()
-        connectedModel.enterAppleReviewDemoMode()
-
-        let errorModel = NodeAppModel()
-        errorModel.gatewayStatusText = "Gateway error: connection refused"
-
-        return [offlineModel, connectingModel, connectedModel, errorModel]
-    }
-
-    private static func rootTabsShellScenarios() -> [RootTabsShellScenario] {
-        [
-            RootTabsShellScenario(
-                idiom: .phone,
-                size: CGSize(width: 393, height: 852),
-                horizontalSizeClass: .compact,
-                verticalSizeClass: .regular),
-            RootTabsShellScenario(
-                idiom: .phone,
-                size: CGSize(width: 852, height: 393),
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .compact),
-            RootTabsShellScenario(
-                idiom: .pad,
-                size: CGSize(width: 1024, height: 1366),
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
-            RootTabsShellScenario(
-                idiom: .pad,
-                size: CGSize(width: 1366, height: 1024),
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
-        ]
-    }
-
-    private struct RootTabsShellScenario {
-        let idiom: UIUserInterfaceIdiom
-        let size: CGSize
-        let horizontalSizeClass: UserInterfaceSizeClass
-        let verticalSizeClass: UserInterfaceSizeClass
     }
 }

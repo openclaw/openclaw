@@ -1,5 +1,6 @@
 {
   "id": "parallel",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },
@@ -26,9 +27,14 @@
   "contracts": {
     "webSearchProviders": ["parallel", "parallel-free"]
   },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
-  },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

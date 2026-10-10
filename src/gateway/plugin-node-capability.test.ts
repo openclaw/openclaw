@@ -1,13 +1,17 @@
 // Plugin node capability tests cover scoped host URLs, request rewriting, and
 // authorization state attached to gateway node clients.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
+  hasAuthorizedClientPluginNodeCapabilityUrl,
   hasAuthorizedPluginNodeCapability,
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
+  pluginNodeCapabilityScopedHostUrlsConflict,
+  prepareClientPluginNodeCapabilities,
+  reconcileClientPluginNodeCapabilities,
   refreshClientPluginNodeCapability,
-  replacePluginNodeCapabilityInScopedHostUrl,
   setClientPluginNodeCapability,
 } from "./plugin-node-capability.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -21,6 +25,8 @@ function makeClient(
     socket: {} as GatewayWsClient["socket"],
     connect: {
       role: "node",
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
       client: {
         mode: "node",
       },
@@ -32,6 +38,81 @@ function makeClient(
 }
 
 describe("plugin node capability helpers", () => {
+  test("publishes plugin surface replacement atomically while retaining unaffected credentials", () => {
+    const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
+    const files = { surface: "files", scopeKey: "storage:files" };
+    const removed = { surface: "retired", scopeKey: "drawing:retired" };
+    const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
+    prepareClientPluginNodeCapabilities({
+      client,
+      surfaces: [canvas, files, removed],
+      changedPluginIds: new Set(),
+    })();
+    const previous = { ...client.pluginSurfaceUrls };
+    const publish = prepareClientPluginNodeCapabilities({
+      client,
+      surfaces: [canvas, files],
+      changedPluginIds: new Set(["drawing"]),
+    });
+    expect(client.pluginSurfaceUrls).toEqual(previous);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: previous.canvas!,
+      }),
+    ).toBe(true);
+    publish();
+    expect(client.pluginSurfaceUrls?.files).toBe(previous.files);
+    expect(client.pluginSurfaceUrls?.retired).toBeUndefined();
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: previous.canvas!,
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: removed,
+        url: previous.retired!,
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: client.pluginSurfaceUrls!.canvas!,
+      }),
+    ).toBe(true);
+  });
+
+  test("publishes newly enabled surfaces only within the client's admitted capabilities", () => {
+    const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
+    const files = { surface: "files", scopeKey: "storage:files" };
+    const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
+    const publish = prepareClientPluginNodeCapabilities({
+      client,
+      surfaces: [canvas, files],
+      changedPluginIds: new Set(["drawing", "storage"]),
+      allowedSurfaces: new Set(["canvas"]),
+    });
+    expect(client.pluginSurfaceUrls).toBeUndefined();
+    expect(client.pluginNodeCapabilities).toBeUndefined();
+    publish();
+    expect(Object.keys(client.pluginSurfaceUrls ?? {})).toEqual(["canvas"]);
+    expect(client.pluginNodeCapabilitySurfaces).toEqual({ canvas });
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: client.pluginSurfaceUrls!.canvas!,
+      }),
+    ).toBe(true);
+    expect(Object.keys(client.pluginNodeCapabilities ?? {})).toEqual(["canvas\0drawing:canvas"]);
+  });
+
   test("builds scoped host urls from clean base urls", () => {
     expect(
       buildPluginNodeCapabilityScopedHostUrl(
@@ -56,13 +137,69 @@ describe("plugin node capability helpers", () => {
     });
   });
 
-  test("replaces scoped capability tokens without nesting capability prefixes", () => {
+  test("detects conflicting scoped host capabilities across rewritten hosts", () => {
     expect(
-      replacePluginNodeCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token/__openclaw__/a2ui/",
-        "new token",
+      pluginNodeCapabilityScopedHostUrlsConflict(
+        "http://127.0.0.1:18789/__openclaw__/cap/token%20value",
+        "https://gateway.example:7443/__openclaw__/cap/token%20value",
       ),
-    ).toBe("http://127.0.0.1:18789/__openclaw__/cap/new%20token/__openclaw__/a2ui");
+    ).toBe(false);
+    expect(
+      pluginNodeCapabilityScopedHostUrlsConflict(
+        "https://gateway.example/__openclaw__/cap/old-token",
+        "https://gateway.example/__openclaw__/cap/new-token",
+      ),
+    ).toBe(true);
+    expect(pluginNodeCapabilityScopedHostUrlsConflict("not-a-url", "also-not-a-url")).toBe(false);
+  });
+
+  test("validates a current scoped URL without extending its authorization", () => {
+    const client = makeClient({
+      pluginNodeCapabilities: {
+        canvas: { capability: "current-token", expiresAtMs: 1_500 },
+      },
+    });
+    const params = {
+      client,
+      surface: { surface: "canvas" },
+      url: "https://gateway.example/__openclaw__/cap/current-token",
+      nowMs: 1_000,
+    };
+
+    expect(hasAuthorizedClientPluginNodeCapabilityUrl(params)).toBe(true);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        url: "https://gateway.example/__openclaw__/cap/other-token",
+      }),
+    ).toBe(false);
+    expect(hasAuthorizedClientPluginNodeCapabilityUrl({ ...params, nowMs: 1_500 })).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        client: makeClient(),
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        surface: { surface: "canvas", scopeKey: "other-plugin:canvas" },
+      }),
+    ).toBe(false);
+  });
+
+  test("treats the scoped path capability as authoritative over a stale query", () => {
+    const normalized = normalizePluginNodeCapabilityScopedUrl(
+      "/__openclaw__/cap/current-token/__openclaw__/canvas/?oc_cap=stale-token",
+    );
+    expect(normalized).toEqual({
+      pathname: "/__openclaw__/canvas/",
+      capability: "current-token",
+      rewrittenUrl: "/__openclaw__/canvas/?oc_cap=current-token",
+      scopedPath: true,
+      malformedScopedPath: false,
+    });
   });
 
   test("marks malformed scoped urls without authorizing a path capability", () => {
@@ -138,6 +275,108 @@ describe("plugin node capability helpers", () => {
       canvas: { surface: "canvas", ttlMs: 100 },
       files: { surface: "files" },
     });
+  });
+
+  test.each([
+    { change: "enabled", before: [], after: [{ surface: "files" }] },
+    { change: "disabled", before: [{ surface: "files" }], after: [] },
+    {
+      change: "owner changed",
+      before: [{ surface: "files", scopeKey: "previous:files" }],
+      after: [{ surface: "files", scopeKey: "current:files" }],
+    },
+  ])("reconnects nodes when a capability is $change", ({ before, after }) => {
+    const close = vi.fn();
+    const client = makeClient({
+      connect: { ...makeClient().connect, caps: ["files"] },
+      pluginNodeCapabilitySurfaces: indexPluginNodeCapabilitySurfaces(before),
+    });
+
+    expect(
+      reconcileClientPluginNodeCapabilities(
+        client,
+        indexPluginNodeCapabilitySurfaces(after),
+        close,
+      ),
+    ).toBe(false);
+    expect(client).toMatchObject({
+      invalidated: true,
+      invalidatedReason: "plugin-node-capabilities-changed",
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(client.pluginSurfaceUrls).toBeUndefined();
+  });
+
+  test.each([
+    { node: "browser-only", caps: ["browser"], maxProtocol: PROTOCOL_VERSION },
+    { node: "without approved capabilities", caps: [], maxProtocol: PROTOCOL_VERSION },
+  ])("preserves $node nodes across unrelated hosted-surface changes", ({ caps, maxProtocol }) => {
+    const close = vi.fn();
+    const client = makeClient({
+      connect: { ...makeClient().connect, minProtocol: maxProtocol, maxProtocol, caps },
+    });
+    for (const next of [
+      [{ surface: "files", scopeKey: "previous:files", ttlMs: 100 }],
+      [{ surface: "files", scopeKey: "current:files", ttlMs: 200 }],
+      [],
+    ]) {
+      const surfaces = indexPluginNodeCapabilitySurfaces(next);
+      expect(reconcileClientPluginNodeCapabilities(client, surfaces, close)).toBe(true);
+      expect(client.invalidated).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+      expect(
+        refreshClientPluginNodeCapability({ client, surface: { surface: "files" } }),
+      ).toBeUndefined();
+      client.pluginNodeCapabilitySurfaces = surfaces;
+    }
+  });
+
+  test("reconnects legacy nodes to recompute session protocol ceilings", () => {
+    const close = vi.fn();
+    const client = makeClient({
+      connect: {
+        ...makeClient().connect,
+        minProtocol: PROTOCOL_VERSION - 1,
+        maxProtocol: PROTOCOL_VERSION - 1,
+        caps: [],
+      },
+    });
+    expect(
+      reconcileClientPluginNodeCapabilities(client, { files: { surface: "files" } }, close),
+    ).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  test("revokes changed node capabilities while preserving current nodes and operators", () => {
+    const surface = { surface: "files", scopeKey: "publisher:files", ttlMs: 200 };
+    const surfaces = indexPluginNodeCapabilitySurfaces([surface]);
+    const close = vi.fn();
+    const changed = makeClient({
+      connect: { ...makeClient().connect, caps: [] },
+      pluginSurfaceUrls: { files: "https://gateway.example/__openclaw__/cap/current-token" },
+      pluginNodeCapabilitySurfaces: { files: { ...surface, ttlMs: 100 } },
+      pluginNodeCapabilities: {
+        "files\0publisher:files": { capability: "current-token", expiresAtMs: 2_000 },
+      },
+    });
+    changed.socket.close = close;
+    const current = makeClient({ pluginNodeCapabilitySurfaces: surfaces });
+    const operator = makeClient({ connect: { ...current.connect, role: "operator" } });
+
+    expect(reconcileClientPluginNodeCapabilities(changed, surfaces)).toBe(false);
+    expect(reconcileClientPluginNodeCapabilities(current, surfaces)).toBe(true);
+    expect(reconcileClientPluginNodeCapabilities(operator, surfaces)).toBe(true);
+    expect(close).toHaveBeenCalledExactlyOnceWith(1012, "node capabilities changed");
+    expect(current.invalidated).toBeUndefined();
+    expect(operator.invalidated).toBeUndefined();
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: [changed],
+        surface,
+        capability: "current-token",
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
   });
 
   test("refreshes client plugin surface url and stored capability", () => {
@@ -222,6 +461,25 @@ describe("plugin node capability helpers", () => {
         nowMs: 1_000,
       }),
     ).toBe(false);
+  });
+
+  test("rejects invalidated clients without sliding capability expiry", () => {
+    const client = makeClient({
+      invalidated: true,
+      pluginNodeCapabilities: {
+        canvas: { capability: "canvas-token", expiresAtMs: 1_500 },
+      },
+    });
+
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([client]),
+        surface: { surface: "canvas", ttlMs: 100 },
+        capability: "canvas-token",
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
   });
 
   test("rejects plugin surface capabilities when the clock is invalid", () => {

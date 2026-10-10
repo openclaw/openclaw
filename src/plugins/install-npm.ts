@@ -1,0 +1,265 @@
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { withInstallActivity } from "../infra/install-progress.js";
+import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
+import { resolveManagedNpmRootDependencySpec } from "../infra/npm-managed-root.js";
+import {
+  formatPrereleaseResolutionError,
+  isPrereleaseResolutionAllowed,
+  parseRegistryNpmSpecResult,
+} from "../infra/npm-registry-spec.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveUserPath } from "../utils.js";
+import { resolveManagedNpmInstallPlan } from "./install-managed-npm-state.js";
+import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
+import {
+  canResolveAroundCompatibilityError,
+  isNpmPackageNotFoundMessage,
+  resolveLatestCompatibleNpmResolution,
+  resolveTrustedOfficialPrereleaseResolution,
+  validateNpmResolutionCompatibility,
+  type TrustedOfficialPrereleaseResolution,
+} from "./install-npm-metadata.js";
+import { resolveDefaultPluginNpmDir } from "./install-paths.js";
+import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
+import {
+  defaultLogger,
+  emitSuccessfulPluginInstallSecurityEvent,
+  loadPluginInstallRuntime,
+  runInstallSourceScan,
+} from "./install-shared.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import {
+  PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPluginResult,
+  type PackageInstallCommonParams,
+  type PluginNpmIntegrityDriftParams,
+} from "./install-types.js";
+
+export async function installPluginFromNpmSpec(
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries" | "installPolicyRequest"
+  > & {
+    spec: string;
+    signal?: AbortSignal;
+    expectedReplacementPluginId?: string;
+    expectedIntegrity?: string;
+    npmMetadata?: {
+      spec: string;
+      metadata: NpmSpecResolution;
+      trustedPrereleaseResolution?: TrustedOfficialPrereleaseResolution;
+    };
+    onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+  },
+): Promise<InstallPluginResult> {
+  const runtime = await loadPluginInstallRuntime();
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+    params,
+    defaultLogger,
+  );
+  const expectedPluginId = params.expectedPluginId;
+  const spec = params.spec.trim();
+  const parsed = parseRegistryNpmSpecResult(spec);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      error: parsed.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
+    };
+  }
+  const parsedSpec = parsed.parsed;
+
+  // A channel fallback changes the attempt's spec and must resolve its own metadata.
+  const preparedMetadata = params.npmMetadata?.spec === spec ? params.npmMetadata : undefined;
+  const metadataResult = preparedMetadata
+    ? { ok: true as const, metadata: preparedMetadata.metadata }
+    : await withInstallActivity(logger, "resolve", () =>
+        resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
+      );
+  if (!metadataResult.ok) {
+    return {
+      ok: false,
+      error: metadataResult.error,
+      ...(isNpmPackageNotFoundMessage(metadataResult.error)
+        ? { code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND }
+        : metadataResult.category === "metadata-env"
+          ? { code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE }
+          : {}),
+    };
+  }
+  const npmResolution: NpmSpecResolution = {
+    ...metadataResult.metadata,
+    resolvedAt: new Date().toISOString(),
+  };
+  if (
+    npmResolution.version &&
+    !isPrereleaseResolutionAllowed({
+      spec: parsedSpec,
+      resolvedVersion: npmResolution.version,
+    })
+  ) {
+    const preparedResolution = preparedMetadata?.trustedPrereleaseResolution;
+    const trustedResolution = params.trustedSourceLinkedOfficialInstall
+      ? preparedResolution?.resolvedPrereleaseVersion === npmResolution.version
+        ? preparedResolution
+        : await resolveTrustedOfficialPrereleaseResolution({
+            spec: parsedSpec,
+            resolvedPrereleaseVersion: npmResolution.version,
+            timeoutMs,
+            signal: params.signal,
+            killProcessTree: true,
+          })
+      : null;
+    if (trustedResolution) {
+      logger.warn?.(trustedResolution.warning);
+    }
+    if (trustedResolution?.kind === "stable" || trustedResolution?.kind === "prerelease-only") {
+      Object.assign(npmResolution, trustedResolution.resolution, {
+        resolvedAt: npmResolution.resolvedAt,
+      });
+    } else if (trustedResolution?.kind === "allow-prerelease-only") {
+      // Keep the original prerelease resolution. The package has no stable line yet.
+    } else {
+      return {
+        ok: false,
+        error: formatPrereleaseResolutionError({
+          spec: parsedSpec,
+          resolvedVersion: npmResolution.version,
+        }),
+      };
+    }
+  }
+  let compatibilityError = validateNpmResolutionCompatibility({
+    runtime,
+    parsedSpec,
+    expectedPluginId,
+    resolution: npmResolution,
+  });
+  if (compatibilityError && canResolveAroundCompatibilityError(compatibilityError)) {
+    const compatibleResolution = await resolveLatestCompatibleNpmResolution({
+      runtime,
+      parsedSpec,
+      expectedPluginId,
+      currentResolution: npmResolution,
+      timeoutMs,
+      signal: params.signal,
+      logger,
+    });
+    if (compatibleResolution) {
+      Object.assign(npmResolution, compatibleResolution, {
+        resolvedAt: npmResolution.resolvedAt,
+      });
+      compatibilityError = validateNpmResolutionCompatibility({
+        runtime,
+        parsedSpec,
+        expectedPluginId,
+        resolution: npmResolution,
+      });
+    }
+  }
+  if (compatibilityError) {
+    return compatibilityError;
+  }
+  const npmInstallPolicySource = {
+    kind: "npm",
+    authority: params.trustedSourceLinkedOfficialInstall ? "official" : "third-party",
+    mutable: false,
+    network: true,
+  } as const;
+  const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
+    spec,
+    expectedIntegrity: params.expectedIntegrity,
+    resolution: npmResolution,
+    onIntegrityDrift: params.onIntegrityDrift,
+    warn: (message) => logger.warn?.(message),
+  });
+  if (driftResult.error) {
+    return { ok: false, error: driftResult.error };
+  }
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const { policyMode } = await resolveManagedNpmInstallPlan({
+    runtime,
+    npmBaseDir,
+    packageName: parsedSpec.name,
+    requestedMode: mode,
+    npmResolution,
+  });
+
+  const preflightPolicyResult = await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-npm-policy-",
+      mode: 0o666 & ~process.umask(),
+    },
+    async (workspace) => {
+      const policyMetadataPath = await workspace.writeJson("npm-package-metadata.json", {
+        packageName: parsedSpec.name,
+        requestedSpecifier: spec,
+        resolution: npmResolution,
+      });
+      return await runInstallSourceScan({
+        subject: `Plugin "${expectedPluginId ?? parsedSpec.name}"`,
+        pluginId: expectedPluginId ?? parsedSpec.name,
+        mode: policyMode,
+        sourceFamily: "npm",
+        scan: async () =>
+          await preflightPluginNpmInstallPolicy({
+            config: params.config,
+            onInstallPolicyWarning: params.onInstallPolicyWarning,
+            logger,
+            mode: policyMode,
+            packageName: parsedSpec.name,
+            ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
+            requestedSpecifier: spec,
+            source: npmInstallPolicySource,
+            sourcePath: policyMetadataPath,
+            sourcePathKind: "file",
+          }),
+      });
+    },
+  );
+  if (preflightPolicyResult) {
+    return preflightPolicyResult;
+  }
+
+  const result = await installPluginFromManagedNpmRoot(
+    copyPluginInstallTransactionRequest(params, {
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      config: params.config,
+      packageName: parsedSpec.name,
+      dependencySpec: resolveManagedNpmRootDependencySpec({
+        parsedSpec,
+        resolution: npmResolution,
+      }),
+      displaySpec: spec,
+      installPolicyRequest: {
+        kind: "plugin-npm",
+        requestedSpecifier: spec,
+        source: npmInstallPolicySource,
+      },
+      extensionsDir: params.extensionsDir,
+      npmDir: params.npmDir,
+      timeoutMs,
+      workTimeoutMs,
+      signal: params.signal,
+      logger,
+      mode,
+      dryRun,
+      expectedPluginId,
+      expectedReplacementPluginId: params.expectedReplacementPluginId,
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
+      npmResolution,
+      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
+    }),
+  );
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun,
+    mode: policyMode,
+    sourceFamily: "npm",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
+}

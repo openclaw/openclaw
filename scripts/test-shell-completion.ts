@@ -1,32 +1,9 @@
-/**
- * Test script for shell completion installation feature.
- *
- * This script simulates the shell completion prompt that appears during
- * `openclaw update`. Use it to verify the completion installation flow
- * without running a full update.
- *
- * Run from repo root:
- *   node --import tsx scripts/test-shell-completion.ts [options]
- *   npx tsx scripts/test-shell-completion.ts [options]
- *   bun scripts/test-shell-completion.ts [options]
- *
- * Options:
- *   --shell <shell>   Override shell detection (zsh, bash, fish, powershell)
- *   --check-only      Only check status, don't prompt to install
- *   --force           Skip the "already installed" check and prompt anyway
- *   --help            Show this help message
- *
- * Examples:
- *   node --import tsx scripts/test-shell-completion.ts
- *   node --import tsx scripts/test-shell-completion.ts --check-only
- *   node --import tsx scripts/test-shell-completion.ts --shell bash
- *   node --import tsx scripts/test-shell-completion.ts --force
- */
-
+// Exercises completion installation without running a full update.
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { confirm, isCancel } from "@clack/prompts";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { stylePromptMessage } from "../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import {
@@ -58,7 +35,7 @@ function parseArgs(args: string[]): Options {
   };
 
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], `shell completion argument at index ${index}`);
     if (arg === "--check-only") {
       options.checkOnly = true;
     } else if (arg === "--force") {
@@ -132,7 +109,6 @@ async function main() {
   console.log(theme.heading("Shell Completion Test"));
   console.log("");
 
-  // Get completion status using the same function used by doctor/update/onboard
   const status = await checkShellCompletionStatus(CLI_NAME, { shell: options.shell });
   const shellSource = options.shell ? "(from --shell)" : "(detected from $SHELL)";
 
@@ -155,10 +131,12 @@ async function main() {
     return;
   }
 
-  // Profile uses slow dynamic pattern - upgrade to cached version
   if (status.usesSlowPattern) {
     console.log(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (cacheGenerated) {
       await installCompletion(status.shell, false, CLI_NAME);
       console.log(theme.success("Upgraded to cached completion."));
@@ -168,10 +146,12 @@ async function main() {
     return;
   }
 
-  // Profile has completion but no cache - auto-fix
   if (status.profileInstalled && !status.cacheExists) {
     console.log(theme.warn("Profile has completion but cache is missing. Regenerating..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (cacheGenerated) {
       console.log(theme.success("Cache regenerated successfully."));
     } else {
@@ -180,7 +160,6 @@ async function main() {
     return;
   }
 
-  // Both profile and cache exist - nothing to do
   if (status.profileInstalled && status.cacheExists && !options.force) {
     console.log(theme.muted("Shell completion is fully configured. To test the prompt:"));
     console.log(
@@ -192,7 +171,6 @@ async function main() {
     return;
   }
 
-  // No profile configured - prompt to install
   console.log(theme.heading("Shell completion"));
 
   const shouldInstall = await confirm({
@@ -205,10 +183,12 @@ async function main() {
     return;
   }
 
-  // Generate cache first (required for fast shell startup)
   if (!status.cacheExists) {
     console.log(theme.muted("Generating completion cache..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (!cacheGenerated) {
       console.log(theme.error("Failed to generate completion cache."));
       return;
@@ -216,7 +196,6 @@ async function main() {
     console.log(theme.success("Cache generated."));
   }
 
-  // Install to shell profile
   await installCompletion(status.shell, false, CLI_NAME);
 }
 

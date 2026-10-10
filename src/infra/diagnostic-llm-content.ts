@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 /** Per-field policy for diagnostic traces that may include model-visible content. */
 export type DiagnosticModelContentCapturePolicy = {
   /** Capture chat/message payloads sent to a model. */
@@ -26,10 +28,6 @@ const NO_MODEL_CONTENT_CAPTURE: DiagnosticModelContentCapturePolicy = Object.fre
   anyModelContent: false,
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 // Clone captured content so private diagnostic payloads never alias live runtime
 // objects (tool params/results, model messages) that callers keep mutating.
 export function cloneDiagnosticContentValue(value: unknown): unknown {
@@ -43,19 +41,6 @@ export function cloneDiagnosticContentValue(value: unknown): unknown {
       return String(value);
     }
   }
-}
-
-function withDerivedFields(
-  policy: Omit<DiagnosticModelContentCapturePolicy, "anyModelContent">,
-): DiagnosticModelContentCapturePolicy {
-  return {
-    ...policy,
-    anyModelContent:
-      policy.inputMessages ||
-      policy.outputMessages ||
-      policy.systemPrompt ||
-      policy.toolDefinitions,
-  };
 }
 
 /** Resolves model-content diagnostic capture from config, defaulting to no content capture. */
@@ -76,24 +61,15 @@ export function resolveDiagnosticModelContentCapturePolicy(
 
   const captureContent = otel.captureContent;
   if (captureContent === true) {
-    return withDerivedFields({
+    return {
       inputMessages: true,
       outputMessages: true,
       toolInputs: true,
       toolOutputs: true,
       systemPrompt: false,
       toolDefinitions: true,
-    });
+      anyModelContent: true,
+    };
   }
-  if (!isRecord(captureContent) || captureContent.enabled !== true) {
-    return NO_MODEL_CONTENT_CAPTURE;
-  }
-  return withDerivedFields({
-    inputMessages: captureContent.inputMessages === true,
-    outputMessages: captureContent.outputMessages === true,
-    toolInputs: captureContent.toolInputs === true,
-    toolOutputs: captureContent.toolOutputs === true,
-    systemPrompt: captureContent.systemPrompt === true,
-    toolDefinitions: captureContent.toolDefinitions === true,
-  });
+  return NO_MODEL_CONTENT_CAPTURE;
 }

@@ -1,4 +1,3 @@
-// Matrix tests cover room info plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
@@ -98,24 +97,6 @@ describe("createMatrixRoomInfoResolver", () => {
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
   });
 
-  it("marks unresolved room metadata when room info lookups fail", async () => {
-    const client = createRoomStateClient(async (_roomId, eventType) => {
-      if (eventType === "m.room.member") {
-        return {};
-      }
-      throw new Error("room info unavailable");
-    });
-    const resolver = createMatrixRoomInfoResolver(client);
-
-    await expect(
-      resolver.getRoomInfo("!room:example.org", { includeAliases: true }),
-    ).resolves.toEqual({
-      altAliases: [],
-      aliasesResolved: false,
-      nameResolved: false,
-    });
-  });
-
   it("treats missing room metadata as resolved-empty state", async () => {
     const client = createRoomStateClient(async (_roomId, eventType) => {
       if (eventType === "m.room.name" || eventType === "m.room.canonical_alias") {
@@ -173,9 +154,12 @@ describe("createMatrixRoomInfoResolver", () => {
     });
   });
 
-  it("caches fallback user IDs when member display-name lookups fail", async () => {
+  it("retries member display names after transient state lookup failures", async () => {
     const client = createRoomStateClient(async () => {
-      throw new Error("member lookup failed");
+      if (client.getRoomStateEvent.mock.calls.length === 1) {
+        throw new Error("member lookup failed");
+      }
+      return { displayname: "Recovered Alice" };
     });
     const resolver = createMatrixRoomInfoResolver(client);
 
@@ -184,9 +168,33 @@ describe("createMatrixRoomInfoResolver", () => {
     ).resolves.toBe("@alice:example.org");
     await expect(
       resolver.getMemberDisplayName("!room:example.org", "@alice:example.org"),
-    ).resolves.toBe("@alice:example.org");
+    ).resolves.toBe("Recovered Alice");
 
-    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
+    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes only the observed member after a room membership state change", async () => {
+    let aliceDisplayName = "Original Alice";
+    const client = createRoomStateClient(async (_roomId, _eventType, stateKey) => ({
+      displayname: stateKey === "@alice:example.org" ? aliceDisplayName : "Bob",
+    }));
+    const resolver = createMatrixRoomInfoResolver(client);
+
+    await expect(
+      resolver.getMemberDisplayName("!room:example.org", "@alice:example.org"),
+    ).resolves.toBe("Original Alice");
+    await resolver.getMemberDisplayName("!room:example.org", "@bob:example.org");
+
+    aliceDisplayName = "Renamed Alice";
+    resolver.invalidateMemberDisplayName("!room:example.org", "@alice:example.org");
+
+    await expect(
+      resolver.getMemberDisplayName("!room:example.org", "@alice:example.org"),
+    ).resolves.toBe("Renamed Alice");
+    await expect(
+      resolver.getMemberDisplayName("!room:example.org", "@bob:example.org"),
+    ).resolves.toBe("Bob");
+    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(3);
   });
 
   it("bounds cached room and member entries", async () => {

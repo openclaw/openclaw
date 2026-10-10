@@ -1,75 +1,41 @@
-// Azure Speech tests cover tts plugin behavior.
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import {
   azureSpeechTTS,
-  buildAzureSpeechSsml,
   inferAzureSpeechFileExtension,
   isAzureSpeechVoiceCompatible,
   listAzureSpeechVoices,
-  normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
 
 describe("azure speech tts", () => {
   installPinnedHostnameTestHooks();
+  const synthesisRequest = {
+    text: "hello",
+    apiKey: "fixture-value",
+    region: "eastus",
+    voice: "en-US-JennyNeural",
+    lang: "en-US",
+    outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+    timeoutMs: 1234,
+  };
+  const voiceRequest = { apiKey: "speech-key", baseUrl: "https://custom.example.com/" };
 
-  function createStreamingAudioResponse(params: {
-    chunkCount: number;
-    chunkSize: number;
-    byte: number;
-  }): { response: Response; getReadCount: () => number } {
-    let reads = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (reads >= params.chunkCount) {
-          controller.close();
-          return;
-        }
-        reads += 1;
-        controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
-      },
-    });
-    return {
-      response: new Response(stream, {
-        status: 200,
-        headers: { "Content-Type": "audio/mpeg" },
+  function mockVoiceCatalog(payload: unknown) {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        headers: { "Content-Type": "application/json" },
       }),
-      getReadCount: () => reads,
-    };
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
   }
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-  });
-
-  it("escapes SSML text and attributes", () => {
-    expect(
-      buildAzureSpeechSsml({
-        text: `Tom & "Jerry" <tag>`,
-        voice: `en-US-JennyNeural" xml:lang="evil`,
-        lang: `en-US" bad="1`,
-      }),
-    ).toBe(
-      `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
-        `xml:lang="en-US&quot; bad=&quot;1">` +
-        `<voice name="en-US-JennyNeural&quot; xml:lang=&quot;evil">` +
-        `Tom &amp; "Jerry" &lt;tag&gt;</voice></speak>`,
-    );
-  });
-
-  it("normalizes region and endpoint routing", () => {
-    expect(normalizeAzureSpeechBaseUrl({ region: "eastus" })).toBe(
-      "https://eastus.tts.speech.microsoft.com",
-    );
-    expect(
-      normalizeAzureSpeechBaseUrl({
-        endpoint: "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1/",
-      }),
-    ).toBe("https://eastus.tts.speech.microsoft.com");
-    expect(normalizeAzureSpeechBaseUrl({ baseUrl: "https://custom.example.com/" })).toBe(
-      "https://custom.example.com",
-    );
   });
 
   it("maps Azure output formats to attachment metadata", () => {
@@ -86,13 +52,10 @@ describe("azure speech tts", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await azureSpeechTTS({
-      text: "hello",
-      apiKey: "speech-key",
-      region: "eastus",
-      voice: "en-US-JennyNeural",
-      lang: "en-US",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      timeoutMs: 1234,
+      ...synthesisRequest,
+      text: `Tom & "Jerry" <tag>`,
+      voice: `en-US-JennyNeural" xml:lang="evil`,
+      lang: `en-US" bad="1`,
     });
 
     expect(result).toEqual(Buffer.from("mp3"));
@@ -101,30 +64,31 @@ describe("azure speech tts", () => {
     expect(url).toBe("https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
     expect(init.method).toBe("POST");
     const headers = new Headers(init.headers);
-    expect(headers.get("Ocp-Apim-Subscription-Key")).toBe("speech-key");
+    expect(headers.get("Ocp-Apim-Subscription-Key")).toBe("fixture-value");
     expect(headers.get("Content-Type")).toBe("application/ssml+xml");
     expect(headers.get("X-Microsoft-OutputFormat")).toBe("audio-24khz-48kbitrate-mono-mp3");
-    expect(init.body).toContain(`<voice name="en-US-JennyNeural">hello</voice>`);
+    expect(init.body).toBe(
+      `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
+        `xml:lang="en-US&quot; bad=&quot;1">` +
+        `<voice name="en-US-JennyNeural&quot; xml:lang=&quot;evil">` +
+        `Tom &amp; "Jerry" &lt;tag&gt;</voice></speak>`,
+    );
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
-    const streamed = createStreamingAudioResponse({
+    const streamed = createStreamingResponse({
       chunkCount: 20,
       chunkSize: 1024,
       byte: 121,
+      headers: { "Content-Type": "audio/mpeg" },
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed.response));
 
     await expect(
       azureSpeechTTS({
-        text: "hello",
+        ...synthesisRequest,
         apiKey: "speech-key",
-        region: "eastus",
-        voice: "en-US-JennyNeural",
-        lang: "en-US",
-        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-        timeoutMs: 1234,
         maxBytes: 2048,
       }),
     ).rejects.toThrow("Azure Speech TTS audio response exceeds 2048 bytes");
@@ -132,29 +96,36 @@ describe("azure speech tts", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
-  it("lists voices with timeout and filters deprecated entries", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify([
-          {
-            ShortName: "en-US-JennyNeural",
-            DisplayName: "Jenny",
-            Locale: "en-US",
-            Gender: "Female",
-            Status: "GA",
-            VoiceTag: { VoicePersonalities: ["Warm"] },
-          },
-          { ShortName: "en-US-OldNeural", DisplayName: "Old", Status: "Deprecated" },
-          { ShortName: "en-US-RetiredNeural", DisplayName: "Retired", IsDeprecated: true },
-        ]),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it("lists valid voices while filtering deprecated and malformed entries", async () => {
+    const voice = {
+      ShortName: "en-US-JennyNeural",
+      DisplayName: "Jenny",
+      Locale: "en-US",
+      Gender: "Female",
+      Status: "GA",
+      VoiceTag: { VoicePersonalities: ["Warm"] },
+    };
+    const fetchMock = mockVoiceCatalog([
+      voice,
+      { ShortName: "en-US-OldNeural", DisplayName: "Old", Status: "Deprecated" },
+      { ShortName: "en-US-RetiredNeural", DisplayName: "Retired", IsDeprecated: true },
+      null,
+      "unexpected",
+      [],
+      { ShortName: 42 },
+      {
+        ...voice,
+        ShortName: "en-US-AriaNeural",
+        DisplayName: "Aria",
+        VoiceTag: {
+          TailoredScenarios: [null, "Conversational"],
+          VoicePersonalities: [false, "Warm", "  "],
+        },
+      },
+    ]);
 
     const voices = await listAzureSpeechVoices({
-      apiKey: "speech-key",
-      baseUrl: "https://custom.example.com",
+      ...voiceRequest,
       timeoutMs: 4321,
     });
 
@@ -172,6 +143,64 @@ describe("azure speech tts", () => {
         gender: "Female",
         personalities: ["Warm"],
       },
+      {
+        id: "en-US-AriaNeural",
+        name: "Aria",
+        description: "Conversational, Warm",
+        locale: "en-US",
+        gender: "Female",
+        personalities: ["Warm"],
+      },
     ]);
+  });
+
+  it("returns an empty catalog for a malformed top-level voice payload", async () => {
+    mockVoiceCatalog(null);
+    await expect(listAzureSpeechVoices(voiceRequest)).resolves.toEqual([]);
+  });
+
+  it("rejects empty synthesized audio", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { headers: { "content-type": "audio/mpeg" } })),
+    );
+
+    await expect(
+      azureSpeechTTS({
+        ...synthesisRequest,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
+  });
+
+  it("closes the upstream socket for a never-ending malformed response over a real connection", async () => {
+    let notifySocketClosed: ((closed: boolean) => void) | undefined;
+    const socketClosed = new Promise<boolean>((resolve) => {
+      notifySocketClosed = resolve;
+    });
+    await withServer(
+      (request, response) => {
+        request.socket.once("close", () => notifySocketClosed?.(true));
+        response.writeHead(200, { "content-type": "application/json" });
+        // Headers land, then the body never ends: only an explicit cancel closes this.
+        response.write('{"error":"still streaming');
+      },
+      async (baseUrl) => {
+        await expect(
+          azureSpeechTTS({
+            ...synthesisRequest,
+            endpoint: baseUrl,
+            outputFormat: undefined,
+            timeoutMs: 5_000,
+          }),
+        ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
+
+        await expect(
+          withTimeout(socketClosed, 250, {
+            message: "Azure Speech malformed-response socket did not close",
+          }),
+        ).resolves.toBe(true);
+      },
+    );
   });
 });

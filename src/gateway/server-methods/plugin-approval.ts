@@ -1,154 +1,259 @@
-// Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope } from "../../infra/approval-scope.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
-  resolvePluginApprovalRequestAllowedDecisions,
+  exceedsApprovalTextLimit,
+  sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
+} from "../../infra/exec-approval-text-sanitize.js";
+import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
+import type {
+  PluginApprovalRequestPayload,
+  PluginApprovalResolved,
+} from "../../infra/plugin-approvals.js";
+import {
+  PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+  PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   resolvePluginApprovalTimeoutMs,
+  truncatePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { createApprovalRequestAuthority } from "./approval-request-authority.js";
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
-  buildRequestedApprovalEvent,
+  bindApprovalReviewerDeviceIds,
   handleApprovalResolve,
   handleApprovalWaitDecision,
-  handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
-/** Create plugin approval handlers backed by the shared approval manager. */
+type PluginApprovalIosPushDelivery = NonNullable<
+  GatewayRequestContext["pluginApprovalIosPushDelivery"]
+> & {
+  handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+};
+
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  opts?: { forwarder?: ExecApprovalForwarder },
+  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond, client }) => {
-      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
+    "plugin.approval.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { respond, client, context } = options;
+      const approvals = await listVisiblePendingApprovalRequests({
+        authority,
+        manager,
+        client,
+        approvalKind: "plugin",
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+      });
+      authority.assertCurrent();
+      respond(true, approvals, undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
-      if (!validatePluginApprovalRequestParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid plugin.approval.request params: ${formatValidationErrors(
-              validatePluginApprovalRequestParams.errors,
-            )}`,
-          ),
-        );
+      if (
+        !assertValidParams(
+          params,
+          validatePluginApprovalRequestParams,
+          "plugin.approval.request",
+          respond,
+        )
+      ) {
         return;
       }
-      const p = params as {
-        pluginId?: string | null;
-        title: string;
-        description: string;
-        severity?: string | null;
-        toolName?: string | null;
-        toolCallId?: string | null;
-        allowedDecisions?: string[] | null;
-        agentId?: string | null;
-        sessionKey?: string | null;
-        turnSourceChannel?: string | null;
-        turnSourceTo?: string | null;
-        turnSourceAccountId?: string | null;
-        turnSourceThreadId?: string | number | null;
-        timeoutMs?: number;
-        twoPhase?: boolean;
-      };
+      const reject = (message: string) =>
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+      const p = params;
       const twoPhase = p.twoPhase === true;
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
+      const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
 
-      const normalizeTrimmedString = (value?: string | null): string | null =>
-        normalizeOptionalString(value) || null;
+      if (
+        trustedAgentRuntime &&
+        context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
+      ) {
+        reject("agent runtime approval authority is no longer active");
+        return;
+      }
 
+      if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
+        reject("signed plugin approval owner is unavailable");
+        return;
+      }
+
+      if (p.policySubject && !trustedAgentRuntime) {
+        reject("plugin approval policy subject requires agent runtime authority");
+        return;
+      }
+
+      const rawSessionKey = normalizeOptionalString(
+        trustedAgentRuntime?.sessionKey ?? p.sessionKey,
+      );
+      const sessionOwner = rawSessionKey
+        ? resolveRequestedSessionAgentId(
+            context.getRuntimeConfig(),
+            rawSessionKey,
+            normalizeOptionalString(trustedAgentRuntime?.agentId ?? p.agentId),
+          )
+        : undefined;
+      if (sessionOwner && !sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      const sessionKey =
+        rawSessionKey && sessionOwner?.ok
+          ? resolveStoredSessionKeyForAgentStore({
+              cfg: context.getRuntimeConfig(),
+              agentId: sessionOwner.agentId,
+              sessionKey: rawSessionKey,
+            })
+          : null;
+
+      // Sanitize once at the creation boundary, like exec command text: the
+      // raw record otherwise reaches channel messages, iOS push, and the web
+      // modal unescaped (bidi/invisible spoofing). Escaping expands invisible
+      // chars to \u{...}, so re-check the protocol caps: a spoof-heavy title
+      // must fail loud here, not as a misleading registration throw later.
+      const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
+      const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
+      if (
+        exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+        exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+      ) {
+        reject("approval title or description exceeds the display limit after sanitization");
+        return;
+      }
+      const rawDetail = normalizeNullableString(p.detail);
+      // Untrusted display metadata gets the same escape as title/description:
+      // pluginId/toolName/agentId are interpolated into channel approval text.
+      // Host-minted runtime identity values stay authoritative and unescaped.
+      const sanitizeMeta = (value?: string | null): string | null => {
+        const normalized = normalizeNullableString(value);
+        return normalized === null ? null : sanitizeExecApprovalDisplayText(normalized);
+      };
+      const turnSource = trustedAgentRuntime ?? p;
       const request: PluginApprovalRequestPayload = {
-        pluginId: p.pluginId ?? null,
-        title: p.title,
-        description: p.description,
+        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
+        title: sanitizedTitle,
+        description: sanitizedDescription,
+        scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
+        detail:
+          rawDetail === null
+            ? null
+            : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
-        toolName: p.toolName ?? null,
+        toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
-        ...(Array.isArray(p.allowedDecisions)
+        ...(trustedAgentRuntime && p.policySubject
+          ? { policySubject: { ...p.policySubject } }
+          : {}),
+        ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
+        ...(p.allowedDecisions
           ? {
-              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
+              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
                 allowedDecisions: p.allowedDecisions,
               }),
             }
           : {}),
-        agentId: p.agentId ?? null,
-        sessionKey: p.sessionKey ?? null,
-        turnSourceChannel: normalizeTrimmedString(p.turnSourceChannel),
-        turnSourceTo: normalizeTrimmedString(p.turnSourceTo),
-        turnSourceAccountId: normalizeTrimmedString(p.turnSourceAccountId),
-        turnSourceThreadId: p.turnSourceThreadId ?? null,
+        agentId:
+          trustedAgentRuntime?.agentId ??
+          (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
+        sessionKey,
+        runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
+        turnSourceChannel: normalizeNullableString(turnSource.turnSourceChannel),
+        turnSourceTo: normalizeNullableString(turnSource.turnSourceTo),
+        turnSourceAccountId: normalizeNullableString(turnSource.turnSourceAccountId),
+        turnSourceThreadId: turnSource.turnSourceThreadId ?? null,
       };
 
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      if (trustedAgentRuntime) {
+        record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+        if (request.mcpTool && request.toolCallId) {
+          record.mcpToolApprovalActive = takeMcpToolApprovalBinding({
+            authority: trustedAgentRuntime.delegatedAuthority,
+            agentId: trustedAgentRuntime.agentId,
+            toolCallId: request.toolCallId,
+            ...request.mcpTool,
+          });
+        }
+      }
+      if (
+        trustedAgentRuntime?.executionIdentity &&
+        request.runId === trustedAgentRuntime.executionIdentity.runId
+      ) {
+        record.executionIdentityToken = trustedAgentRuntime.executionIdentity;
+      }
       bindApprovalRequesterMetadata({ record, client });
+      if (client?.internal?.approvalRuntime === true) {
+        bindApprovalReviewerDeviceIds({
+          record,
+          deviceIds: p.approvalReviewerDeviceIds,
+        });
+      }
 
-      const decisionPromise = registerPendingApprovalRecord({
+      const registration = await registerPendingApprovalRecord({
         manager,
         record,
         timeoutMs,
         respond,
+        context,
       });
-      if (!decisionPromise) {
+      if (!registration) {
         return;
       }
 
-      const requestEvent = buildRequestedApprovalEvent(record);
-
-      await handlePendingApprovalRequest({
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "plugin",
         manager,
         record,
-        decisionPromise,
         respond,
         context,
         clientConnId: client?.connId,
-        requestEventName: "plugin.approval.requested",
-        requestEvent,
         twoPhase,
-        approvalKind: "plugin",
-        deliverRequest: () => {
-          if (!opts?.forwarder?.handlePluginApprovalRequested) {
-            return false;
-          }
-          return opts.forwarder
-            .handlePluginApprovalRequested(requestEvent)
-            .catch((err: unknown) => {
-              context.logGateway?.error?.(
-                `plugin approvals: forward request failed: ${String(err)}`,
-              );
-              return false;
-            });
-        },
+        forwardRequest: opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder),
+        getIosPushDelivery: () => opts?.iosPushDelivery,
+        source: "rpc",
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond, client }) => {
+    "plugin.approval.waitDecision": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
+        authority,
         manager,
-        inputId: (params as { id?: string }).id,
+        inputId: params.id,
         client,
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
       });
     },
 
-    "plugin.approval.resolve": async ({ params, respond, client, context }) => {
+    "plugin.approval.resolve": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,
         validate: validatePluginApprovalResolveParams,
@@ -158,41 +263,40 @@ export function createPluginApprovalHandlers(
       if (!resolveParams) {
         return;
       }
-      const { inputId, decision } = resolveParams;
+      const { inputId, decision, reviewer } = resolveParams;
       await handleApprovalResolve({
+        approvalKind: "plugin",
+        authority,
         manager,
         inputId,
         decision,
         respond,
         context,
         client,
+        reviewer,
         exposeAmbiguousPrefixError: false,
         validateDecision: (snapshot) =>
-          resolvePluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
+          resolveCanonicalPluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
             ? null
             : {
                 message: `${decision} is unavailable for this plugin approval`,
                 details: {
-                  allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(snapshot.request),
+                  allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+                    snapshot.request,
+                  ),
                 },
               },
-        resolvedEventName: "plugin.approval.resolved",
-        buildResolvedEvent: ({
-          approvalId,
-          decision: decisionLocal,
-          resolvedBy,
-          snapshot,
-          nowMs,
-        }) => ({
-          id: approvalId,
-          decision: decisionLocal,
-          resolvedBy,
-          ts: nowMs,
-          request: snapshot.request,
-        }),
         forwardResolved: (resolvedEvent) =>
           opts?.forwarder?.handlePluginApprovalResolved?.(resolvedEvent),
         forwardResolvedErrorLabel: "plugin approvals: forward resolve failed",
+        extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved
+          ? [
+              {
+                run: (resolvedEvent) => opts.iosPushDelivery!.handleResolved!(resolvedEvent),
+                errorLabel: "plugin approvals: iOS push resolve failed",
+              },
+            ]
+          : undefined,
       });
     },
   };

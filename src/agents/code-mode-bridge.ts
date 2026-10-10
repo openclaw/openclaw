@@ -1,0 +1,523 @@
+import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessage } from "../infra/errors.js";
+import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { parseNodeList } from "../shared/node-list-parse.js";
+import type { NodeListNode } from "../shared/node-list-types.js";
+import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { getBeforeToolCallFailureDisposition } from "./agent-tools.before-tool-call.js";
+import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
+import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import type { CodeModeReplyLease } from "./code-mode-program-data.js";
+import type { CodeModeResultsAccess } from "./code-mode-results.js";
+import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
+import {
+  isCodeModeSessionStoreRequest,
+  type CodeModeSessionStoreAccess,
+} from "./code-mode-session-store.js";
+import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
+import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
+import type { AgentToolUpdateCallback } from "./runtime/index.js";
+import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capability.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import { getToolContractFailureCode } from "./tool-contract-error.js";
+import { isTrustedToolInputError } from "./tool-input-error.js";
+import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
+import type { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
+import { ToolInputError } from "./tools/common.js";
+
+const loadSwarmHandlers = createLazyRuntimeNamedExport(
+  () => import("./code-mode-swarm.runtime.js"),
+  "codeModeSwarmHandlers",
+);
+
+export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
+
+function projectCodeModeNode(node: NodeListNode) {
+  return {
+    id: node.nodeId,
+    name: node.displayName?.trim() || node.nodeId,
+    ...(node.platform ? { platform: node.platform } : {}),
+    connected: node.connected === true,
+    commands: Array.isArray(node.commands)
+      ? node.commands.filter((command): command is string => typeof command === "string")
+      : [],
+  };
+}
+
+async function runNodesBridge(params: {
+  runtime: ToolSearchRuntime;
+  parentToolCallId: string;
+  request: PendingBridgeRequest;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+}): Promise<unknown> {
+  const call = (input: Record<string, unknown>) =>
+    params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, input, {
+      includeMcp: false,
+      parentToolCallId: params.parentToolCallId,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
+      recoverySurface: "catalog",
+    });
+  const values = params.request.args;
+  const action = values[0];
+  if (action === "list") {
+    return parseNodeList(await call({ action: "status" }))
+      .filter((node) => node.paired === true)
+      .map(projectCodeModeNode);
+  }
+  if (action === "get") {
+    const query = values[1];
+    if (typeof query !== "string" || !query.trim()) {
+      throw new ToolInputError("nodes.get id or name must be a non-empty string.");
+    }
+    const node = resolveEligibleNodeFromList(
+      parseNodeList(await call({ action: "status" })),
+      query,
+      (candidate) => candidate.paired === true,
+      {
+        ineligibleExact: (id, eligibleIds) =>
+          `node "${id}" is not paired (paired node ids: ${eligibleIds})`,
+        nameResolveFailed: (reason, eligibleIds) => `${reason} (paired node ids: ${eligibleIds})`,
+        noneEligible: () => "no paired nodes",
+        multipleEligible: (eligible) =>
+          `multiple nodes paired: ${eligible
+            .map((candidate) => candidate.nodeId)
+            .toSorted()
+            .join(", ")}`,
+      },
+    );
+    const projected = projectCodeModeNode(node);
+    return {
+      id: projected.id,
+      name: projected.name,
+      ...(projected.commands.includes(NODE_FS_LIST_DIR_COMMAND)
+        ? { listDirCommand: NODE_FS_LIST_DIR_COMMAND }
+        : {}),
+    };
+  }
+  if (action === "invoke") {
+    const node = values[1];
+    const command = values[2];
+    if (typeof node !== "string" || !node.trim()) {
+      throw new ToolInputError("nodes.invoke node id must be a non-empty string.");
+    }
+    if (typeof command !== "string" || !command.trim()) {
+      throw new ToolInputError("nodes.invoke command must be a non-empty string.");
+    }
+    return await call({
+      action: "invoke",
+      node,
+      invokeCommand: command,
+      invokeParamsJson: JSON.stringify(values[3] ?? {}),
+    });
+  }
+  throw new ToolInputError("unsupported nodes bridge action.");
+}
+
+export function codeModeReplayIdForToolCall(
+  ctx: ToolSearchToolContext,
+  toolCallId: string,
+  code: string,
+  assistantTurnId?: string,
+): string {
+  const outerRunId = ctx.runId?.trim();
+  if (!outerRunId) {
+    // Swarm bridges require an outer run id; ordinary Code Mode still gets an isolated identity.
+    return `cm_replay_${randomUUID()}`;
+  }
+  // Provider response ids survive transcript restore and scope resettable tool-call ids to one turn.
+  const identity = JSON.stringify([
+    ctx.sessionKey ?? "",
+    ctx.sessionId ?? "",
+    outerRunId,
+    assistantTurnId?.trim() ?? "",
+    toolCallId,
+    code,
+  ]);
+  const digest = createHash("sha256").update(identity).digest("hex").slice(0, 24);
+  return `cm_replay_${digest}`;
+}
+
+export function isCodeModeSwarmAvailable(
+  ctx: ToolSearchToolContext,
+  catalog: readonly Pick<ToolSearchCatalogEntry, "source" | "name">[] | undefined,
+): boolean {
+  // Detached runs retain denied schemas; only an executable spawn capability
+  // may advertise Swarm declarations or install its guest globals.
+  return (
+    resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled &&
+    (!ctx.toolExecutionAllow || isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) &&
+    catalog?.some((entry) => entry.source === "openclaw" && entry.name === "sessions_spawn") ===
+      true &&
+    ctx.catalogRef?.current?.entries.some(
+      (entry) => entry.name === "sessions_spawn" && isCollectorSpawnTool(entry.tool),
+    ) === true &&
+    !ctx.catalogRef.current.entries.some(
+      (entry) => entry.source === "client" && entry.name === "sessions_spawn",
+    )
+  );
+}
+
+function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
+  if (!resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled) {
+    throw new ToolInputError("code mode swarm globals are disabled.");
+  }
+  // Swarm globals are the sessions_spawn capability: phase/log emit foreground lifecycle
+  // events and agents.run launches collectors. A run that executes only an allowlist
+  // (detached skill review) gets the same refusal as the tool, never the foreground session.
+  if (ctx.toolExecutionAllow && !isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) {
+    throw new ToolInputError(
+      formatToolExecutionGatedMessage("sessions_spawn", ctx.toolExecutionAllow),
+    );
+  }
+}
+
+/** Recognize explicit required intent only on the authorized core tool bindings. */
+export function requiresCodeModeCompletion(
+  requests: readonly PendingBridgeRequest[],
+  catalogProjection: CodeModeCatalogProjection,
+): boolean {
+  return requests.some((request) => {
+    if (
+      request.method !== "callValue" ||
+      !isRecord(request.args[1]) ||
+      request.args[1].awaitResults !== true
+    ) {
+      return false;
+    }
+    const binding =
+      typeof request.args[0] === "string"
+        ? catalogProjection.byCallableName.get(request.args[0])
+        : undefined;
+    return binding?.id === "openclaw:core:exec" || binding?.id === "openclaw:core:agents_wait";
+  });
+}
+
+export async function runBridgeRequest(params: {
+  runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
+  namespaceRuntime: CodeModeNamespaceRuntime;
+  parentToolCallId: string;
+  codeModeRunId: string;
+  reply: CodeModeReplyLease;
+  results: CodeModeResultsAccess;
+  sessionStore?: CodeModeSessionStoreAccess;
+  remainingMs: number;
+  completionRequired?: boolean;
+  ctx: ToolSearchToolContext;
+  request: PendingBridgeRequest;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+}): Promise<void> {
+  const catalogProjection = params.catalogProjection;
+  const sessionStoreRequest = isCodeModeSessionStoreRequest(params.request);
+  try {
+    params.signal?.throwIfAborted();
+    const values = Array.isArray(params.request.args) ? params.request.args : [];
+    let value: unknown;
+    switch (params.request.method) {
+      case "resultSave":
+      case "resultLoad":
+      case "resultDelete": {
+        const sessionStore = sessionStoreRequest ? params.sessionStore : undefined;
+        if (sessionStoreRequest && !sessionStore) {
+          throw new ToolInputError(
+            "Code Mode store/load is unavailable in headless execution; use an interactive session-bound cell.",
+          );
+        }
+        if (params.request.method === "resultSave") {
+          if (sessionStore) {
+            await sessionStore.save(values[2], values[0], params.runtime.hasNetworkContent());
+          } else {
+            value = params.results.save(values[0], params.runtime.hasNetworkContent());
+          }
+        } else if (params.request.method === "resultLoad") {
+          const loaded = sessionStore
+            ? await sessionStore.load(values[0])
+            : params.results.load(values[0]);
+          if (loaded.networkContent) {
+            params.runtime.observeNetworkContent(params.parentToolCallId);
+          }
+          // Session values need an envelope to preserve missing/undefined across the JSON bridge.
+          value = sessionStore
+            ? loaded.value === undefined
+              ? {}
+              : { value: loaded.value }
+            : loaded.value;
+        } else if (sessionStore) {
+          await sessionStore.delete(values[0]);
+        } else {
+          value = params.results.delete(values[0]);
+        }
+        break;
+      }
+      case "search": {
+        const query = values[0];
+        if (typeof query !== "string") {
+          throw new ToolInputError("search query must be a string.");
+        }
+        const options = isRecord(values[1]) ? values[1] : undefined;
+        const spelling = query.trim();
+        const exact = spelling.toLowerCase();
+        const mcpBindings = params.namespaceRuntime.mcpBindings;
+        const mcpRoutes = [...mcpBindings];
+        const exactMcpId = (mcpRoutes.find(([, binding]) => binding.callableName === spelling) ??
+          mcpRoutes.find(([, binding]) => binding.callableName.toLowerCase() === exact))?.[0];
+        const exactBinding = exactMcpId
+          ? undefined
+          : (catalogProjection.byCallableName.get(spelling) ??
+            catalogProjection.bindings.find((binding) => binding.name === spelling) ??
+            catalogProjection.bindings.find(
+              (binding) =>
+                binding.name.toLowerCase() === exact ||
+                binding.callableName.toLowerCase() === exact,
+            ));
+        const matches = await params.runtime.search(exactBinding?.id ?? exactMcpId ?? query, {
+          limit: typeof options?.limit === "number" ? options.limit : undefined,
+          allowedIds: catalogProjection.searchableIds,
+          parentToolCallId: params.parentToolCallId,
+        });
+        value = exactBinding
+          ? [exactBinding.callableName]
+          : matches.map((entry) => {
+              const binding = catalogProjection.byId.get(entry.id);
+              if (binding) {
+                return binding.callableName;
+              }
+              const mcp = mcpBindings.get(entry.id);
+              if (!mcp) {
+                throw new ToolInputError("Search result has no callable namespace route.");
+              }
+              return {
+                callableName: mcp.callableName,
+                namespaceId: mcp.namespaceId,
+                path: mcp.path,
+                apiPath: mcp.apiPath,
+                name: entry.mcp?.toolName ?? entry.name,
+                source: "mcp",
+                description: truncateUtf16Safe(entry.description, 512),
+              };
+            });
+        break;
+      }
+      case "describe": {
+        const callableName = values[0];
+        if (typeof callableName !== "string") {
+          throw new ToolInputError("describe callable name must be a string.");
+        }
+        const binding = catalogProjection.byCallableName.get(callableName);
+        if (!binding) {
+          throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
+        }
+        const described = await params.runtime.describe(binding.id, {
+          includeMcp: false,
+          recoverySurface: "catalog",
+          parentToolCallId: params.parentToolCallId,
+        });
+        const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
+        value =
+          values[1] === "declaration"
+            ? await createCodeModeToolApiFile(binding.callableName, guestDescription)
+            : { ...guestDescription, callableName: binding.callableName };
+        break;
+      }
+      case "callValue": {
+        const callableName = values[0];
+        if (typeof callableName !== "string") {
+          throw new ToolInputError("catalog callable name must be a string.");
+        }
+        const binding = catalogProjection.byCallableName.get(callableName);
+        if (!binding) {
+          throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
+        }
+        let input = values[1] ?? {};
+        if (
+          binding.id === "openclaw:core:exec" &&
+          isRecord(input) &&
+          input.background !== true &&
+          params.completionRequired
+        ) {
+          input = { ...input, awaitResults: true };
+        } else if (
+          binding.source === "openclaw" &&
+          binding.name === "exec" &&
+          binding.input?.includes("yieldMs") === true &&
+          isRecord(input) &&
+          input.background !== true &&
+          input.yieldMs === undefined
+        ) {
+          // Use the remaining call budget except the margin for inline guest resumption.
+          // Late sequential calls yield sooner so their process handle returns in this call.
+          input = {
+            ...input,
+            yieldMs: Math.max(1, Math.floor(params.remainingMs) - CODE_MODE_EXEC_YIELD_MARGIN_MS),
+          };
+        }
+        if (
+          binding.id === "openclaw:core:agents_wait" &&
+          params.completionRequired &&
+          isRecord(input) &&
+          input.timeoutSeconds === undefined
+        ) {
+          input = { ...input, awaitResults: true };
+        }
+        value = await params.runtime.callExactValue(binding.id, input, {
+          recoverySurface: "catalog",
+          parentToolCallId: params.parentToolCallId,
+          signal: params.signal,
+          onUpdate: params.onUpdate,
+        });
+        break;
+      }
+      case "nodes": {
+        value = await runNodesBridge(params);
+        break;
+      }
+      case "yield": {
+        value = { status: "yielded", reason: values[0] ?? null };
+        break;
+      }
+      case "namespace": {
+        const namespaceId = values[0];
+        const pathLocal = values[1];
+        const callArgs = values[2];
+        if (typeof namespaceId !== "string") {
+          throw new ToolInputError("namespace id must be a string.");
+        }
+        if (!Array.isArray(pathLocal) || !pathLocal.every((entry) => typeof entry === "string")) {
+          throw new ToolInputError("namespace path must be an array of strings.");
+        }
+        value = await params.namespaceRuntime.invoke(
+          namespaceId,
+          pathLocal,
+          Array.isArray(callArgs) ? callArgs : [],
+          async (request) => {
+            const called = await params.runtime.callExactId(request.catalogId, request.input, {
+              recoverySurface: "catalog",
+              parentToolCallId: params.parentToolCallId,
+              signal: params.signal,
+              onUpdate: params.onUpdate,
+              mcpNamespaceGuest: true,
+            });
+            const guestResult = consumeMcpCodeModeGuestResult(called.result);
+            if (guestResult === undefined) {
+              throw new ToolInputError(
+                "MCP namespace tool result is missing its owned guest projection.",
+              );
+            }
+            return guestResult;
+          },
+        );
+        if (namespaceId === "mcp" && pathLocal.at(-1) === "$api") {
+          params.runtime.observeNetworkContent(params.parentToolCallId);
+        }
+        break;
+      }
+      case "agentSpawn":
+      case "agentWait":
+      case "swarmNote": {
+        const { signal } = params;
+        requireCodeModeSwarmEnabled(params.ctx);
+        signal?.throwIfAborted();
+        const handlers = await loadSwarmHandlers();
+        // Loading can outlive the cell. Reject before replay recovery, collector
+        // reads, or note publication, even when the cancellation race has settled.
+        signal?.throwIfAborted();
+        requireCodeModeSwarmEnabled(params.ctx);
+        value = await handlers[params.request.method](params);
+        break;
+      }
+      case "skillsList": {
+        if (
+          !catalogProjection.bindings.some(
+            (entry) => entry.source === "openclaw" && entry.name === "skills_search",
+          )
+        ) {
+          throw new ToolInputError("skills_search is not available in this run.");
+        }
+        if (
+          params.ctx.toolExecutionAllow &&
+          !isToolExecutionAllowed(params.ctx.toolExecutionAllow, "skills_search")
+        ) {
+          throw new ToolInputError(
+            formatToolExecutionGatedMessage("skills_search", params.ctx.toolExecutionAllow),
+          );
+        }
+        const offset = values[0] ?? 0;
+        if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+          throw new ToolInputError("skills.list offset must be a non-negative integer.");
+        }
+        value = (params.ctx.codeModeSkills ?? [])
+          .slice(offset, offset + 20)
+          .map(({ name, description, location }) => ({
+            name,
+            description: description.slice(0, 512),
+            location,
+          }));
+        break;
+      }
+      case "skillsSearch":
+      case "skillsRead": {
+        const toolName = params.request.method === "skillsRead" ? "skills_read" : "skills_search";
+        const binding = catalogProjection.bindings.find(
+          (entry) => entry.source === "openclaw" && entry.name === toolName,
+        );
+        if (!binding) {
+          throw new ToolInputError(`${toolName} is not available in this run.`);
+        }
+        const called = await params.runtime.callExactId(
+          binding.id,
+          params.request.method === "skillsRead"
+            ? { name: values[0] }
+            : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
+          {
+            recoverySurface: "catalog",
+            parentToolCallId: params.parentToolCallId,
+            signal: params.signal,
+            onUpdate: params.onUpdate,
+          },
+        );
+        const result = called.result;
+        if (!isRecord(result) || result.isError || !isRecord(result.details)) {
+          throw new ToolInputError("Installed skill request failed.");
+        }
+        value = params.request.method === "skillsRead" ? result.details.content : result.details;
+        break;
+      }
+      case "sleep": {
+        const delay = values[0];
+        if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
+          throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
+        }
+        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+          signal: params.signal,
+        });
+        break;
+      }
+    }
+    params.reply.settle(true, value);
+  } catch (error) {
+    const classified =
+      getBeforeToolCallFailureDisposition(error) !== undefined && error instanceof Error
+        ? (error.cause ?? error)
+        : error;
+    params.reply.settle(false, {
+      message: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+      code:
+        sessionStoreRequest && error instanceof RangeError
+          ? "store_range"
+          : sessionStoreRequest && error instanceof TypeError
+            ? "store_type"
+            : (getToolContractFailureCode(classified) ??
+              (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error")),
+      effectStatus: "unknown",
+    });
+  }
+}

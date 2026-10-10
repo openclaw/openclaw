@@ -1,36 +1,13 @@
-// Media Understanding Common helper module supports format behavior.
 import type { MediaUnderstandingOutput } from "./types.js";
 
-const MEDIA_PLACEHOLDER_TOKEN = String.raw`<media:[^>]+>(?:\s*\([^)]*\))?`;
-const MEDIA_PLACEHOLDER_RE = new RegExp(String.raw`^(?:${MEDIA_PLACEHOLDER_TOKEN}\s*)+$`, "i");
-const MEDIA_PLACEHOLDER_TOKEN_RE = new RegExp(String.raw`^(?:${MEDIA_PLACEHOLDER_TOKEN}\s*)+`, "i");
-
-/** Extracts user-authored text while ignoring synthetic media placeholder tokens. */
-export function extractMediaUserText(body?: string): string | undefined {
-  const trimmed = body?.trim() ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  if (MEDIA_PLACEHOLDER_RE.test(trimmed)) {
-    return undefined;
-  }
-  const cleaned = trimmed.replace(MEDIA_PLACEHOLDER_TOKEN_RE, "").trim();
-  return cleaned || undefined;
-}
-
-function formatSection(
-  title: string,
-  kind: "Transcript" | "Description",
-  text: string,
-  userText?: string,
-): string {
-  const lines = [`[${title}]`];
-  if (userText) {
-    lines.push(`User text:\n${userText}`);
-  }
-  lines.push(`${kind}:\n${text}`);
-  return lines.join("\n");
-}
+const sectionByKind = {
+  "audio.transcription": { title: "Audio", label: "Transcript" },
+  "image.description": { title: "Image", label: "Description" },
+  "video.description": { title: "Video", label: "Description" },
+} satisfies Record<
+  MediaUnderstandingOutput["kind"],
+  { title: string; label: "Transcript" | "Description" }
+>;
 
 /** Formats media-understanding outputs into the chat body sent back to the model. */
 export function formatMediaUnderstandingBody(params: {
@@ -42,7 +19,7 @@ export function formatMediaUnderstandingBody(params: {
     return params.body ?? "";
   }
 
-  const userText = extractMediaUserText(params.body);
+  const userText = params.body?.trim() || undefined;
   const sections: string[] = [];
   if (userText && outputs.length > 1) {
     sections.push(`User text:\n${userText}`);
@@ -59,36 +36,9 @@ export function formatMediaUnderstandingBody(params: {
     const next = (seen.get(output.kind) ?? 0) + 1;
     seen.set(output.kind, next);
     const suffix = count > 1 ? ` ${next}/${count}` : "";
-    if (output.kind === "audio.transcription") {
-      sections.push(
-        formatSection(
-          `Audio${suffix}`,
-          "Transcript",
-          output.text,
-          outputs.length === 1 ? userText : undefined,
-        ),
-      );
-      continue;
-    }
-    if (output.kind === "image.description") {
-      sections.push(
-        formatSection(
-          `Image${suffix}`,
-          "Description",
-          output.text,
-          outputs.length === 1 ? userText : undefined,
-        ),
-      );
-      continue;
-    }
-    sections.push(
-      formatSection(
-        `Video${suffix}`,
-        "Description",
-        output.text,
-        outputs.length === 1 ? userText : undefined,
-      ),
-    );
+    const section = sectionByKind[output.kind];
+    const userSection = outputs.length === 1 && userText ? `User text:\n${userText}\n` : "";
+    sections.push(`[${section.title}${suffix}]\n${userSection}${section.label}:\n${output.text}`);
   }
 
   return sections.join("\n\n").trim();
@@ -97,7 +47,11 @@ export function formatMediaUnderstandingBody(params: {
 /** Formats one or more audio transcript outputs for legacy transcript-only callers. */
 export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
   if (outputs.length === 1) {
-    return outputs[0].text;
+    const [output] = outputs;
+    if (output) {
+      return output.text;
+    }
+    throw new Error("expected single audio transcript to be defined");
   }
   return outputs.map((output, index) => `Audio ${index + 1}:\n${output.text}`).join("\n\n");
 }

@@ -1,0 +1,180 @@
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  resolveOutboundChannelPlugin: vi.fn<() => unknown>(),
+  resolveChannelTarget: vi.fn<(params: { input: string }) => Promise<unknown>>(),
+  resolveOutboundTarget: vi.fn<() => { ok: true; to: string } | { ok: false; error: Error }>(),
+  resolveOutboundSessionRoute: vi.fn<() => Promise<unknown>>(),
+  resolveSessionDeliveryTarget: vi.fn(
+    (params: { requestedChannel?: string; explicitTo?: string }) => ({
+      channel: params.requestedChannel,
+      to: params.explicitTo,
+      mode: params.explicitTo ? "explicit" : "implicit",
+    }),
+  ),
+}));
+
+vi.mock("./targets.js", () => ({
+  resolveOutboundTarget: mocks.resolveOutboundTarget,
+  resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
+}));
+
+vi.mock("./target-resolver.js", () => ({
+  resolveChannelTarget: mocks.resolveChannelTarget,
+}));
+
+vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
+  isDeliverableMessageChannel: (channel: string) => channel === "workspace",
+  isGatewayMessageChannel: (channel: string) => ["webchat", "workspace"].includes(channel),
+  normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
+}));
+
+import type { OpenClawConfig } from "../../config/config.js";
+
+let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
+let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
+
+beforeAll(async () => {
+  ({ resolveAgentDeliveryPlanWithSessionRoute, resolveAgentOutboundTarget } =
+    await import("./agent-delivery.js"));
+});
+
+beforeEach(() => {
+  mocks.resolveOutboundChannelPlugin.mockReset();
+  mocks.resolveChannelTarget.mockReset();
+  mocks.resolveOutboundTarget.mockReset();
+  mocks.resolveOutboundSessionRoute.mockReset();
+  mocks.resolveOutboundSessionRoute.mockResolvedValue(null);
+  mocks.resolveSessionDeliveryTarget.mockClear();
+});
+
+function resolvePlan(explicitTo?: string, currentSessionKey?: string) {
+  return resolveAgentDeliveryPlanWithSessionRoute({
+    cfg: {},
+    agentId: "agent",
+    currentSessionKey,
+    requestedChannel: "workspace",
+    explicitTo,
+    wantsDelivery: true,
+  });
+}
+
+describe("agent delivery target resolution", () => {
+  it("does not session-route targets when outbound validation fails", async () => {
+    const targetError = new Error("ambiguous target");
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: false, error: targetError });
+    mocks.resolveChannelTarget.mockResolvedValue({
+      ok: true,
+      target: {
+        to: "1470130713209602050",
+        kind: "group",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
+    });
+
+    const plan = await resolvePlan("1470130713209602050");
+
+    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(plan.resolvedTo).toBe("1470130713209602050");
+    expect(plan.targetResolutionError).toBe(targetError);
+  });
+
+  it("resolves named targets through the shared directory resolver", async () => {
+    const plugin = {
+      messaging: {
+        resolveOutboundSessionRoute: vi.fn(),
+        targetResolver: { resolveTarget: vi.fn() },
+      },
+    };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:general" });
+    mocks.resolveChannelTarget.mockResolvedValue({
+      ok: true,
+      target: {
+        to: "channel:1524410080953634829",
+        kind: "channel",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+
+    const plan = await resolvePlan("channel:general", "agent:main");
+
+    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "workspace",
+      input: "channel:general",
+      accountId: undefined,
+      unknownTargetMode: "error",
+      plugin,
+    });
+    expect(plan.resolvedTo).toBe("channel:1524410080953634829");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("resolves plugin default targets before returning the delivery plan", async () => {
+    const plugin = { messaging: { targetResolver: { resolveTarget: vi.fn() } } };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:default-room" });
+    mocks.resolveChannelTarget.mockResolvedValue({
+      ok: true,
+      target: {
+        to: "channel:1524410080953634830",
+        kind: "channel",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+
+    const plan = await resolvePlan();
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
+      channel: "workspace",
+      plugin,
+      to: undefined,
+      cfg: {},
+      accountId: undefined,
+      mode: "implicit",
+    });
+    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "workspace",
+      input: "channel:default-room",
+      accountId: undefined,
+      unknownTargetMode: "error",
+      plugin,
+    });
+    expect(plan.resolvedTo).toBe("channel:1524410080953634830");
+    expect(plan.plugin).toBe(plugin);
+
+    mocks.resolveOutboundTarget.mockClear();
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:final" });
+    resolveAgentOutboundTarget({
+      cfg: {} as OpenClawConfig,
+      plan,
+      targetMode: "implicit",
+      validateExplicitTarget: true,
+    });
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
+      channel: "workspace",
+      plugin,
+      to: "channel:1524410080953634830",
+      cfg: {},
+      accountId: undefined,
+      mode: "implicit",
+    });
+  });
+});

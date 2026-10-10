@@ -1,0 +1,157 @@
+import {
+  buildCredentialSafetyPrompt,
+  buildDelegationGuidanceSection,
+  buildUiPresentationPrompt,
+  buildSkillWorkshopPromptSection,
+  resolveMainSessionDelegationMode,
+  SKILL_WORKSHOP_TOOL_NAME,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  isMessageOnlyCodexSourceReply,
+  isSystemAgentOnlyCodexDynamicToolAllowlist,
+  shouldDisableCodexToolSearchForModel,
+} from "./dynamic-tool-profile.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+
+export type CodexThreadPromptContext = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "agentId"
+  | "sessionKey"
+  | "modelId"
+  | "disableTools"
+  | "disableMessageTool"
+  | "delegationCapability"
+  | "pluginHarnessToolPolicyRestricted"
+  | "requireWorkspaceOnly"
+  | "toolsAllow"
+  | "sourceReplyDeliveryMode"
+  | "promptMode"
+  | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
+  | "runtimePlan"
+>;
+
+export function buildDeveloperInstructions(
+  params: CodexThreadPromptContext,
+  options: {
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    nativeCodeModeOnlyEnabled?: boolean;
+  } = {},
+): string {
+  const deferredToolNames = new Set<string>();
+  const toolNames = new Map<string, string>();
+  let messageTool: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
+  let hasSessionsYield = false;
+  let hasSeenDirectNamespace = false;
+  for (const spec of options.dynamicTools ?? []) {
+    const isDirectNamespace =
+      spec.type === "namespace" &&
+      !hasSeenDirectNamespace &&
+      spec.name.trim() === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE;
+    if (isDirectNamespace) {
+      hasSeenDirectNamespace = true;
+    }
+    for (const tool of spec.type === "namespace" ? spec.tools : [spec]) {
+      const name = tool.name.trim();
+      const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
+      if (tool.deferLoading === true && name) {
+        deferredToolNames.add(name);
+      }
+      if (!toolNames.has(name)) {
+        toolNames.set(name, qualifiedName);
+      }
+      if (name === "message") {
+        messageTool ??= { name: qualifiedName, parameters: tool.inputSchema };
+      }
+      hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
+    }
+  }
+  const hasSessionsSpawn = toolNames.has("sessions_spawn");
+  const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
+    surface: "codex_app_server",
+    includeLegacyGlobalGuidance: false,
+  }).join("\n");
+  const delegationGuidanceAvailable =
+    params.disableTools !== true &&
+    params.toolsAllow?.length !== 0 &&
+    params.delegationCapability !== "report_only" &&
+    !isMessageOnlyCodexSourceReply(params);
+  const nativeDelegationAvailable =
+    delegationGuidanceAvailable &&
+    params.pluginHarnessToolPolicyRestricted !== true &&
+    params.requireWorkspaceOnly !== true &&
+    !isCodexResponsesOAuthRun(params) &&
+    !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
+    !shouldDisableCodexToolSearchForModel(params.modelId);
+  const deferredToolDiscoveryGuidance =
+    deferredToolNames.size > 0 || nativeDelegationAvailable
+      ? options.nativeCodeModeOnlyEnabled === true
+        ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
+        : "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have."
+      : undefined;
+  const sections = [
+    "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+    deferredToolNames.size > 0
+      ? `Deferred searchable OpenClaw dynamic tools available: ${[...deferredToolNames]
+          .toSorted((left, right) => left.localeCompare(right))
+          .join(", ")}.`
+      : undefined,
+    deferredToolDiscoveryGuidance,
+    toolNames.has(SKILL_WORKSHOP_TOOL_NAME)
+      ? buildSkillWorkshopPromptSection().join("\n")
+      : undefined,
+    // Codex defers native collab tools behind tool_search on search-capable
+    // models (codex-rs spec_plan add_collaboration_tools). Without this hint
+    // models cannot see spawn_agent and grab the always-direct sessions_spawn.
+    nativeDelegationAvailable
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
+      : undefined,
+    hasSessionsYield && nativeDelegationAvailable
+      ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
+      : undefined,
+    delegationGuidanceAvailable
+      ? buildDelegationGuidanceSection({
+          mode: resolveMainSessionDelegationMode({
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+          }),
+          // Subagent/none prompt modes stay lean and must not be told to delegate further.
+          isMinimal: params.promptMode === "minimal" || params.promptMode === "none",
+          hiddenDelegationTool: nativeDelegationAvailable
+            ? "native `spawn_agent`"
+            : hasSessionsSpawn
+              ? "`sessions_spawn`"
+              : "",
+          hasVisibleSessionSpawn: hasSessionsSpawn,
+          hasSessionsYield,
+          hasSubagentsList: toolNames.has("subagents"),
+          hasSessionsSend: toolNames.has("sessions_send"),
+        }).join("\n")
+      : undefined,
+    params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
+      ? buildUiPresentationPrompt({
+          screenToolName: toolNames.get("screen"),
+          showWidgetToolName: toolNames.get("show_widget"),
+          dashboardToolName: toolNames.get("dashboard"),
+          portalToolName: toolNames.get("portal"),
+          messageTool,
+        })
+      : undefined,
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable:
+        params.disableTools !== true && (toolNames.has("openclaw") || toolNames.has("gateway")),
+    }),
+    nativeCommandGuidance,
+    params.gitCoauthorPrompt,
+    params.extraSystemPrompt,
+  ];
+  return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}

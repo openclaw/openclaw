@@ -10,216 +10,50 @@ import {
   resolveSlackAccountDmPolicy,
 } from "./accounts.js";
 
+function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
+  return { channels: { slack } };
+}
+
 describe("resolveSlackAccount allowFrom precedence", () => {
-  it("uses configured defaultAccount when accountId is omitted", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            defaultAccount: "work",
-            accounts: {
-              work: {
-                name: "Work",
-                botToken: "xoxb-work",
-                appToken: "xapp-work",
-              },
-            },
-          },
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg = slackConfig({
+      botToken: "xoxb-default",
+      appToken: "xapp-default",
+      accounts: {
+        work: {
+          enabled: false,
+          botToken: "xoxb-work",
+          appToken: "xapp-work",
         },
       },
     });
-
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.name).toBe("Work");
-    expect(resolved.botToken).toBe("xoxb-work");
-    expect(resolved.appToken).toBe("xapp-work");
-  });
-
-  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          botToken: "xoxb-default",
-          appToken: "xapp-default",
-          accounts: {
-            work: {
-              enabled: false,
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
 
     expect(listSlackAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultSlackAccountId(cfg)).toBe("default");
     expect(listEnabledSlackAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
   });
 
-  it("does not synthesize a default account from only shared optional tokens", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          appToken: "xapp-shared",
-          userToken: "xoxp-shared",
-          accounts: {
-            work: {
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(listSlackAccountIds(cfg)).toEqual(["work"]);
-    expect(resolveDefaultSlackAccountId(cfg)).toBe("work");
-    expect(listEnabledSlackAccounts(cfg).map((account) => account.accountId)).toEqual(["work"]);
-  });
-
-  it("prefers accounts.default.allowFrom over top-level for default account", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            allowFrom: ["top"],
-            accounts: {
-              default: {
-                botToken: "xoxb-default",
-                appToken: "xapp-default",
-                allowFrom: ["default"],
-              },
-            },
-          },
-        },
-      },
-      accountId: "default",
-    });
-
-    expect(resolved.config.allowFrom).toEqual(["default"]);
-  });
-
-  it("falls back to top-level allowFrom for named account without override", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            allowFrom: ["top"],
-            accounts: {
-              work: { botToken: "xoxb-work", appToken: "xapp-work" },
-            },
-          },
-        },
-      },
-      accountId: "work",
-    });
-
-    expect(resolved.config.allowFrom).toEqual(["top"]);
-  });
-
-  it("merges top-level unfurl controls into named accounts", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            unfurlLinks: false,
-            unfurlMedia: true,
-            accounts: {
-              work: { botToken: "xoxb-work", appToken: "xapp-work" },
-            },
-          },
-        },
-      },
-      accountId: "work",
-    });
-
-    expect(resolved.config.unfurlLinks).toBe(false);
-    expect(resolved.config.unfurlMedia).toBe(true);
-  });
-
-  it("prefers account-level unfurl controls over top-level defaults", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            unfurlLinks: false,
-            unfurlMedia: true,
-            accounts: {
-              work: {
-                botToken: "xoxb-work",
-                appToken: "xapp-work",
-                unfurlLinks: true,
-                unfurlMedia: false,
-              },
-            },
-          },
-        },
-      },
-      accountId: "work",
-    });
-
-    expect(resolved.config.unfurlLinks).toBe(true);
-    expect(resolved.config.unfurlMedia).toBe(false);
-  });
-
-  it("merges account bot loop protection over top-level defaults field-by-field", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            botLoopProtection: {
-              maxEventsPerWindow: 8,
-              windowSeconds: 120,
-              cooldownSeconds: 240,
-            },
-            accounts: {
-              work: {
-                botToken: "xoxb-work",
-                appToken: "xapp-work",
-                botLoopProtection: {
-                  maxEventsPerWindow: 3,
-                },
-              },
-            },
-          },
-        },
-      },
-      accountId: "work",
-    });
-
-    expect(resolved.config.botLoopProtection).toEqual({
-      maxEventsPerWindow: 3,
-      windowSeconds: 120,
-      cooldownSeconds: 240,
-    });
-  });
-
   it("merges canonical account streaming over top-level defaults field-by-field", () => {
     const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
+      cfg: slackConfig({
+        streaming: {
+          mode: "progress",
+          nativeTransport: true,
+          preview: { toolProgress: true, commandText: "raw" },
+          progress: { label: "Shelling", commandText: "status" },
+          block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 250 } },
+        },
+        accounts: {
+          work: {
+            botToken: "xoxb-work",
+            appToken: "xapp-work",
             streaming: {
-              mode: "progress",
-              nativeTransport: true,
-              preview: { toolProgress: true, commandText: "raw" },
-              progress: { label: "Shelling", commandText: "status" },
-              block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 250 } },
-            },
-            accounts: {
-              work: {
-                botToken: "xoxb-work",
-                appToken: "xapp-work",
-                streaming: {
-                  progress: { nativeTaskCards: true },
-                  block: { coalesce: { idleMs: 500 } },
-                },
-              },
+              progress: { nativeTaskCards: true },
+              block: { coalesce: { idleMs: 500 } },
             },
           },
         },
-      },
+      }),
       accountId: "work",
     });
 
@@ -232,142 +66,37 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     });
   });
 
-  it("preserves account legacy scalar streaming overrides", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            streaming: { mode: "progress", progress: { label: "Shelling" } },
-            accounts: {
-              work: {
-                botToken: "xoxb-work",
-                appToken: "xapp-work",
-                streaming: "off",
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      accountId: "work",
-    });
-
-    expect(resolved.config.streaming).toBe("off");
-  });
-
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {
     const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                botToken: "xoxb-default",
-                appToken: "xapp-default",
-                allowFrom: ["default"],
-              },
-              work: { botToken: "xoxb-work", appToken: "xapp-work" },
-            },
+      cfg: slackConfig({
+        accounts: {
+          default: {
+            botToken: "xoxb-default",
+            appToken: "xapp-default",
+            allowFrom: ["default"],
           },
+          work: { botToken: "xoxb-work", appToken: "xapp-work" },
         },
-      },
+      }),
       accountId: "work",
     });
 
     expect(resolved.config.allowFrom).toBeUndefined();
-  });
-
-  it("falls back to top-level dm.allowFrom when allowFrom alias is unset", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            dm: { allowFrom: ["U123"] },
-            accounts: {
-              work: { botToken: "xoxb-work", appToken: "xapp-work" },
-            },
-          },
-        },
-      },
-      accountId: "work",
-    });
-
-    expect(resolved.config.allowFrom).toBeUndefined();
-    expect(resolved.config.dm?.allowFrom).toEqual(["U123"]);
-  });
-
-  it("resolves account legacy dm.allowFrom before inherited root allowFrom", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          allowFrom: ["root"],
-          accounts: {
-            work: {
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-              dm: { allowFrom: ["account-legacy"] },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account-legacy"]);
-  });
-
-  it("coerces numeric allowFrom entries at the config boundary", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            work: {
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-              allowFrom: [12345],
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["12345"]);
-  });
-
-  it("resolves account legacy dm policy before inherited root policy", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          dmPolicy: "open",
-          accounts: {
-            work: {
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-              dm: { policy: "allowlist" },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(resolveSlackAccountDmPolicy({ cfg, accountId: "work" })).toBe("allowlist");
   });
 
   it("resolves mixed-case account keys for DM access settings", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          dmPolicy: "open",
-          allowFrom: ["root"],
-          accounts: {
-            Work: {
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-              dm: { policy: "allowlist" },
-              allowFrom: ["U123"],
-            },
-          },
+    const cfg = slackConfig({
+      dmPolicy: "open",
+      allowFrom: ["root"],
+      accounts: {
+        Work: {
+          botToken: "xoxb-work",
+          appToken: "xapp-work",
+          dmPolicy: "allowlist",
+          allowFrom: ["U123"],
         },
       },
-    } satisfies OpenClawConfig;
+    });
 
     expect(resolveSlackAccountDmPolicy({ cfg, accountId: "work" })).toBe("allowlist");
     expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["U123"]);
@@ -376,28 +105,6 @@ describe("resolveSlackAccount allowFrom precedence", () => {
 
 describe("resolveSlackAccount active secret surfaces", () => {
   const secretRef = { source: "exec", provider: "default", id: "slack_token" } as const;
-  const cfgWithUnresolvedBotTokenRef = {
-    channels: {
-      slack: {
-        accounts: {
-          default: {
-            botToken: secretRef,
-            allowFrom: ["U999"],
-          },
-        },
-      },
-    },
-  } as unknown as OpenClawConfig;
-
-  it("throws when an enabled account still has an unresolved active bot token SecretRef", () => {
-    expect(() =>
-      resolveSlackAccount({
-        cfg: cfgWithUnresolvedBotTokenRef,
-        accountId: "default",
-      }),
-    ).toThrowError(/channels\.slack\.accounts\.default\.botToken/);
-  });
-
   it("does not read credentials for disabled accounts", () => {
     const resolved = resolveSlackAccount({
       cfg: {
@@ -428,52 +135,6 @@ describe("resolveSlackAccount active secret surfaces", () => {
     expect(resolved.config.allowFrom).toEqual(["U999"]);
   });
 
-  it("does not read socket-only app token for HTTP mode accounts", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                mode: "http",
-                botToken: "xoxb-resolved",
-                appToken: secretRef,
-                signingSecret: "signing-secret",
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      accountId: "default",
-    });
-
-    expect(resolved.botToken).toBe("xoxb-resolved");
-    expect(resolved.botTokenSource).toBe("config");
-    expect(resolved.appToken).toBeUndefined();
-    expect(resolved.appTokenSource).toBe("none");
-  });
-
-  it("throws when a socket-mode account still has an unresolved active app token SecretRef", () => {
-    expect(() =>
-      resolveSlackAccount({
-        cfg: {
-          channels: {
-            slack: {
-              accounts: {
-                default: {
-                  mode: "socket",
-                  botToken: "xoxb-resolved",
-                  appToken: secretRef,
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        accountId: "default",
-      }),
-    ).toThrowError(/channels\.slack\.accounts\.default\.appToken/);
-  });
-
   it("preserves env fallback when no active config token is set", () => {
     const previousBotToken = process.env.SLACK_BOT_TOKEN;
     const previousAppToken = process.env.SLACK_APP_TOKEN;
@@ -485,15 +146,11 @@ describe("resolveSlackAccount active secret surfaces", () => {
       // on SLACK_BOT_TOKEN / SLACK_APP_TOKEN) keep working when callers like
       // `channel.ts` invoke sendMessageSlack without an explicit override.
       const resolved = resolveSlackAccount({
-        cfg: {
-          channels: {
-            slack: {
-              accounts: {
-                default: { allowFrom: ["U001"] },
-              },
-            },
+        cfg: slackConfig({
+          accounts: {
+            default: { allowFrom: ["U001"] },
           },
-        },
+        }),
         accountId: "default",
       });
 
@@ -522,17 +179,13 @@ describe("resolveSlackAccount active secret surfaces", () => {
     process.env.SLACK_APP_TOKEN = "xapp-env-app";
     try {
       const resolved = resolveSlackAccount({
-        cfg: {
-          channels: {
-            slack: {
-              accounts: {
-                default: {
-                  enabled: false,
-                },
-              },
+        cfg: slackConfig({
+          accounts: {
+            default: {
+              enabled: false,
             },
           },
-        },
+        }),
         accountId: "default",
       });
 

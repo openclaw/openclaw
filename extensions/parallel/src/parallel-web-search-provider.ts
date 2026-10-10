@@ -1,6 +1,10 @@
-import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
-import { createParallelWebSearchProviderBase } from "./parallel-web-search-provider.shared.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createWebSearchProviderContractFields,
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search-contract";
 
+const PARALLEL_CREDENTIAL_PATH = "plugins.entries.parallel.config.webSearch.apiKey";
 const PARALLEL_MAX_SEARCH_COUNT = 40;
 const PARALLEL_MAX_SEARCH_QUERIES = 5;
 const PARALLEL_MAX_SEARCH_QUERY_CHARS = 200;
@@ -8,14 +12,9 @@ const PARALLEL_MAX_OBJECTIVE_CHARS = 5000;
 const PARALLEL_MAX_SESSION_ID_CHARS = 1000;
 const PARALLEL_MAX_CLIENT_MODEL_CHARS = 100;
 
-type ParallelWebSearchRuntime = typeof import("./parallel-web-search-provider.runtime.js");
-
-let parallelWebSearchRuntimePromise: Promise<ParallelWebSearchRuntime> | undefined;
-
-function loadParallelWebSearchRuntime(): Promise<ParallelWebSearchRuntime> {
-  parallelWebSearchRuntimePromise ??= import("./parallel-web-search-provider.runtime.js");
-  return parallelWebSearchRuntimePromise;
-}
+const loadParallelWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./parallel-web-search-provider.runtime.js"),
+);
 
 // Mirrors Parallel's recommended search tool schema:
 // https://docs.parallel.ai/search/best-practices#search-tool-definition
@@ -51,7 +50,7 @@ export const ParallelSearchSchema = {
     client_model: {
       type: "string",
       description:
-        "The identifier of the LLM model making this tool call (e.g. 'claude-opus-4-7', 'gpt-5.5', 'gemini-3.1-pro'). Pass the exact active model slug verbatim; never shorten or substitute a family alias like 'gpt-5'. Lets Parallel tailor default settings for your model's capabilities.",
+        "The identifier of the LLM model making this tool call (e.g. 'claude-opus-4-7', 'gpt-6-astra', 'gemini-3.1-pro'). Pass the exact active model slug verbatim; never shorten or substitute a family alias like 'gpt-5'. Lets Parallel tailor default settings for your model's capabilities.",
       maxLength: PARALLEL_MAX_CLIENT_MODEL_CHARS,
     },
   },
@@ -61,14 +60,31 @@ export const ParallelSearchSchema = {
 
 export function createParallelWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    ...createParallelWebSearchProviderBase(),
+    id: "parallel",
+    label: "Parallel Search",
+    hint: "LLM-optimized dense excerpts from web sources",
+    onboardingScopes: ["text-inference"],
+    credentialLabel: "Parallel API key",
+    envVars: ["PARALLEL_API_KEY"],
+    placeholder: "par-...",
+    signupUrl: "https://platform.parallel.ai",
+    docsUrl: "https://docs.openclaw.ai/tools/parallel-search",
+    autoDetectOrder: 75,
+    credentialPath: PARALLEL_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: PARALLEL_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "parallel" },
+      configuredCredential: { pluginId: "parallel" },
+      selectionPluginId: "parallel",
+    }),
     createTool: (ctx) => ({
       description:
         "Search the web using Parallel. Returns ranked, LLM-optimized dense excerpts from web sources. Pass an `objective` describing the underlying question along with 2-3 short keyword `search_queries` (Parallel's recommended pairing). For multi-step research, thread the prior result's `sessionId` back in as `session_id` to keep Parallel's context grouped.",
       parameters: ParallelSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
         const { executeParallelWebSearchProviderTool } = await loadParallelWebSearchRuntime();
-        return await executeParallelWebSearchProviderTool(ctx, args);
+        return await executeParallelWebSearchProviderTool(ctx, args, context?.signal);
       },
     }),
   };

@@ -1,15 +1,9 @@
-/**
- * Lazy setup wizard proxy helpers.
- *
- * Delegates setup wizard status, credential, allowlist, and finalization hooks to loaded wizards.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDelegatedSetupWizardStatusResolvers } from "./setup-wizard-binary.js";
 import type { ChannelSetupDmPolicy } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 
 type PromptAllowFromParams = Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0];
-type ResolveConfiguredParams = Parameters<ChannelSetupWizard["status"]["resolveConfigured"]>[0];
 type ResolveAllowFromEntriesParams = Parameters<
   NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]
 >[0];
@@ -19,30 +13,6 @@ type ResolveAllowFromEntriesResult = Awaited<
 type ResolveGroupAllowlistParams = Parameters<
   NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
 >[0];
-
-/**
- * Delegates setup configured-state checks to a lazily loaded wizard.
- */
-export function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async ({ cfg, accountId }: ResolveConfiguredParams) =>
-    await (await loadWizard()).status.resolveConfigured({ cfg, accountId });
-}
-
-/**
- * Delegates setup preparation to a lazily loaded wizard.
- */
-export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async (params: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0]) =>
-    await (await loadWizard()).prepare?.(params);
-}
-
-/**
- * Delegates setup finalization to a lazily loaded wizard.
- */
-export function createDelegatedFinalize(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async (params: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]) =>
-    await (await loadWizard()).finalize?.(params);
-}
 
 type DelegatedStatusBase = Omit<
   ChannelSetupWizard["status"],
@@ -70,7 +40,8 @@ export function createDelegatedSetupWizardProxy(params: {
     channel: params.channel,
     status: {
       ...params.status,
-      resolveConfigured: createDelegatedResolveConfigured(params.loadWizard),
+      resolveConfigured: async (statusParams) =>
+        await (await params.loadWizard()).status.resolveConfigured(statusParams),
       ...createDelegatedSetupWizardStatusResolvers(params.loadWizard),
     },
     // Keep static setup metadata available immediately, while expensive
@@ -78,10 +49,22 @@ export function createDelegatedSetupWizardProxy(params: {
     ...(params.resolveShouldPromptAccountIds
       ? { resolveShouldPromptAccountIds: params.resolveShouldPromptAccountIds }
       : {}),
-    ...(params.delegatePrepare ? { prepare: createDelegatedPrepare(params.loadWizard) } : {}),
+    ...(params.delegatePrepare
+      ? {
+          prepare: async (
+            prepareParams: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0],
+          ) => await (await params.loadWizard()).prepare?.(prepareParams),
+        }
+      : {}),
     credentials: params.credentials ?? [],
     ...(params.textInputs ? { textInputs: params.textInputs } : {}),
-    ...(params.delegateFinalize ? { finalize: createDelegatedFinalize(params.loadWizard) } : {}),
+    ...(params.delegateFinalize
+      ? {
+          finalize: async (
+            finalizeParams: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0],
+          ) => await (await params.loadWizard()).finalize?.(finalizeParams),
+        }
+      : {}),
     ...(params.completionNote ? { completionNote: params.completionNote } : {}),
     ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
     ...(params.disable ? { disable: params.disable } : {}),
@@ -104,41 +87,30 @@ export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
   fallbackResolvedGroupAllowlist: (entries: string[]) => TGroupResolved;
 }) {
   return params.createBase({
-    promptAllowFrom: async ({ cfg, prompter, accountId }) => {
+    promptAllowFrom: async (input) => {
       const wizard = await params.loadWizard();
       if (!wizard.dmPolicy?.promptAllowFrom) {
-        return cfg;
+        return input.cfg;
       }
-      return await wizard.dmPolicy.promptAllowFrom({ cfg, prompter, accountId });
+      return await wizard.dmPolicy.promptAllowFrom(input);
     },
-    resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) => {
+    resolveAllowFromEntries: async (input) => {
       const wizard = await params.loadWizard();
       if (!wizard.allowFrom) {
         // A base wizard may expose allowlist UI before the delegated wizard has
         // resolver support. Preserve raw entries as unresolved instead of failing.
-        return entries.map((input) => ({ input, resolved: false, id: null }));
+        return input.entries.map((entry) => ({ input: entry, resolved: false, id: null }));
       }
-      return await wizard.allowFrom.resolveEntries({
-        cfg,
-        accountId,
-        credentialValues,
-        entries,
-      });
+      return await wizard.allowFrom.resolveEntries(input);
     },
-    resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) => {
+    resolveGroupAllowlist: async (input) => {
       const wizard = await params.loadWizard();
       if (!wizard.groupAccess?.resolveAllowlist) {
         // Group allowlists are channel-specific; callers provide the safe
         // fallback representation when the delegated wizard has no resolver.
-        return params.fallbackResolvedGroupAllowlist(entries);
+        return params.fallbackResolvedGroupAllowlist(input.entries);
       }
-      return (await wizard.groupAccess.resolveAllowlist({
-        cfg,
-        accountId,
-        credentialValues,
-        entries,
-        prompter,
-      })) as TGroupResolved;
+      return (await wizard.groupAccess.resolveAllowlist(input)) as TGroupResolved;
     },
   });
 }

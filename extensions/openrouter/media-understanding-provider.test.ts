@@ -1,13 +1,11 @@
 // Openrouter tests cover media understanding provider plugin behavior.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-} from "openclaw/plugin-sdk/media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  openrouterMediaUnderstandingProvider,
-  transcribeOpenRouterAudio,
-} from "./media-understanding-provider.js";
+import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+
+const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
+if (!transcribeOpenRouterAudio) {
+  throw new Error("expected OpenRouter audio transcription provider");
+}
 
 const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
   vi.hoisted(() => ({
@@ -60,8 +58,6 @@ describe("openrouter media understanding provider", () => {
         audio: "openai/whisper-large-v3-turbo",
       },
       autoPriority: { audio: 35 },
-      describeImage: describeImageWithModel,
-      describeImages: describeImagesWithModel,
       transcribeAudio: transcribeOpenRouterAudio,
     });
   });
@@ -95,8 +91,6 @@ describe("openrouter media understanding provider", () => {
       defaultHeaders: {
         Authorization: "Bearer sk-openrouter",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
       },
       provider: "openrouter",
       api: "openrouter-stt",
@@ -125,8 +119,6 @@ describe("openrouter media understanding provider", () => {
       throw new Error("expected OpenRouter request headers");
     }
     expect(headers.get("authorization")).toBe("Bearer sk-openrouter");
-    expect(headers.get("http-referer")).toBe("https://openclaw.ai");
-    expect(headers.get("x-openrouter-title")).toBe("OpenClaw");
     expect(release).toHaveBeenCalledOnce();
   });
 

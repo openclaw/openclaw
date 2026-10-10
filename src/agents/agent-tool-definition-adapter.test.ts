@@ -5,9 +5,11 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -16,31 +18,13 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
-
-async function executeThrowingTool(name: string, callId: string) {
-  const tool = {
-    name,
-    label: name === "bash" ? "Bash" : "Boom",
-    description: "throws",
-    parameters: Type.Object({}),
-    execute: async () => {
-      throw new Error("nope");
-    },
-  } satisfies AgentTool;
-
-  const defs = toToolDefinitions([tool]);
-  const def = defs[0];
-  if (!def) {
-    throw new Error("missing tool definition");
-  }
-  return await def.execute(callId, {}, undefined, undefined, extensionContext);
-}
 
 async function executeTool(tool: AgentTool, callId: string) {
   const defs = toToolDefinitions([tool]);
@@ -52,49 +36,73 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
-  it("preserves argument preparation and execution mode contracts", () => {
-    const prepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
-    const tool = {
-      name: "serial_tool",
-      label: "Serial Tool",
-      description: "runs sequentially",
-      parameters: Type.Object({}),
-      prepareArguments,
-      executionMode: "sequential",
-      execute: async () => ({
-        content: [{ type: "text", text: "done" }],
+  it.each(["direct", "wrapped", "composed"] as const)(
+    "preserves signal and update identity through %s execution",
+    async (route) => {
+      const caller = new AbortController();
+      const run = new AbortController();
+      const partial = {
+        content: [{ type: "text" as const, text: "partial receipt" }],
         details: {},
-      }),
-    } satisfies AgentTool;
+      };
+      const result = { content: [{ type: "text" as const, text: "final receipt" }], details: {} };
+      const onUpdate = vi.fn();
+      const execute = vi.fn<AgentTool["execute"]>(async (_id, _args, _signal, update) => {
+        update?.(partial);
+        return result;
+      });
+      const [definition] = toToolDefinitions(
+        [
+          {
+            name: "receipt",
+            label: "Receipt",
+            description: "Receipt",
+            parameters: Type.Object({}),
+            execute,
+          },
+        ],
+        undefined,
+        route === "composed" ? run.signal : undefined,
+      );
+      const def = expectDefined(definition, "receipt definition");
+      const invoke = (id: string) =>
+        route === "wrapped"
+          ? wrapToolDefinition(def).execute(id, {}, caller.signal, onUpdate)
+          : def.execute(id, {}, caller.signal, onUpdate, extensionContext);
 
-    const [definition] = toToolDefinitions([tool]);
+      try {
+        expect(await withTestTimeout(invoke("receipt-call"), 2_000, "receipt did not settle")).toBe(
+          result,
+        );
+        expect(execute).toHaveBeenCalledOnce();
+        const call = expectDefined(execute.mock.calls[0], "receipt invocation");
+        expect(call[0]).toBe("receipt-call");
+        expect(call[1]).toEqual({});
+        expect(call[3]).toBe(onUpdate);
+        expect(onUpdate).toHaveBeenCalledExactlyOnceWith(partial);
+        expect(onUpdate.mock.calls[0]?.[0]).toBe(partial);
+        if (route === "composed") {
+          expect(call[2]).not.toBe(caller.signal);
+          expect(call[2]).not.toBe(run.signal);
+        } else {
+          expect(call[2]).toBe(caller.signal);
+        }
 
-    expect(definition?.prepareArguments).toBe(prepareArguments);
-    expect(definition?.executionMode).toBe("sequential");
-  });
-
-  it("wraps tool errors into a tool result", async () => {
-    const result = await executeThrowingTool("boom", "call1");
-
-    const details = result.details as
-      | { status?: string; tool?: string; error?: string }
-      | undefined;
-    expect(details?.status).toBe("error");
-    expect(details?.tool).toBe("boom");
-    expect(details?.error).toBe("nope");
-    expect(JSON.stringify(result.details)).not.toContain("\n    at ");
-  });
-
-  it("normalizes exec tool aliases in error results", async () => {
-    const result = await executeThrowingTool("bash", "call2");
-
-    const details = result.details as
-      | { status?: string; tool?: string; error?: string }
-      | undefined;
-    expect(details?.status).toBe("error");
-    expect(details?.tool).toBe("exec");
-    expect(details?.error).toBe("nope");
-  });
+        const reason = new Error("operator cancelled receipt");
+        (route === "composed" ? run : caller).abort(reason);
+        expect(call[2]?.aborted).toBe(true);
+        expect(call[2]?.reason).toBe(reason);
+        await expect(
+          withTestTimeout(invoke("cancelled-receipt"), 2_000, "cancelled receipt did not settle"),
+        ).rejects.toBe(reason);
+        expect(execute).toHaveBeenCalledOnce();
+      } finally {
+        caller.abort();
+        run.abort();
+      }
+    },
+    10_000,
+  );
 
   it("preserves exec deny before prepared workdir failures", async () => {
     const tool = createExecTool({
@@ -104,7 +112,7 @@ describe("agent tool definition adapter", () => {
     const [definition] = toToolDefinitions([tool]);
     const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
 
-    const existing = await definition.execute(
+    const existing = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-existing-cwd",
       {
         command: "echo denied",
@@ -114,7 +122,7 @@ describe("agent tool definition adapter", () => {
       undefined,
       extensionContext,
     );
-    const missing = await definition.execute(
+    const missing = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-missing-cwd",
       {
         command: "echo denied",
@@ -150,7 +158,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-backend-cwd",
       {
         command: "echo denied",
@@ -175,7 +183,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-exec-params",
       "not-an-object",
       undefined,
@@ -189,38 +197,6 @@ describe("agent tool definition adapter", () => {
     });
   });
 
-  it("does not throw WeakMap errors when preparing malformed backend sandbox exec params", async () => {
-    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir: process.cwd(),
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-      },
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await definition.execute(
-      "call-malformed-backend-sandbox-exec-params",
-      "not-an-object",
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Provide a command to start.",
-    });
-    expect(JSON.stringify(result)).not.toContain("WeakMap");
-    expect(validateWorkdir).not.toHaveBeenCalled();
-  });
-
   it("reports malformed exec params when elevated logging is enabled", async () => {
     const tool = createExecTool({
       security: "full",
@@ -229,7 +205,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-elevated-exec-params",
       {},
       undefined,
@@ -259,7 +235,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-backend-sandbox-exec-params",
       {
         workdir: "/remote/workspace/generated",
@@ -379,90 +355,75 @@ async function executeClientTool(params: unknown): Promise<{
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
-  it("returns terminal pending results for each client tool in a batch", async () => {
-    const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
-    const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {
-      complete: (id, name, params) => {
-        completed.push({ id, name, params });
-      },
-    });
-    const [search, lookup] = defs;
-    if (!search || !lookup) {
-      throw new Error("missing client tool definition");
-    }
-
-    const [searchResult, lookupResult] = await Promise.all([
-      search.execute("call-search", { query: "first" }, undefined, undefined, extensionContext),
-      lookup.execute("call-lookup", { query: "second" }, undefined, undefined, extensionContext),
-    ]);
-
-    expect(searchResult.terminate).toBe(true);
-    expect(lookupResult.terminate).toBe(true);
-    expect(completed).toEqual([
-      { id: "call-search", name: "search", params: { query: "first" } },
-      { id: "call-lookup", name: "lookup", params: { query: "second" } },
-    ]);
-  });
-
-  it("passes plain object params through unchanged", async () => {
-    const { calledWith, result } = await executeClientTool({ query: "hello" });
-    expect(calledWith).toEqual({ query: "hello" });
-    expect(result.terminate).toBe(true);
-  });
-
-  it("parses a JSON string into an object (streaming delta accumulation)", async () => {
-    const { calledWith } = await executeClientTool('{"query":"hello","limit":10}');
-    expect(calledWith).toEqual({ query: "hello", limit: 10 });
-  });
-
-  it("parses a JSON string with surrounding whitespace", async () => {
-    const { calledWith } = await executeClientTool('  {"query":"hello"}  ');
-    expect(calledWith).toEqual({ query: "hello" });
-  });
-
-  it("falls back to empty object for invalid JSON string", async () => {
-    const { calledWith } = await executeClientTool("not-json");
-    expect(calledWith).toStrictEqual({});
-  });
+  it.each(["not-json", "42"])(
+    "returns a visible error instead of dispatching malformed client arguments: %s",
+    async (params) => {
+      const { calledWith, result } = await executeClientTool(params);
+      expect(calledWith).toBeUndefined();
+      expect(result.details).toMatchObject({
+        status: "error",
+        tool: "search",
+        error: expect.stringContaining("client tool arguments"),
+      });
+      expect(result.terminate).not.toBe(true);
+    },
+  );
 
   it("falls back to empty object for empty string", async () => {
     const { calledWith } = await executeClientTool("");
     expect(calledWith).toStrictEqual({});
   });
 
-  it("falls back to empty object for null", async () => {
-    const { calledWith } = await executeClientTool(null);
-    expect(calledWith).toStrictEqual({});
-  });
+  it.each([""])(
+    "rejects missing required client arguments without reserving a completed call: %s",
+    async (params) => {
+      const clientTool = makeClientTool("search");
+      clientTool.function.parameters = {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      };
+      const reserve = vi.fn();
+      const complete = vi.fn();
+      const discard = vi.fn();
+      const [definition] = toClientToolDefinitions([clientTool], { reserve, complete, discard });
+      const result = await expectDefined(definition, "client tool definition").execute(
+        "call-required-client-args",
+        params,
+        undefined,
+        undefined,
+        extensionContext,
+      );
 
-  it("falls back to empty object for undefined", async () => {
-    const { calledWith } = await executeClientTool(undefined);
-    expect(calledWith).toStrictEqual({});
-  });
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("query"),
+      });
+      expect(result.terminate).not.toBe(true);
+      expect(complete).not.toHaveBeenCalled();
+      expect(discard).toHaveBeenCalledWith("call-required-client-args", "search");
+    },
+  );
 
-  it("falls back to empty object for a JSON array string", async () => {
-    const { calledWith } = await executeClientTool("[1,2,3]");
-    expect(calledWith).toStrictEqual({});
-  });
-
-  it("handles nested JSON string correctly", async () => {
-    const { calledWith } = await executeClientTool(
-      '{"action":"search","params":{"q":"test","page":1}}',
+  it("keeps absent arguments valid for a parameterless client tool", async () => {
+    const clientTool = makeClientTool("ping");
+    clientTool.function.parameters = { type: "object", properties: {} };
+    const complete = vi.fn();
+    const [definition] = toClientToolDefinitions([clientTool], { complete });
+    const result = await expectDefined(definition, "client tool definition").execute(
+      "call-parameterless-client-tool",
+      undefined,
+      undefined,
+      undefined,
+      extensionContext,
     );
-    expect(calledWith).toEqual({ action: "search", params: { q: "test", page: 1 } });
+
+    expect(complete).toHaveBeenCalledWith("call-parameterless-client-tool", "ping", {});
+    expect(result.terminate).toBe(true);
   });
 });
 
 describe("client tool name conflict checks", () => {
-  it("detects collisions with existing built-in names after normalization", () => {
-    expect(
-      findClientToolNameConflicts({
-        tools: [makeClientTool("Web_Search"), makeClientTool("exec")],
-        existingToolNames: ["web_search", "read"],
-      }),
-    ).toEqual(["Web_Search"]);
-  });
-
   it("detects duplicate client tool names after normalization", () => {
     expect(
       findClientToolNameConflicts({

@@ -1,0 +1,551 @@
+import { listAgentRoles } from "../agents/agent-roles.js";
+import { parseConfigSetPath } from "../cli/config-cli-path.js";
+import type { ConfigSetOptions } from "../cli/config-set-input.js";
+import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { isValidSecretRef } from "../secrets/ref-contract.js";
+import type { TuiResult } from "../tui/tui-types.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { isReservedSystemAgentId } from "./agent-id.js";
+import {
+  isSystemAgentSensitiveConfigPathEmbedding,
+  isSystemAgentSensitiveConfigValue,
+  redactSystemAgentConfigPath,
+} from "./config-redaction.js";
+import type { SystemAgentOperation } from "./operation-types.js";
+import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
+import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
+import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
+
+export type { SystemAgentOperation };
+
+export type SystemAgentOperationResult = {
+  applied: boolean;
+  /** Creation created or preserved BOOTSTRAP.md for the agent's first turn. */
+  bootstrapPending?: boolean;
+  /** Agent created by this operation, when applicable. */
+  agentId?: string;
+  exitsInteractive?: boolean;
+  message?: string;
+  nextInput?: string;
+  /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
+  returnToShell?: boolean;
+};
+
+export type SystemAgentCommandDeps = {
+  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
+  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
+  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
+  formatOverview?: (overview: SystemAgentOverview) => string;
+  loadOverview?: typeof loadSystemAgentOverview;
+  createAgent?: typeof import("../agents/agent-create.js").createAgent;
+  runConfigSet?: (opts: {
+    path?: string;
+    value?: string;
+    cliOptions: ConfigSetOptions;
+    beforePersistentApply?: () => void;
+  }) => Promise<void>;
+  runConfigUnset?: typeof import("../cli/config-cli.js").runConfigUnset;
+  runGatewayRestart?: () => Promise<void | boolean>;
+  runGatewayStart?: () => Promise<void>;
+  runGatewayStop?: () => Promise<void>;
+  applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
+  gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
+  runPluginUninstall?: (
+    pluginId: string,
+    runtime: RuntimeEnv,
+    options?: { beforePersistentApply?: () => void },
+  ) => Promise<void>;
+  runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
+  runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
+  runTui?: (opts: {
+    local: boolean;
+    session?: string;
+    deliver?: boolean;
+    historyLimit?: number;
+    message?: string;
+  }) => Promise<TuiResult | void>;
+  /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
+  setupSurface?: "cli" | "gateway";
+  applySetup?: typeof import("./setup-apply.js").applySystemAgentSetup;
+  verifyInferenceConfig?: typeof import("./setup-inference.js").verifySetupInferenceConfig;
+  listChannelSetupPlugins?: typeof import("../channels/plugins/setup-registry.js").listChannelSetupPlugins;
+  resolveChannelSetupEntries?: typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
+  isChannelConfigured?: typeof import("../config/channel-configured-shared.js").isStaticallyChannelConfigured;
+};
+
+// Grammar tokens. Workspace/path tokens accept quoted strings so paths with
+// spaces survive; model refs and ids stay single tokens.
+const ARG_WORD = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
+
+// Every command pattern is anchored to the whole input. Optional clauses use a
+// fixed order (workspace before model) so filler words never become values.
+const CONFIG_SET_PREFIX_RE = /^(?:config\s+set|set\s+config)\s+/i;
+const CONFIG_SET_REF_PREFIX_RE = /^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+/i;
+const CONFIG_UNSET_PREFIX_RE = /^config\s+unset(?=\s|$)/i;
+const CONFIG_GET_PREFIX_RE = /^config\s+get(?=\s|$)/i;
+const CONFIG_SCHEMA_PREFIX_RE = /^config\s+schema(?=\s|$)/i;
+const CONFIG_SET_REF_ARGS_RE = new RegExp(
+  String.raw`^(?:(?<source>env|file|exec|store)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$`,
+  "i",
+);
+const SETUP_RE = new RegExp(
+  String.raw`^(?:setup|set\s+me\s+up|set\s+up\s+openclaw|onboard(?:\s+me)?|bootstrap|first\s+run)(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  "i",
+);
+const MODEL_SETUP_RE = new RegExp(
+  String.raw`^(?:configure\s+(?:a\s+)?model\s+provider|set\s*up\s+(?:a\s+)?model\s+provider|model\s+setup)(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?$`,
+  "i",
+);
+const CREATE_AGENT_RE = new RegExp(
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+name\s+(?<name>${ARG_WORD}))?(?:\s+role\s+(?<role>\S+))?(?:\s+purpose\s+(?<purpose>${ARG_WORD}))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  "i",
+);
+const CREATE_TEAM_RE = new RegExp(
+  String.raw`^create\s+team(?:\s+coordinator\s+(?<coordinatorId>\S+))?(?:\s+prefix\s+(?<prefix>\S+))?(?:\s+workspace\s+(?<workspaceRoot>${ARG_WORD}))?$`,
+  "i",
+);
+// "talk to agent for ~/Projects/work" is a documented selector; "for|in" are
+// only valid here, after the literal word "agent", never as generic fillers.
+const TALK_AGENT_RE = new RegExp(
+  String.raw`^(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent(?:\s+(?:for|in|workspace)\s+(?<workspace>${ARG_WORD}))?$`,
+  "i",
+);
+const SET_MODEL_RE =
+  /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)(?:\s+for\s+agent\s+(?<agent>\S+))?$/i;
+const GATEWAY_RE =
+  /^(?:gateway\s+(?<sub>status|start|stop|restart)|(?<verb>start|stop|restart)\s+(?:the\s+)?gateway)$/i;
+const PLUGIN_SEARCH_RE =
+  /^(?:(?:plugins?|clawhub)\s+search|search\s+plugins?(?:\s+for)?)\s+(?<query>.+)$/i;
+const PLUGIN_INSTALL_RE =
+  /^(?:plugins?\s+install|install\s+(?:(?<source>npm|clawhub)\s+)?plugins?)\s+(?<spec>\S+)$/i;
+const PLUGIN_UNINSTALL_RE =
+  /^(?:plugins?\s+(?:uninstall|remove)|(?:uninstall|remove)\s+plugins?)\s+(?<pluginId>[A-Za-z0-9_.@/-]+)$/i;
+const CHANNEL_CONNECT_RE =
+  /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
+const CHANNEL_INFO_RE =
+  /^(?:channel\s+info\s+(?<channel>[a-z0-9_-]+)|about\s+(?<aboutChannel>[a-z0-9_-]+)\s+channel)$/i;
+const OPEN_CHANNEL_SETUP_RE = /^open\s+channel\s+wizard(?:\s+for\s+(?<channel>[a-z0-9_-]+))?$/i;
+
+const NO_MATCH_MESSAGE =
+  "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+
+const SIMPLE_COMMANDS: ReadonlyArray<readonly [readonly string[] | RegExp, SystemAgentOperation]> =
+  [
+    [["help", "?", "overview", "system"], { kind: "overview" }],
+    [["audit", "audit log", "show audit"], { kind: "audit" }],
+    [["status"], { kind: "status" }],
+    [["health"], { kind: "health" }],
+    [["doctor"], { kind: "doctor" }],
+    [["doctor fix", "doctor repair"], { kind: "doctor-fix" }],
+    [["config validate", "validate config"], { kind: "config-validate" }],
+    [["agents", "list agents"], { kind: "agents" }],
+    [["models", "list models"], { kind: "models" }],
+    [
+      ["model accounts", "personal model accounts", "manage model accounts"],
+      { kind: "model-accounts" },
+    ],
+    [["tui", "open tui", "chat"], { kind: "open-tui" }],
+    [["quit", "exit"], { kind: "none", message: "OpenClaw retracts into shell. Bye." }],
+    [/^(?:(?:plugins?|clawhub)\s+list|list\s+plugins?)$/i, { kind: "plugin-list" }],
+    [/^(?:channels|list\s+channels|show\s+channels)$/i, { kind: "channel-list" }],
+    [/^(?:configure|set\s*up|setup)\s+skills$/i, { kind: "skills-setup" }],
+    [
+      /^(?:(?:configure|set\s*up|setup)\s+(?:web\s+)?search|(?:web\s+)?search\s+provider\s+setup)$/i,
+      { kind: "search-setup" },
+    ],
+    [
+      /^(?:configure\s+gateway|set\s*up\s+gateway|gateway\s+settings)$/i,
+      { kind: "gateway-config-setup" },
+    ],
+    [/^(?:import\s+memor(?:y|ies)|memory\s+import)$/i, { kind: "memory-import" }],
+    [
+      /^(?:open\s+setup\s+wizard|setup\s+wizard|menu\s+setup|use\s+the\s+(?:setup\s+)?wizard)$/i,
+      { kind: "open-setup", target: "guided" },
+    ],
+    [
+      /^(?:open\s+classic(?:\s+setup)?\s+wizard|classic\s+setup)$/i,
+      { kind: "open-setup", target: "classic" },
+    ],
+    [/^open\s+(?:web\s+)?search\s+wizard$/i, { kind: "open-setup", target: "search" }],
+    [/^open\s+gateway\s+wizard$/i, { kind: "open-setup", target: "gateway" }],
+  ];
+
+function normalizeExplicitSystemAgentId(agentId: string): string {
+  const normalized = normalizeAgentIdStrict(agentId);
+  // Preserve an unrepresentable input so the execution owner rejects it instead of targeting main.
+  return normalized.ok ? normalized.value : agentId;
+}
+
+function parseConfigWriteCommand(
+  input: string,
+  kind: "config-set" | "config-set-ref",
+  prefixPattern: RegExp,
+): SystemAgentOperation | undefined {
+  const prefix = input.match(prefixPattern)?.[0];
+  if (!prefix) {
+    return undefined;
+  }
+  const body = input.slice(prefix.length);
+  for (const separator of body.matchAll(/\s+/gu)) {
+    const path = body.slice(0, separator.index);
+    const value = body.slice(separator.index).trim();
+    const args =
+      kind === "config-set-ref" ? value.match(CONFIG_SET_REF_ARGS_RE)?.groups : undefined;
+    if (!value || (kind === "config-set-ref" && !args?.id)) {
+      continue;
+    }
+    try {
+      // Reuse the writer's grammar so quoted/escaped dynamic keys cannot fall
+      // through to model-visible text while remaining valid config commands.
+      parseConfigSetPath(path);
+      if (isSystemAgentSensitiveConfigPathEmbedding(path)) {
+        return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+      }
+    } catch {
+      continue;
+    }
+    if (!args?.id) {
+      return { kind: "config-set", path, value };
+    }
+    const source = (args.source?.toLowerCase() ?? "env") as "env" | "file" | "exec" | "store";
+    const id = args.id;
+    const provider = args.provider ?? DEFAULT_SECRET_PROVIDER_ALIAS;
+    if (!isValidSecretRef({ source, provider, id })) {
+      return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+    }
+    return {
+      kind: "config-set-ref",
+      path,
+      source,
+      id,
+      ...(args.provider ? { provider: args.provider } : {}),
+    };
+  }
+  // Keep malformed writes on the host side so their values never reach the
+  // model. This outcome is deliberately non-executable.
+  return body.trim() ? { kind: "none", message: INVALID_CONFIG_SET_MESSAGE } : undefined;
+}
+
+function parseConfigReadCommand(
+  input: string,
+  kind: "config-get" | "config-unset" | "config-schema",
+  prefixPattern: RegExp,
+): SystemAgentOperation | undefined {
+  const prefix = input.match(prefixPattern)?.[0];
+  if (!prefix) {
+    return undefined;
+  }
+  const path = input.slice(prefix.length).trim();
+  if (kind === "config-schema" && (!path || path === ".")) {
+    return { kind, ...(path ? { path } : {}) };
+  }
+  try {
+    if (path) {
+      parseConfigSetPath(path);
+      if (!isSystemAgentSensitiveConfigPathEmbedding(path)) {
+        return { kind, path };
+      }
+    }
+  } catch {
+    // Malformed paths stay on the host instead of entering the assistant prompt.
+  }
+  return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+}
+
+/** Stable name prefix; the secret-store writer allocates a fresh entry for every save. */
+export function secretStoreNameForConfigPath(path: string): string {
+  const name = parseConfigSetPath(path)
+    .join("_")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/gu, "_")
+    .replace(/^[^A-Z]+/u, "");
+  return (name || "OPENCLAW_SECRET").slice(0, 128);
+}
+
+/**
+ * Parse one user command into OpenClaw's closed operation union. Anything
+ * that does not match the anchored grammar exactly returns kind "none" so the
+ * caller can route it to the system agent (or show guidance).
+ */
+export function parseSystemAgentOperation(input: string): SystemAgentOperation {
+  const trimmed = input.trim();
+  const lower = trimmed.toLowerCase();
+  if (!trimmed) {
+    return {
+      kind: "none",
+      message: "Tiny claw tap: say status, doctor, models, agents, or talk to agent.",
+    };
+  }
+  for (const [commands, operation] of SIMPLE_COMMANDS) {
+    if (commands instanceof RegExp ? commands.test(trimmed) : commands.includes(lower)) {
+      return { ...operation };
+    }
+  }
+  for (const [kind, prefix] of [
+    ["config-set-ref", CONFIG_SET_REF_PREFIX_RE],
+    ["config-set", CONFIG_SET_PREFIX_RE],
+  ] as const) {
+    const parsed = parseConfigWriteCommand(trimmed, kind, prefix);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  for (const [kind, prefix] of [
+    ["config-unset", CONFIG_UNSET_PREFIX_RE],
+    ["config-get", CONFIG_GET_PREFIX_RE],
+    ["config-schema", CONFIG_SCHEMA_PREFIX_RE],
+  ] as const) {
+    const parsed = parseConfigReadCommand(trimmed, kind, prefix);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  const pluginSearchMatch = trimmed.match(PLUGIN_SEARCH_RE);
+  if (pluginSearchMatch?.groups?.query?.trim()) {
+    return { kind: "plugin-search", query: pluginSearchMatch.groups.query.trim() };
+  }
+  const pluginInstallMatch = trimmed.match(PLUGIN_INSTALL_RE);
+  if (pluginInstallMatch?.groups?.spec) {
+    const rawSpec = pluginInstallMatch.groups.spec;
+    const source = pluginInstallMatch.groups.source?.toLowerCase();
+    const spec =
+      source && !rawSpec.toLowerCase().startsWith(`${source}:`) ? `${source}:${rawSpec}` : rawSpec;
+    const validationError = validateSystemAgentPluginInstallSpec(spec);
+    if (validationError) {
+      return { kind: "none", message: validationError };
+    }
+    return { kind: "plugin-install", spec };
+  }
+  const pluginUninstallMatch = trimmed.match(PLUGIN_UNINSTALL_RE);
+  if (pluginUninstallMatch?.groups?.pluginId) {
+    return { kind: "plugin-uninstall", pluginId: pluginUninstallMatch.groups.pluginId };
+  }
+  const channelInfoMatch = trimmed.match(CHANNEL_INFO_RE);
+  const channelInfo = channelInfoMatch?.groups?.channel ?? channelInfoMatch?.groups?.aboutChannel;
+  if (channelInfo) {
+    return { kind: "channel-info", channel: channelInfo.toLowerCase() };
+  }
+  const channelConnectMatch = trimmed.match(CHANNEL_CONNECT_RE);
+  if (channelConnectMatch?.groups?.channel) {
+    return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
+  }
+  const modelSetupMatch = trimmed.match(MODEL_SETUP_RE);
+  if (modelSetupMatch) {
+    const workspace = trimShellishToken(modelSetupMatch.groups?.workspace);
+    return {
+      kind: "model-setup",
+      ...(workspace ? { workspace } : {}),
+    };
+  }
+  const openChannelSetupMatch = trimmed.match(OPEN_CHANNEL_SETUP_RE);
+  if (openChannelSetupMatch) {
+    const channel = openChannelSetupMatch.groups?.channel?.toLowerCase();
+    return {
+      kind: "open-setup",
+      target: "channels",
+      ...(channel ? { channel } : {}),
+    };
+  }
+  const setupMatch = trimmed.match(SETUP_RE);
+  if (setupMatch) {
+    const workspace = trimShellishToken(setupMatch.groups?.workspace);
+    const model = setupMatch.groups?.model;
+    return {
+      kind: "setup",
+      ...(workspace ? { workspace } : {}),
+      ...(model ? { model } : {}),
+    };
+  }
+  const gatewayMatch = trimmed.match(GATEWAY_RE);
+  if (gatewayMatch) {
+    const action = (gatewayMatch.groups?.sub ?? gatewayMatch.groups?.verb ?? "").toLowerCase();
+    if (action === "start") {
+      return { kind: "gateway-start" };
+    }
+    if (action === "stop") {
+      return { kind: "gateway-stop" };
+    }
+    if (action === "restart") {
+      return { kind: "gateway-restart" };
+    }
+    return { kind: "gateway-status" };
+  }
+  const createMatch = trimmed.match(CREATE_AGENT_RE);
+  if (createMatch?.groups?.agent) {
+    const role = listAgentRoles().find((candidate) => candidate === createMatch.groups?.role);
+    if (createMatch.groups.role && !role) {
+      return {
+        kind: "none",
+        message: `Unknown agent role. Choose ${listAgentRoles().join(", ")}.`,
+      };
+    }
+    const workspace = trimShellishToken(createMatch.groups.workspace);
+    const name = trimShellishToken(createMatch.groups.name);
+    const purpose = trimShellishToken(createMatch.groups.purpose);
+    const model = createMatch.groups.model;
+    return {
+      kind: "create-agent",
+      agentId: normalizeExplicitSystemAgentId(createMatch.groups.agent),
+      ...(name ? { name } : {}),
+      ...(purpose ? { purpose } : {}),
+      ...(role ? { role } : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(model ? { model } : {}),
+    };
+  }
+  const teamMatch = trimmed.match(CREATE_TEAM_RE);
+  if (teamMatch) {
+    const coordinatorId = teamMatch.groups?.coordinatorId;
+    const prefix = teamMatch.groups?.prefix;
+    const workspaceRoot = trimShellishToken(teamMatch.groups?.workspaceRoot);
+    return {
+      kind: "create-team",
+      ...(coordinatorId ? { coordinatorId } : {}),
+      ...(prefix ? { prefix } : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+    };
+  }
+  const talkMatch = trimmed.match(TALK_AGENT_RE);
+  if (talkMatch) {
+    const workspace = trimShellishToken(talkMatch.groups?.workspace);
+    return {
+      kind: "open-tui",
+      ...(talkMatch.groups?.agent ? { agentId: talkMatch.groups.agent } : {}),
+      ...(workspace ? { workspace } : {}),
+    };
+  }
+  const setModelMatch = trimmed.match(SET_MODEL_RE);
+  if (setModelMatch?.groups?.model) {
+    const agent = setModelMatch.groups.agent;
+    return {
+      kind: "set-default-model",
+      model: setModelMatch.groups.model,
+      ...(agent ? { agentId: normalizeExplicitSystemAgentId(agent) } : {}),
+    };
+  }
+  return { kind: "none", message: NO_MATCH_MESSAGE };
+}
+
+function trimShellishToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim() || undefined;
+  }
+  return trimmed;
+}
+
+/**
+ * Return whether an operation can change local state or process lifecycle.
+ * Guided setup operations are intentionally absent: starting a wizard is not
+ * itself a write; the wizard owns approval and persistence for its answers.
+ */
+export function isPersistentSystemAgentOperation(operation: SystemAgentOperation): boolean {
+  return (
+    operation.kind === "set-default-model" ||
+    operation.kind === "config-set" ||
+    operation.kind === "config-unset" ||
+    operation.kind === "config-set-ref" ||
+    operation.kind === "setup" ||
+    operation.kind === "plugin-install" ||
+    operation.kind === "plugin-activate-artifact" ||
+    operation.kind === "plugin-uninstall" ||
+    operation.kind === "create-team" ||
+    (operation.kind === "create-agent" &&
+      !operation.model?.trim() &&
+      !isReservedSystemAgentId(operation.agentId)) ||
+    operation.kind === "gateway-start" ||
+    operation.kind === "gateway-stop" ||
+    operation.kind === "gateway-restart"
+  );
+}
+
+export function describeSystemAgentPersistentOperation(operation: SystemAgentOperation): string {
+  switch (operation.kind) {
+    case "set-default-model":
+      return operation.agentId
+        ? `set agent ${operation.agentId}'s model to ${operation.model}`
+        : `set agents.defaults.model.primary to ${operation.model}`;
+    case "config-unset":
+      return `remove config ${redactSystemAgentConfigPath(operation.path)}`;
+    case "config-set": {
+      const path = redactSystemAgentConfigPath(operation.path);
+      const value = isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+        ? "<redacted>"
+        : operation.value;
+      return `set config ${path} to ${value}`;
+    }
+    case "config-set-ref":
+      return operation.secret === undefined
+        ? `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`
+        : `save the provided secret in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
+    case "setup":
+      return `bootstrap OpenClaw setup for workspace ${shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()))}`;
+    case "model-setup":
+      return "configure a model provider and default model";
+    case "doctor-fix":
+      return "run openclaw doctor --fix on the machine running OpenClaw, with OpenClaw stopped";
+    case "plugin-install":
+      return `install plugin ${operation.spec}`;
+    case "plugin-activate-artifact":
+      return `install the trusted plugin artifact ${operation.path} (SHA256 ${operation.sha256}), including its declared capabilities and native UI; restart the Gateway to load it`;
+    case "plugin-uninstall":
+      return `uninstall plugin ${operation.pluginId}`;
+    case "create-agent":
+      return [
+        `create agent ${operation.agentId} with workspace ${operation.workspace ? shortenHomePath(resolveUserPath(operation.workspace)) : "the default for this agent"}`,
+        operation.name ? `name: ${JSON.stringify(operation.name)}` : undefined,
+        operation.purpose ? `purpose: ${JSON.stringify(operation.purpose)}` : undefined,
+        operation.role
+          ? `role: ${operation.role === "coordinator" ? "Chief of staff" : operation.role.charAt(0).toUpperCase() + operation.role.slice(1)}`
+          : undefined,
+        operation.requesterAgentId ? `requested by agent ${operation.requesterAgentId}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(", ");
+    case "create-team":
+      return [
+        "create team of 4: chief of staff, researcher, writer, reviewer",
+        operation.coordinatorId ? `coordinator id: ${operation.coordinatorId}` : undefined,
+        operation.prefix ? `prefix: ${operation.prefix}` : undefined,
+        operation.workspaceRoot
+          ? `workspace root: ${shortenHomePath(resolveUserPath(operation.workspaceRoot))}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(", ");
+    case "gateway-start":
+      return "start the Gateway";
+    case "gateway-stop":
+      return "stop the Gateway";
+    case "gateway-restart":
+      return "restart the Gateway";
+    default:
+      return "apply this action";
+  }
+}
+
+export const SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF =
+  "The host applies the requesting session's permission policy to this exact proposal and returns the final outcome. Do not request conversational approval or claim the change was applied before that outcome.";
+
+export const SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF =
+  "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request. Open `openclaw dashboard` or run `openclaw setup` on the Gateway host.";
+
+export function formatSystemAgentPersistentPlan(
+  operation: SystemAgentOperation,
+  operatorApprovalOnly = false,
+): string {
+  const description = describeSystemAgentPersistentOperation(operation);
+  return operatorApprovalOnly
+    ? `Proposed: ${description}.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
+    : `Plan: ${description}. Say yes to apply.`;
+}

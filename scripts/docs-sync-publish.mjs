@@ -4,193 +4,74 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
+import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+import { renderDocsHeadingMap } from "./docs-list.js";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
+const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
+const AUTHORING_INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
-const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
+export const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
 const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub-docs-clawhub"),
   path.resolve(ROOT, "..", "clawhub"),
 ];
+// File URLs declare the copied runtime closure without executing modules:
+// source sync runs before parser dependencies are installed.
 const SYNC_SUPPORT_FILES = [
-  {
-    source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
-    target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
-    target: path.join(".openclaw-sync", "lib", "mintlify-accordion.mjs"),
-  },
+  ...[
+    "lib/docs-markdown.mjs",
+    "lib/docs-redirects.mjs",
+    "check-docs-mdx.mjs",
+    "check-docs-mdx.mts",
+    "lib/arg-utils.runtime.mjs",
+    "lib/tsx-cli-shim.mjs",
+    "lib/local-check-runtime.mts",
+    "lib/managed-cleanup-handoff.mts",
+    "tsx.mjs",
+  ].map((file) => ({
+    source: new URL(`./${file}`, import.meta.url),
+    target: path.join(".openclaw-sync", file),
+  })),
   {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
     target: path.join(".openclaw-sync", "docs-mdx-repair.md"),
   },
 ];
 const GENERATED_LOCALES = [
-  {
-    language: "zh-Hans",
-    dir: "zh-CN",
-    navFile: "zh-Hans-navigation.json",
-    tmFile: "zh-CN.tm.jsonl",
-    navMode: "overlay",
-  },
-  {
-    language: "zh-Hant",
-    dir: "zh-TW",
-    navFile: "zh-Hant-navigation.json",
-    tmFile: "zh-TW.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "ja",
-    dir: "ja-JP",
-    navFile: "ja-navigation.json",
-    tmFile: "ja-JP.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "es",
-    dir: "es",
-    navFile: "es-navigation.json",
-    tmFile: "es.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "pt-BR",
-    dir: "pt-BR",
-    navFile: "pt-BR-navigation.json",
-    tmFile: "pt-BR.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "ko",
-    dir: "ko",
-    navFile: "ko-navigation.json",
-    tmFile: "ko.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "de",
-    dir: "de",
-    navFile: "de-navigation.json",
-    tmFile: "de.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "fr",
-    dir: "fr",
-    navFile: "fr-navigation.json",
-    tmFile: "fr.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "hi",
-    dir: "hi",
-    navFile: "hi-navigation.json",
-    tmFile: "hi.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "ar",
-    dir: "ar",
-    navFile: "ar-navigation.json",
-    tmFile: "ar.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "it",
-    dir: "it",
-    navFile: "it-navigation.json",
-    tmFile: "it.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "vi",
-    dir: "vi",
-    navFile: "vi-navigation.json",
-    tmFile: "vi.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "nl",
-    dir: "nl",
-    navFile: "nl-navigation.json",
-    tmFile: "nl.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "fa",
-    dir: "fa",
-    navFile: "fa-navigation.json",
-    tmFile: "fa.tm.jsonl",
-    navMode: "clone-en",
-    // Mintlify does not currently accept `fa` in navigation.languages.
-    // Keep generated docs and translation memory so the locale stays available
-    // once the docs host accepts it.
-    navigation: false,
-  },
-  {
-    language: "tr",
-    dir: "tr",
-    navFile: "tr-navigation.json",
-    tmFile: "tr.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "uk",
-    dir: "uk",
-    navFile: "uk-navigation.json",
-    tmFile: "uk.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "id",
-    dir: "id",
-    navFile: "id-navigation.json",
-    tmFile: "id.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "pl",
-    dir: "pl",
-    navFile: "pl-navigation.json",
-    tmFile: "pl.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "th",
-    dir: "th",
-    navFile: "th-navigation.json",
-    tmFile: "th.tm.jsonl",
-    navMode: "clone-en",
-    // Mintlify does not currently accept `th` in navigation.languages.
-    // Keep generated docs and translation memory so the locale stays available
-    // once the docs host accepts it.
-    navigation: false,
-  },
-  {
-    language: "ru",
-    dir: "ru",
-    navFile: "ru-navigation.json",
-    tmFile: "ru.tm.jsonl",
-    navMode: "clone-en",
-  },
-];
-
-function readOptionValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
+  ["zh-Hans", "zh-CN"],
+  ["zh-Hant", "zh-TW"],
+  ["ja", "ja-JP"],
+  ["es"],
+  ["pt-BR"],
+  ["ko"],
+  ["de"],
+  ["fr"],
+  ["hi"],
+  ["ar"],
+  ["it"],
+  ["vi"],
+  ["nl"],
+  ["fa"],
+  ["tr"],
+  ["uk"],
+  ["id"],
+  ["pl"],
+  ["th"],
+  ["ru"],
+].map(([language, dir = language]) => ({
+  language,
+  dir,
+  navFile: `${language}-navigation.json`,
+  tmFile: `${dir}.tm.jsonl`,
+}));
 
 export function parseArgs(argv) {
   const args = {
@@ -203,37 +84,27 @@ export function parseArgs(argv) {
     clawhubSourceSha: process.env.OPENCLAW_DOCS_SYNC_CLAWHUB_SOURCE_SHA || "",
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const part = argv[index];
-    switch (part) {
-      case "--target":
-        args.target = readOptionValue(argv, index, part);
-        index += 1;
-        break;
-      case "--source-repo":
-        args.sourceRepo = readOptionValue(argv, index, part);
-        index += 1;
-        break;
-      case "--source-sha":
-        args.sourceSha = readOptionValue(argv, index, part);
-        index += 1;
-        break;
-      case "--clawhub-repo":
-        args.clawhubRepo = readOptionValue(argv, index, part);
-        index += 1;
-        break;
-      case "--clawhub-source-repo":
-        args.clawhubSourceRepo = readOptionValue(argv, index, part);
-        index += 1;
-        break;
-      case "--clawhub-source-sha":
-        args.clawhubSourceSha = readOptionValue(argv, index, part);
-        index += 1;
-        break;
-      default:
+  const flags = [
+    ["--target", "target"],
+    ["--source-repo", "sourceRepo"],
+    ["--source-sha", "sourceSha"],
+    ["--clawhub-repo", "clawhubRepo"],
+    ["--clawhub-source-repo", "clawhubSourceRepo"],
+    ["--clawhub-source-sha", "clawhubSourceSha"],
+  ];
+  parseFlagArgs(
+    argv,
+    args,
+    flags.map(([flag, key]) =>
+      stringFlag(flag, key, { allowInline: false, repeatable: true, rejectShortOptions: true }),
+    ),
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(part) {
         throw new Error(`unknown arg: ${part}`);
-    }
-  }
+      },
+    },
+  );
 
   if (!args.target) {
     throw new Error("missing --target");
@@ -274,28 +145,6 @@ function walkFiles(entryPath, out = []) {
       continue;
     }
     walkFiles(path.join(entryPath, entry.name), out);
-  }
-  return out;
-}
-
-function walkMarkdownFiles(entryPath, out = []) {
-  if (!fs.existsSync(entryPath)) {
-    return out;
-  }
-
-  const stat = fs.statSync(entryPath);
-  if (stat.isFile()) {
-    if (/\.mdx?$/i.test(entryPath)) {
-      out.push(entryPath);
-    }
-    return out;
-  }
-
-  for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git") {
-      continue;
-    }
-    walkMarkdownFiles(path.join(entryPath, entry.name), out);
   }
   return out;
 }
@@ -400,14 +249,104 @@ function cloneEnglishLanguageNav(englishNav, locale) {
   };
 }
 
-function composeLocaleNav(locale, englishNav) {
-  if (locale.navMode === "clone-en") {
-    return cloneEnglishLanguageNav(englishNav, locale);
+function collectNavPages(entry, pages = new Set()) {
+  if (typeof entry === "string") {
+    pages.add(entry);
+    return pages;
   }
-  return readJson(path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile));
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      collectNavPages(item, pages);
+    }
+    return pages;
+  }
+  if (!entry || typeof entry !== "object") {
+    return pages;
+  }
+  if (typeof entry.page === "string") {
+    pages.add(entry.page);
+  }
+  collectNavPages(entry.pages, pages);
+  collectNavPages(entry.groups, pages);
+  collectNavPages(entry.tabs, pages);
+  return pages;
 }
 
-function composeDocsConfig() {
+function findBestNavMatchIndex(candidates, overlayEntry, excludedIndexes = new Set()) {
+  const overlayPages = collectNavPages(overlayEntry);
+  let bestIndex = -1;
+  let bestScore = 0;
+  for (const [index, candidate] of candidates.entries()) {
+    if (excludedIndexes.has(index)) {
+      continue;
+    }
+    const candidatePages = collectNavPages(candidate);
+    let score = 0;
+    for (const page of overlayPages) {
+      if (candidatePages.has(page)) {
+        score += 1;
+      }
+    }
+    if (score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+  return bestIndex;
+}
+
+export function applyLocaleNavLabelOverlay(fullNav, labelOverlay) {
+  const tabs = Array.isArray(fullNav.tabs)
+    ? fullNav.tabs.map((tab) => ({
+        ...tab,
+        groups: Array.isArray(tab.groups) ? tab.groups.map((group) => ({ ...group })) : tab.groups,
+      }))
+    : fullNav.tabs;
+  const composed = { ...fullNav, tabs };
+  if (!Array.isArray(tabs) || !Array.isArray(labelOverlay?.tabs)) {
+    return composed;
+  }
+
+  for (const overlayTab of labelOverlay.tabs) {
+    const tabIndex = findBestNavMatchIndex(tabs, overlayTab);
+    if (tabIndex < 0) {
+      continue;
+    }
+    const tab = tabs[tabIndex];
+    if (typeof overlayTab.tab === "string") {
+      tab.tab = overlayTab.tab;
+    }
+    if (!Array.isArray(tab.groups) || !Array.isArray(overlayTab.groups)) {
+      continue;
+    }
+    const matchedGroupIndexes = new Set();
+    for (const overlayGroup of overlayTab.groups) {
+      const groupIndex = findBestNavMatchIndex(tab.groups, overlayGroup, matchedGroupIndexes);
+      if (groupIndex >= 0 && typeof overlayGroup.group === "string") {
+        tab.groups[groupIndex].group = overlayGroup.group;
+        matchedGroupIndexes.add(groupIndex);
+      }
+    }
+  }
+  return composed;
+}
+
+function composeLocaleNav(locale, englishNav) {
+  const cloned = cloneEnglishLanguageNav(englishNav, locale);
+  if (!locale.navFile) {
+    return cloned;
+  }
+  const overlayPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile);
+  if (!fs.existsSync(overlayPath)) {
+    console.warn(
+      `docs-sync-publish: missing navigation overlay ${locale.navFile} for locale ${locale.language}; publishing the English sidebar labels for that locale.`,
+    );
+    return cloned;
+  }
+  return applyLocaleNavLabelOverlay(cloned, readJson(overlayPath));
+}
+
+export function composeDocsConfig() {
   const sourceConfig = readJson(SOURCE_CONFIG_PATH);
   const languages = sourceConfig?.navigation?.languages;
 
@@ -416,14 +355,10 @@ function composeDocsConfig() {
   }
 
   const englishNav = languages.find((entry) => entry?.language === "en");
-  const generatedLanguageSet = new Set(
-    GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) => entry.language),
-  );
+  const generatedLanguageSet = new Set(GENERATED_LOCALES.map((entry) => entry.language));
   const withoutGenerated = languages.filter((entry) => !generatedLanguageSet.has(entry?.language));
   const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
-  const generated = GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) =>
-    composeLocaleNav(entry, englishNav),
-  );
+  const generated = GENERATED_LOCALES.map((entry) => composeLocaleNav(entry, englishNav));
   if (enIndex === -1) {
     withoutGenerated.push(...generated);
   } else {
@@ -439,50 +374,33 @@ function composeDocsConfig() {
   };
 }
 
-function pruneOrphanLocaleDocs(targetDocsDir) {
-  let pruned = 0;
+export function reportOrphanLocaleDocs(targetDocsDir) {
+  let orphaned = 0;
   for (const locale of GENERATED_LOCALES) {
     const localeDir = path.join(targetDocsDir, locale.dir);
     if (!fs.existsSync(localeDir)) {
       continue;
     }
-    for (const filePath of walkMarkdownFiles(localeDir)) {
-      const relativeToLocale = path.relative(localeDir, filePath);
-      // The English source file lives at docs/<relativeToLocale> with either .md or .mdx.
-      const englishBase = path.join(SOURCE_DOCS_DIR, relativeToLocale);
+    for (const filePath of walkFiles(localeDir).filter((file) => /\.mdx?$/i.test(file))) {
+      const relativePath = path.relative(localeDir, filePath);
+      // Check the assembled publish tree so externally mirrored docs, such as
+      // ClawHub pages, count as valid English sources too.
+      const englishBase = path.join(targetDocsDir, relativePath);
       const englishMd = englishBase.replace(/\.mdx?$/i, ".md");
       const englishMdx = englishBase.replace(/\.mdx?$/i, ".mdx");
       if (fs.existsSync(englishMd) || fs.existsSync(englishMdx)) {
         continue;
       }
-      fs.rmSync(filePath, { force: true });
-      pruned += 1;
+      orphaned += 1;
     }
   }
 
-  if (pruned > 0) {
-    console.log(`Pruned ${pruned} orphan localized doc(s) with no matching English source file.`);
+  if (orphaned > 0) {
+    // Translation artifacts update inbound links and delete their old target
+    // together. Docs sync must not publish the deletion ahead of that step.
+    console.log(`Deferred ${orphaned} orphan localized doc(s) to translation finalization.`);
   }
-}
-
-function repairGeneratedLocaleDocs(targetDocsDir) {
-  let repaired = 0;
-  for (const locale of GENERATED_LOCALES) {
-    const localeDir = path.join(targetDocsDir, locale.dir);
-    for (const filePath of walkMarkdownFiles(localeDir)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const repairedRaw = repairMintlifyAccordionIndentation(raw);
-      if (repairedRaw === raw) {
-        continue;
-      }
-      fs.writeFileSync(filePath, repairedRaw);
-      repaired += 1;
-    }
-  }
-
-  if (repaired > 0) {
-    console.log(`Repaired Mintlify accordion indentation in ${repaired} generated locale doc(s).`);
-  }
+  return orphaned;
 }
 
 function pruneInternalDocs(targetDocsDir) {
@@ -498,6 +416,14 @@ function pruneInternalDocs(targetDocsDir) {
 
   if (pruned > 0) {
     console.log(`Pruned ${pruned} internal-only docs director${pruned === 1 ? "y" : "ies"}.`);
+  }
+}
+
+function pruneAuthoringInstructions(targetDocsDir) {
+  // Root repository instructions are not public pages. Locale orphans remain
+  // translation-finalizer owned so their inbound links are repaired together.
+  for (const file of AUTHORING_INSTRUCTION_FILES) {
+    fs.rmSync(path.join(targetDocsDir, file), { force: true });
   }
 }
 
@@ -689,11 +615,14 @@ function syncDocsTree(targetRoot, options = {}) {
     "--exclude",
     ".i18n/README.md",
     ...INTERNAL_DOCS_DIRS.flatMap((dir) => ["--exclude", `${dir}/`]),
+    ...AUTHORING_INSTRUCTION_FILES.flatMap((file) => ["--exclude", `/${file}`]),
     ...localeFilters,
     `${SOURCE_DOCS_DIR}/`,
     `${targetDocsDir}/`,
   ]);
   pruneInternalDocs(targetDocsDir);
+  pruneAuthoringInstructions(targetDocsDir);
+  writePublishedDocsMap(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {
     const sourceTmPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.tmFile);
@@ -709,10 +638,16 @@ function syncDocsTree(targetRoot, options = {}) {
     sourceRepo: options.clawhubSourceRepo,
     sourceSha: options.clawhubSourceSha,
   });
-  pruneOrphanLocaleDocs(targetDocsDir);
-  repairGeneratedLocaleDocs(targetDocsDir);
+  reportOrphanLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };
+}
+
+/** Writes the public heading map into the publish tree without committing an expanded mirror. */
+export function writePublishedDocsMap(targetDocsDir) {
+  const outputPath = path.join(targetDocsDir, "docs_map.md");
+  fs.writeFileSync(outputPath, renderDocsHeadingMap(SOURCE_DOCS_DIR), "utf8");
+  return outputPath;
 }
 
 function writeSyncMetadata(targetRoot, args, sources) {
@@ -735,12 +670,84 @@ function writeSyncMetadata(targetRoot, args, sources) {
   writeJson(path.join(targetRoot, ".openclaw-sync", "source.json"), metadata);
 }
 
+function sourceSlugifyVersion() {
+  const version = readJson(path.join(ROOT, "package.json")).devDependencies[SLUGIFY_PACKAGE];
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error("docs sync requires an exact source slugify version");
+  }
+  return version;
+}
+
+function readPublishDependencies(targetRoot) {
+  return {
+    packageJson: readJson(path.join(targetRoot, "package.json")),
+    packageLock: readJson(path.join(targetRoot, "package-lock.json")),
+  };
+}
+
+function matchesSlugifyVersion({ packageJson, packageLock }, version) {
+  return (
+    packageJson.devDependencies?.[SLUGIFY_PACKAGE] === version &&
+    packageLock.lockfileVersion === 3 &&
+    packageLock.packages?.[""]?.devDependencies?.[SLUGIFY_PACKAGE] === version &&
+    packageLock.packages?.[`node_modules/${SLUGIFY_PACKAGE}`]?.version === version
+  );
+}
+
+/** Checks sync output here and against fresh publisher main after the workflow rebases. */
+export function validateDocsSyncDependencies(targetRoot, baseline) {
+  const current = readPublishDependencies(targetRoot);
+  const version = sourceSlugifyVersion();
+  if (!matchesSlugifyVersion(current, version)) {
+    throw new Error(`docs sync publisher manifest and lock must both pin slugify ${version}`);
+  }
+  // Only this dependency's declaration and resolved row belong to source sync.
+  // Compare objects, not JSON formatting; never absorb unrelated npm or rebase churn.
+  const expected = structuredClone(baseline);
+  expected.packageJson.devDependencies[SLUGIFY_PACKAGE] = version;
+  expected.packageLock.packages[""].devDependencies[SLUGIFY_PACKAGE] = version;
+  const slugifyPath = `node_modules/${SLUGIFY_PACKAGE}`;
+  expected.packageLock.packages[slugifyPath] = current.packageLock.packages[slugifyPath];
+  if (!isDeepStrictEqual(current, expected)) {
+    throw new Error(
+      "docs sync changed unrelated publisher dependencies; reconcile the lock before retrying",
+    );
+  }
+  for (const entry of SYNC_SUPPORT_FILES) {
+    const copied = fs.readFileSync(path.join(targetRoot, entry.target));
+    if (!fs.readFileSync(entry.source).equals(copied)) {
+      throw new Error(`docs sync support file differs from source: ${entry.target}`);
+    }
+  }
+}
+
 function syncSupportFiles(targetRoot) {
+  const baseline = readPublishDependencies(targetRoot);
+  const version = sourceSlugifyVersion();
+  if (!matchesSlugifyVersion(baseline, version)) {
+    // Generate the lock from the publisher's existing graph, without installing
+    // packages. Parser, manifest and lock are committed together by the workflow.
+    run(
+      "npm",
+      [
+        "install",
+        "--package-lock-only",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--save-dev",
+        "--save-exact",
+        `${SLUGIFY_PACKAGE}@${version}`,
+      ],
+      { cwd: targetRoot, timeout: 120_000 },
+    );
+  }
   for (const entry of SYNC_SUPPORT_FILES) {
     const targetPath = path.join(targetRoot, entry.target);
     ensureDir(path.dirname(targetPath));
     fs.copyFileSync(entry.source, targetPath);
   }
+  validateDocsSyncDependencies(targetRoot, baseline);
 }
 
 function main() {

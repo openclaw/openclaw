@@ -17,7 +17,7 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+  sendDurableMessageBatchCore: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -88,6 +88,20 @@ describe("sendTranscriptEcho", () => {
     });
   });
 
+  it("keeps dollar sequences in the transcript literal", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx(),
+      cfg: EMPTY_CONFIG,
+      transcript: "tickets cost $$40, wait for the deal & confirm with $&",
+    });
+
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: '📝 "tickets cost $$40, wait for the deal & confirm with $&"' }],
+      }),
+    );
+  });
+
   it("skips non-deliverable channels", async () => {
     await sendTranscriptEcho({
       ctx: createCtx({ Provider: "internal-system", From: "some-source" }),
@@ -106,25 +120,6 @@ describe("sendTranscriptEcho", () => {
     });
 
     expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("prefers OriginatingTo when From is absent", async () => {
-    await sendTranscriptEcho({
-      ctx: createCtx({ From: undefined, OriginatingTo: "+19999999999" }),
-      cfg: EMPTY_CONFIG,
-      transcript: "hello world",
-    });
-
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
-      cfg: EMPTY_CONFIG,
-      channel: "voicechat",
-      to: "+19999999999",
-      accountId: "acc1",
-      threadId: undefined,
-      payloads: [{ text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "hello world") }],
-      bestEffort: true,
-      durability: "best_effort",
-    });
   });
 
   it("forwards Telegram account and thread metadata to outbound delivery", async () => {

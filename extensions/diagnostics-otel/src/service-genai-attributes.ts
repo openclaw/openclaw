@@ -1,0 +1,195 @@
+import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "openclaw/plugin-sdk/number-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
+  OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
+} from "./service-constants.js";
+import type { ModelCallLifecycleDiagnosticEvent } from "./service-types.js";
+
+function emitLatestGenAiSemconv(): boolean {
+  return (
+    process.env[OTEL_SEMCONV_STABILITY_OPT_IN_ENV]
+      ?.split(",")
+      .map((part) => part.trim())
+      .includes(GEN_AI_LATEST_EXPERIMENTAL_OPT_IN) ?? false
+  );
+}
+
+export function genAiOperationName(
+  api: string | undefined,
+  observationUnit?: "request" | "turn",
+): "chat" | "generate_content" | "invoke_agent" | "text_completion" {
+  // CLI/app-server diagnostics bracket an opaque agent turn, not one inference request.
+  // Label that boundary as agent invocation so its latency stays distinct from request latency.
+  if (observationUnit === "turn") {
+    return GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT;
+  }
+  const normalized = api?.trim().toLowerCase();
+  if (!normalized) {
+    return "chat";
+  }
+  if (normalized === "completions" || normalized.endsWith("-completions")) {
+    return "text_completion";
+  }
+  if (normalized === "generate_content" || normalized.includes("generative-ai")) {
+    return "generate_content";
+  }
+  return "chat";
+}
+
+export function assignPositiveNumberAttr(
+  attrs: Record<string, string | number | boolean>,
+  key: string,
+  value: number | undefined,
+): void {
+  const normalized = asPositiveFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
+  }
+}
+
+function modelCallPromptTokens(usage: {
+  promptTokens?: number;
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}): number | undefined {
+  const promptTokens = asNonNegativeFiniteNumber(usage.promptTokens);
+  if (promptTokens !== undefined) {
+    return promptTokens;
+  }
+  const input = asNonNegativeFiniteNumber(usage.input);
+  const cacheRead = asNonNegativeFiniteNumber(usage.cacheRead);
+  const cacheWrite = asNonNegativeFiniteNumber(usage.cacheWrite);
+  if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return undefined;
+  }
+  return (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+}
+
+export function assignModelCallPromptStatsAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<Extract<DiagnosticEventPayload, { type: "model.call.started" }>, "promptStats">,
+): void {
+  const stats = evt.promptStats;
+  if (!stats) {
+    return;
+  }
+  for (const [key, value] of [
+    ["openclaw.model_call.prompt.input_messages_count", stats.inputMessagesCount],
+    ["openclaw.model_call.prompt.input_messages_chars", stats.inputMessagesChars],
+    ["openclaw.model_call.prompt.system_prompt_chars", stats.systemPromptChars],
+    ["openclaw.model_call.prompt.tool_definitions_count", stats.toolDefinitionsCount],
+    ["openclaw.model_call.prompt.tool_definitions_chars", stats.toolDefinitionsChars],
+    ["openclaw.model_call.prompt.total_chars", stats.totalChars],
+  ] as const) {
+    const normalized = asFiniteNumber(value);
+    if (normalized !== undefined) {
+      attrs[key] = normalized;
+    }
+  }
+}
+
+export function assignModelCallUsageAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<ModelCallLifecycleDiagnosticEvent, "usage">,
+): void {
+  const usage = evt.usage;
+  if (!usage) {
+    return;
+  }
+  const promptTokens = modelCallPromptTokens(usage);
+  for (const [key, value] of [
+    ["openclaw.model_call.usage.input_tokens", usage.input],
+    ["openclaw.model_call.usage.output_tokens", usage.output],
+    ["openclaw.model_call.usage.cache_read_input_tokens", usage.cacheRead],
+    ["openclaw.model_call.usage.cache_creation_input_tokens", usage.cacheWrite],
+    ["openclaw.model_call.usage.reasoning_output_tokens", usage.reasoningTokens],
+    ["openclaw.model_call.usage.prompt_tokens", promptTokens],
+    ["openclaw.model_call.usage.total_tokens", usage.total],
+    ["gen_ai.usage.input_tokens", promptTokens],
+    ["gen_ai.usage.output_tokens", usage.output],
+    ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
+    ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
+  ] as const) {
+    const normalized = asNonNegativeFiniteNumber(value);
+    if (normalized !== undefined) {
+      attrs[key] = normalized;
+    }
+  }
+}
+
+export function assignGenAiSpanIdentityAttrs(
+  attrs: Record<string, string | number | boolean>,
+  input: {
+    api?: string;
+    model?: string;
+    observationUnit?: "request" | "turn";
+    provider?: string;
+  },
+): void {
+  if (emitLatestGenAiSemconv()) {
+    attrs["gen_ai.provider.name"] = normalizeDiagnosticValue(input.provider);
+  } else {
+    attrs["gen_ai.system"] = normalizeDiagnosticValue(input.provider);
+  }
+  if (input.model) {
+    // Span attributes carry the full model id; only metric labels need bounded cardinality
+    // (the gen_ai metrics below still use normalizeDiagnosticValue). The low-cardinality allowlist
+    // regex rejects "/", so provider-qualified ids like "anthropic/claude-sonnet-4.6" collapse
+    // to "unknown" on the SPAN — breaking model attribution in trace backends (e.g. Langfuse
+    // reads gen_ai.request.model). Keep the redacted raw model on the span.
+    attrs["gen_ai.request.model"] = redactSensitiveText(input.model.trim());
+  }
+  attrs["gen_ai.operation.name"] = genAiOperationName(input.api, input.observationUnit);
+}
+
+export function assignGenAiModelCallAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: {
+    api?: string;
+    model?: string;
+    observationUnit?: "request" | "turn";
+    provider?: string;
+  },
+): void {
+  assignGenAiSpanIdentityAttrs(attrs, evt);
+  attrs["openclaw.model_call.observation_unit"] = evt.observationUnit ?? "request";
+}
+
+export function modelCallSpanName(evt: {
+  api?: string;
+  model?: string;
+  observationUnit?: "request" | "turn";
+}): string {
+  if (!emitLatestGenAiSemconv()) {
+    return "openclaw.model.call";
+  }
+  const operationName = genAiOperationName(evt.api, evt.observationUnit);
+  return operationName === GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT
+    ? operationName
+    : `${operationName} ${normalizeDiagnosticValue(evt.model)}`;
+}
+
+export function addUpstreamRequestIdSpanEvent(
+  span: { addEvent?: (name: string, attributes?: Record<string, string>) => void },
+  upstreamRequestIdHash: string | undefined,
+): void {
+  if (!upstreamRequestIdHash) {
+    return;
+  }
+  const boundedHash = normalizeDiagnosticValue(upstreamRequestIdHash);
+  if (boundedHash === "unknown") {
+    return;
+  }
+  span.addEvent?.("openclaw.provider.request", {
+    "openclaw.upstreamRequestIdHash": boundedHash,
+  });
+}

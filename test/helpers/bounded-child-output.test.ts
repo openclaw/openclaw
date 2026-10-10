@@ -15,11 +15,28 @@ describe("bounded child output", () => {
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(16);
   });
 
-  it("keeps only the tail of a single oversized chunk", () => {
-    const output = createBoundedChildOutput(8);
+  it("drops split UTF-8 prefixes after buffered output overflow", () => {
+    const output = createBoundedChildOutput(7);
 
-    output.append(Buffer.from("old-prefix-recent"));
+    output.append(Buffer.from("prefix 😀"));
+    output.append(Buffer.from("tail"));
 
-    expect(output.text()).toBe("x-recent");
+    expect(output.text()).toBe("tail");
+  });
+
+  it("drops split UTF-8 prefixes from single oversized chunks", () => {
+    const output = createBoundedChildOutput(7);
+
+    output.append(Buffer.from("prefix 😀tail"));
+
+    expect(output.text()).toBe("tail");
+  });
+
+  it("preserves replacement output for incomplete trailing bytes", () => {
+    const output = createBoundedChildOutput(7);
+
+    output.append(Buffer.from([0x61, 0xe2]));
+
+    expect(output.text()).toBe("a�");
   });
 });

@@ -1,16 +1,13 @@
-/**
- * Browser tab selection operations for default tab choice, focus, and close.
- */
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
+import { BrowserTabNotFoundError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   OPEN_TAB_DISCOVERY_POLL_MS,
@@ -18,28 +15,24 @@ import {
 } from "./server-context.constants.js";
 import type {
   BrowserTab,
+  BrowserOperationOptions,
+  BrowserTabTargetOptions,
   EnsureTabAvailableOptions,
+  ProfileContext,
   ProfileRuntimeState,
 } from "./server-context.types.js";
-import { resolveTargetIdFromTabs } from "./target-id.js";
+import { dispatchBrowserTabClose } from "./session-tab-store.js";
+import { resolveBrowserTabOrThrow, resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
   profile: ResolvedBrowserProfile;
-  getProfileState: () => ProfileRuntimeState;
+  runtime: ProfileRuntimeState;
   getCdpControlPolicy: () => SsrFPolicy | undefined;
-  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
-  listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
+  openTab: (url: string, options?: BrowserOperationOptions) => Promise<BrowserTab>;
 };
 
-type SelectionOps = {
-  ensureTabAvailable: (
-    targetId?: string,
-    options?: EnsureTabAvailableOptions,
-  ) => Promise<BrowserTab>;
-  focusTab: (targetId: string) => Promise<void>;
-  closeTab: (targetId: string) => Promise<void>;
-};
+type SelectionOps = Pick<ProfileContext, "ensureTabAvailable" | "focusTab" | "closeTab">;
 
 function mergeOpenedTabSnapshot(
   tabs: BrowserTab[],
@@ -57,22 +50,18 @@ function mergeOpenedTabSnapshot(
     return tabs;
   }
   const merged = tabs.slice();
-  merged[index] = { ...listedTab, wsUrl: openedTab.wsUrl };
+  merged[index] = {
+    ...listedTab,
+    wsUrl: openedTab.wsUrl,
+    ...(openedTab.wsLookup ? { wsLookup: openedTab.wsLookup } : {}),
+  };
   return merged;
 }
 
-function waitForTabDiscoveryPoll(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, OPEN_TAB_DISCOVERY_POLL_MS);
-  });
-}
-
-/** Builds tab selection/focus/close operations for one resolved browser profile. */
 export function createProfileSelectionOps({
   profile,
-  getProfileState,
+  runtime,
   getCdpControlPolicy,
-  ensureBrowserAvailable,
   listTabs,
   openTab,
 }: SelectionDeps): SelectionOps {
@@ -83,8 +72,7 @@ export function createProfileSelectionOps({
     targetId?: string,
     options?: EnsureTabAvailableOptions,
   ): Promise<BrowserTab> => {
-    await ensureBrowserAvailable();
-    const profileState = getProfileState();
+    options?.signal?.throwIfAborted();
     let lastNonEmptyTabs: BrowserTab[] = [];
     let lastListError: unknown;
     let sawSuccessfulList = false;
@@ -92,21 +80,26 @@ export function createProfileSelectionOps({
 
     const readTabs = async (): Promise<BrowserTab[]> => {
       try {
-        const tabs = await listTabs();
+        const tabs = await listTabs(options);
+        options?.signal?.throwIfAborted();
         sawSuccessfulList = true;
         if (tabs.length > 0) {
           lastNonEmptyTabs = tabs;
         }
         return tabs;
       } catch (err) {
+        options?.signal?.throwIfAborted();
         lastListError = err;
         return [];
       }
     };
 
     const openWhenConfirmedEmpty = async (tabs: BrowserTab[]): Promise<void> => {
+      if (targetId !== undefined) {
+        return;
+      }
       if (!openedTab && sawSuccessfulList && lastNonEmptyTabs.length === 0 && tabs.length === 0) {
-        openedTab = await openTab("about:blank");
+        openedTab = await openTab("about:blank", options);
       }
     };
 
@@ -116,10 +109,13 @@ export function createProfileSelectionOps({
       const desiredTargetId =
         targetId ??
         openedTab?.targetId ??
-        normalizeOptionalString(profileState.lastTargetId) ??
+        normalizeOptionalString(runtime.lastTargetId) ??
         undefined;
       if (!desiredTargetId) {
         return tabs.length > 0;
+      }
+      if (targetId === undefined) {
+        return tabs.some((tab) => tab.targetId === desiredTargetId);
       }
       const resolved = resolveTargetIdFromTabs(desiredTargetId, tabs);
       return resolved.ok || resolved.reason === "ambiguous";
@@ -144,7 +140,7 @@ export function createProfileSelectionOps({
     ) {
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
       while (Date.now() < deadline) {
-        await waitForTabDiscoveryPoll();
+        await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, options?.signal);
         listedTabs = await readTabs();
         await openWhenConfirmedEmpty(listedTabs);
         unfilteredTabs = mergeOpenedTabSnapshot(listedTabs, openedTab);
@@ -173,119 +169,99 @@ export function createProfileSelectionOps({
         : new Error(formatErrorMessage(lastListError));
     }
 
-    const resolveById = (raw: string) => {
-      const resolved = resolveTargetIdFromTabs(raw, candidates);
-      if (!resolved.ok) {
-        if (resolved.reason === "ambiguous") {
-          return "AMBIGUOUS" as const;
-        }
-        return null;
-      }
-      return candidates.find((t) => t.targetId === resolved.targetId) ?? null;
-    };
+    const stickyTargetId = normalizeOptionalString(runtime.lastTargetId);
+    // Sticky selection is an identity promise: a missing target requires a fresh
+    // explicit choice. Without one, prefer page tabs over background targets.
+    const chosen = targetId
+      ? resolveBrowserTabOrThrow(targetId, candidates)
+      : stickyTargetId
+        ? candidates.find((tab) => tab.targetId === stickyTargetId)
+        : (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0));
 
-    const pickDefault = () => {
-      const last = normalizeOptionalString(profileState.lastTargetId) ?? "";
-      const lastResolved = last ? resolveById(last) : null;
-      if (lastResolved && lastResolved !== "AMBIGUOUS") {
-        return lastResolved;
-      }
-      // Prefer a real page tab first (avoid service workers/background targets).
-      const page = candidates.find((t) => (t.type ?? "page") === "page");
-      return page ?? candidates.at(0) ?? null;
-    };
-
-    const chosen = targetId ? resolveById(targetId) : pickDefault();
-
-    if (chosen === "AMBIGUOUS") {
-      throw new BrowserTargetAmbiguousError();
-    }
     if (!chosen) {
-      throw new BrowserTabNotFoundError(targetId ? { input: targetId } : undefined);
+      throw new BrowserTabNotFoundError({ input: targetId ?? stickyTargetId });
     }
-    profileState.lastTargetId = chosen.targetId;
+    runtime.lastTargetId = chosen.targetId;
     return chosen;
   };
 
-  const resolveTargetIdOrThrow = async (targetId: string): Promise<string> => {
-    const tabs = await listTabs();
-    const resolved = resolveTargetIdFromTabs(targetId, tabs);
-    if (!resolved.ok) {
-      if (resolved.reason === "ambiguous") {
-        throw new BrowserTargetAmbiguousError();
-      }
-      throw new BrowserTabNotFoundError({ input: targetId });
-    }
-    return resolved.targetId;
+  const resolveTargetIdOrThrow = async (
+    targetId: string,
+    options?: BrowserTabTargetOptions,
+  ): Promise<string> => {
+    const tabs = await listTabs(options);
+    return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId).targetId;
   };
 
-  const focusTab = async (targetId: string): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
-
+  const prepareTabOperation = async (
+    action: "focus" | "close",
+    resolvedTargetId: string,
+    options?: BrowserTabTargetOptions,
+  ): Promise<() => Promise<void>> => {
     if (capabilities.usesChromeMcp) {
-      const { focusChromeMcpTab } = await getChromeMcpModule();
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile);
-      const profileState = getProfileState();
-      profileState.lastTargetId = resolvedTargetId;
-      return;
+      assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
+      const mod = await getChromeMcpModule();
+      const run = action === "focus" ? mod.focusChromeMcpTab : mod.closeChromeMcpTab;
+      return () => run(profile.name, resolvedTargetId, profile, options);
     }
 
-    if (capabilities.usesPersistentPlaywright) {
+    const assertCurrent = action === "focus" ? options?.assertCurrent : undefined;
+    if (capabilities.usesPersistentPlaywright || assertCurrent) {
       const mod = await getPwAiModule({ mode: "strict" });
-      const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
-        ?.focusPageByTargetIdViaPlaywright;
-      if (typeof focusPageByTargetIdViaPlaywright === "function") {
-        await focusPageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
-          targetId: resolvedTargetId,
-          ssrfPolicy: getCdpControlPolicy(),
-        });
-        const profileState = getProfileState();
-        profileState.lastTargetId = resolvedTargetId;
-        return;
+      if (mod) {
+        const run =
+          action === "focus"
+            ? mod.focusPageByTargetIdViaPlaywright
+            : mod.closePageByTargetIdViaPlaywright;
+        return () =>
+          run({
+            cdpUrl: profile.cdpUrl,
+            targetId: resolvedTargetId,
+            ssrfPolicy: getCdpControlPolicy(),
+            ...(options?.signal ? { signal: options.signal } : {}),
+            ...(assertCurrent ? { assertCurrent } : {}),
+          });
+      }
+      if (assertCurrent) {
+        throw new Error("Playwright focus is unavailable for this dashboard tab");
       }
     }
 
-    await fetchOk(
-      appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
-      undefined,
-      undefined,
-      getCdpControlPolicy(),
-    );
-    const profileState = getProfileState();
-    profileState.lastTargetId = resolvedTargetId;
+    return () =>
+      fetchOk(
+        appendCdpPath(
+          cdpHttpBase,
+          `/json/${action === "focus" ? "activate" : "close"}/${resolvedTargetId}`,
+        ),
+        undefined,
+        options?.signal ? { signal: options.signal } : undefined,
+        getCdpControlPolicy(),
+      );
   };
 
-  const closeTab = async (targetId: string): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+  const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    const focus = await prepareTabOperation("focus", resolvedTargetId, options);
+    options?.signal?.throwIfAborted();
+    await focus();
+    runtime.lastTargetId = resolvedTargetId;
+  };
 
-    if (capabilities.usesChromeMcp) {
-      const { closeChromeMcpTab } = await getChromeMcpModule();
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile);
-      return;
+  const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    const close = await prepareTabOperation("close", resolvedTargetId, options);
+    options?.signal?.throwIfAborted();
+    await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
+      options?.signal?.throwIfAborted();
+      return close();
+    });
+
+    if (runtime.lastTargetId === resolvedTargetId) {
+      // Retire only the closed sticky identity; otherwise an unprovable session
+      // handle can block every later targetless action.
+      runtime.lastTargetId = null;
     }
-
-    // For remote profiles, use Playwright's persistent connection to close tabs
-    if (capabilities.usesPersistentPlaywright) {
-      const mod = await getPwAiModule({ mode: "strict" });
-      const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
-        ?.closePageByTargetIdViaPlaywright;
-      if (typeof closePageByTargetIdViaPlaywright === "function") {
-        await closePageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
-          targetId: resolvedTargetId,
-          ssrfPolicy: getCdpControlPolicy(),
-        });
-        return;
-      }
-    }
-
-    await fetchOk(
-      appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
-      undefined,
-      undefined,
-      getCdpControlPolicy(),
-    );
+    return resolvedTargetId;
   };
 
   return {

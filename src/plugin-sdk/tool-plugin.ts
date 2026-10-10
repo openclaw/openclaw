@@ -1,4 +1,3 @@
-// Tool plugin contracts describe plugin-provided tools, schemas, and invocation hooks.
 import { Type, type Static, type TSchema } from "typebox";
 import type { AgentToolResult, AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult, textResult } from "../agents/tools/common.js";
@@ -67,6 +66,8 @@ export type ToolPluginToolDefinition<
 > = ToolPluginToolDefinitionBase<TParamsSchema> &
   (
     | {
+        /** Optional schema for the JSON value returned in `AgentToolResult.details`. */
+        outputSchema?: TSchema;
         /** Execute one concrete tool call and return either plain text or JSON-serializable data. */
         execute: (
           params: Static<TParamsSchema>,
@@ -81,6 +82,8 @@ export type ToolPluginToolDefinition<
           context: ToolPluginFactoryContext<TConfig>,
         ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
         execute?: never;
+        /** Factory tools declare output schemas on their returned `AnyAgentTool` objects. */
+        outputSchema?: never;
       }
   );
 
@@ -89,6 +92,7 @@ type DefinedToolPluginTool = {
   label: string;
   description: string;
   parameters: TSchema;
+  outputSchema?: TSchema;
   optional: boolean;
   execute?: (params: unknown, config: unknown, context: ToolPluginExecutionContext) => unknown;
   factory?: (
@@ -102,6 +106,7 @@ export type ToolPluginStaticToolMetadata = {
   label: string;
   description: string;
   parameters: JsonSchemaObject;
+  outputSchema?: JsonSchemaObject;
   optional?: boolean;
 };
 
@@ -151,6 +156,7 @@ function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> 
     label: definition.label ?? definition.name,
     description: definition.description,
     parameters: definition.parameters,
+    outputSchema: definition.outputSchema,
     optional: definition.optional === true,
     execute: definition.execute as DefinedToolPluginTool["execute"],
     factory: definition.factory as DefinedToolPluginTool["factory"],
@@ -180,6 +186,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
       label: tool.label,
       description: tool.description,
       parameters: tool.parameters as JsonSchemaObject,
+      ...(tool.outputSchema ? { outputSchema: tool.outputSchema as JsonSchemaObject } : {}),
       ...(tool.optional ? { optional: true } : {}),
     })),
   };
@@ -218,6 +225,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
             label: tool.label,
             description: tool.description,
             parameters: tool.parameters,
+            ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
             execute: async (toolCallId, params, signal, onUpdate) =>
               wrapToolPluginResult(
                 await execute(params, config, {

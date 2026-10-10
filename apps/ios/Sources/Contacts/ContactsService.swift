@@ -3,6 +3,16 @@ import Foundation
 import OpenClawKit
 
 final class ContactsService: ContactsServicing {
+    private let authorizationStatus: @Sendable () -> CNAuthorizationStatus
+
+    init(
+        authorizationStatus: @escaping @Sendable () -> CNAuthorizationStatus = {
+            CNContactStore.authorizationStatus(for: .contacts)
+        })
+    {
+        self.authorizationStatus = authorizationStatus
+    }
+
     private static var payloadKeys: [CNKeyDescriptor] {
         [
             CNContactIdentifierKey as CNKeyDescriptor,
@@ -11,11 +21,15 @@ final class ContactsService: ContactsServicing {
             CNContactOrganizationNameKey as CNKeyDescriptor,
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
+            // CNContactFormatter requires more keys than payload(from:) accesses directly.
+            // Fetch its declared key set; formatting a partial contact otherwise raises an
+            // Objective-C CNContactPropertyNotFetchedException and crashes the app.
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
         ]
     }
 
     func search(params: OpenClawContactsSearchParams) async throws -> OpenClawContactsSearchPayload {
-        let store = try await Self.authorizedStore()
+        let store = try self.authorizedStore()
 
         let limit = max(1, min(params.limit ?? 25, 200))
 
@@ -33,14 +47,11 @@ final class ContactsService: ContactsServicing {
             }
         }
 
-        let sliced = Array(contacts.prefix(limit))
-        let payload = sliced.map { Self.payload(from: $0) }
-
-        return OpenClawContactsSearchPayload(contacts: payload)
+        return OpenClawContactsSearchPayload(contacts: contacts.prefix(limit).map(Self.payload(from:)))
     }
 
     func add(params: OpenClawContactsAddParams) async throws -> OpenClawContactsAddPayload {
-        let store = try await Self.authorizedStore()
+        let store = try self.authorizedStore()
 
         let givenName = params.givenName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let familyName = params.familyName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -58,14 +69,12 @@ final class ContactsService: ContactsServicing {
             ])
         }
 
-        if !phoneNumbers.isEmpty || !emails.isEmpty {
-            if let existing = try Self.findExistingContact(
-                store: store,
-                phoneNumbers: phoneNumbers,
-                emails: emails)
-            {
-                return OpenClawContactsAddPayload(contact: Self.payload(from: existing))
-            }
+        if hasDetails, let existing = try Self.findExistingContact(
+            store: store,
+            phoneNumbers: phoneNumbers,
+            emails: emails)
+        {
+            return OpenClawContactsAddPayload(contact: Self.payload(from: existing))
         }
 
         let contact = CNMutableContact()
@@ -97,28 +106,9 @@ final class ContactsService: ContactsServicing {
         return OpenClawContactsAddPayload(contact: Self.payload(from: persisted))
     }
 
-    private static func ensureAuthorization(status: CNAuthorizationStatus) async -> Bool {
-        switch status {
-        case .authorized, .limited:
-            return true
-        case .notDetermined:
-            return await PermissionRequestBridge.awaitRequest { completion in
-                let store = CNContactStore()
-                store.requestAccess(for: .contacts) { granted, _ in
-                    completion(granted)
-                }
-            }
-        case .restricted, .denied:
-            return false
-        @unknown default:
-            return false
-        }
-    }
-
-    private static func authorizedStore() async throws -> CNContactStore {
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-        let authorized = await Self.ensureAuthorization(status: status)
-        guard authorized else {
+    private func authorizedStore() throws -> CNContactStore {
+        let status = self.authorizationStatus()
+        guard status == .authorized || status == .limited else {
             throw NSError(domain: "Contacts", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
             ])
@@ -138,50 +128,21 @@ final class ContactsService: ContactsServicing {
         phoneNumbers: [String],
         emails: [String]) throws -> CNContact?
     {
-        if phoneNumbers.isEmpty, emails.isEmpty {
-            return nil
+        let predicates = phoneNumbers.map {
+            CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: $0))
+        } + emails.map { CNContact.predicateForContacts(matchingEmailAddress: $0) }
+        let contacts = try predicates.flatMap {
+            try store.unifiedContacts(matching: $0, keysToFetch: Self.payloadKeys)
         }
-
-        var matches: [CNContact] = []
-
-        for phone in phoneNumbers {
-            let predicate = CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: phone))
-            let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: Self.payloadKeys)
-            matches.append(contentsOf: contacts)
-        }
-
-        for email in emails {
-            let predicate = CNContact.predicateForContacts(matchingEmailAddress: email)
-            let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: Self.payloadKeys)
-            matches.append(contentsOf: contacts)
-        }
-
-        return Self.matchContacts(contacts: matches, phoneNumbers: phoneNumbers, emails: emails)
-    }
-
-    private static func matchContacts(
-        contacts: [CNContact],
-        phoneNumbers: [String],
-        emails: [String]) -> CNContact?
-    {
-        let normalizedPhones = Set(phoneNumbers.map { self.normalizePhone($0) }.filter { !$0.isEmpty })
-        let normalizedEmails = Set(emails.map { $0.lowercased() }.filter { !$0.isEmpty })
+        let normalizedPhones = Set(phoneNumbers.map(Self.normalizePhone))
+        let normalizedEmails = Set(emails)
         var seen = Set<String>()
-
-        for contact in contacts {
-            guard seen.insert(contact.identifier).inserted else { continue }
-            let contactPhones = Set(contact.phoneNumbers.map { self.normalizePhone($0.value.stringValue) })
-            let contactEmails = Set(contact.emailAddresses.map { String($0.value).lowercased() })
-
-            if !normalizedPhones.isEmpty, !contactPhones.isDisjoint(with: normalizedPhones) {
-                return contact
-            }
-            if !normalizedEmails.isEmpty, !contactEmails.isDisjoint(with: normalizedEmails) {
-                return contact
-            }
+        return contacts.first { contact in
+            guard seen.insert(contact.identifier).inserted else { return false }
+            return contact.phoneNumbers
+                .contains { normalizedPhones.contains(Self.normalizePhone($0.value.stringValue)) }
+                || contact.emailAddresses.contains { normalizedEmails.contains(String($0.value).lowercased()) }
         }
-
-        return nil
     }
 
     private static func normalizePhone(_ phone: String) -> String {

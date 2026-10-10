@@ -1,20 +1,12 @@
-// Best-effort inbound session metadata recorder for channel plugin command handlers.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-let inboundSessionRuntimePromise: Promise<
-  typeof import("../config/sessions/inbound.runtime.js")
-> | null = null;
+// Keep the session writer out of channel startup paths that only need SDK types.
+const loadInboundSessionRuntime = createLazyRuntimeModule(
+  () => import("../config/sessions/inbound.runtime.js"),
+);
 
-function loadInboundSessionRuntime() {
-  // Keep the session writer out of channel startup paths that only need SDK types.
-  inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
-  return inboundSessionRuntimePromise;
-}
-
-/**
- * Best-effort inbound session metadata recorder for channel plugin command handlers.
- */
 export async function recordInboundSessionMetaSafe(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -23,11 +15,11 @@ export async function recordInboundSessionMetaSafe(params: {
   onError?: (error: unknown) => void;
 }): Promise<void> {
   const runtime = await loadInboundSessionRuntime();
-  const storePath = runtime.resolveStorePath(params.cfg.session?.store, {
+  const storePath = runtime.resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
   try {
-    await runtime.recordSessionMetaFromInbound({
+    await runtime.recordInboundSessionMeta({
       storePath,
       sessionKey: params.sessionKey,
       ctx: params.ctx,

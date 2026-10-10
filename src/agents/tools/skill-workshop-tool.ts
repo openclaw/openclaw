@@ -1,486 +1,298 @@
-/**
- * Skill Workshop built-in tool.
- *
- * Exposes proposal create/update/review/apply actions while the workshop service owns persistence.
- */
-import { Type } from "typebox";
+import path from "node:path";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pathExists } from "../../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import type { WorkshopChange } from "../../skills/workshop/changes.kernel.js";
+import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import {
-  applySkillProposal,
-  inspectSkillProposal,
-  listSkillProposals,
-  proposeCreateSkill,
-  proposeUpdateSkill,
-  quarantineSkillProposal,
-  rejectSkillProposal,
-  resolvePendingSkillProposal,
-  reviseSkillProposal,
-} from "../../skills/workshop/service.js";
-import type {
-  SkillProposalManifestEntry,
-  SkillProposalOrigin,
-  SkillProposalReadResult,
-  SkillProposalRecord,
-  SkillProposalStatus,
-  SkillProposalSupportFileInput,
-} from "../../skills/workshop/types.js";
-import { stringEnum } from "../schema/typebox.js";
+  archiveWorkshopSkill,
+  createWorkshopSkill,
+  listWorkshopArchive,
+  listWorkshopSkills,
+  patchWorkshopSkill,
+  removeWorkshopSkillFile,
+  restoreWorkshopSkill,
+  viewWorkshopSkill,
+  WorkshopWriteError,
+  writeWorkshopSkillFile,
+  type WorkshopMutationContext,
+} from "../../skills/workshop/library.js";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
+import { skillWriteAdvisories } from "../../skills/workshop/skill-lint.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import { recordSkillUsed } from "../agent-tools.before-tool-call.diagnostics.js";
+import { SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
+import { canonicalizePath } from "../utils/paths.js";
 import {
   asToolParamsRecord,
-  readNumberParam,
-  readStringParam,
+  readToolStringParam,
   ToolInputError,
   type AnyAgentTool,
 } from "./common.js";
+import { SkillWorkshopToolSchema } from "./skill-workshop-tool-schema.js";
+import { textResult } from "./tool-results.js";
 
-const SKILL_WORKSHOP_ACTIONS = [
-  "create",
-  "update",
-  "revise",
-  "list",
-  "inspect",
-  "apply",
-  "reject",
-  "quarantine",
-] as const;
-const SKILL_PROPOSAL_STATUSES = [
-  "pending",
-  "applied",
-  "rejected",
-  "quarantined",
-  "stale",
-] as const satisfies readonly SkillProposalStatus[];
+const SKILL_WORKSHOP_DESCRIPTION = `Your learned skills: reusable procedures saved as <name>/SKILL.md that load in future sessions. Changes apply immediately, are versioned, and are shown to the user.
+Actions: list | view name [file_path] [version] | create name content | patch name old_text new_text [file_path] | write_file name file_path content | remove_file name file_path | archive name (absorbed_into or reason) | restore name [version].
+- create: content is the full SKILL.md: frontmatter name (= name) and description (aim for ≤160 bytes, triggers first), then the procedure.
+- patch: replaces one exact, unique old_text; view first and copy the text exactly. Prefer patch over rewrites.
+- file_path: SKILL.md or files under references/, templates/, scripts/, assets/. remove_file deletes one of those support files; archive removes a whole skill.
+- reason: one short line saying what changed; shown to the user.
+- restore without version undoes the last change.
 
-const SkillWorkshopToolSchema = Type.Object(
-  {
-    action: stringEnum(SKILL_WORKSHOP_ACTIONS, {
-      description:
-        "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
-    }),
-    proposal_id: Type.Optional(
-      Type.String({
-        description:
-          "Existing proposal id for action=inspect, action=revise, action=apply, action=reject, or action=quarantine.",
-      }),
-    ),
-    name: Type.Optional(
-      Type.String({
-        description:
-          "Skill/proposal name. Required for action=create; optional resolver for action=inspect or action=revise when proposal_id is unknown.",
-      }),
-    ),
-    query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
-    status: Type.Optional(
-      stringEnum(SKILL_PROPOSAL_STATUSES, {
-        description: "Optional proposal status filter for action=list.",
-      }),
-    ),
-    limit: Type.Optional(
-      Type.Integer({
-        minimum: 1,
-        maximum: 50,
-        description: "Maximum proposals to return for action=list. Defaults to 20.",
-      }),
-    ),
-    description: Type.Optional(
-      Type.String({
-        maxLength: 160,
-        description:
-          "Skill description for action=create, action=update, or action=revise. Keep it concise; max 160 bytes.",
-      }),
-    ),
-    skill_name: Type.Optional(
-      Type.String({ description: "Existing skill name or key for action=update." }),
-    ),
-    proposal_content: Type.Optional(
-      Type.String({
-        description:
-          "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
-      }),
-    ),
-    support_files: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            path: Type.String({
-              description:
-                "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
-            }),
-            content: Type.String({ description: "Support file text content." }),
-          },
-          { additionalProperties: false },
-        ),
-        { description: "Optional support files to store with the proposal." },
-      ),
-    ),
-    goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
-    evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
-    reason: Type.Optional(
-      Type.String({
-        description: "Optional reason for action=apply, action=reject, or action=quarantine.",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+
+const GUARDED_ACTIONS = new Set(["patch", "write_file", "remove_file", "archive"]);
+const MAX_TRACKED_RUNS = 256;
+// Retries and fallbacks rebuild tools within one run; reads must survive that.
+const viewedSkillsByRun = new Map<string, Set<string>>();
 
 export type SkillWorkshopToolOptions = {
-  workspaceDir: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  origin?: SkillProposalOrigin;
+  config: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  runId?: string;
+  /**
+   * Background review of this originating session: edits of existing skills require a prior
+   * view, archive needs a why, and change rows credit the review to that conversation.
+   */
+  reviewOf?: string;
 };
 
-/** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
+function formatChange(verb: string, change: WorkshopChange): string {
+  const undo = change.versionId
+    ? `Saved previous version; undo with action=restore name=${change.skillName}.`
+    : `Undo with action=archive name=${change.skillName}.`;
+  return `${verb} "${change.skillName}" (${change.summary}). ${undo}`;
+}
+
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
+  let viewed = new Set<string>();
+  if (options.runId) {
+    viewed = viewedSkillsByRun.get(options.runId) ?? viewed;
+    viewedSkillsByRun.set(options.runId, viewed);
+    pruneMapToMaxSize(viewedSkillsByRun, MAX_TRACKED_RUNS);
+  }
+  const baseCtx: WorkshopMutationContext = {
+    config: options.config,
+    agentId: options.agentId,
+    // A background review credits "review" and records the conversation it learned from.
+    actor: options.reviewOf ? "review" : "agent",
+    ...((options.reviewOf ?? options.sessionKey)
+      ? { sessionKey: options.reviewOf ?? options.sessionKey }
+      : {}),
+    ...(options.runId ? { runId: options.runId } : {}),
+  };
+  const skillsRoot = resolveWorkshopSkillsDir(options.config, options.agentId);
+
+  const execute = async (params: Record<string, unknown>, signal?: AbortSignal) => {
+    // Captured before any await; library writes recheck it under the skill lock.
+    const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+    const ctx: WorkshopMutationContext = {
+      ...baseCtx,
+      assertLive: () => {
+        assertSourceCurrent();
+        // The operator may switch Learning Off mid-review.
+        if (
+          options.reviewOf &&
+          resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto"
+        ) {
+          throw new WorkshopWriteError(
+            "Learning is off; background reviews may not change skills.",
+          );
+        }
+      },
+    };
+    const action = readToolStringParam(params, "action", { required: true });
+    if (action === "list") {
+      const [skills, archive] = await Promise.all([
+        listWorkshopSkills(options.config, options.agentId),
+        listWorkshopArchive(options.config, options.agentId),
+      ]);
+      const archived = archive.filter((entry) => !entry.live);
+      const lines = skills.map((skill) => `- ${skill.name}: ${skill.description}`);
+      if (archived.length > 0) {
+        lines.push(
+          "Archived (restore with action=restore):",
+          ...archived.map((entry) => `- ${entry.name}`),
+        );
+      }
+      return textResult(
+        lines.length > 0 ? lines.join("\n") : "No learned skills yet. Add one with action=create.",
+        { skills, archived },
+      );
+    }
+
+    const name = readToolStringParam(params, "name", { required: true });
+    const filePath = readToolStringParam(params, "file_path");
+    const reason = readToolStringParam(params, "reason");
+    const version = readToolStringParam(params, "version");
+
+    if (action === "view") {
+      const view = await viewWorkshopSkill(
+        options.config,
+        options.agentId,
+        name,
+        filePath,
+        version,
+      );
+      // Only a view of the live skill counts: it satisfies the review read-before-edit guard,
+      // and a foreground view is skill use (review trigger and unused-skill archive clock,
+      // through the same skill_usage owner as file reads).
+      if (!version) {
+        viewed.add(name);
+      }
+      if (!version && !options.reviewOf) {
+        recordSkillUsed({
+          ctx: options,
+          match: {
+            skillName: name,
+            skillSource: "workspace",
+            activation: "read",
+            skillFile: canonicalizePath(path.join(skillsRoot, name, "SKILL.md")),
+          },
+          toolName: "skill_workshop",
+        });
+      }
+      const others = view.files.filter((file) => file !== view.filePath);
+      return textResult(
+        others.length > 0 ? `${view.content}\n\n[Other files: ${others.join(", ")}]` : view.content,
+        { name, filePath: view.filePath, files: view.files, ...(version ? { version } : {}) },
+      );
+    }
+
+    if (
+      options.reviewOf &&
+      GUARDED_ACTIONS.has(action) &&
+      !viewed.has(name) &&
+      (await pathExists(path.join(skillsRoot, name, "SKILL.md")))
+    ) {
+      throw new ToolInputError(
+        `View it first: call skill_workshop action=view name=${name}, then retry once.`,
+      );
+    }
+
+    // SKILL.md writes get advisory feedback, so the prior text is read before the write.
+    const skillFileWrite =
+      action === "create" ||
+      ((action === "patch" || action === "write_file") &&
+        (!filePath?.trim() || filePath.trim() === "SKILL.md"));
+    const readLiveSkillFile = async () =>
+      (await viewWorkshopSkill(options.config, options.agentId, name).catch(() => undefined))
+        ?.content;
+    const before = !skillFileWrite
+      ? undefined
+      : action === "create"
+        ? ""
+        : await readLiveSkillFile();
+    let written: string | undefined;
+
+    let change: WorkshopChange;
+    let verb: string;
+    switch (action) {
+      case "create":
+        written = readToolStringParam(params, "content", { required: true, trim: false });
+        change = await createWorkshopSkill(ctx, {
+          name,
+          content: written,
+          ...(reason ? { summary: reason } : {}),
+        });
+        viewed.add(name);
+        verb = "Created";
+        break;
+      case "patch":
+        change = await patchWorkshopSkill(ctx, {
+          name,
+          oldText: readToolStringParam(params, "old_text", { required: true, trim: false }),
+          newText: readToolStringParam(params, "new_text", { trim: false, allowEmpty: true }) ?? "",
+          ...(filePath ? { filePath } : {}),
+          ...(reason ? { summary: reason } : {}),
+        });
+        verb = "Patched";
+        break;
+      case "write_file":
+        written = readToolStringParam(params, "content", { required: true, trim: false });
+        change = await writeWorkshopSkillFile(ctx, {
+          name,
+          filePath: readToolStringParam(params, "file_path", { required: true }),
+          content: written,
+          ...(reason ? { summary: reason } : {}),
+        });
+        verb = "Updated";
+        break;
+      case "remove_file":
+        change = await removeWorkshopSkillFile(ctx, {
+          name,
+          filePath: readToolStringParam(params, "file_path", { required: true }),
+          ...(reason ? { summary: reason } : {}),
+        });
+        verb = "Updated";
+        break;
+      case "archive": {
+        const absorbedInto = readToolStringParam(params, "absorbed_into");
+        if (options.reviewOf && !absorbedInto && !reason) {
+          throw new ToolInputError(
+            "archive needs absorbed_into (the live skill that now covers this one) or a reason.",
+          );
+        }
+        change = await archiveWorkshopSkill(ctx, {
+          name,
+          ...(absorbedInto ? { absorbedInto } : {}),
+          ...(reason ? { reason } : {}),
+        });
+        verb = "Archived";
+        break;
+      }
+      case "restore":
+        change = await restoreWorkshopSkill(ctx, {
+          name,
+          ...(version ? { versionId: version } : {}),
+          ...(reason ? { summary: reason } : {}),
+        });
+        verb = "Restored";
+        break;
+      default:
+        throw new ToolInputError(
+          `Unknown action "${action}". Use list, view, create, patch, write_file, remove_file, archive, or restore.`,
+        );
+    }
+    const after = skillFileWrite ? (written ?? (await readLiveSkillFile())) : undefined;
+    const lines = [formatChange(verb, change)];
+    if (before !== undefined && after !== undefined) {
+      lines.push(...skillWriteAdvisories(before, after));
+    }
+    if (action === "create") {
+      // The agent, not a string heuristic, judges whether a new skill duplicates an old one.
+      const others = (await listWorkshopSkills(options.config, options.agentId)).filter(
+        (skill) => skill.name !== name,
+      );
+      if (others.length > 0) {
+        lines.push(
+          "Other learned skills; if one covers the same class of task, merge (patch the broader one, archive the other with absorbed_into):",
+          ...others.map((skill) => `- ${skill.name}: ${skill.description}`),
+        );
+      }
+    }
+    return textResult(lines.join("\n"), { change });
+  };
+
   return {
     label: "Skill Workshop",
     name: "skill_workshop",
-    displaySummary: "Propose a reusable skill",
-    description:
-      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals when reusable procedures should be captured, improved, or explicitly approved.",
+    displaySummary: SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY,
+    description: SKILL_WORKSHOP_DESCRIPTION,
     parameters: SkillWorkshopToolSchema,
-    execute: async (_toolCallId, args) => {
-      const params = asToolParamsRecord(args);
-      const action = readStringParam(params, "action", { required: true });
-
-      if (action === "list") {
-        const proposals = listProposalEntries({
-          proposals: (await listSkillProposals({ workspaceDir: options.workspaceDir })).proposals,
-          status: readProposalStatusParam(params),
-          query: readStringParam(params, "query"),
-          limit: readListLimitParam(params),
-        });
-        return {
-          content: [{ type: "text", text: formatProposalList(proposals) }],
-          details: {
-            proposals,
-          },
-        };
+    execute: async (_toolCallId, args, signal) => {
+      try {
+        return await execute(asToolParamsRecord(args), signal);
+      } catch (error) {
+        if (error instanceof WorkshopWriteError) {
+          throw new ToolInputError(error.message);
+        }
+        throw error;
       }
-
-      if (action === "inspect") {
-        const proposal = await readProposalForInspect(params, options.workspaceDir);
-        return proposalResult(proposal, {
-          contentText: formatProposalInspect(proposal),
-          includeContent: true,
-        });
-      }
-
-      if (action === "apply") {
-        const applied = await applySkillProposal({
-          workspaceDir: options.workspaceDir,
-          config: options.config,
-          proposalId: readLifecycleProposalIdParam(params),
-          reason: readStringParam(params, "reason"),
-        });
-        return actionResult(applied.record, {
-          contentText: `Applied skill proposal ${applied.record.id}.`,
-          targetSkillFile: applied.targetSkillFile,
-        });
-      }
-
-      if (action === "reject") {
-        const rejected = await rejectSkillProposal({
-          workspaceDir: options.workspaceDir,
-          proposalId: readLifecycleProposalIdParam(params),
-          reason: readStringParam(params, "reason"),
-        });
-        return actionResult(rejected, {
-          contentText: `Rejected skill proposal ${rejected.id}.`,
-        });
-      }
-
-      if (action === "quarantine") {
-        const quarantined = await quarantineSkillProposal({
-          workspaceDir: options.workspaceDir,
-          proposalId: readLifecycleProposalIdParam(params),
-          reason: readStringParam(params, "reason"),
-        });
-        return actionResult(quarantined, {
-          contentText: `Quarantined skill proposal ${quarantined.id}.`,
-        });
-      }
-
-      const proposalContent = readStringParam(params, "proposal_content", {
-        required: true,
-        label: "proposal_content",
-      });
-      const supportFiles = readSupportFilesParam(params);
-      const goal = readStringParam(params, "goal");
-      const evidence = readStringParam(params, "evidence");
-
-      let proposal: SkillProposalReadResult;
-      let contentText: string;
-      if (action === "create") {
-        proposal = await proposeCreateSkill({
-          workspaceDir: options.workspaceDir,
-          config: options.config,
-          name: readStringParam(params, "name", { required: true }),
-          description: readStringParam(params, "description", { required: true }),
-          content: proposalContent,
-          supportFiles,
-          createdBy: "skill-workshop",
-          ...(options.origin ? { origin: options.origin } : {}),
-          goal,
-          evidence,
-        });
-        contentText = proposalMutationText("Created skill proposal", proposal.record);
-      } else if (action === "update") {
-        proposal = await proposeUpdateSkill({
-          workspaceDir: options.workspaceDir,
-          config: options.config,
-          agentId: options.agentId,
-          skillName: readStringParam(params, "skill_name", {
-            required: true,
-            label: "skill_name",
-          }),
-          description: readStringParam(params, "description"),
-          content: proposalContent,
-          supportFiles,
-          createdBy: "skill-workshop",
-          ...(options.origin ? { origin: options.origin } : {}),
-          goal,
-          evidence,
-        });
-        contentText = proposalMutationText("Created skill update proposal", proposal.record);
-      } else if (action === "revise") {
-        const pendingProposal = await resolvePendingSkillProposal({
-          proposalId: readStringParam(params, "proposal_id", {
-            label: "proposal_id",
-          }),
-          name: readStringParam(params, "name"),
-          workspaceDir: options.workspaceDir,
-        });
-        proposal = await reviseSkillProposal({
-          workspaceDir: options.workspaceDir,
-          config: options.config,
-          proposalId: pendingProposal.record.id,
-          content: proposalContent,
-          supportFiles,
-          description: readStringParam(params, "description"),
-          goal,
-          evidence,
-        });
-        contentText = proposalMutationText("Revised skill proposal", proposal.record);
-      } else {
-        throw new ToolInputError(`action must be one of ${SKILL_WORKSHOP_ACTIONS.join(", ")}`);
-      }
-
-      return proposalResult(proposal, { contentText });
     },
   };
-}
-
-function proposalMutationText(action: string, record: SkillProposalRecord): string {
-  return `${action} ${record.id} (${record.status}) for ${record.target.skillKey}.`;
-}
-
-function actionResult(
-  record: SkillProposalRecord,
-  options: { contentText: string; targetSkillFile?: string },
-) {
-  return {
-    content: [{ type: "text" as const, text: options.contentText }],
-    details: {
-      id: record.id,
-      status: record.status,
-      kind: record.kind,
-      skillName: record.target.skillName,
-      skillKey: record.target.skillKey,
-      targetSkillFile: options.targetSkillFile ?? record.target.skillFile,
-      scanState: record.scan.state,
-      proposedVersion: record.proposedVersion,
-    },
-  };
-}
-
-function proposalResult(
-  proposal: SkillProposalReadResult,
-  options: { contentText?: string; includeContent?: boolean } = {},
-) {
-  return {
-    content: options.contentText ? [{ type: "text" as const, text: options.contentText }] : [],
-    details: {
-      id: proposal.record.id,
-      status: proposal.record.status,
-      kind: proposal.record.kind,
-      skillName: proposal.record.target.skillName,
-      skillKey: proposal.record.target.skillKey,
-      proposalFile: proposal.record.draftFile,
-      supportFileCount: proposal.record.supportFiles?.length ?? 0,
-      targetSkillFile: proposal.record.target.skillFile,
-      scanState: proposal.record.scan.state,
-      proposedVersion: proposal.record.proposedVersion,
-      ...(options.includeContent ? { proposalContent: proposal.content } : {}),
-      ...(options.includeContent && proposal.supportFiles
-        ? { supportFiles: proposal.supportFiles }
-        : {}),
-    },
-  };
-}
-
-function readLifecycleProposalIdParam(params: Record<string, unknown>): string {
-  return readStringParam(params, "proposal_id", {
-    required: true,
-    label: "proposal_id",
-  });
-}
-
-async function readProposalForInspect(
-  params: Record<string, unknown>,
-  workspaceDir: string,
-): Promise<SkillProposalReadResult> {
-  const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
-  if (proposalId) {
-    const proposal = await inspectSkillProposal(proposalId, { workspaceDir });
-    if (!proposal) {
-      throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
-    }
-    return proposal;
-  }
-  const resolved = await resolvePendingSkillProposal({
-    name: readStringParam(params, "name", { required: true }),
-    workspaceDir,
-  });
-  const proposal = await inspectSkillProposal(resolved.record.id, { workspaceDir });
-  if (!proposal) {
-    throw new ToolInputError(`Skill proposal not found: ${resolved.record.id}`);
-  }
-  return proposal;
-}
-
-function readProposalStatusParam(params: Record<string, unknown>): SkillProposalStatus | undefined {
-  const status = readStringParam(params, "status");
-  if (!status) {
-    return undefined;
-  }
-  if (!(SKILL_PROPOSAL_STATUSES as readonly string[]).includes(status)) {
-    throw new ToolInputError(`status must be one of ${SKILL_PROPOSAL_STATUSES.join(", ")}`);
-  }
-  return status as SkillProposalStatus;
-}
-
-function readListLimitParam(params: Record<string, unknown>): number {
-  return (
-    readNumberParam(params, "limit", {
-      integer: true,
-      positiveInteger: true,
-      label: "limit",
-    }) ?? 20
-  );
-}
-
-function listProposalEntries(params: {
-  proposals: readonly SkillProposalManifestEntry[];
-  status?: SkillProposalStatus;
-  query?: string;
-  limit: number;
-}): SkillProposalManifestEntry[] {
-  const query = params.query?.trim().toLowerCase();
-  const normalizedQuery = query ? normalizeProposalSearchText(query) : undefined;
-  const limit = Math.min(Math.max(params.limit, 1), 50);
-  // Pending proposals sort first so the model sees actionable work before
-  // historical applied/rejected records.
-  return params.proposals
-    .filter((proposal) => !params.status || proposal.status === params.status)
-    .filter((proposal) => {
-      if (!query) {
-        return true;
-      }
-      return [
-        proposal.id,
-        proposal.title,
-        proposal.description,
-        proposal.skillName,
-        proposal.skillKey,
-      ].some((value) => {
-        const lower = value.toLowerCase();
-        return (
-          lower.includes(query) ||
-          (normalizedQuery !== undefined &&
-            normalizedQuery.length > 0 &&
-            normalizeProposalSearchText(lower).includes(normalizedQuery))
-        );
-      });
-    })
-    .toSorted((a, b) => {
-      if (a.status === "pending" && b.status !== "pending") {
-        return -1;
-      }
-      if (a.status !== "pending" && b.status === "pending") {
-        return 1;
-      }
-      return b.updatedAt.localeCompare(a.updatedAt);
-    })
-    .slice(0, limit);
-}
-
-function normalizeProposalSearchText(value: string): string {
-  return value
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/^-|-$/g, "");
-}
-
-function formatProposalList(proposals: readonly SkillProposalManifestEntry[]): string {
-  if (proposals.length === 0) {
-    return "No skill proposals matched.";
-  }
-  return proposals
-    .map(
-      (proposal) =>
-        `- ${proposal.id} [${proposal.status}, ${proposal.kind}, ${proposal.scanState}] ${proposal.skillKey}: ${proposal.title}`,
-    )
-    .join("\n");
-}
-
-function formatProposalInspect(proposal: SkillProposalReadResult): string {
-  const supportFiles =
-    proposal.supportFiles && proposal.supportFiles.length > 0
-      ? [
-          "",
-          "Support files:",
-          ...proposal.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
-        ]
-      : [];
-  return [
-    `Proposal: ${proposal.record.id}`,
-    `Status: ${proposal.record.status}`,
-    `Kind: ${proposal.record.kind}`,
-    `Skill: ${proposal.record.target.skillKey}`,
-    `Version: ${proposal.record.proposedVersion}`,
-    `Scan: ${proposal.record.scan.state}`,
-    "",
-    proposal.content,
-    ...supportFiles,
-  ].join("\n");
-}
-
-function readSupportFilesParam(
-  params: Record<string, unknown>,
-): SkillProposalSupportFileInput[] | undefined {
-  const raw = params.support_files;
-  if (raw === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(raw)) {
-    throw new ToolInputError("support_files must be an array");
-  }
-  return raw.map((item, index) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new ToolInputError(`support_files[${index}] must be an object`);
-    }
-    const file = item as Record<string, unknown>;
-    if (typeof file.path !== "string" || !file.path.trim()) {
-      throw new ToolInputError(`support_files[${index}].path required`);
-    }
-    if (typeof file.content !== "string") {
-      throw new ToolInputError(`support_files[${index}].content required`);
-    }
-    return {
-      path: file.path,
-      content: file.content,
-    };
-  });
 }

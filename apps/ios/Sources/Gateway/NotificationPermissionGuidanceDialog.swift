@@ -50,42 +50,27 @@ private struct NotificationPermissionGuidanceCard: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Notifications are off")
-                    .font(.headline)
+                    .font(OpenClawType.headline)
                 Text(
                     """
                     Exec approvals can only be reviewed while OpenClaw is open and connected.
 
                     Enable Notifications to receive approval notifications while OpenClaw is not open.
                     """)
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(spacing: 10) {
-                Button {
-                    self.onOpenNotifications()
-                } label: {
-                    Text("Open Notifications Settings")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
+                approvalDialogButton(Text("Open Notifications Settings"), action: self.onOpenNotifications)
+                    .openClawProminentButton()
 
-                Button(role: .cancel) {
-                    self.onDismiss()
-                } label: {
-                    Text("Not Now")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                approvalDialogButton(Text("Not Now"), role: .cancel, action: self.onDismiss)
+                    .buttonStyle(.bordered)
 
-                Button {
-                    self.onSuppressFuture()
-                } label: {
-                    Text("Don't show again")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                approvalDialogButton(Text("Don't show again"), action: self.onSuppressFuture)
+                    .buttonStyle(.bordered)
             }
             .controlSize(.large)
             .frame(maxWidth: .infinity)
@@ -97,6 +82,6 @@ private struct NotificationPermissionGuidanceCard: View {
 
 extension View {
     func notificationPermissionGuidanceDialog(openNotifications: @escaping (String) -> Void) -> some View {
-        self.modifier(NotificationPermissionGuidanceDialogModifier(openNotifications: openNotifications))
+        modifier(NotificationPermissionGuidanceDialogModifier(openNotifications: openNotifications))
     }
 }

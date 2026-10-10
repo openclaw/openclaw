@@ -3,9 +3,8 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { isCommandFlagEnabled, isRestartEnabled } from "./commands.flags.js";
 import {
-  isCommandFlagEnabled,
-  isRestartEnabled,
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -14,63 +13,25 @@ import { validateConfigObjectWithPlugins } from "./validation.js";
 
 beforeEach(() => {
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
+    createTestRegistry(
+      [
+        { id: "discord", autoEnabled: true },
+        { id: "telegram", autoEnabled: true },
+        { id: "slack", autoEnabled: false },
+        { id: "whatsapp", autoEnabled: false },
+        { id: "demo-channel", autoEnabled: true },
+      ].map(({ id, autoEnabled }) => ({
+        pluginId: id,
         source: "test",
         plugin: {
-          ...createChannelTestPluginBase({ id: "discord" }),
+          ...createChannelTestPluginBase({ id }),
           commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
+            nativeCommandsAutoEnabled: autoEnabled,
+            nativeSkillsAutoEnabled: autoEnabled,
           },
         },
-      },
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "telegram" }),
-          commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
-          },
-        },
-      },
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "slack" }),
-          commands: {
-            nativeCommandsAutoEnabled: false,
-            nativeSkillsAutoEnabled: false,
-          },
-        },
-      },
-      {
-        pluginId: "whatsapp",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "whatsapp" }),
-          commands: {
-            nativeCommandsAutoEnabled: false,
-            nativeSkillsAutoEnabled: false,
-          },
-        },
-      },
-      {
-        pluginId: "demo-channel",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "demo-channel" }),
-          commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
-          },
-        },
-      },
-    ]),
+      })),
+    ),
   );
 });
 
@@ -107,7 +68,6 @@ describe("resolveNativeSkillsEnabled", () => {
     const env = {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
     expect(
@@ -279,16 +239,12 @@ describe("isCommandFlagEnabled", () => {
   });
 });
 
-describe("deprecated commands compatibility", () => {
-  it("ignores legacy modelsWrite during validation", () => {
+describe("retired commands config", () => {
+  it("rejects legacy modelsWrite during validation", () => {
     const result = validateConfigObjectWithPlugins({
       commands: { text: true, modelsWrite: false },
     });
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.commands?.text).toBe(true);
-      expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
-    }
+    expect(result.ok).toBe(false);
   });
 });

@@ -3,8 +3,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 
 type CommandSurfaceParams = {
   ctx: {
@@ -18,17 +18,8 @@ type CommandSurfaceParams = {
   };
 };
 
-type ChannelAccountParams = {
+type ChannelAccountParams = CommandSurfaceParams & {
   cfg: OpenClawConfig;
-  ctx: {
-    OriginatingChannel?: string;
-    Surface?: string;
-    Provider?: string;
-    AccountId?: string;
-  };
-  command: {
-    channel?: string;
-  };
 };
 
 /** Resolves the command surface channel from inbound context and command state. */
@@ -48,9 +39,7 @@ export function resolveChannelAccountId(params: ChannelAccountParams): string {
     return accountId;
   }
   const channel = resolveCommandSurfaceChannel(params);
-  const plugin = getActivePluginChannelRegistry()?.channels.find(
-    (entry) => entry.plugin.id === channel,
-  )?.plugin;
+  const plugin = getLoadedChannelPluginById(channel);
   const configuredDefault = normalizeOptionalString(plugin?.config.defaultAccountId?.(params.cfg));
   return configuredDefault || "default";
 }

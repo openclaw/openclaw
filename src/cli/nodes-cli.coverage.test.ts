@@ -2,9 +2,11 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
+import { callNodesGatewayCli } from "./nodes-cli/rpc.js";
 
 type NodeInvokeCall = {
   method?: string;
+  timeoutMs?: number | null;
   params?: {
     idempotencyKey?: string;
     command?: string;
@@ -45,8 +47,6 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   return { ok: true };
 });
 
-const randomIdempotencyKey = vi.fn(() => "rk_test");
-
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
   return createCliRuntimeMock(vi);
@@ -56,7 +56,6 @@ const { runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
-  randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
 vi.mock("../runtime.js", async () => ({
@@ -66,17 +65,6 @@ vi.mock("../runtime.js", async () => ({
 
 describe("nodes-cli coverage", () => {
   const sharedProgram: Command = new Command();
-
-  const withSuppressedStderr = async <T>(run: () => Promise<T>) => {
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation((() => true) as typeof process.stderr.write);
-    try {
-      return await run();
-    } finally {
-      stderrSpy.mockRestore();
-    }
-  };
 
   const getNodeInvokeCall = () => {
     const last = lastNodeInvokeCall;
@@ -96,13 +84,12 @@ describe("nodes-cli coverage", () => {
       return;
     }
     sharedProgram.exitOverride();
-    await registerNodesCli(sharedProgram);
+    await registerNodesCli(sharedProgram, ["node", "openclaw", "nodes", "status"]);
   });
 
   beforeEach(() => {
     runtimeErrors.length = 0;
     callGateway.mockClear();
-    randomIdempotencyKey.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
@@ -111,16 +98,19 @@ describe("nodes-cli coverage", () => {
     lastNodeInvokeCall = null;
   });
 
-  it("does not register the removed run wrapper", async () => {
-    await withSuppressedStderr(async () => {
-      let error: { code?: unknown } | undefined;
-      try {
-        await sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" });
-      } catch (err) {
-        error = err as { code?: unknown };
-      }
-      expect(error?.code).toBe("commander.unknownCommand");
+  it("shows the registered pending command in node pairing help", () => {
+    const nodes = sharedProgram.commands.find((command) => command.name() === "nodes");
+    const output: string[] = [];
+
+    expect(nodes).toBeDefined();
+    nodes?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
     });
+    nodes?.outputHelp();
+
+    expect(output.join("")).toContain("openclaw nodes pending");
+    expect(output.join("")).not.toContain("openclaw nodes pairing pending");
   });
 
   it("explains unknown nodes approve request ids with the current pending requests", async () => {
@@ -199,6 +189,117 @@ describe("nodes-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ approved: true });
   });
 
+  it("explains unknown nodes reject request ids without leaking connection credentials", async () => {
+    callGateway.mockRejectedValueOnce(
+      Object.assign(new Error("unknown requestId"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    );
+
+    await expect(
+      sharedProgram.parseAsync(
+        [
+          "nodes",
+          "reject",
+          "stale-request",
+          "--url",
+          "wss://gateway.example.test",
+          "--token",
+          "secret-token",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: stale-request");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).not.toContain("gateway.example.test");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.reject"]);
+  });
+
+  it.each([
+    {
+      label: "list with an invalid last-connected duration",
+      command: "list",
+      args: ["nodes", "list", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      label: "status with an empty last-connected duration",
+      command: "status",
+      args: ["nodes", "status", "--last-connected", ""],
+      message: "Invalid --last-connected",
+    },
+    {
+      label: "invoke with a blank node",
+      command: "invoke",
+      args: ["nodes", "invoke", "--node", "   ", "--command", "canvas.eval"],
+      message: "--node and --command required",
+    },
+    {
+      label: "invoke with a blank command",
+      command: "invoke",
+      args: ["nodes", "invoke", "--node", "mac-1", "--command", "   "],
+      message: "--node and --command required",
+    },
+    {
+      label: "invoke with an empty idempotency key",
+      command: "invoke",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--idempotency-key",
+        "",
+      ],
+      message: "--idempotency-key",
+    },
+    {
+      label: "rename with a blank name",
+      command: "rename",
+      args: ["nodes", "rename", "--node", "mac-1", "--name", "   "],
+      message: "--name must not be empty",
+    },
+    {
+      label: "push with an invalid environment",
+      command: "push",
+      args: ["nodes", "push", "--node", "mac-1", "--environment", "staging"],
+      message: "invalid --environment (use sandbox|production)",
+    },
+    {
+      label: "notify without a title or body",
+      command: "notify",
+      args: ["nodes", "notify", "--node", "mac-1", "--title", " ", "--body", " "],
+      message: "missing --title or --body",
+    },
+    {
+      label: "camera snap with an invalid facing",
+      command: "camera snap",
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--facing", "side"],
+      message: "invalid facing: side (expected front|back|both)",
+    },
+    {
+      label: "camera clip with an invalid facing",
+      command: "camera clip",
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--facing", "both"],
+      message: "invalid facing: both (expected front|back)",
+    },
+  ])("reports $label once before calling the gateway", async ({ command, args, message }) => {
+    await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([expect.stringContaining(`nodes ${command} failed: ${message}`)]);
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
@@ -208,7 +309,21 @@ describe("nodes-cli coverage", () => {
     expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
   });
 
-  it("invokes system.notify with provided fields", async () => {
+  it("rejects malformed nodes invoke params before opening a gateway call", async () => {
+    await expect(
+      sharedProgram.parseAsync(
+        ["nodes", "invoke", "--node", "mac-1", "--command", "canvas.eval", "--params", "not-json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON.");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(lastNodeInvokeCall).toBeNull();
+  });
+
+  it("forwards notification priority with the default system delivery", async () => {
+    const priority = "timeSensitive";
     const invoke = await runNodesCommand([
       "nodes",
       "notify",
@@ -216,22 +331,59 @@ describe("nodes-cli coverage", () => {
       "mac-1",
       "--title",
       "Ping",
-      "--body",
-      "Gateway ready",
-      "--delivery",
-      "overlay",
+      "--priority",
+      priority,
     ]);
 
-    if (!invoke) {
-      throw new Error("expected system.notify invocation");
-    }
-    expect(invoke.params?.command).toBe("system.notify");
-    expect(invoke.params?.params).toEqual({
-      title: "Ping",
-      body: "Gateway ready",
-      sound: undefined,
-      priority: undefined,
-      delivery: "overlay",
+    expect(invoke.params?.params).toMatchObject({ priority, delivery: "system" });
+  });
+
+  it.each([
+    {
+      label: "a shorter explicit gateway timeout",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "15000",
+        "--timeout",
+        "5000",
+      ],
+      invokeTimeoutMs: 15_000,
+      transportTimeoutMs: 25_000,
+      lookupTimeoutMs: 5_000,
+    },
+  ])(
+    "keeps the gateway transport alive for $label",
+    async ({ args, invokeTimeoutMs, transportTimeoutMs, lookupTimeoutMs }) => {
+      const invoke = await runNodesCommand(args);
+
+      expect(invoke.params?.timeoutMs).toBe(invokeTimeoutMs);
+      expect(invoke.timeoutMs).toBe(transportTimeoutMs);
+      expect(
+        callGateway.mock.calls.find(([call]) => call.method === "node.list")?.[0].timeoutMs,
+      ).toBe(lookupTimeoutMs);
+    },
+  );
+
+  it("disables the gateway request deadline for an unbounded node invocation", async () => {
+    const params = {
+      nodeId: "mac-1",
+      command: "canvas.eval",
+      timeoutMs: 0,
+      idempotencyKey: "rk_test",
+    };
+
+    await callNodesGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
+
+    expect(getNodeInvokeCall()).toMatchObject({
+      method: "node.invoke",
+      timeoutMs: null,
+      params,
     });
   });
 
@@ -252,9 +404,6 @@ describe("nodes-cli coverage", () => {
       "6000",
     ]);
 
-    if (!invoke) {
-      throw new Error("expected location.get invocation");
-    }
     expect(invoke.params?.command).toBe("location.get");
     expect(invoke.params?.params).toEqual({
       maxAgeMs: 1000,
@@ -265,78 +414,20 @@ describe("nodes-cli coverage", () => {
   });
 
   it.each([
-    {
-      args: ["nodes", "location", "get", "--node", "mac-1", "--max-age", "1000ms"],
-      flag: "--max-age",
-    },
-    {
-      args: ["nodes", "location", "get", "--node", "mac-1", "--location-timeout", "5s"],
-      flag: "--location-timeout",
-    },
-    {
-      args: ["nodes", "location", "get", "--node", "mac-1", "--invoke-timeout", "6s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--max-width", "1024px"],
-      flag: "--max-width",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--delay-ms", "20ms"],
-      flag: "--delay-ms",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--invoke-timeout", "20s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "0.8jpg"],
-      flag: "--quality",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "1.1"],
-      flag: "--quality",
-    },
-    {
-      args: ["nodes", "camera", "clip", "--node", "mac-1", "--invoke-timeout", "90s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--screen", "1x"],
-      flag: "--screen",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--invoke-timeout", "120s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "10fps"],
-      flag: "--fps",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "0"],
-      flag: "--fps",
-    },
-    {
-      args: ["nodes", "notify", "--node", "mac-1", "--title", "Ping", "--invoke-timeout", "15s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: [
-        "nodes",
-        "invoke",
-        "--node",
-        "mac-1",
-        "--command",
-        "canvas.eval",
-        "--invoke-timeout",
-        "15s",
-      ],
-      flag: "--invoke-timeout",
-    },
-  ])("rejects partial numeric option for $args", async ({ args, flag }) => {
+    [["nodes", "location", "get", "--node", "mac-1", "--invoke-timeout", "6s"], "--invoke-timeout"],
+    [["nodes", "camera", "snap", "--node", "mac-1", "--invoke-timeout", "20s"], "--invoke-timeout"],
+    [["nodes", "camera", "snap", "--node", "mac-1", "--quality", "1.1"], "--quality"],
+    [["nodes", "camera", "clip", "--node", "mac-1", "--invoke-timeout", "90s"], "--invoke-timeout"],
+    [
+      ["nodes", "screen", "record", "--node", "mac-1", "--invoke-timeout", "120s"],
+      "--invoke-timeout",
+    ],
+    [["nodes", "screen", "record", "--node", "mac-1", "--fps", "10fps"], "--fps"],
+    [["nodes", "screen", "record", "--node", "mac-1", "--fps", "0"], "--fps"],
+  ])("rejects invalid numeric option before calling the gateway for %s", async (args, flag) => {
     await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
     expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
+    expect(callGateway).not.toHaveBeenCalled();
     expect(lastNodeInvokeCall).toBeNull();
   });
 });

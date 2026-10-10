@@ -1,18 +1,23 @@
-// QR/setup-code CLI for mobile/device pairing with local or remote Gateway credentials.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
-import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { resolveCanonicalRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
+import { formatDocsHelp } from "./help-format.js";
 
 type QrCliOptions = {
   json?: boolean;
@@ -23,19 +28,12 @@ type QrCliOptions = {
   publicUrl?: string;
   token?: string;
   password?: string;
+  limited?: boolean;
+  voiceNode?: boolean;
 };
 
-function renderQrAscii(data: string): Promise<string> {
-  return renderQrTerminal(data);
-}
-function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
-  const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+const LIMITED_TRANSPORT_WARNING =
+  "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
 function shouldResolveLocalGatewayPasswordSecret(
   cfg: OpenClawConfig,
@@ -60,26 +58,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   return !envToken && !configTokenConfigured;
 }
 
-async function resolveLocalGatewayPasswordSecretIfNeeded(cfg: OpenClawConfig): Promise<void> {
-  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
-    config: cfg,
-    env: process.env,
-    value: cfg.gateway?.auth?.password,
-    path: "gateway.auth.password",
-  });
-  if (!resolvedPassword) {
-    return;
-  }
-  if (!cfg.gateway?.auth) {
-    return;
-  }
-  cfg.gateway.auth.password = resolvedPassword;
-}
-
 function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
-  if (diagnostics.length === 0) {
-    return;
-  }
   const toStderr = opts.json === true || opts.setupCodeOnly === true;
   for (const entry of diagnostics) {
     const message = theme.warn(`[secrets] ${entry}`);
@@ -95,10 +74,7 @@ export function registerQrCli(program: Command) {
   program
     .command("qr")
     .description("Generate a mobile pairing QR code and setup code")
-    .addHelpText(
-      "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/qr"))
     .option(
       "--remote",
       "Use gateway.remote.url and gateway.remote token/password (ignores device-pair publicUrl)",
@@ -108,13 +84,18 @@ export function registerQrCli(program: Command) {
     .option("--public-url <url>", "Override gateway public URL used in the setup payload")
     .option("--token <token>", "Override gateway token for setup payload")
     .option("--password <password>", "Override gateway password for setup payload")
+    .option("--limited", "Pair with limited operator access (omit operator.admin)", false)
+    .option("--voice-node", "Pair a voice node with node, read, and Talk access only", false)
     .option("--setup-code-only", "Print only the setup code", false)
     .option("--no-ascii", "Skip ASCII QR rendering")
     .option("--json", "Output JSON", false)
     .action(async (opts: QrCliOptions) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         if (opts.token && opts.password) {
           throw new Error("Use either --token or --password, not both.");
+        }
+        if (opts.limited && opts.voiceNode) {
+          throw new Error("Use either --limited or --voice-node, not both.");
         }
 
         const token = trimToUndefined(opts.token) ?? "";
@@ -155,28 +136,18 @@ export function registerQrCli(program: Command) {
         };
         emitQrSecretResolveDiagnostics(remoteDiagnostics, opts);
 
-        if (token) {
+        const authToken =
+          token || (wantsRemote && !password ? trimToUndefined(cfg.gateway.remote?.token) : "");
+        const authPassword =
+          password || (wantsRemote && !token ? trimToUndefined(cfg.gateway.remote?.password) : "");
+        if (authToken) {
           cfg.gateway.auth.mode = "token";
-          cfg.gateway.auth.token = token;
+          cfg.gateway.auth.token = authToken;
           cfg.gateway.auth.password = undefined;
-        }
-        if (password) {
+        } else if (authPassword) {
           cfg.gateway.auth.mode = "password";
-          cfg.gateway.auth.password = password;
+          cfg.gateway.auth.password = authPassword;
           cfg.gateway.auth.token = undefined;
-        }
-        if (wantsRemote && !token && !password) {
-          const remoteToken = trimToUndefined(cfg.gateway?.remote?.token) ?? "";
-          const remotePassword = trimToUndefined(cfg.gateway?.remote?.password) ?? "";
-          if (remoteToken) {
-            cfg.gateway.auth.mode = "token";
-            cfg.gateway.auth.token = remoteToken;
-            cfg.gateway.auth.password = undefined;
-          } else if (remotePassword) {
-            cfg.gateway.auth.mode = "password";
-            cfg.gateway.auth.password = remotePassword;
-            cfg.gateway.auth.token = undefined;
-          }
         }
         if (
           !wantsRemote &&
@@ -184,25 +155,34 @@ export function registerQrCli(program: Command) {
           !token &&
           shouldResolveLocalGatewayPasswordSecret(cfg, process.env)
         ) {
-          await resolveLocalGatewayPasswordSecretIfNeeded(cfg);
+          const resolvedPassword = await resolveCanonicalRequiredConfiguredSecretRefInputString({
+            config: cfg,
+            env: process.env,
+            value: cfg.gateway.auth.password,
+            path: "gateway.auth.password",
+          });
+          if (resolvedPassword) {
+            cfg.gateway.auth.password = resolvedPassword;
+          }
         }
 
-        const explicitUrl =
-          typeof opts.url === "string" && opts.url.trim()
-            ? opts.url.trim()
-            : typeof opts.publicUrl === "string" && opts.publicUrl.trim()
-              ? opts.publicUrl.trim()
-              : undefined;
-        const publicUrl =
-          explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
-
+        const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
         const resolved = await resolvePairingSetupFromConfig(cfg, {
-          publicUrl,
+          publicUrl: explicitUrl,
           preferRemoteUrl: wantsRemote,
+          ...(opts.voiceNode
+            ? { bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }
+            : opts.limited
+              ? { bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE }
+              : {}),
           runCommandWithTimeout: async (argv, runOpts) =>
             await runCommandWithTimeout(argv, {
               timeoutMs: runOpts.timeoutMs,
             }),
+          loadLocalTlsFingerprint: async () => {
+            const certificate = await inspectGatewayTlsCertificate(cfg.gateway?.tls);
+            return certificate.ok ? certificate.value.fingerprintSha256 : undefined;
+          },
         });
 
         if (!resolved.ok) {
@@ -211,18 +191,24 @@ export function registerQrCli(program: Command) {
 
         const setupCode = encodePairingSetupCode(resolved.payload);
 
-        if (opts.setupCodeOnly) {
-          defaultRuntime.log(setupCode);
-          return;
-        }
-
         if (opts.json) {
           defaultRuntime.writeJson({
             setupCode,
             gatewayUrl: resolved.payload.url,
+            ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
             auth: resolved.authLabel,
             urlSource: resolved.urlSource,
+            access: resolved.access,
+            ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
           });
+          return;
+        }
+
+        if (opts.setupCodeOnly) {
+          if (resolved.accessDowngraded) {
+            defaultRuntime.error(theme.warn(LIMITED_TRANSPORT_WARNING));
+          }
+          defaultRuntime.log(setupCode);
           return;
         }
 
@@ -233,14 +219,18 @@ export function registerQrCli(program: Command) {
         ];
 
         if (opts.ascii !== false) {
-          const qrAscii = await renderQrAscii(setupCode);
+          const qrAscii = await renderQrTerminal(setupCode, { small: true });
           lines.push(qrAscii.trimEnd(), "");
         }
 
         lines.push(
           `${theme.muted("Setup code:")} ${setupCode}`,
           `${theme.muted("Gateway:")} ${resolved.payload.url}`,
+          ...(resolved.payload.urls?.slice(1).map((url) => `${theme.muted("Fallback:")} ${url}`) ??
+            []),
           `${theme.muted("Auth:")} ${resolved.authLabel}`,
+          `${theme.muted("Access:")} ${resolved.access}`,
+          ...(resolved.accessDowngraded ? [theme.warn(LIMITED_TRANSPORT_WARNING)] : []),
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
           "Approve after scan with:",
@@ -249,9 +239,6 @@ export function registerQrCli(program: Command) {
         );
 
         defaultRuntime.log(lines.join("\n"));
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

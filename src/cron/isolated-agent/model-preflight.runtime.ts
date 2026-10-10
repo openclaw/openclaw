@@ -1,13 +1,18 @@
 /** Preflights local model-provider endpoints before scheduled cron runner startup. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isLocalProviderBaseUrl } from "../../agents/model-provider-local.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
+const MAX_PREFLIGHT_ERROR_CAUSE_DEPTH = 8;
+const MAX_PREFLIGHT_ERROR_CHARS = 1_000;
 
 type PreflightApi = "ollama" | "openai-completions";
 
@@ -66,46 +71,6 @@ function normalizeProbeApi(providerConfig: ModelProviderConfig): PreflightApi | 
   return api === "ollama" || api === "openai-completions" ? api : undefined;
 }
 
-function isPrivateIpv4Host(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-}
-
-function isLocalProviderBaseUrl(baseUrl: string): boolean {
-  try {
-    let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    if (host.startsWith("[") && host.endsWith("]")) {
-      host = host.slice(1, -1);
-    }
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host === "::ffff:7f00:1" ||
-      host === "::ffff:127.0.0.1" ||
-      host.endsWith(".local") ||
-      isPrivateIpv4Host(host)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function buildProbeUrl(api: PreflightApi, baseUrl: string): string {
-  if (api === "ollama") {
-    return `${baseUrl}/api/tags`;
-  }
-  return `${baseUrl}/models`;
-}
-
 function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
     const parsed = new URL(baseUrl);
@@ -123,17 +88,49 @@ function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
   }
 }
 
-function formatUnavailableReason(params: {
-  provider: string;
-  model: string;
-  baseUrl: string;
-  error: unknown;
-}): string {
-  return [
-    `Agent cron job uses ${params.provider}/${params.model} but the local provider endpoint is not reachable at ${params.baseUrl}.`,
-    `Skipping this cron run; OpenClaw will retry the provider preflight on a later scheduled run.`,
-    `Last error: ${String(params.error)}`,
-  ].join(" ");
+function readErrorProperty(error: unknown, key: "cause" | "code" | "message" | "name"): unknown {
+  if ((typeof error !== "object" && typeof error !== "function") || error === null) {
+    return undefined;
+  }
+  try {
+    return (error as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function collectPreflightErrorCauseChain(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (
+    current !== undefined &&
+    current !== null &&
+    chain.length < MAX_PREFLIGHT_ERROR_CAUSE_DEPTH &&
+    !seen.has(current)
+  ) {
+    seen.add(current);
+    chain.push(current);
+    current = readErrorProperty(current, "cause");
+  }
+  return chain;
+}
+
+function isPreflightTimeout(error: unknown): boolean {
+  // fetchWithSsrFGuard propagates only its owned deadline as TimeoutError.
+  return collectPreflightErrorCauseChain(error).some(
+    (candidate) => readErrorProperty(candidate, "name") === "TimeoutError",
+  );
+}
+
+function formatPreflightError(error: unknown): string {
+  const causeDetails = formatErrorMessageWithCode(error);
+  const classified = isPreflightTimeout(error)
+    ? `Local provider preflight exceeded its configured ${PREFLIGHT_TIMEOUT_MS}ms deadline | ${causeDetails}`
+    : causeDetails;
+  return classified.length <= MAX_PREFLIGHT_ERROR_CHARS
+    ? classified
+    : `${truncateUtf16Safe(classified, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
 }
 
 function buildUnavailableResult(params: {
@@ -148,12 +145,11 @@ function buildUnavailableResult(params: {
     model: params.model,
     baseUrl: params.baseUrl,
     retryAfterMs: PREFLIGHT_CACHE_TTL_MS,
-    reason: formatUnavailableReason({
-      provider: params.provider,
-      model: params.model,
-      baseUrl: params.baseUrl,
-      error: params.error,
-    }),
+    reason: [
+      `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
+      `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
+      `Last error: ${formatPreflightError(params.error)}`,
+    ].join(" "),
   };
 }
 
@@ -162,7 +158,7 @@ async function probeLocalProviderEndpoint(params: {
   baseUrl: string;
 }): Promise<void> {
   const { response, release } = await fetchWithSsrFGuard({
-    url: buildProbeUrl(params.api, params.baseUrl),
+    url: `${params.baseUrl}${params.api === "ollama" ? "/api/tags" : "/models"}`,
     init: { method: "GET" },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
@@ -174,6 +170,11 @@ async function probeLocalProviderEndpoint(params: {
     // have the full provider context.
     void response.status;
   } finally {
+    // Captured responses can tee their body, so awaiting branch cancellation
+    // would hang the cron probe; start cancellation before closing the agent.
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }
@@ -221,7 +222,9 @@ export async function preflightCronModelProvider(params: {
   } catch (error) {
     result = { status: "unavailable", error };
   }
-  preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  if (result.status === "available" || !isPreflightTimeout(result.error)) {
+    preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  }
   if (result.status === "available") {
     return { status: "available" };
   }

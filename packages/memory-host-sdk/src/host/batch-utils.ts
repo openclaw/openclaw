@@ -1,5 +1,4 @@
-// Memory Host SDK helper module supports batch utils behavior.
-import type { SsrFPolicy } from "./ssrf-policy.js";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 
 // Common HTTP and grouping helpers for remote embedding batch clients.
 
@@ -33,30 +32,11 @@ export function buildBatchHeaders(
   return headers;
 }
 
-const jsonlEncoder = new TextEncoder();
-
-function estimateJsonlLineBytes(request: unknown): number {
-  return jsonlEncoder.encode(JSON.stringify(request) ?? "").byteLength;
-}
-
 function normalizePositiveInteger(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
   return Math.floor(value);
-}
-
-/** Split provider requests into max-sized groups while preserving order. */
-export function splitBatchRequests<T>(requests: T[], maxRequests: number): T[][] {
-  const limit = normalizePositiveInteger(maxRequests) ?? 1;
-  if (requests.length <= limit) {
-    return [requests];
-  }
-  const groups: T[][] = [];
-  for (let i = 0; i < requests.length; i += limit) {
-    groups.push(requests.slice(i, i + limit));
-  }
-  return groups;
 }
 
 export function splitBatchRequestsByLimits<T>(
@@ -65,19 +45,21 @@ export function splitBatchRequestsByLimits<T>(
 ): T[][] {
   const maxRequests = normalizePositiveInteger(limits.maxRequests) ?? 1;
   const maxJsonlBytes = normalizePositiveInteger(limits.maxJsonlBytes);
-  if (!maxJsonlBytes) {
-    return splitBatchRequests(requests, maxRequests);
+  if (requests.length === 0) {
+    return maxJsonlBytes ? [] : [requests];
   }
 
   const groups: T[][] = [];
   let current: T[] = [];
   let currentBytes = 0;
   for (const request of requests) {
-    const requestBytes = estimateJsonlLineBytes(request);
+    const requestBytes = Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
     const separatorBytes = current.length === 0 ? 0 : 1;
     const wouldExceedRequests = current.length >= maxRequests;
     const wouldExceedBytes =
-      current.length > 0 && currentBytes + separatorBytes + requestBytes > maxJsonlBytes;
+      maxJsonlBytes !== undefined &&
+      current.length > 0 &&
+      currentBytes + separatorBytes + requestBytes > maxJsonlBytes;
     if (current.length > 0 && (wouldExceedRequests || wouldExceedBytes)) {
       groups.push(current);
       current = [];

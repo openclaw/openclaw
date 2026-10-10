@@ -1,51 +1,49 @@
-// Qwen setup module handles plugin onboarding behavior.
 import {
-  createModelCatalogPresetAppliers,
+  createProviderConnectionPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
   QWEN_CN_BASE_URL,
   QWEN_DEFAULT_MODEL_REF,
   QWEN_GLOBAL_BASE_URL,
-  QWEN_OAUTH_DEFAULT_MODEL_REF,
-  QWEN_OAUTH_PROVIDER_ID,
   QWEN_STANDARD_CN_BASE_URL,
   QWEN_STANDARD_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+  QWEN_TOKEN_PLAN_PROVIDER_ID,
+  type QwenTokenPlanRegion,
+  resolveQwenTokenPlanBaseUrl,
 } from "./models.js";
-import { buildQwenOAuthProvider, buildQwenProvider } from "./provider-catalog.js";
+import { buildQwenProvider, buildQwenTokenPlanProvider } from "./provider-catalog.js";
 
-const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
+const qwenPresetAppliers = createProviderConnectionPresetAppliers<[string]>({
   primaryModelRef: QWEN_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
+  resolveParams: (_cfg, baseUrl) => {
     const provider = buildQwenProvider({ baseUrl });
     return {
       providerId: "qwen",
       api: provider.api ?? "openai-completions",
       baseUrl,
-      catalogModels: provider.models ?? [],
+      catalogModels: provider.models,
       aliases: [
-        ...(provider.models ?? []).flatMap((model) => [
-          `qwen/${model.id}`,
-          `modelstudio/${model.id}`,
-        ]),
+        ...provider.models.flatMap((model) => [`qwen/${model.id}`, `modelstudio/${model.id}`]),
         { modelRef: QWEN_DEFAULT_MODEL_REF, alias: "Qwen" },
       ],
     };
   },
 });
 
-const qwenOAuthPresetAppliers = createModelCatalogPresetAppliers<[]>({
-  primaryModelRef: QWEN_OAUTH_DEFAULT_MODEL_REF,
-  resolveParams: () => {
-    const provider = buildQwenOAuthProvider();
+const qwenTokenPlanPresetAppliers = createProviderConnectionPresetAppliers<[string]>({
+  primaryModelRef: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg, baseUrl) => {
+    const provider = buildQwenTokenPlanProvider({ baseUrl });
     return {
-      providerId: QWEN_OAUTH_PROVIDER_ID,
+      providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
       api: provider.api ?? "openai-completions",
-      baseUrl: provider.baseUrl,
-      catalogModels: provider.models ?? [],
+      baseUrl,
+      catalogModels: provider.models,
       aliases: [
-        ...(provider.models ?? []).map((model) => `qwen-oauth/${model.id}`),
-        { modelRef: QWEN_OAUTH_DEFAULT_MODEL_REF, alias: "Qwen OAuth" },
+        ...provider.models.map((model) => `${QWEN_TOKEN_PLAN_PROVIDER_ID}/${model.id}`),
+        { modelRef: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF, alias: "Qwen Token Plan" },
       ],
     };
   },
@@ -67,6 +65,9 @@ export function applyQwenStandardConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyConfig(cfg, QWEN_STANDARD_CN_BASE_URL);
 }
 
-export function applyQwenOAuthConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return qwenOAuthPresetAppliers.applyConfig(cfg);
+export function applyQwenTokenPlanConfig(
+  cfg: OpenClawConfig,
+  region: QwenTokenPlanRegion,
+): OpenClawConfig {
+  return qwenTokenPlanPresetAppliers.applyConfig(cfg, resolveQwenTokenPlanBaseUrl(region));
 }

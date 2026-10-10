@@ -6,11 +6,9 @@ import SwiftUI
 @MainActor
 @Observable
 final class TalkOverlayController {
-    static let shared = TalkOverlayController()
     static let overlaySize: CGFloat = 440
     static let orbSize: CGFloat = 96
     static let orbPadding: CGFloat = 12
-    static let orbHitSlop: CGFloat = 10
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.overlay")
 
@@ -24,35 +22,82 @@ final class TalkOverlayController {
     var model = Model()
     private var window: NSPanel?
     private var hostingView: NSHostingView<TalkOverlayView>?
-    private let screenInset: CGFloat = 0
+    @ObservationIgnored private var transitionID = UUID()
+    @ObservationIgnored let state: AppVoiceRuntime.State
+    @ObservationIgnored private let presentation: Presentation
+    @ObservationIgnored let actions: ActionsProvider
+
+    struct Presentation: Sendable {
+        let present: @MainActor @Sendable (TalkOverlayController, Bool) -> Void
+        let animateDismiss: @MainActor @Sendable (
+            TalkOverlayController, @escaping @MainActor @Sendable (AppVoiceRuntime.UIAction) -> Void) -> Void
+
+        static let live = Self(
+            present: { $0.presentWindow(isFirst: $1) },
+            animateDismiss: { owner, completion in
+                guard let window = owner.window else { return }
+                OverlayPanelFactory.animateDismiss(window: window) {
+                    completion { window.orderOut(nil) }
+                }
+            })
+    }
+
+    struct Actions: Sendable {
+        let togglePaused: AppVoiceRuntime.UIAction
+        let stopSpeaking: AppVoiceRuntime.UIAction
+        let pauseForDrag: AppVoiceRuntime.UIAction
+        let exit: AppVoiceRuntime.UIAction
+    }
+
+    typealias ActionsProvider = @MainActor @Sendable () -> Actions?
+
+    static func liveActions() -> Actions? {
+        Actions(
+            togglePaused: { TalkModeController.shared.togglePaused() },
+            stopSpeaking: { TalkModeController.shared.stopSpeaking(reason: .userTap) },
+            pauseForDrag: { TalkModeController.shared.setPaused(true) },
+            exit: { TalkModeController.shared.exitTalkMode() })
+    }
+
+    init(
+        state: @escaping AppVoiceRuntime.State = { AppStateStore.shared },
+        presentation: Presentation = .live,
+        actions: @escaping ActionsProvider = TalkOverlayController.liveActions)
+    {
+        self.state = state
+        self.presentation = presentation
+        self.actions = actions
+    }
 
     func present() {
+        self.transitionID = UUID()
+        let isFirst = !self.model.isVisible
+        if isFirst { self.model.isVisible = true }
+        self.presentation.present(self, isFirst)
+    }
+
+    private func presentWindow(isFirst: Bool) {
         self.ensureWindow()
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
-        let isFirst = !self.model.isVisible
-        if isFirst { self.model.isVisible = true }
         OverlayPanelFactory.present(
             window: self.window,
             isFirstPresent: isFirst,
             target: target)
         { window in
             window.setFrame(target, display: true)
-            window.orderFrontRegardless()
+            AppActivation.shared.orderFrontRegardless(window: window)
         }
     }
 
     func dismiss() {
-        guard let window else {
-            self.model.isVisible = false
-            return
-        }
-
-        OverlayPanelFactory.animateDismiss(window: window) {
-            Task { @MainActor in
-                window.orderOut(nil)
-                self.model.isVisible = false
-            }
+        let dismissalID = UUID()
+        self.transitionID = dismissalID
+        self.model.isVisible = false
+        self.presentation.animateDismiss(self) { [weak self] finishWindow in
+            // A later present or dismiss owns the panel, even while this fade is completing.
+            guard self?.transitionID == dismissalID else { return }
+            finishWindow()
         }
     }
 
@@ -71,15 +116,6 @@ final class TalkOverlayController {
     func updateLevel(_ level: Double) {
         guard self.model.isVisible else { return }
         self.model.level = max(0, min(1, level))
-    }
-
-    func currentWindowOrigin() -> CGPoint? {
-        self.window?.frame.origin
-    }
-
-    func setWindowOrigin(_ origin: CGPoint) {
-        guard let window else { return }
-        window.setFrameOrigin(origin)
     }
 
     // MARK: - Private
@@ -107,8 +143,8 @@ final class TalkOverlayController {
         let size = NSSize(width: Self.overlaySize, height: Self.overlaySize)
         let visible = screen.visibleFrame
         let origin = CGPoint(
-            x: visible.maxX - size.width - self.screenInset,
-            y: visible.maxY - size.height - self.screenInset)
+            x: visible.maxX - size.width,
+            y: visible.maxY - size.height)
         return NSRect(origin: origin, size: size)
     }
 }

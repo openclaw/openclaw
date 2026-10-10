@@ -1,30 +1,25 @@
-// Resolves a human-readable machine name for gateway display.
-import { execFile } from "node:child_process";
 import os from "node:os";
-import { promisify } from "node:util";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { runExec } from "../process/exec.js";
 
-const execFileAsync = promisify(execFile);
-
-// Machine display names prefer macOS ComputerName when available and fall back
-// to hostname for deterministic tests and non-macOS hosts.
+// Prefer macOS ComputerName/LocalHostName with hostname fallback; machine
+// identity is process-stable, so retain the first outcome until restart.
 let cachedPromise: Promise<string> | null = null;
 
 async function tryScutil(key: "ComputerName" | "LocalHostName") {
   try {
-    const { stdout } = await execFileAsync("/usr/sbin/scutil", ["--get", key], {
-      timeout: 1000,
-      windowsHide: true,
+    const { stdout } = await runExec("/usr/sbin/scutil", ["--get", key], {
+      logOutput: false,
+      timeoutMs: 1000,
     });
-    const value = normalizeOptionalString(stdout ?? "") ?? "";
-    return value.length > 0 ? value : null;
+    return normalizeNullableString(stdout);
   } catch {
     return null;
   }
 }
 
 function fallbackHostName() {
-  const trimmed = normalizeOptionalString(os.hostname()) ?? "";
+  const trimmed = normalizeNullableString(os.hostname()) ?? "";
   return trimmed.replace(/\.local$/i, "") || "openclaw";
 }
 
@@ -38,14 +33,11 @@ export async function getMachineDisplayName(): Promise<string> {
       return fallbackHostName();
     }
     if (process.platform === "darwin") {
-      const computerName = await tryScutil("ComputerName");
-      if (computerName) {
-        return computerName;
-      }
-      const localHostName = await tryScutil("LocalHostName");
-      if (localHostName) {
-        return localHostName;
-      }
+      return (
+        (await tryScutil("ComputerName")) ??
+        (await tryScutil("LocalHostName")) ??
+        fallbackHostName()
+      );
     }
     return fallbackHostName();
   })();

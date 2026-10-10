@@ -1,14 +1,124 @@
-/**
- * Target id resolution helpers for Browser tab aliases and user-facing ids.
- */
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
+import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 
-/** Result for resolving a user-supplied tab id, label, or target prefix. */
+const TAB_LABEL_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/** Validate and normalize a user-facing tab label before browser mutation. */
+export function normalizeTabLabel(label: string): string {
+  const trimmed = label.trim();
+  if (!TAB_LABEL_PATTERN.test(trimmed)) {
+    throw new Error("tab label must be 1-64 chars and use only letters, numbers, _, ., :, or -");
+  }
+  return trimmed;
+}
+
+function getTabAliasState(
+  profileState: ProfileRuntimeState,
+): NonNullable<ProfileRuntimeState["tabAliases"]> {
+  profileState.tabAliases ??= { nextTabNumber: 1, byTargetId: {} };
+  return profileState.tabAliases;
+}
+
+/** Assign a stable friendly id and optional validated label to one tab. */
+export function assignTabAlias(params: {
+  profileState: ProfileRuntimeState;
+  tab: BrowserTab;
+  label?: string;
+}): BrowserTab {
+  const label = params.label === undefined ? undefined : normalizeTabLabel(params.label);
+  const aliases = getTabAliasState(params.profileState);
+  let entry = aliases.byTargetId[params.tab.targetId];
+  if (!entry) {
+    entry = { tabId: `t${aliases.nextTabNumber}` };
+    aliases.nextTabNumber += 1;
+    aliases.byTargetId[params.tab.targetId] = entry;
+  }
+  if (label) {
+    for (const [targetId, current] of Object.entries(aliases.byTargetId)) {
+      if (targetId !== params.tab.targetId && current.label === label) {
+        delete current.label;
+      }
+    }
+    entry.label = label;
+  }
+  entry.url = params.tab.url;
+  const labelFields = entry.label ? { label: entry.label } : {};
+  return {
+    ...params.tab,
+    suggestedTargetId: entry.label ?? entry.tabId,
+    tabId: entry.tabId,
+    ...labelFields,
+  };
+}
+
+type TabAliasEntry = NonNullable<ProfileRuntimeState["tabAliases"]>["byTargetId"][string];
+
+function findConfidentReplacement(params: {
+  staleEntry: TabAliasEntry;
+  staleEntries: Array<[targetId: string, entry: TabAliasEntry]>;
+  newCandidates: BrowserTab[];
+}): BrowserTab | undefined {
+  const { staleEntry, staleEntries, newCandidates } = params;
+  // Preserve shipped form-submit continuity when the replacement set is one-for-one.
+  if (staleEntries.length === 1 && newCandidates.length === 1) {
+    return newCandidates[0];
+  }
+
+  const url = normalizeOptionalString(staleEntry.url);
+  if (!url) {
+    return undefined;
+  }
+  const staleMatches = staleEntries.filter(
+    ([, entry]) => normalizeOptionalString(entry.url) === url,
+  );
+  const candidates = newCandidates.filter((tab) => normalizeOptionalString(tab.url) === url);
+  // Duplicate URL buckets have no ordering contract, so only migrate an exact 1:1 bucket.
+  return staleMatches.length === 1 && candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/** Reconcile stable aliases with the latest authoritative browser tab list. */
+export function assignTabAliases(
+  profileState: ProfileRuntimeState,
+  tabs: BrowserTab[],
+  migrateReplacements: boolean,
+): BrowserTab[] {
+  const aliases = getTabAliasState(profileState);
+  const liveTargetIds = new Set(tabs.map((tab) => tab.targetId));
+  const staleEntries = Object.entries(aliases.byTargetId).filter(
+    ([targetId]) => !liveTargetIds.has(targetId),
+  );
+  const newCandidates = tabs.filter((tab) => !aliases.byTargetId[tab.targetId]);
+  if (migrateReplacements) {
+    for (const [oldTargetId, staleEntry] of staleEntries) {
+      const candidate = findConfidentReplacement({ staleEntry, staleEntries, newCandidates });
+      if (!candidate) {
+        continue;
+      }
+      aliases.byTargetId[candidate.targetId] = staleEntry;
+      delete aliases.byTargetId[oldTargetId];
+      if (profileState.lastTargetId === oldTargetId) {
+        profileState.lastTargetId = candidate.targetId;
+      }
+    }
+  }
+
+  for (const targetId of Object.keys(aliases.byTargetId)) {
+    if (!liveTargetIds.has(targetId)) {
+      delete aliases.byTargetId[targetId];
+    }
+  }
+  return tabs.map((tab) => assignTabAlias({ profileState, tab }));
+}
+
 type TargetIdResolution =
   | { ok: true; targetId: string }
   | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };
 
-/** Resolves exact tab ids/labels first, then unique target-id prefixes. */
+/** Resolves exact tab references first, then unique raw target-id prefixes. */
 export function resolveTargetIdFromTabs(
   input: string,
   tabs: Array<{ targetId: string; suggestedTargetId?: string; tabId?: string; label?: string }>,
@@ -18,28 +128,56 @@ export function resolveTargetIdFromTabs(
     return { ok: false, reason: "not_found" };
   }
 
-  const exact = tabs.find(
-    (t) =>
-      t.targetId === needle ||
-      t.suggestedTargetId === needle ||
-      t.tabId === needle ||
-      t.label === needle,
-  );
-  if (exact) {
-    return { ok: true, targetId: exact.targetId };
+  // Friendly references and raw CDP ids share one input field, so a cross-namespace
+  // collision must fail closed instead of silently choosing a different tab.
+  let matches = [
+    ...new Set(
+      tabs
+        .filter(
+          (tab) =>
+            tab.targetId === needle ||
+            tab.suggestedTargetId === needle ||
+            tab.tabId === needle ||
+            tab.label === needle,
+        )
+        .map((tab) => tab.targetId),
+    ),
+  ];
+  if (matches.length === 0) {
+    const lower = normalizeLowercaseStringOrEmpty(needle);
+    matches = tabs
+      .map((tab) => tab.targetId)
+      .filter((id) => normalizeLowercaseStringOrEmpty(id).startsWith(lower));
   }
 
-  const lower = normalizeLowercaseStringOrEmpty(needle);
-  const matches = tabs
-    .map((t) => t.targetId)
-    .filter((id) => normalizeLowercaseStringOrEmpty(id).startsWith(lower));
-
   const only = matches.length === 1 ? matches[0] : undefined;
-  if (only) {
+  if (only !== undefined) {
     return { ok: true, targetId: only };
   }
   if (matches.length === 0) {
     return { ok: false, reason: "not_found" };
   }
   return { ok: false, reason: "ambiguous", matches };
+}
+
+export function resolveBrowserTabOrThrow(
+  input: string,
+  tabs: BrowserTab[],
+  exactTargetId = false,
+): BrowserTab {
+  let targetId = input;
+  if (!exactTargetId) {
+    const resolved = resolveTargetIdFromTabs(input, tabs);
+    if (!resolved.ok) {
+      throw resolved.reason === "ambiguous"
+        ? new BrowserTargetAmbiguousError()
+        : new BrowserTabNotFoundError({ input });
+    }
+    targetId = resolved.targetId;
+  }
+  const tab = tabs.find((candidate) => candidate.targetId === targetId);
+  if (!tab) {
+    throw new BrowserTabNotFoundError({ input });
+  }
+  return tab;
 }

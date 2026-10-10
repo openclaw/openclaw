@@ -1,5 +1,7 @@
 // Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type StreamableTransportOptions = {
@@ -8,16 +10,28 @@ type StreamableTransportOptions = {
   authProvider?: unknown;
 };
 
+type OAuthBearerParams = {
+  fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  authFetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  identity: McpOAuthIdentity;
+};
+
 const {
   lookupMock,
   runtimeFetchMock,
+  oauthBearerMock,
   streamableTransportConstructorMock,
   sseTransportConstructorMock,
 } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
+  oauthBearerMock: vi.fn((params: OAuthBearerParams) => params.fetchFn),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
+}));
+
+vi.mock("./mcp-oauth-fetch.js", () => ({
+  withMcpOAuthBearer: oauthBearerMock,
 }));
 
 vi.mock("node:dns/promises", () => ({
@@ -111,11 +125,20 @@ function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | unde
   return call;
 }
 
+function latestOAuthBearerParams(): OAuthBearerParams {
+  const params = oauthBearerMock.mock.calls.at(-1)?.[0];
+  if (!params) {
+    throw new Error("Expected native OAuth bearer wrapper parameters");
+  }
+  return params;
+}
+
 describe("resolveMcpTransport", () => {
   beforeEach(() => {
     lookupMock.mockReset();
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     runtimeFetchMock.mockReset();
+    oauthBearerMock.mockClear();
     streamableTransportConstructorMock.mockClear();
     sseTransportConstructorMock.mockClear();
   });
@@ -295,7 +318,7 @@ describe("resolveMcpTransport", () => {
     expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("passes OAuth providers and TLS options into HTTP transports", () => {
+  it("routes native OAuth through the host fetch coordinator instead of the SDK provider", () => {
     resolveMcpTransport("probe", {
       url: "https://mcp.example.com/mcp",
       transport: "streamable-http",
@@ -308,9 +331,65 @@ describe("resolveMcpTransport", () => {
     });
 
     const options = latestStreamableTransportOptions();
-    expect(options.authProvider).toBeTypeOf("object");
+    expect(options.authProvider).toBeUndefined();
     expect(options.fetch).toBeTypeOf("function");
     expect(options.requestInit).toBeUndefined();
+    expect(oauthBearerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        identity: expect.objectContaining({
+          serverName: "probe",
+          serverUrl: "https://mcp.example.com/mcp",
+        }),
+      }),
+    );
+  });
+
+  it("selects distinct requester OAuth identities for the same configured server", () => {
+    const server = {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+      oauth: { identity: "per-requester" },
+    };
+    for (const requesterSenderId of ["alice", "bob"]) {
+      resolveMcpTransport("probe", server, {
+        requesterScope: {
+          messageChannel: "telegram",
+          agentAccountId: "bot",
+          requesterSenderId,
+        },
+      });
+    }
+
+    const identities = oauthBearerMock.mock.calls.slice(-2).map(([params]) => params.identity);
+    expect(identities.map((identity) => identity.principal)).toEqual(["requester", "requester"]);
+    expect(identities[0]?.storeKey).not.toBe(identities[1]?.storeKey);
+    expect(identities.map((identity) => identity.serverUrl)).toEqual([
+      "https://mcp.example.com/mcp",
+      "https://mcp.example.com/mcp",
+    ]);
+
+    const partition = partitionMcpServersByConnectionScope({
+      shared: { command: "true" },
+      calendar: server,
+    });
+    expect(Object.keys(partition.staticServers)).toEqual(["shared"]);
+    expect(partition.requesterScopedServerNames).toEqual(["calendar"]);
+    expect(partition.oauthRequesterServerNames).toEqual(["calendar"]);
+    expect(partition.resolverRequesterServerNames).toEqual([]);
+  });
+
+  it("does not create an operator transport for per-requester OAuth", () => {
+    const transport = resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+      oauth: { identity: "per-requester" },
+    });
+
+    expect(transport).toBeNull();
+    expect(oauthBearerMock).not.toHaveBeenCalled();
+    expect(streamableTransportConstructorMock).not.toHaveBeenCalled();
   });
 
   it("keeps OAuth runtime headers scoped to the MCP resource origin", async () => {
@@ -329,8 +408,71 @@ describe("resolveMcpTransport", () => {
     await options.fetch?.("https://mcp.example.com/mcp");
     await options.fetch?.("https://auth.example.com/token");
 
+    const oauthParams = latestOAuthBearerParams();
+    await oauthParams.authFetchFn("https://mcp.example.com/.well-known/oauth-protected-resource");
+    await oauthParams.authFetchFn("https://auth.example.com/token");
+
     expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("x-tenant")).toBeNull();
+    expect(new Headers(runtimeFetchCall(2)?.[1]?.headers).get("x-tenant")).toBe("docs");
+    expect(new Headers(runtimeFetchCall(3)?.[1]?.headers).get("x-tenant")).toBeNull();
+  });
+
+  it.each([307, 308])(
+    "rejects cross-origin OAuth %s redirects that would replay a POST body",
+    async (status) => {
+      runtimeFetchMock
+        .mockResolvedValueOnce(redirectResponse("https://redirect.example/token", status))
+        .mockResolvedValueOnce(new Response("ok"));
+
+      resolveMcpTransport("probe", {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+      });
+
+      const oauthParams = latestOAuthBearerParams();
+      const tokenBody = new URLSearchParams({
+        code: "synthetic-code",
+        code_verifier: "synthetic-verifier",
+      }).toString();
+
+      await expect(
+        oauthParams.authFetchFn("https://auth.example.com/token", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: tokenBody,
+        }),
+      ).rejects.toThrow("Refusing to follow cross-origin redirect for POST request body");
+
+      expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves OAuth POST bodies across same-origin 307 redirects", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://auth.example.com/regional-token", 307))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+    });
+
+    const oauthParams = latestOAuthBearerParams();
+    const tokenBody = "code=synthetic-code&code_verifier=synthetic-verifier";
+
+    await oauthParams.authFetchFn("https://auth.example.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: tokenBody,
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://auth.example.com/regional-token");
+    expect(runtimeFetchCall(1)?.[1]?.method).toBe("POST");
+    expect(runtimeFetchCall(1)?.[1]?.body).toBe(tokenBody);
   });
 
   it("merges SSE event-source headers case-insensitively so auth is not duplicated", async () => {

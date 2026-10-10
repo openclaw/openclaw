@@ -1,15 +1,26 @@
 // History image prune tests keep provider replay compact by replacing stale
-// image bytes and media references while preserving recent user context.
+// image bytes and fact-owned projections while preserving recent user context.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
-  PRUNED_HISTORY_IMAGE_MARKER,
-  PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
   installHistoryImagePruneContextTransform,
   pruneProcessedHistoryImages,
 } from "./history-image-prune.js";
+
+const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
+  "[media reference removed - already processed by model]";
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
 function expectArrayMessageContent(
   message: AgentMessage | undefined,
@@ -55,16 +66,8 @@ function expectPrunedMessages(messages: AgentMessage[]): AgentMessage[] {
   return pruned;
 }
 
-function expectImageMessagePreserved(messages: AgentMessage[], errorMessage: string) {
-  const pruned = pruneProcessedHistoryImages(messages);
-
-  expect(pruned).toBeNull();
-  const content = expectArrayMessageContent(messages[0], errorMessage);
-  expectContentBlock(content[1], { type: "image", data: "abc" });
-}
-
 function oldEnoughTail(): AgentMessage[] {
-  // Four assistant turns makes the first message old enough to prune while
+  // Four prior completed turns make the first message old enough to prune while
   // keeping each test focused on content rewriting instead of turn counting.
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
   const userText = () => castAgentMessage({ role: "user", content: "more" });
@@ -76,6 +79,7 @@ function oldEnoughTail(): AgentMessage[] {
     assistantTurn(),
     userText(),
     assistantTurn(),
+    userText(),
   ];
 }
 
@@ -84,28 +88,7 @@ describe("pruneProcessedHistoryImages", () => {
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
   const userText = () => castAgentMessage({ role: "user", content: "more" });
 
-  it("prunes image blocks from user messages older than 3 assistant turns", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-    ];
-
-    const content = expectPrunedImageMessage(messages, "expected user array content");
-    expect(content[0]?.type).toBe("text");
-  });
-
-  it("scrubs old media attachment markers from text blocks", () => {
-    // Text references are scrubbed alongside image blocks so old paths and
-    // media URIs cannot rehydrate stale images on a later replay.
+  it("redacts factless legacy attachment text while pruning old image blocks", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "user",
@@ -145,26 +128,113 @@ describe("pruneProcessedHistoryImages", () => {
     expectContentBlock(originalContent[1], { type: "image", data: "abc" });
   });
 
-  it("scrubs old media attachment markers from string content without image blocks", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: "please remember [media attached: media://inbound/stale-image.png]",
-      }),
-      ...oldEnoughTail(),
-    ];
+  it("prunes fact-owned and factless late-media projections", () => {
+    const fields = { role: "user" as const };
+    const markedString = castAgentMessage({
+      ...fields,
+      content: "",
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "media://inbound/stale-image.png" }],
+      },
+    });
+    const legacyString = castAgentMessage({
+      content: "[media attached: media://inbound/stale-image.png]",
+      role: "user",
+    });
+    const markedArray = castAgentMessage({
+      ...fields,
+      content: [{ ...image }],
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "media://inbound/stale-image.png" }],
+      },
+    });
+    const legacyArray = castAgentMessage({
+      role: "user",
+      content: [
+        { type: "text", text: "[media attached: media://inbound/stale-image.png]" },
+        { ...image },
+      ],
+    });
 
-    const pruned = expectPrunedMessages(messages);
+    const prunedMarkedString = expectPrunedMessages([markedString, ...oldEnoughTail()]);
+    const prunedLegacyString = expectPrunedMessages([legacyString, ...oldEnoughTail()]);
+    const prunedMarkedArray = expectPrunedMessages([markedArray, ...oldEnoughTail()]);
+    const prunedLegacyArray = expectPrunedMessages([legacyArray, ...oldEnoughTail()]);
+    const markedStringOutput = prunedMarkedString as unknown as Array<{ content?: unknown }>;
+    const markedArrayOutput = prunedMarkedArray as unknown as Array<{ content?: unknown }>;
+    const legacyStringOutput = prunedLegacyString as unknown as Array<{ content?: unknown }>;
+    const legacyArrayOutput = prunedLegacyArray as unknown as Array<{ content?: unknown }>;
 
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(`please remember ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}`);
-    const originalUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(originalUser?.content).toBe(
-      "please remember [media attached: media://inbound/stale-image.png]",
-    );
+    expect(markedStringOutput[0]?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+    expect(legacyStringOutput[0]?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+    expect(markedArrayOutput[0]?.content).toEqual([
+      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
+      { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER },
+    ]);
+    expect(legacyArrayOutput[0]?.content).toEqual([
+      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
+      { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER },
+    ]);
   });
 
-  it("scrubs bare old inbound media URIs from tool results", () => {
+  it("redacts a persisted relative projection without a dot prefix", () => {
+    const message = buildPersistedUserTurnMessage({
+      text: "[media attached: sub/old.png (image/png)]",
+      media: [
+        {
+          path: "sub/old.png",
+          workspaceDir: "/workspace",
+          contentType: "image/png",
+        },
+      ],
+    }) as AgentMessage;
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+  });
+
+  it("keeps image blocks byte-identical throughout the active tool loop", () => {
+    const block = image;
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "look" }, block] }),
+      assistantTurn(),
+      userText(),
+      assistantTurn(),
+      userText(),
+      assistantTurn(),
+      userText(),
+    ];
+    const retainedLength = messages.length;
+    const retainedBytes = JSON.stringify(messages);
+    expect(pruneProcessedHistoryImages(messages)).toBeNull();
+
+    messages.push(
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_4", name: "read", arguments: {} }],
+      }),
+      castAgentMessage(textToolResult("call_4", "read", "bytes")),
+    );
+    const duringLoop = pruneProcessedHistoryImages(messages) ?? messages;
+    expect(JSON.stringify(duringLoop.slice(0, retainedLength))).toBe(retainedBytes);
+    expect(expectArrayMessageContent(duringLoop[0], "expected retained content")[1]).toBe(block);
+
+    messages.push(assistantTurn());
+    expect(pruneProcessedHistoryImages(messages)).toBeNull();
+    messages.push(userText());
+    const nextTurn = expectPrunedMessages(messages);
+    expect(expectArrayMessageContent(nextTurn[0], "expected pruned content")[1]).toEqual({
+      type: "text",
+      text: PRUNED_HISTORY_IMAGE_MARKER,
+    });
+    expect(JSON.stringify(nextTurn.slice(2))).toBe(JSON.stringify(messages.slice(2)));
+    expect(JSON.stringify(messages.slice(0, retainedLength))).toBe(retainedBytes);
+  });
+
+  it("redacts bare old inbound media URIs from factless tool results", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "toolResult",
@@ -175,169 +245,21 @@ describe("pruneProcessedHistoryImages", () => {
     ];
 
     const pruned = expectPrunedMessages(messages);
-
     const toolResult = pruned[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
     expect(toolResult?.content).toBe(`previous ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER} result`);
-    const originalToolResult = messages[0] as
-      | Extract<AgentMessage, { role: "toolResult" }>
-      | undefined;
-    expect(originalToolResult?.content).toBe(
-      "previous media://inbound/stale-screenshot.png result",
-    );
   });
 
-  it("keeps image blocks that belong to the third-most-recent assistant turn", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-    ];
-
-    expectImageMessagePreserved(messages, "expected user array content");
-  });
-
-  it("preserves recent media attachment markers", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "recent [media attached: media://inbound/current.png]",
-          },
-          { ...image },
-        ],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-    ];
-
-    const pruned = pruneProcessedHistoryImages(messages);
-
-    expect(pruned).toBeNull();
-    const content = expectArrayMessageContent(messages[0], "expected user array content");
-    expect(content[0]?.text).toBe("recent [media attached: media://inbound/current.png]");
-    expectContentBlock(content[1], { type: "image", data: "abc" });
-  });
-
-  it("does not count multiple assistant messages from one tool loop as separate turns", () => {
-    // Tool-call assistant messages belong to one model turn; counting each
-    // message separately would prune images too aggressively inside tool loops.
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      } as AgentMessage),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "bytes" }],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-    ];
-
-    expectImageMessagePreserved(messages, "expected user array content");
-  });
-
-  it("does not prune latest user message when no assistant response exists yet", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-    ];
-
-    const pruned = pruneProcessedHistoryImages(messages);
-
-    expect(pruned).toBeNull();
-    const content = expectArrayMessageContent(messages[0], "expected user array content");
-    expect(content).toHaveLength(2);
-    expectContentBlock(content[1], { type: "image", data: "abc" });
-  });
-
-  it("prunes image blocks from toolResult messages older than 3 assistant turns", () => {
+  it("prunes image blocks from toolResult messages older than 3 completed turns", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "toolResult",
         toolName: "read",
         content: [{ type: "text", text: "screenshot bytes" }, { ...image }],
       }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
+      ...oldEnoughTail(),
     ];
 
     expectPrunedImageMessage(messages, "expected toolResult array content");
-  });
-
-  it("prunes only old images while preserving recent ones", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "old" }, { ...image }],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "recent" }, { ...image }],
-      }),
-      assistantTurn(),
-    ];
-
-    const pruned = expectPrunedMessages(messages);
-
-    const oldContent = expectArrayMessageContent(pruned[0], "expected old user content");
-    expectContentBlock(oldContent[1], { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
-
-    const recentContent = expectArrayMessageContent(pruned[6], "expected recent user content");
-    expectContentBlock(recentContent[1], { type: "image", data: "abc" });
-
-    const originalOldContent = expectArrayMessageContent(
-      messages[0],
-      "expected original old user content",
-    );
-    expectContentBlock(originalOldContent[1], { type: "image", data: "abc" });
-  });
-
-  it("does not change messages when no assistant turn exists", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: "noop",
-      }),
-    ];
-
-    const pruned = pruneProcessedHistoryImages(messages);
-
-    expect(pruned).toBeNull();
-    const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe("noop");
   });
 });
 
@@ -395,5 +317,152 @@ describe("installHistoryImagePruneContextTransform", () => {
 
     restore();
     expect(agent.transformContext).toBe(originalTransformContext);
+  });
+
+  it("hydrates recent facts before an existing transform clones messages", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-history-hydrate-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "describe" }] }),
+      [{ path: imagePath, contentType: "image/png" }],
+    );
+    const agent = {
+      transformContext: async (messages: AgentMessage[]) =>
+        messages.map((entry) => {
+          if (!("content" in entry)) {
+            return { ...entry };
+          }
+          return {
+            ...entry,
+            content: Array.isArray(entry.content)
+              ? entry.content.map((block: (typeof entry.content)[number]) => ({ ...block }))
+              : entry.content,
+          };
+        }) as AgentMessage[],
+    };
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+    });
+
+    try {
+      const replay = await agent.transformContext([message]);
+      expect(expectArrayMessageContent(replay[0], "expected hydrated content")).toEqual([
+        { type: "text", text: "describe" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces a failed active image through the installed context transform", async () => {
+    const onCurrentTurnImageFailure = vi.fn();
+    const message = castAgentMessage({
+      role: "user",
+      content: [
+        { type: "text", text: "inspect" },
+        { type: "image", data: "%%%", mimeType: "image/png" },
+      ],
+      __openclaw: {
+        media: [{ kind: "image" }],
+        mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+      },
+    });
+    const agent: {
+      transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]> | AgentMessage[];
+    } = {};
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      onCurrentTurnImageFailure,
+    });
+
+    try {
+      const replay = await agent.transformContext?.([message]);
+      expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
+      expect(expectArrayMessageContent(replay?.[0], "expected failure notice")).toEqual([
+        { type: "text", text: "inspect" },
+        {
+          type: "text",
+          text: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+        },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("strips nested media metadata before old turns can rehydrate", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruned-nested-media-"));
+    const imagePath = path.join(workspaceDir, "old.png");
+    const videoPath = path.join(workspaceDir, "old.mp4");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    await fs.writeFile(videoPath, Buffer.from("0000001c6674797069736f6d", "hex"));
+    const baseBridge = createHostSandboxFsBridge(workspaceDir);
+    let hydrationReadCount = 0;
+    const bridge = {
+      ...baseBridge,
+      readFile: async (params: Parameters<typeof baseBridge.readFile>[0]) => {
+        hydrationReadCount++;
+        return await baseBridge.readFile(params);
+      },
+    };
+    const message = castAgentMessage({
+      role: "user",
+      content: "[media attached: ./old.png (image/png)]",
+      __openclaw: {
+        media: [
+          { path: "./old.png", contentType: "image/png" },
+          { path: "./old.mp4", contentType: "video/mp4" },
+        ],
+        mediaImageBlockFactIndexes: [0],
+        mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+      },
+    });
+    const agent: {
+      transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]> | AgentMessage[];
+    } = {};
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+      sandbox: { root: workspaceDir, bridge },
+    });
+
+    try {
+      const replay = await agent.transformContext?.([message, ...oldEnoughTail()]);
+      const meta = (replay?.[0] as unknown as Record<string, unknown>)?.["__openclaw"] as
+        | Record<string, unknown>
+        | undefined;
+      expect(hydrationReadCount).toBe(0);
+      expect(meta?.media).toBeUndefined();
+      expect(meta?.mediaImageBlockFactIndexes).toBeUndefined();
+      expect(meta?.mediaImageLayout).toBeUndefined();
+    } finally {
+      restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats identity-less nested facts as structured ownership", () => {
+    const message = castAgentMessage({
+      role: "user",
+      content: "[media attached: /tmp/unknown.png (image/png)]",
+      __openclaw: {
+        media: [{ kind: "image" }],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+      },
+    });
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const first = pruned[0] as unknown as Record<string, unknown>;
+    const meta = first["__openclaw"] as Record<string, unknown> | undefined;
+    expect(first.content).toBe("[media attached: /tmp/unknown.png (image/png)]");
+    expect(meta?.media).toBeUndefined();
+    expect(meta?.mediaImageLayout).toBeUndefined();
   });
 });

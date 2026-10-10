@@ -1,6 +1,6 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
-import fs from "node:fs/promises";
-import path from "node:path";
+import { classifySessionMessageOrigin } from "../../../../packages/memory-host-sdk/src/host/session-provenance.js";
+import type { MemoryOriginClass } from "../../../../packages/memory-host-sdk/src/host/types.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -14,15 +14,24 @@ const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
 );
 const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
-const SESSION_MEMORY_MEDIA_PLACEHOLDER_RE = /(^|\n)\s*<media:[^>]+>(?:\s*\([^)]*\))?\s*/gi;
 const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
+const SESSION_MEMORY_JSON_LINE_SEPARATOR_RE = /[\u0085\u2028\u2029]/gu;
+
+function quoteSessionMemoryText(text: string): string {
+  // One JSON string per role record keeps message text from forging later
+  // records while preserving every character for memory readers.
+  return JSON.stringify(text).replace(
+    SESSION_MEMORY_JSON_LINE_SEPARATOR_RE,
+    (separator) => `\\u${separator.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 function isNoReplyMarker(text: string): boolean {
   const trimmed = text.trim();
   return /^NO_REPLY$/i.test(trimmed) || /^\{\s*"action"\s*:\s*"NO_REPLY"\s*\}$/i.test(trimmed);
 }
 
-export function sanitizeSessionMemoryTranscriptText(text: string): string | null {
+function sanitizeSessionMemoryTranscriptText(text: string): string | null {
   if (isNoReplyMarker(text)) {
     return null;
   }
@@ -30,7 +39,6 @@ export function sanitizeSessionMemoryTranscriptText(text: string): string | null
     .replace(SESSION_MEMORY_DROP_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE, "")
-    .replace(SESSION_MEMORY_MEDIA_PLACEHOLDER_RE, "$1")
     .replace(SESSION_MEMORY_TRAILING_NO_REPLY_RE, "")
     .trim();
 
@@ -56,176 +64,102 @@ function extractTextMessageContent(content: unknown): string | undefined {
   return undefined;
 }
 
-export async function getRecentSessionContent(
-  sessionFilePath: string,
-  messageCount = 15,
-): Promise<string | null> {
-  try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
-    const lines = content.trim().split("\n");
+type SessionMemoryRecord = {
+  line: string;
+  originClass: MemoryOriginClass;
+};
 
-    const allMessages: string[] = [];
-    let lastAssistantText: string | undefined;
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry.type === "message" && entry.message) {
-          const msg = entry.message as {
-            role?: unknown;
-            content?: unknown;
-            provenance?: unknown;
-          };
-          const role = msg.role;
-          if ((role === "user" || role === "assistant") && "content" in msg && msg.content) {
-            if (role === "user" && hasInterSessionUserProvenance(msg)) {
-              continue;
-            }
-            if (role === "user") {
-              // New turn: reset even when slash commands are omitted from
-              // memory, so later standalone delivery mirrors are preserved.
-              lastAssistantText = undefined;
-            }
-            const text = extractTextMessageContent(msg.content);
-            const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
-            // Skip delivery-mirror rows only when they duplicate the preceding
-            // assistant text. Delivery-mirror rows with unique visible content
-            // (e.g., message-tool replies) are preserved.
-            if (isOpenClawDeliveryMirrorAssistantMessage(msg)) {
-              if (sanitized && sanitized === lastAssistantText) {
-                continue;
-              }
-            }
-            if (sanitized && !sanitized.startsWith("/")) {
-              allMessages.push(`${role}: ${sanitized}`);
-              if (role === "assistant") {
-                lastAssistantText = sanitized;
-              }
-            }
-          }
-        }
-      } catch {
-        // Skip invalid JSON lines.
-      }
+function renderSessionMemoryRecords(events: readonly unknown[]): SessionMemoryRecord[] {
+  const allMessages: SessionMemoryRecord[] = [];
+  let lastAssistantText: string | undefined;
+  let turnOrigin: MemoryOriginClass = "untrusted";
+  for (const event of events) {
+    if (!event || typeof event !== "object") {
+      continue;
     }
+    const record = event as {
+      message?: {
+        content?: unknown;
+        provenance?: unknown;
+        role?: unknown;
+      } & Record<string, unknown>;
+      type?: unknown;
+    };
+    if (record.type !== "message" || !record.message) {
+      continue;
+    }
+    const role = record.message.role;
+    if ((role !== "user" && role !== "assistant") || !("content" in record.message)) {
+      continue;
+    }
+    if (role === "user") {
+      turnOrigin = classifySessionMessageOrigin(record.message, turnOrigin);
+    }
+    const originClass = classifySessionMessageOrigin(record.message, turnOrigin);
+    if (role === "user" && hasInterSessionUserProvenance(record.message)) {
+      continue;
+    }
+    const text = extractTextMessageContent(record.message.content);
+    const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
+    if (!sanitized) {
+      continue;
+    }
+    if (role === "user") {
+      // New turn: reset even when slash commands are omitted from memory, so
+      // later standalone delivery mirrors are preserved.
+      lastAssistantText = undefined;
+    }
+    if (sanitized.startsWith("/")) {
+      continue;
+    }
+    // Skip delivery-mirror rows only when they duplicate the preceding
+    // assistant text. Delivery-mirror rows with unique visible content
+    // (e.g., message-tool replies) are preserved.
+    if (
+      isOpenClawDeliveryMirrorAssistantMessage(record.message) &&
+      sanitized === lastAssistantText
+    ) {
+      continue;
+    }
+    allMessages.push({
+      line: `${role}: ${quoteSessionMemoryText(sanitized)}`,
+      originClass,
+    });
+    if (role === "assistant") {
+      lastAssistantText = sanitized;
+    }
+  }
+  return allMessages;
+}
 
-    return allMessages.slice(-messageCount).join("\n");
-  } catch {
+/** Counts transcript events that remain after session-memory filtering and deduplication. */
+export function countSessionMemoryMessages(events: readonly unknown[]): number {
+  return renderSessionMemoryRecords(events).length;
+}
+
+export type SessionMemoryProjection = {
+  content: string;
+  originClass: "agent" | "untrusted";
+};
+
+export function getRecentSessionProjectionFromEvents(
+  events: readonly unknown[],
+  messageCount = 15,
+): SessionMemoryProjection | null {
+  const limit = Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0;
+  if (limit === 0) {
     return null;
   }
-}
-
-export async function getRecentSessionContentWithResetFallback(
-  sessionFilePath: string,
-  messageCount = 15,
-): Promise<string | null> {
-  const primary = await getRecentSessionContent(sessionFilePath, messageCount);
-  if (primary) {
-    return primary;
+  const records = renderSessionMemoryRecords(events).slice(-limit);
+  if (records.length === 0) {
+    return null;
   }
-
-  try {
-    const dir = path.dirname(sessionFilePath);
-    const base = path.basename(sessionFilePath);
-    const resetPrefix = `${base}.reset.`;
-    const files = await fs.readdir(dir);
-    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
-
-    if (resetCandidates.length === 0) {
-      return primary;
-    }
-
-    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
-    return (await getRecentSessionContent(latestResetPath, messageCount)) || primary;
-  } catch {
-    return primary;
-  }
-}
-
-function stripResetSuffix(fileName: string): string {
-  const resetIndex = fileName.indexOf(".reset.");
-  return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
-}
-
-export async function findPreviousSessionFile(params: {
-  sessionsDir: string;
-  currentSessionFile?: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  try {
-    const files = await fs.readdir(params.sessionsDir);
-    const fileSet = new Set(files);
-
-    const currentBaseName = params.currentSessionFile
-      ? path.basename(params.currentSessionFile)
-      : undefined;
-    const baseFromReset = currentBaseName ? stripResetSuffix(currentBaseName) : undefined;
-    if (baseFromReset && fileSet.has(baseFromReset)) {
-      return path.join(params.sessionsDir, baseFromReset);
-    }
-    if (currentBaseName?.includes(".reset.") && fileSet.has(currentBaseName)) {
-      return path.join(params.sessionsDir, currentBaseName);
-    }
-
-    const trimmedSessionId = params.sessionId?.trim();
-    if (trimmedSessionId) {
-      const canonicalFile = `${trimmedSessionId}.jsonl`;
-      if (fileSet.has(canonicalFile)) {
-        return path.join(params.sessionsDir, canonicalFile);
-      }
-
-      const canonicalResetVariants = files
-        .filter((name) => name.startsWith(`${canonicalFile}.reset.`))
-        .toSorted()
-        .toReversed();
-      if (canonicalResetVariants.length > 0) {
-        return path.join(params.sessionsDir, canonicalResetVariants[0]);
-      }
-
-      const topicVariants = files
-        .filter(
-          (name) =>
-            name.startsWith(`${trimmedSessionId}-topic-`) &&
-            name.endsWith(".jsonl") &&
-            !name.includes(".reset."),
-        )
-        .toSorted()
-        .toReversed();
-      if (topicVariants.length > 0) {
-        return path.join(params.sessionsDir, topicVariants[0]);
-      }
-
-      const topicResetVariants = files
-        .filter(
-          (name) => name.startsWith(`${trimmedSessionId}-topic-`) && name.includes(".jsonl.reset."),
-        )
-        .toSorted()
-        .toReversed();
-      if (topicResetVariants.length > 0) {
-        return path.join(params.sessionsDir, topicResetVariants[0]);
-      }
-    }
-
-    if (!params.currentSessionFile) {
-      return undefined;
-    }
-
-    const nonResetJsonl = files
-      .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
-      .toSorted()
-      .toReversed();
-    if (nonResetJsonl.length > 0) {
-      return path.join(params.sessionsDir, nonResetJsonl[0]);
-    }
-
-    const resetJsonl = files
-      .filter((name) => name.includes(".jsonl.reset."))
-      .toSorted()
-      .toReversed();
-    if (resetJsonl.length > 0) {
-      return path.join(params.sessionsDir, resetJsonl[0]);
-    }
-  } catch {
-    // Ignore directory read errors.
-  }
-  return undefined;
+  return {
+    content: records.map((record) => record.line).join("\n"),
+    originClass: records.some(
+      (record) => record.originClass === "untrusted" || record.originClass === "system",
+    )
+      ? "untrusted"
+      : "agent",
+  };
 }

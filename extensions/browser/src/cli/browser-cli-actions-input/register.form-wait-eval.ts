@@ -1,26 +1,16 @@
-/**
- * Browser CLI form fill, wait, and evaluate commands.
- */
 import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
+  runBrowserCliCommand,
   parseBrowserNonNegativeIntegerOption,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
-import {
-  callBrowserAct,
-  logBrowserActionResult,
-  readFields,
-  resolveBrowserActionContext,
-} from "./shared.js";
+import { runBrowserAction, readFields } from "./shared.js";
 
-const DEFAULT_WAIT_CONDITION_TIMEOUT_MS = 20000;
-type BrowserWaitLoadState = "load" | "domcontentloaded" | "networkidle";
-
-function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undefined {
+function parseBrowserWaitLoadState(value: unknown) {
   const load = normalizeOptionalString(value);
   switch (load) {
     case undefined:
@@ -34,7 +24,6 @@ function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undef
   }
 }
 
-/** Registers Browser fill, wait, and evaluate commands. */
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -46,26 +35,22 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--fields-file <path>", "Read JSON array from a file")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
+      const parent = parentOpts(cmd);
+      await runBrowserCliCommand(async () => {
         const fields = await readFields({
           fields: opts.fields,
           fieldsFile: opts.fieldsFile,
         });
-        const result = await callBrowserAct<{ result?: unknown }>({
+        await runBrowserAction({
           parent,
-          profile,
           body: {
             kind: "fill",
             fields,
             targetId: normalizeOptionalString(opts.targetId),
           },
+          successMessage: `filled ${fields.length} field(s)`,
         });
-        logBrowserActionResult(parent, result, `filled ${fields.length} field(s)`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   browser
@@ -87,42 +72,26 @@ export function registerBrowserFormWaitEvalCommands(
     )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (selector: string | undefined, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const sel = normalizeOptionalString(selector);
+      const parent = parentOpts(cmd);
+      await runBrowserCliCommand(async () => {
         const load = parseBrowserWaitLoadState(opts.load);
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const timeMs = Number.isFinite(opts.time) ? opts.time : undefined;
-        const text = normalizeOptionalString(opts.text);
-        const textGone = normalizeOptionalString(opts.textGone);
-        const url = normalizeOptionalString(opts.url);
-        const fn = normalizeOptionalString(opts.fn);
-        const waitConditionCount = [text, textGone, sel, url, load, fn].filter(Boolean).length;
-        const outerTimeoutBaseMs =
-          (timeMs ?? 0) + waitConditionCount * (timeoutMs ?? DEFAULT_WAIT_CONDITION_TIMEOUT_MS) ||
-          undefined;
-        const result = await callBrowserAct<{ result?: unknown }>({
+        await runBrowserAction({
           parent,
-          profile,
           body: {
             kind: "wait",
-            timeMs,
-            text,
-            textGone,
-            selector: sel,
-            url,
+            timeMs: opts.time,
+            text: normalizeOptionalString(opts.text),
+            textGone: normalizeOptionalString(opts.textGone),
+            selector: normalizeOptionalString(selector),
+            url: normalizeOptionalString(opts.url),
             loadState: load,
-            fn,
+            fn: normalizeOptionalString(opts.fn),
             targetId: normalizeOptionalString(opts.targetId),
-            timeoutMs,
+            timeoutMs: opts.timeoutMs,
           },
-          timeoutMs: outerTimeoutBaseMs,
+          successMessage: "wait complete",
         });
-        logBrowserActionResult(parent, result, "wait complete");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   browser
@@ -140,34 +109,23 @@ export function registerBrowserFormWaitEvalCommands(
     )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       if (!opts.fn) {
         defaultRuntime.error(danger("Missing --fn"));
         defaultRuntime.exit(1);
         return;
       }
-      try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserAct<{ result?: unknown }>({
+      await runBrowserCliCommand(async () => {
+        await runBrowserAction({
           parent,
-          profile,
           body: {
             kind: "evaluate",
             fn: opts.fn,
             ref: normalizeOptionalString(opts.ref),
             targetId: normalizeOptionalString(opts.targetId),
-            timeoutMs,
+            timeoutMs: opts.timeoutMs,
           },
-          timeoutMs,
         });
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
-          return;
-        }
-        defaultRuntime.writeJson(result.result ?? null);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

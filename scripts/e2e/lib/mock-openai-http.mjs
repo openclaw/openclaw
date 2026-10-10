@@ -1,6 +1,8 @@
-// Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
+// Raw launchers meet the repo's Node 24.16.0 minimum, where native TS stripping is enabled.
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import { readPositiveIntEnv } from "./env-limits.mjs";
+import { readBoundedRequestBody } from "./request-body.mjs";
 
 const DEFAULT_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_REQUEST_LOG_BODY_MAX_BYTES = 256 * 1024;
@@ -27,46 +29,24 @@ function requestBodyTooLargeError(limit) {
   });
 }
 
+/** @param {unknown} error @returns {error is Error & { code: "ETOOBIG" }} */
 export function isRequestBodyTooLargeError(error) {
-  return error instanceof Error && error.code === "ETOOBIG";
+  return error instanceof Error && "code" in error && error.code === "ETOOBIG";
 }
 
+/**
+ * @param {NodeJS.ReadableStream} req
+ * @param {{ requestLogBodyMaxBytes?: number; requestMaxBytes: number }} [limits]
+ */
 export function readBody(req, limits = readMockOpenAiHttpLimits()) {
-  const { requestMaxBytes } = limits;
-  return new Promise((resolve, reject) => {
-    let body = "";
-    let bytes = 0;
-    let settled = false;
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      bytes += Buffer.byteLength(chunk, "utf8");
-      if (bytes > requestMaxBytes) {
-        settled = true;
-        body = "";
-        req.resume();
-        reject(requestBodyTooLargeError(requestMaxBytes));
-        return;
-      }
-      body += chunk;
-    });
-    req.on("end", () => {
-      if (!settled) {
-        settled = true;
-        resolve(body);
-      }
-    });
-    req.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
+  return readBoundedRequestBody(req, limits.requestMaxBytes, requestBodyTooLargeError);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} bodyText
+ * @param {{ requestLogBodyMaxBytes: number; requestMaxBytes?: number }} [limits]
+ */
 export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHttpLimits()) {
   const { requestLogBodyMaxBytes } = limits;
   const byteLength = Buffer.byteLength(bodyText, "utf8");
@@ -76,7 +56,7 @@ export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHt
   return {
     truncated: true,
     byteLength,
-    preview: bodyText.slice(0, REQUEST_LOG_PREVIEW_CHARS),
+    preview: truncateUtf16Safe(bodyText, REQUEST_LOG_PREVIEW_CHARS),
   };
 }
 
@@ -84,17 +64,14 @@ export function writeRequestLogEntryOrFail(
   res,
   { requestLog, entry, label = "mock-openai", required = false },
 ) {
-  if (!requestLog) {
-    if (!required) {
-      return false;
-    }
-    const message = "MOCK_REQUEST_LOG is not configured";
-    console.error(`${label} request log write failed: ${message}`);
-    writeJson(res, 500, { error: { message: `mock OpenAI request log write failed: ${message}` } });
-    return true;
+  if (!requestLog && !required) {
+    return false;
   }
 
   try {
+    if (!requestLog) {
+      throw new Error("MOCK_REQUEST_LOG is not configured");
+    }
     fs.appendFileSync(requestLog, `${JSON.stringify(entry)}\n`);
     return false;
   } catch (error) {

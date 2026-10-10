@@ -1,13 +1,10 @@
-/** Formatting helpers for gateway runtime summaries and doctor repair hints. */
 import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
-  resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
-import { resolveDaemonContainerContext } from "../daemon/container-context.js";
-import { formatRuntimeStatus } from "../daemon/runtime-format.js";
-import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
+import { buildGatewayRuntimeRecoveryHints } from "../daemon/runtime-hints.js";
 import {
   getSystemdCgroupHygieneSummary,
   isSystemdCgroupHygieneRisk,
@@ -22,22 +19,9 @@ import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.
 import { isWSLEnv } from "../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
-type RuntimeHintOptions = {
-  platform?: NodeJS.Platform;
-  env?: Record<string, string | undefined>;
-};
-
-/** Formats the platform-specific gateway service runtime into a compact status line. */
-export function formatGatewayRuntimeSummary(
-  runtime: GatewayServiceRuntime | undefined,
-): string | null {
-  return formatRuntimeStatus(runtime);
-}
-
-/** Builds follow-up hints for stopped, missing, or unhealthy gateway service runtimes. */
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
-  options: RuntimeHintOptions = {},
+  options: { platform?: NodeJS.Platform; env?: Record<string, string | undefined> } = {},
 ): string[] {
   const hints: string[] = [];
   if (!runtime) {
@@ -45,7 +29,6 @@ export function buildGatewayRuntimeHints(
   }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const container = Boolean(resolveDaemonContainerContext(env));
   const fileLog = (() => {
     try {
       return getResolvedLoggerSettings().file;
@@ -53,18 +36,17 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
-  if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
-    hints.push(
+  const fileLogHints = fileLog ? [`File logs: ${fileLog}`] : [];
+  const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
+  if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
+    return [
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(env),
-        kind: classifySystemdUnavailableDetail(runtime.detail),
-        container,
+        kind: classifySystemdUnavailableDetail(systemdDetail),
+        env,
       }),
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
+      ...fileLogHints,
+    ];
   }
   if (runtime.cachedLabel && platform === "darwin") {
     const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
@@ -75,68 +57,48 @@ export function buildGatewayRuntimeHints(
   }
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
+    hints.push(...fileLogHints);
     return hints;
   }
-  if (runtime.missingGuiSession && platform === "darwin") {
-    hints.push(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
-    );
-    hints.push(
-      `Sign in to the macOS desktop as this user, then run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    hints.push(
-      "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.missingSupervision && platform === "darwin") {
-    hints.push(
-      `LaunchAgent installed but not loaded. Run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.status === "stopped") {
-    if (platform === "linux" && isSystemdStartLimitHit(runtime)) {
+  const missingGuiSession = runtime.missingGuiSession && platform === "darwin";
+  const disabledTask = platform === "win32" && runtime.state === "Disabled";
+  if (missingGuiSession || disabledTask || runtime.status === "stopped") {
+    if (!missingGuiSession && platform === "linux" && isSystemdStartLimitHit(runtime)) {
       // start-limit-hit means systemd gave up restarting after repeated crashes;
       // a plain "exited immediately" hint would hide that recovery needs a restart.
       hints.push(
         "systemd stopped restarting the gateway after repeated crashes.",
         `Recover with: ${formatCliCommand("openclaw gateway restart", env)}, then inspect logs if it keeps crashing.`,
       );
-    } else {
+    } else if (!missingGuiSession && !disabledTask) {
       hints.push("Service is loaded but not running (likely exited immediately).");
     }
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
     hints.push(
-      ...buildPlatformRuntimeLogHints({
+      ...buildGatewayRuntimeRecoveryHints({
+        kind: missingGuiSession ? "gui-session" : disabledTask ? "disabled-task" : "stopped",
+        restartCommand: formatCliCommand("openclaw gateway restart", env),
+        logFile: fileLog,
         platform,
         env,
-        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
-        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
+        systemd: runtime.systemd,
       }),
     );
+    if (missingGuiSession) {
+      return hints;
+    }
   }
   if (platform === "linux" && isSystemdCgroupHygieneRisk(runtime.systemd)) {
-    const unit =
-      runtime.systemd?.unit ?? `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+    const unit = quoteCliArg(
+      runtime.systemd?.unit ?? `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`,
+    );
+    const system = runtime.systemd?.scope === "system";
     const summary = getSystemdCgroupHygieneSummary(runtime.systemd);
     if (summary) {
       hints.push(
         `Systemd cgroup hygiene looks elevated: ${summary}.`,
         "This usually means old helper or browser processes may still be attached to the gateway service.",
-        `Run: systemctl --user show ${unit} -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
-        `Run: systemd-cgls --user-unit ${unit}`,
+        `Run: systemctl ${system ? "--system" : "--user"} show ${unit} -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
+        `Run: systemd-cgls ${system ? "--unit" : "--user-unit"} ${unit}`,
         `After reviewing service settings, run: ${formatCliCommand("openclaw gateway restart", env)}`,
       );
     }

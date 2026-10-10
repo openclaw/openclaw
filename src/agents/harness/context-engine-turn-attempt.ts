@@ -1,0 +1,294 @@
+import {
+  resolveSessionTranscriptDatabasePath,
+  type TranscriptTurnBoundary,
+} from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
+import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
+import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
+import {
+  drainContextEngineTurnOutbox,
+  type ContextEngineTurnRuntimeContext,
+} from "./context-engine-turn-outbox.js";
+
+const ACCEPTED_TURN_MAX_EVENTS = 20_000;
+const ACCEPTED_TURN_MAX_BYTES = 8 * 1024 * 1024;
+
+export type ContextEngineTurnAttemptFacts = {
+  boundary: TranscriptTurnBoundary;
+  sessionIdUsed: string;
+  sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
+  promptError: boolean;
+  aborted: boolean;
+  yieldAborted: boolean;
+  isHeartbeat?: boolean;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
+};
+
+export async function drainPendingContextEngineTurnsBeforeRun(params: {
+  admission: TranscriptTurnBoundary["admission"] | undefined;
+  isHeartbeat?: boolean;
+  lease: ContextEngineLogicalTurnLease;
+  recorder?: UserTurnTranscriptRecorder;
+  sessionTarget?: ContextEngineSessionTarget;
+  warn?: (message: string) => void;
+}): Promise<void> {
+  if (
+    (!params.admission && !params.recorder) ||
+    params.lease.degraded ||
+    !supportsContextEngineDurableTurnAdvancement(params.lease.engine)
+  ) {
+    return;
+  }
+  const warn = params.warn ?? console.warn;
+  try {
+    const target = params.admission ?? params.sessionTarget;
+    if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+      params.lease.degradeBeforeStart(
+        "durable transcript target is unavailable before context assembly",
+      );
+      return;
+    }
+    const databasePath = params.admission
+      ? params.admission.storePath
+      : resolveSessionTranscriptDatabasePath({
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        });
+    // Outbox SQLite runs in the agent database worker; this thread only awaits it.
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: target.agentId,
+      path: databasePath,
+      sessionKey: target.sessionKey,
+      sessionId: target.sessionId,
+    });
+    const owner = {
+      engineId: params.lease.effectiveEngineId,
+      ownerPluginId: params.lease.effectiveEnginePluginId,
+    };
+    const retainAdmission = <T>(
+      admission: TranscriptTurnBoundary["admission"],
+      write: () => Promise<T>,
+    ) => {
+      // Register cleanup before synchronously joining the writer FIFO.
+      const pending = new Promise<T>((resolve) => {
+        params.lease.onDispose(
+          JSON.stringify([databasePath, admission.logicalTurnId]),
+          async () => {
+            // The database decides whether an uncertain write reached host acceptance.
+            await pending.catch(() => {});
+            if (await store.discardIntent({ ...owner, admission })) {
+              warn(
+                `[context-engine] discarded unaccepted turn advancement: ${admission.logicalTurnId}: run ended without host acceptance`,
+              );
+            }
+          },
+        );
+        resolve(write());
+      });
+      return pending;
+    };
+    // One worker transaction recovers, checks for advanceable rows, and records a
+    // known admission when none remain; only pending work needs the drain.
+    const sessionId = target.sessionId;
+    const prepare = () =>
+      store.prepareRun({
+        ...owner,
+        admission: params.admission,
+        isHeartbeat: params.isHeartbeat === true,
+        sessionId,
+      });
+    const prepared = await (params.admission
+      ? retainAdmission(params.admission, prepare)
+      : prepare());
+    for (const message of prepared.warnings) {
+      warn(message);
+    }
+    if (prepared.pending) {
+      const result = await drainContextEngineTurnOutbox({
+        store,
+        engine: params.lease.engine,
+        ...owner,
+        sessionId: target.sessionId,
+        warn,
+      });
+      if (result.pending) {
+        params.lease.degradeBeforeStart(
+          "pending durable turn advancement could not be completed before the next turn",
+        );
+        return;
+      }
+    }
+    const enqueueAdmission = async (admission: TranscriptTurnBoundary["admission"]) => {
+      // Transcript fallback may persist after its provider run has already ended.
+      if (params.lease.disposed) {
+        return;
+      }
+      if (
+        admission.agentId !== target.agentId ||
+        admission.sessionId !== target.sessionId ||
+        admission.sessionKey !== target.sessionKey ||
+        admission.storePath !== databasePath
+      ) {
+        throw new Error("context-engine transcript target changed before provider dispatch");
+      }
+      await retainAdmission(admission, () =>
+        store.enqueueIntent({ ...owner, admission, isHeartbeat: params.isHeartbeat === true }),
+      );
+    };
+    if (params.admission) {
+      if (!prepared.admitted) {
+        await enqueueAdmission(params.admission);
+      }
+      return;
+    }
+    if (!params.recorder?.setAdmissionHandler) {
+      params.lease.degradeBeforeStart(
+        "current-turn transcript admission cannot be recorded for durable advancement",
+      );
+      return;
+    }
+    params.recorder.setAdmissionHandler(enqueueAdmission);
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    const message = error instanceof Error ? error.message : String(error);
+    warn(`[context-engine] failed to retry pending turn advancement: ${message}`);
+    params.lease.degradeBeforeStart(
+      "pending durable turn advancement could not be checked before the next turn",
+    );
+  }
+}
+
+function assertAcceptedTranscriptTarget(facts: ContextEngineTurnAttemptFacts): void {
+  const { admission, terminal } = facts.boundary;
+  if (
+    facts.sessionIdUsed !== admission.sessionId ||
+    terminal.agentId !== admission.agentId ||
+    terminal.sessionId !== admission.sessionId ||
+    terminal.sessionKey !== admission.sessionKey ||
+    terminal.storePath !== admission.storePath ||
+    (facts.sessionKey !== undefined && facts.sessionKey !== admission.sessionKey) ||
+    (facts.sessionTarget?.agentId !== undefined &&
+      facts.sessionTarget.agentId !== admission.agentId) ||
+    (facts.sessionTarget?.sessionId !== undefined &&
+      facts.sessionTarget.sessionId !== admission.sessionId) ||
+    (facts.sessionTarget?.sessionKey !== undefined &&
+      facts.sessionTarget.sessionKey !== admission.sessionKey)
+  ) {
+    throw new Error("accepted context-engine transcript target changed after admission");
+  }
+}
+
+/** Commit the accepted transcript range and offer acknowledged turns to host-owned maintenance. */
+export async function finalizeAcceptedContextEngineTurn(params: {
+  config?: OpenClawConfig;
+  facts: ContextEngineTurnAttemptFacts;
+  lease: ContextEngineLogicalTurnLease;
+  warn?: (message: string) => void;
+}): Promise<void> {
+  const declaresDurableAdvancement =
+    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency !== undefined;
+  const implementsDurableAdvancement = supportsContextEngineDurableTurnAdvancement(
+    params.lease.engine,
+  );
+  // Legacy leaves persistence to SessionManager and owns neither side of this contract.
+  // Partial durable declarations remain invariant failures in the guarded path below.
+  if (!declaresDurableAdvancement && !implementsDurableAdvancement) {
+    return;
+  }
+  const warn = params.warn ?? console.warn;
+  if (params.facts.promptError || params.facts.aborted || params.facts.yieldAborted) {
+    return;
+  }
+  try {
+    assertAcceptedTranscriptTarget(params.facts);
+    if (params.lease.degraded || !declaresDurableAdvancement || !implementsDurableAdvancement) {
+      throw new Error("accepted context engine does not support durable turn advancement");
+    }
+    const admission = params.facts.boundary.admission;
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: admission.agentId,
+      path: admission.storePath,
+      sessionKey: admission.sessionKey,
+      sessionId: admission.sessionId,
+    });
+    const accepted = {
+      boundary: params.facts.boundary,
+      engineId: params.lease.effectiveEngineId,
+      isHeartbeat: params.facts.isHeartbeat === true,
+      ownerPluginId: params.lease.effectiveEnginePluginId,
+      runtimeContext: params.facts.runtimeContext,
+    };
+    // Acceptance commits before the fallible read and publication, so their
+    // failure leaves the turn accepted for the next recovery to advance.
+    await store.acceptIntent(accepted);
+    const closedTurnKind = await store.publishClosedTurn({
+      ...accepted,
+      maxBytes: ACCEPTED_TURN_MAX_BYTES,
+      maxEvents: ACCEPTED_TURN_MAX_EVENTS,
+    });
+    if (closedTurnKind !== "ok") {
+      throw new Error(`accepted context-engine transcript range is ${closedTurnKind}`);
+    }
+    const maintenanceBySession = new Map<
+      string,
+      Parameters<typeof runContextEngineMaintenance>[0]
+    >();
+    const onCommitted = (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]): void => {
+      // Retain only maintenance inputs, not the committed transcript batches.
+      maintenanceBySession.set(turn.sessionId, {
+        contextEngine: params.lease.engine,
+        sessionId: turn.sessionId,
+        sessionKey: turn.sessionKey,
+        sessionTarget: turn.sessionTarget,
+        sessionFile: turn.admission.sessionKey,
+        reason: "turn",
+        runtimeContext: turn.runtimeContext,
+        config: params.config,
+        onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
+      });
+    };
+    const drainSession = (sessionId: string, limit?: number) =>
+      drainContextEngineTurnOutbox({
+        store,
+        engine: params.lease.engine,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+        sessionId,
+        ...(limit === undefined ? {} : { limit }),
+        onCommitted,
+        warn,
+      });
+    await drainSession(admission.sessionId);
+    // Prioritize the accepted session, then preserve one bounded retry opportunity per
+    // other pending session without immediately retrying a failed accepted-session row.
+    const retrySessionIds = await store.listPendingSessions({
+      engineId: params.lease.effectiveEngineId,
+      ownerPluginId: params.lease.effectiveEnginePluginId,
+      limit: 16,
+    });
+    for (const sessionId of retrySessionIds) {
+      if (sessionId === admission.sessionId) {
+        continue;
+      }
+      await drainSession(sessionId, 1);
+    }
+    // Finish draining before maintenance can read engine state. Replayed rows use their own
+    // target and latest model facts; one offer per session lets the scheduler own coalescing.
+    for (const maintenance of maintenanceBySession.values()) {
+      await runContextEngineMaintenance(maintenance);
+    }
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    warn(
+      `[context-engine] skipped accepted turn advancement: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}

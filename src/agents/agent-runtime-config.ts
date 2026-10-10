@@ -1,53 +1,108 @@
 /** Resolves agent runtime config, including SecretRef materialization for agent command use. */
-import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+import {
+  getAgentRuntimeCommandSecretTargetIds,
+  getAgentRuntimeOptionalCommandSecretPaths,
+  getScopedChannelsCommandSecretTargets,
+} from "../cli/command-secret-targets.js";
 import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
+import { listAgentEntries } from "./agent-scope.js";
+import { measureAgentStartup } from "./startup-timing.js";
 
 /** Loads runtime/source config and resolves command SecretRefs when the agent path needs them. */
 export async function resolveAgentRuntimeConfig(
   runtime: RuntimeEnv,
-  params?: { runtimeTargetsChannelSecrets?: boolean },
-): Promise<{
-  loadedRaw: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  cfg: OpenClawConfig;
-}> {
+  params?: {
+    runtimeTargetsChannelSecrets?: boolean;
+    runtimeChannelSecretScope?: { channel: string; accountId?: string };
+  },
+): Promise<OpenClawConfig> {
   const loadedRaw = getRuntimeConfig();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
+  const channelSecretScope = params?.runtimeChannelSecretScope;
   const hasRuntimeSecretRefs = hasAgentRuntimeSecretRefs({
     config: loadedRaw,
     includeChannelTargets,
+    channel: channelSecretScope?.channel,
   });
-  const sourceConfig = await (async () => {
-    try {
-      const { snapshot } = await readConfigFileSnapshotForWrite();
-      if (snapshot.valid) {
-        return snapshot.resolved;
-      }
-    } catch {
-      // Fall back to runtime-loaded config when source snapshot is unavailable.
-    }
-    return loadedRaw;
-  })();
-  const cfg = hasRuntimeSecretRefs
-    ? (
-        await (
-          await import("../cli/command-config-resolution.runtime.js")
-        ).resolveCommandConfigWithSecrets({
-          config: loadedRaw,
-          commandName: "agent",
-          targetIds: getAgentRuntimeCommandSecretTargetIds({
-            includeChannelTargets,
-          }),
-          runtime,
-        })
-      ).resolvedConfig
-    : loadedRaw;
-  setRuntimeConfigSnapshot(cfg, sourceConfig);
-  return { loadedRaw, sourceConfig, cfg };
+  const activeSecretsConfig = getActiveSecretsRuntimeConfigSnapshot();
+  let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  const sourceConfig = activeSecretsConfig
+    ? activeSecretsConfig.sourceConfig
+    : await measureAgentStartup(
+        "config-source",
+        async () => {
+          try {
+            const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+            if (snapshot.valid) {
+              pluginMetadataSnapshot = writeOptions.basePluginMetadataSnapshot;
+              return snapshot.resolved;
+            }
+          } catch {
+            // Fall back to runtime-loaded config when source snapshot is unavailable.
+          }
+          pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
+          return loadedRaw;
+        },
+        { config: loadedRaw },
+      );
+  let cfg = loadedRaw;
+  if (hasRuntimeSecretRefs) {
+    const runtimeSecretTargets = resolveAgentRuntimeSecretTargets({
+      config: loadedRaw,
+      includeChannelTargets,
+      channelSecretScope,
+    });
+    const { resolveCommandConfigWithSecrets } =
+      await import("../cli/command-config-resolution.runtime.js");
+    cfg = (
+      await resolveCommandConfigWithSecrets({
+        config: loadedRaw,
+        commandName: "agent",
+        targetIds: runtimeSecretTargets.targetIds,
+        ...(runtimeSecretTargets.allowedPaths
+          ? { allowedPaths: runtimeSecretTargets.allowedPaths }
+          : {}),
+        ...(runtimeSecretTargets.optionalActivePaths.size > 0
+          ? { optionalActivePaths: runtimeSecretTargets.optionalActivePaths }
+          : {}),
+        runtime,
+      })
+    ).resolvedConfig;
+  }
+  if (activeSecretsConfig && cfg !== loadedRaw) {
+    // Gateway activation already published loadedRaw with this source config. Republishing the
+    // same object here would advance its lifecycle revision and evict revision-keyed hot caches.
+    setRuntimeConfigSnapshot(cfg, sourceConfig);
+  } else if (!activeSecretsConfig) {
+    // Standalone local agent commands have no Gateway-owned snapshot. Materialize
+    // auth-profile refs too; resolving only config refs leaves selected credentials unusable.
+    const secretsRuntime = await measureAgentStartup(
+      "secrets-runtime-import",
+      () => import("../secrets/runtime.js"),
+      { config: cfg },
+    );
+    const snapshot = await measureAgentStartup(
+      "secrets-snapshot",
+      () =>
+        secretsRuntime.prepareSecretsRuntimeSnapshot({
+          config: sourceConfig,
+          assignmentConfig: cfg,
+          includeConfigRefs: false,
+          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+        }),
+      { config: cfg },
+    );
+    secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
+  }
+  return cfg;
 }
 
 function hasNestedSecretRef(value: unknown): boolean {
@@ -55,50 +110,83 @@ function hasNestedSecretRef(value: unknown): boolean {
     return true;
   }
   if (Array.isArray(value)) {
-    return value.some((entry) => hasNestedSecretRef(entry));
+    return value.some(hasNestedSecretRef);
   }
   if (!value || typeof value !== "object") {
     return false;
   }
-  return Object.values(value).some((entry) => hasNestedSecretRef(entry));
+  return Object.values(value).some(hasNestedSecretRef);
 }
 
 function hasAgentRuntimeSecretRefs(params: {
   config: OpenClawConfig;
   includeChannelTargets: boolean;
+  channel?: string;
 }): boolean {
   const { config } = params;
-  if (hasNestedSecretRef(config.models?.providers)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.agents?.defaults?.memorySearch?.remote?.apiKey)) {
-    return true;
-  }
-  if (
-    Array.isArray(config.agents?.list) &&
-    config.agents.list.some((agent) => hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey))
-  ) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.messages?.tts?.providers)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.skills?.entries)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.tools?.web?.search)) {
-    return true;
-  }
-  if (
-    config.plugins?.entries &&
-    Object.values(config.plugins.entries).some((entry) =>
+  return (
+    hasNestedSecretRef(config.models?.providers) ||
+    hasNestedSecretRef(config.memory?.search?.remote) ||
+    listAgentEntries(config).some((agent) =>
+      hasNestedSecretRef({
+        memoryRemote: agent.memory?.search?.remote,
+        tts: agent.tts,
+      }),
+    ) ||
+    hasNestedSecretRef(config.tts) ||
+    hasNestedSecretRef(config.skills?.entries) ||
+    hasNestedSecretRef(config.tools?.web?.search) ||
+    Object.values(config.plugins?.entries ?? {}).some((entry) =>
       hasNestedSecretRef({
         webSearch: entry?.config?.webSearch,
         webFetch: entry?.config?.webFetch,
       }),
+    ) ||
+    hasNestedSecretRef(
+      params.includeChannelTargets
+        ? config.channels
+        : params.channel
+          ? (config.channels as Record<string, unknown> | undefined)?.[params.channel]
+          : undefined,
     )
-  ) {
-    return true;
+  );
+}
+
+function resolveAgentRuntimeSecretTargets(params: {
+  config: OpenClawConfig;
+  includeChannelTargets: boolean;
+  channelSecretScope?: { channel: string; accountId?: string };
+}): {
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+  optionalActivePaths: Set<string>;
+} {
+  const baseTargetIds = getAgentRuntimeCommandSecretTargetIds({
+    config: params.config,
+    includeChannelTargets: params.includeChannelTargets,
+  });
+  const optionalActivePaths = getAgentRuntimeOptionalCommandSecretPaths(params.config);
+  if (params.includeChannelTargets || !params.channelSecretScope) {
+    return { targetIds: baseTargetIds, optionalActivePaths };
   }
-  return params.includeChannelTargets ? hasNestedSecretRef(config.channels) : false;
+  const channelTargets = getScopedChannelsCommandSecretTargets({
+    config: params.config,
+    channel: params.channelSecretScope.channel,
+    accountId: params.channelSecretScope.accountId,
+    defaultAccountWhenMissing: true,
+  });
+  const targetIds = new Set(baseTargetIds);
+  for (const targetId of channelTargets.targetIds) {
+    targetIds.add(targetId);
+  }
+  if (!channelTargets.allowedPaths) {
+    return { targetIds, optionalActivePaths };
+  }
+
+  // Account scoping must not exclude the agent's model/tool secrets from the same resolution.
+  const allowedPaths = new Set(channelTargets.allowedPaths);
+  for (const target of discoverConfigSecretTargetsByIds(params.config, baseTargetIds)) {
+    allowedPaths.add(target.path);
+  }
+  return { targetIds, allowedPaths, optionalActivePaths };
 }

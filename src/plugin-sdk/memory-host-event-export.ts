@@ -1,0 +1,227 @@
+import type { FileHandle } from "node:fs/promises";
+import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
+import { isMissingPathError } from "../infra/errors.js";
+import { writeFileWindowFully } from "../infra/file-descriptor.js";
+import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
+
+export type MemoryHostEventExportOwner = {
+  queueKey: string;
+  lockTarget: string;
+  relativePath: string;
+  ownerRelativePath: string;
+  stateHash: string;
+  workspaceHash: string;
+};
+
+type MemoryHostWorkspaceRoot = Awaited<ReturnType<typeof createFsSafeRoot>>;
+
+export function isRejectedWorkspaceArtifactPath(error: unknown): boolean {
+  if (!(error instanceof FsSafeError)) {
+    return false;
+  }
+  return (
+    error.code === "hardlink" ||
+    error.code === "not-file" ||
+    error.code === "outside-workspace" ||
+    error.code === "path-alias" ||
+    error.code === "path-mismatch" ||
+    error.code === "symlink"
+  );
+}
+
+async function openMemoryHostEventArtifact<T>(open: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await open();
+  } catch (error) {
+    if (isMissingPathError(error) || isRejectedWorkspaceArtifactPath(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+export function memoryHostEventExportOwnerContent(
+  owner: MemoryHostEventExportOwner,
+  content: {
+    currentSha256?: string;
+    pendingSha256?: string;
+    identity?: FileIdentityStat;
+  },
+): string {
+  return `${JSON.stringify({
+    schemaVersion: 3,
+    kind: "openclaw-memory-host-events-export",
+    stateHash: owner.stateHash,
+    workspaceHash: owner.workspaceHash,
+    ...(content.identity
+      ? { fileDev: String(content.identity.dev), fileIno: String(content.identity.ino) }
+      : {}),
+    ...(content.currentSha256 ? { contentSha256: content.currentSha256 } : {}),
+    ...(content.pendingSha256 ? { pendingContentSha256: content.pendingSha256 } : {}),
+  })}\n`;
+}
+
+async function writePinnedMemoryHostEventArtifact(
+  handle: FileHandle,
+  content: string,
+): Promise<void> {
+  const bytes = Buffer.from(content, "utf8");
+  await writeFileWindowFully(handle, bytes, 0);
+  await handle.truncate(bytes.length);
+  await handle.chmod(0o600);
+  await handle.sync();
+}
+
+export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
+  workspaceRoot: MemoryHostWorkspaceRoot;
+  relativePath: string;
+  expectedContent?: string;
+  expectedIdentity?: FileIdentityStat;
+  nextContent: string;
+}): Promise<boolean> {
+  const observation = await openMemoryHostEventArtifact(() =>
+    params.workspaceRoot.open(params.relativePath),
+  );
+  if (!observation) {
+    return false;
+  }
+  await using observed = observation;
+  if (
+    params.expectedIdentity
+      ? !sameFileIdentity(params.expectedIdentity, observed.stat)
+      : (await observed.handle.readFile({ encoding: "utf8" })) !== params.expectedContent
+  ) {
+    return false;
+  }
+  {
+    const writeTarget = await openMemoryHostEventArtifact(() =>
+      params.workspaceRoot.openWritable(params.relativePath, { mode: 0o600, writeMode: "update" }),
+    );
+    if (!writeTarget) {
+      return false;
+    }
+    await using writable = writeTarget;
+    // The matching marker/content snapshot owns this generated artifact inode for
+    // the locked update. A distinct workspace file can take the path only by
+    // replacing that inode; direct writes still target the owned export itself.
+    if (!sameFileIdentity(observed.stat, writable.stat)) {
+      return false;
+    }
+    await writable.handle.writeFile(params.nextContent, { encoding: "utf8" });
+    await writable.handle.truncate(Buffer.byteLength(params.nextContent, "utf8"));
+    await writable.handle.chmod(0o600);
+    await writable.handle.sync();
+  }
+  const verification = await openMemoryHostEventArtifact(() =>
+    params.workspaceRoot.open(params.relativePath),
+  );
+  if (!verification) {
+    return false;
+  }
+  await using verified = verification;
+  return (
+    sameFileIdentity(observed.stat, verified.stat) &&
+    (await verified.handle.readFile({ encoding: "utf8" })) === params.nextContent
+  );
+}
+
+export async function isMemoryHostEventArtifactAtIdentity(params: {
+  workspaceRoot: MemoryHostWorkspaceRoot;
+  relativePath: string;
+  expectedIdentity: FileIdentityStat;
+  expectedContent?: string;
+}): Promise<boolean> {
+  const observation = await openMemoryHostEventArtifact(() =>
+    params.workspaceRoot.open(params.relativePath),
+  );
+  if (!observation) {
+    return false;
+  }
+  await using opened = observation;
+  if (!sameFileIdentity(params.expectedIdentity, opened.stat)) {
+    return false;
+  }
+  return (
+    params.expectedContent === undefined ||
+    (await opened.handle.readFile()).equals(Buffer.from(params.expectedContent, "utf8"))
+  );
+}
+
+export async function publishMemoryHostEventArtifact(params: {
+  workspaceRoot: MemoryHostWorkspaceRoot;
+  owner: MemoryHostEventExportOwner;
+  absolutePath: string;
+  expectedOwnerContent: string;
+  content: string;
+  contentSha256: string;
+}): Promise<FileIdentityStat | undefined> {
+  const writeTarget = await openMemoryHostEventArtifact(() =>
+    params.workspaceRoot.openWritable(params.owner.relativePath, {
+      mode: 0o600,
+      writeMode: "replace",
+    }),
+  );
+  if (!writeTarget) {
+    return undefined;
+  }
+  await using writable = writeTarget;
+  // `createdForWrite` is the exclusive-create proof. Keep its handle pinned
+  // through publication so a replacement path is never opened for mutation.
+  if (!writable.createdForWrite) {
+    return undefined;
+  }
+  const publishedIdentity = { dev: writable.stat.dev, ino: writable.stat.ino };
+  const isPublishedArtifactCurrent = () =>
+    isMemoryHostEventArtifactAtIdentity({
+      workspaceRoot: params.workspaceRoot,
+      relativePath: params.owner.relativePath,
+      expectedIdentity: publishedIdentity,
+      expectedContent: params.content,
+    });
+  await syncDirectoryIfSupported(path.dirname(params.absolutePath));
+
+  const identityPendingOwnerContent = memoryHostEventExportOwnerContent(params.owner, {
+    pendingSha256: params.contentSha256,
+    identity: publishedIdentity,
+  });
+  if (
+    !(await rewriteMemoryHostEventArtifactIfUnchanged({
+      workspaceRoot: params.workspaceRoot,
+      relativePath: params.owner.ownerRelativePath,
+      expectedContent: params.expectedOwnerContent,
+      nextContent: identityPendingOwnerContent,
+    }))
+  ) {
+    return undefined;
+  }
+  await syncDirectoryIfSupported(path.dirname(params.absolutePath));
+
+  await writePinnedMemoryHostEventArtifact(writable.handle, params.content);
+  // Workspace actors can mutate this inode without replacing the path. Verify
+  // bytes before finalizing the marker so foreign content never gains ownership.
+  if (!(await isPublishedArtifactCurrent())) {
+    return undefined;
+  }
+  await syncDirectoryIfSupported(path.dirname(params.absolutePath));
+
+  if (
+    !(await rewriteMemoryHostEventArtifactIfUnchanged({
+      workspaceRoot: params.workspaceRoot,
+      relativePath: params.owner.ownerRelativePath,
+      expectedContent: identityPendingOwnerContent,
+      nextContent: memoryHostEventExportOwnerContent(params.owner, {
+        currentSha256: params.contentSha256,
+        identity: publishedIdentity,
+      }),
+    }))
+  ) {
+    return undefined;
+  }
+  await syncDirectoryIfSupported(path.dirname(params.absolutePath));
+  if (!(await isPublishedArtifactCurrent())) {
+    return undefined;
+  }
+  return publishedIdentity;
+}

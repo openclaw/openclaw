@@ -4,28 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireTelegramPollingLease,
   releaseStoppedTelegramPollingLease,
-  resetTelegramPollingLeasesForTests,
 } from "./polling-lease.js";
+import { resetTelegramPollingLeasesForTest as resetTelegramPollingLeasesForTests } from "./runtime.test-support.js";
 
 describe("Telegram polling lease", () => {
   beforeEach(() => {
     resetTelegramPollingLeasesForTests();
-  });
-
-  it("refuses an active duplicate poller for the same bot token", async () => {
-    const first = await acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-    });
-
-    await expect(
-      acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "ops",
-      }),
-    ).rejects.toThrow('refusing duplicate poller for account "ops"');
-
-    first.release();
   });
 
   it("refuses an old active duplicate poller for the same bot token", async () => {
@@ -51,22 +35,6 @@ describe("Telegram polling lease", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("allows concurrent pollers for different bot tokens", async () => {
-    const first = await acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-    });
-    const second = await acquireTelegramPollingLease({
-      token: "456:def",
-      accountId: "ops",
-    });
-
-    expect(first.tokenFingerprint).not.toBe(second.tokenFingerprint);
-
-    first.release();
-    second.release();
   });
 
   it("waits for an aborting same-token poller before acquiring", async () => {

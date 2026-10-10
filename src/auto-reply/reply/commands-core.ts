@@ -1,21 +1,16 @@
-// Dispatches chat commands to registered handlers and formats their results.
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
-  CommandHandler,
+  CommandDispatchParams,
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-const commandHandlersRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-handlers.runtime.js"),
+const commandHandlersRuntimeLoader = createLazyImportLoader(async () =>
+  (await import("./commands-handlers.runtime.js")).loadCommandHandlers(),
 );
-
-function loadCommandHandlersRuntime() {
-  return commandHandlersRuntimeLoader.load();
-}
-
-let HANDLERS: CommandHandler[] | null = null;
 
 function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHandlerResult {
   if (!result.reply) {
@@ -23,31 +18,59 @@ function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHan
   }
   return {
     ...result,
-    reply: {
+    reply: copyReplyPayloadMetadata(result.reply, {
       ...result.reply,
       replyToId: undefined,
       replyToCurrent: false,
-    },
+    }),
   };
 }
 
-export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
-  if (HANDLERS === null) {
-    HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
+export async function handleCommands(params: CommandDispatchParams): Promise<CommandHandlerResult> {
+  // Literal Gateway input must bypass commands as well as directive parsing.
+  if (params.ctx.CommandInterpretationSuppressed === true) {
+    return { shouldContinue: true };
   }
-  const resetResult = await maybeHandleResetCommand(params);
+  const allowCreateSessionEntry = params.allowCreateSessionEntry === true;
+  const initialSessionEntry =
+    params.initialSessionEntry ??
+    (allowCreateSessionEntry
+      ? undefined
+      : params.sessionEntry
+        ? { ...params.sessionEntry }
+        : undefined);
+  // Native command targets can differ from the inbound owner; prepare one owner for every handler.
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    fallbackAgentId: params.agentId,
+  });
+  const { resolveModelLevels, ...dispatchParams } = params;
+  const commandParams = {
+    ...dispatchParams,
+    agentId,
+    agentDir: agentId === params.agentId ? params.agentDir : resolveAgentDir(params.cfg, agentId),
+    initialSessionEntry,
+    allowCreateSessionEntry,
+  };
+  const resetResult = await maybeHandleResetCommand(commandParams);
   if (resetResult) {
     return normalizeCommandHandlerResult(resetResult);
   }
 
+  const handlerParams: HandleCommandsParams = {
+    ...commandParams,
+    ...(await resolveModelLevels()),
+  };
+  const handlers = await commandHandlersRuntimeLoader.load();
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
 
-  for (const handler of HANDLERS) {
-    const result = await handler(params, allowTextCommands);
+  for (const handler of handlers) {
+    const result = await handler(handlerParams, allowTextCommands);
     if (result) {
       return normalizeCommandHandlerResult(result);
     }

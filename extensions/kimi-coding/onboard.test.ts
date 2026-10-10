@@ -1,11 +1,6 @@
-// Kimi Coding tests cover onboard plugin behavior.
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import {
-  applyKimiCodeConfig,
-  KIMI_CODING_MODEL_REF,
-  KIMI_MODEL_REF,
-} from "./onboard.js";
+import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF, KIMI_MODEL_REF } from "./onboard.js";
 
 describe("kimi coding onboard", () => {
   it("keeps the historical Kimi model ref alias pointed at the coding default", () => {
@@ -13,8 +8,8 @@ describe("kimi coding onboard", () => {
     expect(KIMI_CODING_MODEL_REF).toBe(KIMI_MODEL_REF);
   });
 
-  it("adds the Kimi coding provider defaults", () => {
-    const cfg = applyKimiCodeConfig({});
+  it("adds the Kimi coding provider defaults in replace mode", () => {
+    const cfg = applyKimiCodeConfig({ models: { mode: "replace" } });
     const provider = cfg.models?.providers?.kimi;
 
     expect(provider).toEqual({
@@ -32,8 +27,15 @@ describe("kimi coding onboard", () => {
         },
       ],
     });
-    expect(provider?.models?.map((model) => model.id)).toEqual(["kimi-for-coding"]);
     expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]?.alias).toBe("Kimi");
+  });
+
+  it("leaves ordinary catalogs runtime-owned", () => {
+    const cfg = applyKimiCodeConfig({});
+
+    expect(cfg.models?.providers?.kimi?.models).toEqual([]);
+    expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]).toEqual({ alias: "Kimi" });
+    expect(applyKimiCodeConfig(cfg)).toEqual(cfg);
   });
 
   it("sets the agent primary model when applying the full Kimi coding preset", () => {

@@ -1,0 +1,504 @@
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Context,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
+import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import {
+  createCodeModeHarness,
+  pluginToolWithExecute,
+  resetCodeModeTestState,
+  resultDetails,
+  testing,
+} from "./code-mode.test-support.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "./plugin-runtime-refresh.js";
+import { Agent } from "./runtime/index.js";
+import { createReadTool } from "./sessions/tools/read.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+const model: Model = {
+  id: "test-model",
+  name: "Test Model",
+  api: "openai-responses",
+  provider: "test-provider",
+  baseUrl: "https://example.test",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1_000,
+  maxTokens: 1_000,
+};
+
+function createAssistant(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    role: "assistant",
+    content,
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: createZeroUsageFixture(),
+    stopReason: content.some((entry) => entry.type === "toolCall") ? "toolUse" : "stop",
+    timestamp: Date.now(),
+  };
+}
+
+async function runCodeModeAgent(params: {
+  programs: Array<string | { wait: true }>;
+  hiddenTools: AnyAgentTool[];
+  harness?:
+    | ReturnType<typeof createCodeModeHarness>
+    | ReturnType<typeof createSubscribedCodeModeHarness>;
+  abortSignal?: AbortSignal;
+  configureAgent?: (
+    agent: Agent,
+    harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
+  ) => void;
+}) {
+  const harness = params.harness ?? createCodeModeHarness();
+  const { config, catalogRef } = harness;
+  const ctx = "ctx" in harness ? harness.ctx : harness;
+  const tools = params.abortSignal
+    ? createCodeModeTools({ ...ctx, abortSignal: params.abortSignal }).map((tool) =>
+        wrapToolWithAbortSignal(tool, params.abortSignal),
+      )
+    : harness.tools;
+  applyCodeModeCatalog({
+    tools: [...tools, ...params.hiddenTools],
+    config,
+    catalogRef,
+  });
+  const providerContexts: Context[] = [];
+  const agent = new Agent({
+    initialState: { model, tools },
+    afterToolCall: async ({ result, isError }) => ({
+      isError: isError || isToolResultError(result),
+    }),
+    streamFn: (_activeModel, context) => {
+      providerContexts.push(context);
+      const index = providerContexts.length - 1;
+      const code = params.programs[index];
+      const waiting = code !== undefined && typeof code !== "string";
+      const message = createAssistant(
+        code === undefined
+          ? [{ type: "text", text: "recovered" }]
+          : [
+              {
+                type: "toolCall",
+                id: `code-call-${index}`,
+                name: waiting ? "wait" : "exec",
+                arguments: waiting
+                  ? { runId: readToolResultDetails(context.messages.at(-1))?.runId }
+                  : { title: "Run the recovery step", code },
+              },
+            ],
+      );
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    },
+  });
+  params.configureAgent?.(agent, { tools, ctx });
+  try {
+    await agent.prompt("finish the task despite tool errors");
+  } finally {
+    if ("dispose" in harness) {
+      harness.dispose();
+    }
+  }
+
+  return { agent, providerContexts };
+}
+
+async function runParkedReadFailure() {
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), "code-mode-wait-")));
+  const input = join(workspace, "input.txt");
+  await writeFile(input, "audited input\n");
+  const readStarted = createDeferred();
+  const readRelease = createDeferred();
+  const readFinished = createDeferred();
+  const parked = createDeferred<Record<string, unknown>>();
+  const beginWait = createDeferred();
+  const effects: string[] = [];
+  const read = createReadTool(workspace, {
+    operations: {
+      access,
+      readFile: async (file) => {
+        readStarted.resolve();
+        await readRelease.promise;
+        try {
+          return await readFile(file);
+        } finally {
+          readFinished.resolve();
+        }
+      },
+    },
+  });
+  vi.spyOn(read, "execute");
+  const complete = pluginToolWithExecute("complete_task", "Complete the task", async () => {
+    effects.push("completed");
+    return jsonResult({ completed: true });
+  });
+  let activeAgent: Agent | undefined;
+  let waitDetails: Record<string, unknown> | undefined;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const running = runCodeModeAgent({
+    hiddenTools: [read, complete],
+    programs: [
+      `json(await read({ path: ${JSON.stringify(input)} })); return missingAfterWait();`,
+      { wait: true },
+      "return await complete_task({});",
+    ],
+    configureAgent: (agent) => {
+      activeAgent = agent;
+      agent.afterToolCall = async ({ toolCall, result, isError }) => {
+        if (toolCall.name === "wait") {
+          waitDetails = resultDetails(result);
+        }
+        return { isError: isError || isToolResultError(result) };
+      };
+      agent.afterToolOutcome = async ({ toolCall, result }) => {
+        if (toolCall.name === "exec" && readToolResultDetails(result)?.status === "waiting") {
+          vi.useRealTimers();
+          parked.resolve(resultDetails(result));
+          await beginWait.promise;
+        }
+      };
+    },
+  });
+  try {
+    await readStarted.promise;
+    // Only the host deadline moves; the real worker has already dispatched the audited read.
+    await vi.advanceTimersByTimeAsync(10_000);
+    const suspended = await parked.promise;
+    expect(suspended).toMatchObject({
+      status: "waiting",
+      reason: "pending_tools",
+      replaySafe: false,
+    });
+    expect(read.execute).toHaveBeenCalledOnce();
+    expect(effects).toEqual([]);
+    beginWait.resolve();
+    readRelease.resolve();
+    const result = await running;
+    expect(read.execute).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(0);
+    expect(testing.resumingRunIds.size).toBe(0);
+    expect(waitDetails).toMatchObject({
+      status: "failed",
+      bridgeDispatchStarted: true,
+      error: expect.stringContaining("ReferenceError: missingAfterWait is not defined"),
+      output: [expect.objectContaining({ type: "json" })],
+    });
+    return { ...result, complete, effects, waitDetails };
+  } finally {
+    vi.useRealTimers();
+    activeAgent?.abort();
+    beginWait.resolve();
+    readRelease.resolve();
+    await running;
+    await readFinished.promise;
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+describe("Code Mode agent-loop error recovery", () => {
+  it("drains the old cell before refreshing its complete catalog in the same session", async () => {
+    const refresh = createAgentPluginRuntimeRefresh();
+    const started = createDeferred();
+    const release = createDeferred();
+    const effects: string[] = [];
+    let retainedExec!: AnyAgentTool;
+    try {
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const owner = captureAgentPluginRuntimeRefresh();
+        const slow = pluginToolWithExecute("slow_action", "Finish admitted work", async () => {
+          started.resolve();
+          await release.promise;
+          effects.push("old action completed");
+          return jsonResult({ finished: true });
+        });
+        const reload = pluginToolWithExecute("reload_runtime", "Reload plugin files", async () => {
+          await started.promise;
+          owner.request();
+          effects.push("reload committed");
+          return { ...jsonResult({ generation: 2 }), terminate: true };
+        });
+        const removed = pluginToolWithExecute("removed_tool", "Old capability", async () =>
+          jsonResult({ old: true }),
+        );
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, slow, reload, removed] });
+        retainedExec = wrapToolWithBeforeToolCallHook(harness.tools[0]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const wait = wrapToolWithBeforeToolCallHook(harness.tools[1]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const result = await retainedExec.execute("cell", {
+          code: 'const pending = slow_action({}); await reload_runtime({}); json("reload recorded"); await yield_control(); return await pending;',
+        });
+        expect(result).toMatchObject({ terminate: false, details: { status: "waiting" } });
+        expect(owner.isRequested()).toBe(true);
+        expect(owner.isPending()).toBe(false);
+        expect(effects).toEqual(["reload committed"]);
+        release.resolve();
+        const settled = await wait.execute("drain", {
+          runId: resultDetails(result).runId,
+        });
+        expect(settled).toMatchObject({ terminate: true, details: { status: "completed" } });
+        expect(owner.isPending()).toBe(true);
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+        expect(reload.execute).toHaveBeenCalledOnce();
+        expect(slow.execute).toHaveBeenCalledOnce();
+        expect(removed.execute).not.toHaveBeenCalled();
+        expect(testing.activeRuns.size).toBe(0);
+      });
+      refresh.close();
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const changed = pluginToolWithExecute("changed_tool", "New capability", async (_id, args) =>
+          jsonResult({ version: 2, input: args }),
+        );
+        changed.parameters = {
+          type: "object",
+          properties: { amount: { type: "number" } },
+          required: ["amount"],
+          additionalProperties: false,
+        };
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, changed] });
+        await expect(retainedExec.execute("stale-cell", { code: "return 1;" })).rejects.toThrow(
+          "Plugin runtime changed",
+        );
+        const verified = await harness.tools[0]!.execute("verify", {
+          code: "json({ removed: typeof removed_tool, schema: (await changed_tool.describe()).parameters }); return await changed_tool({ amount: 2 });",
+        });
+        expect(verified).toMatchObject({
+          details: {
+            status: "completed",
+            output: [{ type: "json", value: { removed: "undefined", schema: changed.parameters } }],
+          },
+        });
+        expect(changed.execute).toHaveBeenCalledOnce();
+        expect(vi.mocked(changed.execute).mock.calls[0]?.[1]).toEqual({ amount: 2 });
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+      });
+    } finally {
+      release.resolve();
+      refresh.close();
+    }
+  });
+
+  afterEach(async () => {
+    await resetCodeModeTestState();
+    vi.useRealTimers();
+  });
+
+  it("inspects source and completes multiple edits after a partially applied program fails", async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), "code-mode-continue-")));
+    const file = join(workspace, "source.txt");
+    await writeFile(file, "original\n");
+    const patch = pluginToolWithExecute(
+      "apply_patch",
+      "Append a source change",
+      async (_id, input) => {
+        await writeFile(
+          file,
+          `${await readFile(file, "utf8")}${(input as { value: string }).value}\n`,
+        );
+        return jsonResult({ applied: true });
+      },
+    );
+    const shell = pluginToolWithExecute("shell_command", "Inspect source", async () =>
+      jsonResult({ source: await readFile(file, "utf8") }),
+    );
+
+    try {
+      const { agent, providerContexts } = await runCodeModeAgent({
+        hiddenTools: [patch, shell],
+        programs: [
+          'await apply_patch({ value: "first" }); throw new Error("interrupted after first change");',
+          "return await shell_command({});",
+          'return await apply_patch({ value: "second" });',
+          'return await apply_patch({ value: "third" });',
+          "return await shell_command({});",
+        ],
+      });
+
+      expect(providerContexts).toHaveLength(6);
+      expect(providerContexts[1]?.messages).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          isError: true,
+          details: expect.objectContaining({
+            status: "failed",
+            error: expect.stringContaining("interrupted after first change"),
+          }),
+        }),
+      );
+      expect(patch.execute).toHaveBeenCalledTimes(3);
+      expect(shell.execute).toHaveBeenCalledTimes(2);
+      expect(await readFile(file, "utf8")).toBe("original\nfirst\nsecond\nthird\n");
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "recovered" }],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers from a real parked read failure and completes the requested mutation once", async () => {
+    const { agent, providerContexts, complete, effects } = await runParkedReadFailure();
+    expect(providerContexts).toHaveLength(4);
+    expect(complete.execute).toHaveBeenCalledOnce();
+    expect(effects).toEqual(["completed"]);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "recovered" }],
+    });
+  });
+
+  it("continues after an operator permission change without replaying earlier mutations", async () => {
+    const generation = new AbortController();
+    const parked = createDeferred();
+    const applied: string[] = [];
+    const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () => {
+      applied.push("prior mutation");
+      return jsonResult({ recorded: true });
+    });
+    const pending = pluginToolWithExecute(
+      "pending_action",
+      "Wait for permission",
+      async (_id, _input, signal) => {
+        if (!signal) {
+          throw new Error("Expected owning tool signal");
+        }
+        const cancelled = createDeferred<never>();
+        const onAbort = () => cancelled.reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        parked.resolve();
+        try {
+          return await cancelled.promise;
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+        }
+      },
+    );
+    const inspect = pluginToolWithExecute(
+      "inspect_state",
+      "Inspect authoritative state",
+      async () => jsonResult({ applied: [...applied] }),
+    );
+    const finish = pluginToolWithExecute("finish_task", "Finish remaining work", async () => {
+      applied.push("remaining mutation");
+      return jsonResult({ finished: true });
+    });
+    let changePermissions!: () => void;
+    let retainedControl!: AnyAgentTool;
+    const running = runCodeModeAgent({
+      hiddenTools: [recordEffect, pending, inspect, finish],
+      abortSignal: generation.signal,
+      configureAgent: (agent, harness) => {
+        retainedControl = harness.tools[0]!;
+        agent.prepareNextTurn = async () => ({
+          context: {
+            systemPrompt: agent.state.systemPrompt,
+            tools: agent.state.tools,
+            messages: agent.state.messages,
+          },
+        });
+        changePermissions = () => {
+          generation.abort(createCodeModePermissionChangeReason());
+          agent.state.tools = createCodeModeTools({
+            ...harness.ctx,
+            abortSignal: new AbortController().signal,
+          });
+        };
+      },
+      programs: [
+        'await record_effect({}); json("prior mutation completed"); return await pending_action({});',
+        "return await inspect_state({});",
+        "return await finish_task({});",
+      ],
+    });
+    await parked.promise;
+    changePermissions();
+    const { agent, providerContexts } = await running;
+
+    expect(providerContexts).toHaveLength(4);
+    expect(applied).toEqual(["prior mutation", "remaining mutation"]);
+    expect(recordEffect.execute).toHaveBeenCalledOnce();
+    expect(pending.execute).toHaveBeenCalledOnce();
+    expect(inspect.execute).toHaveBeenCalledOnce();
+    expect(finish.execute).toHaveBeenCalledOnce();
+    expect(agent.state.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        details: expect.objectContaining({
+          status: "failed",
+          code: "aborted",
+          error: expect.stringContaining("Permission change"),
+          output: [{ type: "json", value: "prior mutation completed" }],
+        }),
+      }),
+    );
+    await expect(retainedControl.execute("stale-control", { code: "return 1;" })).rejects.toThrow(
+      "Aborted",
+    );
+  });
+
+  it("preserves an explicitly terminal nested action when later JavaScript fails", async () => {
+    const terminal = pluginToolWithExecute("terminal_action", "Finish the task", async () => ({
+      ...jsonResult({ delivered: true }),
+      terminate: true,
+    }));
+    const repeat = pluginToolWithExecute("repeat_action", "Repeat the action", async () =>
+      jsonResult({ repeated: true }),
+    );
+
+    const { agent, providerContexts } = await runCodeModeAgent({
+      hiddenTools: [terminal, repeat],
+      programs: [
+        'await terminal_action({}); throw new Error("after terminal action");',
+        "return await repeat_action({});",
+      ],
+    });
+
+    expect(providerContexts).toHaveLength(1);
+    expect(terminal.execute).toHaveBeenCalledOnce();
+    expect(repeat.execute).not.toHaveBeenCalled();
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      isError: true,
+      details: {
+        status: "failed",
+        error: expect.stringContaining("after terminal action"),
+      },
+    });
+  });
+});

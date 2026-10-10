@@ -1,35 +1,41 @@
+vi.mock("./media-generation-activity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./media-generation-activity.js")>();
+  return {
+    ...actual,
+    listMediaGenerationOperations: mediaActivityMocks.listMediaGenerationOperations,
+  };
+});
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+import type { MediaGenerationOperation } from "./media-generation-activity.js";
 import {
-  buildActiveMediaGenerationTaskPromptContextForSession,
-  findActiveMediaGenerationTaskForSession,
-  findDuplicateGuardMediaGenerationTaskForSession,
-  listActiveMediaGenerationTasksForSession,
+  buildActiveMediaGenerationTaskPromptContext,
+  createMediaGenerationTaskStatusOwner,
   MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
-  resetRecentMediaGenerationDuplicateGuardsForTests,
 } from "./media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listFreshTasksForOwnerKey: vi.fn(),
+const mediaActivityMocks = vi.hoisted(() => ({
+  listMediaGenerationOperations: vi.fn(),
 }));
 
-vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
+const videoTaskStatusOwner = createMediaGenerationTaskStatusOwner({
+  taskKind: "video_generation",
+  toolName: "video_generate",
+  nounLabel: "video",
+  completionLabel: "video",
+  promptCompletionLabel: "video",
+});
 
-function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
+function makeTask(overrides: Partial<MediaGenerationOperation> = {}): MediaGenerationOperation {
   const now = Date.now();
   return {
     taskId: "task-1",
-    runtime: "cli",
-    taskKind: "video-generate",
-    sourceId: "video-generate:byteplus",
+    taskKind: "video_generation",
+    sourceId: "video_generate:byteplus",
     requesterSessionKey: "session/A",
-    ownerKey: "session/A",
-    scopeKind: "session",
     runId: "run-1",
     task: "generate clip 01",
     status: "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "silent",
     createdAt: now,
     startedAt: now,
     lastEventAt: now,
@@ -39,87 +45,119 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
 
 beforeEach(() => {
   resetRecentMediaGenerationDuplicateGuardsForTests();
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+  mediaActivityMocks.listMediaGenerationOperations.mockReset();
 });
 
 describe("media generation delivery-phase prompt guard", () => {
   it("does not warn about a task waiting only for completion delivery", () => {
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([
-      makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS }),
-    ]);
+    const tasks = [makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS })];
 
     expect(
-      buildActiveMediaGenerationTaskPromptContextForSession({
-        sessionKey: "session/A",
-        taskKind: "video-generate",
-        sourcePrefix: "video-generate",
-        nounLabel: "video",
-        toolName: "video_generate",
-        completionLabel: "video",
+      buildActiveMediaGenerationTaskPromptContext({
+        tasks,
+        taskKind: "video_generation",
+        sourcePrefix: "video_generate",
       }),
     ).toBeUndefined();
   });
 
-  it("still warns while media generation is running", () => {
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([
-      makeTask({ progressSummary: "Generating video" }),
-    ]);
+  it("carries only bounded single-line facts while media generation is running", () => {
+    const tasks = [
+      makeTask({
+        taskId: `task-${"t".repeat(150)}`,
+        sourceId: `video_generate:${"p".repeat(150)}`,
+        progressSummary: `Generating\nvideo\u2028${"x".repeat(400)}`,
+      }),
+    ];
 
     expect(
-      buildActiveMediaGenerationTaskPromptContextForSession({
-        sessionKey: "session/A",
-        taskKind: "video-generate",
-        sourcePrefix: "video-generate",
-        nounLabel: "video",
-        toolName: "video_generate",
-        completionLabel: "video",
+      buildActiveMediaGenerationTaskPromptContext({
+        tasks,
+        taskKind: "video_generation",
+        sourcePrefix: "video_generate",
       }),
-    ).toContain("Do not call `video_generate` again for the same request");
+    ).toBe(
+      `- tool=video_generate; task=task-${"t".repeat(123)}; status=running; provider_json="${"p".repeat(128)}"; progress_json="Generatingvideo${"x".repeat(305)}"`,
+    );
   });
 
-  it("keeps delivery-phase tasks available to duplicate/status lookups", () => {
+  it("keeps a bounded task snapshot stable across registry order and elapsed time", () => {
+    const tasks = Array.from({ length: 10 }, (_, index) =>
+      makeTask({
+        taskId: `task-${index}`,
+        sourceId: "video_generate",
+        status: index % 2 === 0 ? "queued" : "running",
+      }),
+    );
+    const context = buildActiveMediaGenerationTaskPromptContext({
+      tasks,
+      taskKind: "video_generation",
+      sourcePrefix: "video_generate",
+    });
+    expect(context).toBe(
+      [
+        "- tool=video_generate; task=task-0; status=queued",
+        "- tool=video_generate; task=task-1; status=running",
+        "- tool=video_generate; task=task-2; status=queued",
+        "- tool=video_generate; task=task-3; status=running",
+        "- tool=video_generate; task=task-4; status=queued",
+        "- tool=video_generate; task=task-5; status=running",
+        "- tool=video_generate; task=task-6; status=queued",
+        "- tool=video_generate; task=task-7; status=running",
+        "- additional_tasks=2",
+      ].join("\n"),
+    );
+
+    for (const task of tasks) {
+      task.lastEventAt = task.createdAt + 60_000;
+    }
+    expect(
+      buildActiveMediaGenerationTaskPromptContext({
+        tasks: tasks.toReversed(),
+        taskKind: "video_generation",
+        sourcePrefix: "video_generate",
+      }),
+    ).toBe(context);
+  });
+
+  it("keeps delivery-phase tasks available to duplicate/status lookups", async () => {
     const task = makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS });
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
 
-    expect(
-      listActiveMediaGenerationTasksForSession({
-        sessionKey: "session/A",
-        taskKind: "video-generate",
-        sourcePrefix: "video-generate",
-      }),
-    ).toEqual([task]);
-    expect(
-      findActiveMediaGenerationTaskForSession({
-        sessionKey: "session/A",
-        taskKind: "video-generate",
-        sourcePrefix: "video-generate",
-      }),
-    ).toEqual(task);
+    expect(await videoTaskStatusOwner.listActiveTasksForSession("session/A")).toEqual([task]);
+    expect(await videoTaskStatusOwner.findActiveTaskForSession("session/A")).toEqual(task);
   });
 
-  it("blocks the same prompt while allowing a distinct prompt", () => {
+  it("keeps bare-session operations visible only to their explicit requester agent", async () => {
+    const task = makeTask({
+      requesterSessionKey: "global",
+      requesterAgentId: "ops",
+      progressSummary: "Generating video",
+    });
+    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
+
+    expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "ops")).toEqual([task]);
+    expect(
+      await videoTaskStatusOwner.findActiveTaskForSession("global", { agentId: "ops" }),
+    ).toEqual(task);
+    expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "research")).toEqual([]);
+  });
+
+  it("blocks the same prompt while allowing a distinct prompt", async () => {
     const task = makeTask({
       task: "generate clip 01",
       progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
     });
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
 
     expect(
-      findDuplicateGuardMediaGenerationTaskForSession({
-        sessionKey: "session/A",
-        taskKind: "video-generate",
-        sourcePrefix: "video-generate",
-        taskLabel: "generate clip 01",
-        maxAgeMs: 120_000,
+      await videoTaskStatusOwner.findDuplicateGuardTaskForSession("session/A", {
+        prompt: "generate clip 01",
       }),
     ).toEqual(task);
     expect(
-      findDuplicateGuardMediaGenerationTaskForSession({
-        sessionKey: "session/A",
-        taskKind: "video-generate",
-        sourcePrefix: "video-generate",
-        taskLabel: "generate clip 02",
-        maxAgeMs: 120_000,
+      await videoTaskStatusOwner.findDuplicateGuardTaskForSession("session/A", {
+        prompt: "generate clip 02",
       }),
     ).toBeUndefined();
   });

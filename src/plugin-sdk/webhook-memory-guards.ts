@@ -1,6 +1,6 @@
 // Webhook memory guards keep in-process webhook dedupe and replay state bounded.
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
 type FixedWindowState = {
   count: number;
@@ -70,6 +70,39 @@ export type WebhookAnomalyTracker = {
   clear: () => void;
 };
 
+function createBoundedTimedMap<T>(
+  maxTrackedKeys: number,
+  pruneIntervalMs: number,
+  isExpired?: (entry: T, nowMs: number) => boolean,
+) {
+  const entries = new Map<string, T>();
+  let lastPruneMs = 0;
+  return {
+    get(key: string, nowMs: number) {
+      if (isExpired && nowMs - lastPruneMs >= pruneIntervalMs) {
+        for (const [entryKey, entry] of entries) {
+          if (isExpired(entry, nowMs)) {
+            entries.delete(entryKey);
+          }
+        }
+        lastPruneMs = nowMs;
+      }
+      return entries.get(key);
+    },
+    touch(key: string, value: T) {
+      // Refresh before pruning so active keys outlive stale one-off probes.
+      entries.delete(key);
+      entries.set(key, value);
+      pruneMapToMaxSize(entries, maxTrackedKeys);
+    },
+    size: () => entries.size,
+    clear() {
+      entries.clear();
+      lastPruneMs = 0;
+    },
+  };
+}
+
 /** Create a simple fixed-window rate limiter for in-memory webhook protection. */
 export function createFixedWindowRateLimiter(options: {
   /** Duration of one fixed window in milliseconds. */
@@ -81,72 +114,45 @@ export function createFixedWindowRateLimiter(options: {
   /** Optional interval for expired-window pruning. Defaults to `windowMs`. */
   pruneIntervalMs?: number;
 }): FixedWindowRateLimiter {
-  const windowMs = resolveWebhookIntegerOption(
-    options.windowMs,
-    WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-    {
-      min: 1,
-    },
-  );
-  const maxRequests = resolveWebhookIntegerOption(
+  const windowMs = resolveIntegerOption(options.windowMs, WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs, {
+    min: 1,
+  });
+  const maxRequests = resolveIntegerOption(
     options.maxRequests,
     WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
     { min: 1 },
   );
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options.maxTrackedKeys,
     WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
     { min: 1 },
   );
-  const pruneIntervalMs = resolveWebhookIntegerOption(options.pruneIntervalMs, windowMs, {
+  const pruneIntervalMs = resolveIntegerOption(options.pruneIntervalMs, windowMs, {
     min: 1,
   });
-  const state = new Map<string, FixedWindowState>();
-  let lastPruneMs = 0;
-
-  const touch = (key: string, value: FixedWindowState) => {
-    state.delete(key);
-    state.set(key, value);
-  };
-
-  const prune = (nowMs: number) => {
-    for (const [key, entry] of state) {
-      if (nowMs - entry.windowStartMs >= windowMs) {
-        state.delete(key);
-      }
-    }
-  };
+  const state = createBoundedTimedMap<FixedWindowState>(
+    maxTrackedKeys,
+    pruneIntervalMs,
+    (entry, nowMs) => nowMs - entry.windowStartMs >= windowMs,
+  );
 
   return {
     isRateLimited: (key: string, nowMs = Date.now()) => {
       if (!key) {
         return false;
       }
-      if (nowMs - lastPruneMs >= pruneIntervalMs) {
-        prune(nowMs);
-        lastPruneMs = nowMs;
-      }
-
-      const existing = state.get(key);
+      const existing = state.get(key, nowMs);
       if (!existing || nowMs - existing.windowStartMs >= windowMs) {
-        touch(key, { count: 1, windowStartMs: nowMs });
-        // Bound key cardinality after accepting the new key so high-cardinality webhook traffic
-        // cannot grow this pre-auth limiter without limit.
-        pruneMapToMaxSize(state, maxTrackedKeys);
+        state.touch(key, { count: 1, windowStartMs: nowMs });
         return false;
       }
 
       const nextCount = existing.count + 1;
-      touch(key, { count: nextCount, windowStartMs: existing.windowStartMs });
-      // Refreshing the key before pruning keeps active keys newer than stale one-off probes.
-      pruneMapToMaxSize(state, maxTrackedKeys);
+      state.touch(key, { count: nextCount, windowStartMs: existing.windowStartMs });
       return nextCount > maxRequests;
     },
-    size: () => state.size,
-    clear: () => {
-      state.clear();
-      lastPruneMs = 0;
-    },
+    size: state.size,
+    clear: () => state.clear(),
   };
 }
 
@@ -159,61 +165,38 @@ export function createBoundedCounter(options: {
   /** Optional interval for TTL pruning. */
   pruneIntervalMs?: number;
 }): BoundedCounter {
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options.maxTrackedKeys,
     WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
     { min: 1 },
   );
-  const ttlMs = resolveWebhookIntegerOption(options.ttlMs, 0, { min: 0 });
-  const pruneIntervalMs = resolveWebhookIntegerOption(
+  const ttlMs = resolveIntegerOption(options.ttlMs, 0, { min: 0 });
+  const pruneIntervalMs = resolveIntegerOption(
     options.pruneIntervalMs,
     ttlMs > 0 ? ttlMs : 60_000,
     { min: 1 },
   );
-  const counters = new Map<string, CounterState>();
-  let lastPruneMs = 0;
-
-  const touch = (key: string, value: CounterState) => {
-    counters.delete(key);
-    counters.set(key, value);
-  };
-
   const isExpired = (entry: CounterState, nowMs: number) =>
     ttlMs > 0 && nowMs - entry.updatedAtMs >= ttlMs;
-
-  const prune = (nowMs: number) => {
-    if (ttlMs > 0) {
-      for (const [key, entry] of counters) {
-        if (isExpired(entry, nowMs)) {
-          counters.delete(key);
-        }
-      }
-    }
-  };
+  const counters = createBoundedTimedMap<CounterState>(
+    maxTrackedKeys,
+    pruneIntervalMs,
+    ttlMs > 0 ? isExpired : undefined,
+  );
 
   return {
     increment: (key: string, nowMs = Date.now()) => {
       if (!key) {
         return 0;
       }
-      if (nowMs - lastPruneMs >= pruneIntervalMs) {
-        prune(nowMs);
-        lastPruneMs = nowMs;
-      }
-
-      const existing = counters.get(key);
+      const existing = counters.get(key, nowMs);
       const baseCount = existing && !isExpired(existing, nowMs) ? existing.count : 0;
       const nextCount = baseCount + 1;
-      touch(key, { count: nextCount, updatedAtMs: nowMs });
-      // Counters are diagnostic only; prefer bounded memory over retaining every anomaly key.
-      pruneMapToMaxSize(counters, maxTrackedKeys);
+      counters.touch(key, { count: nextCount, updatedAtMs: nowMs });
       return nextCount;
     },
-    size: () => counters.size,
-    clear: () => {
-      counters.clear();
-      lastPruneMs = 0;
-    },
+    size: counters.size,
+    clear: () => counters.clear(),
   };
 }
 
@@ -228,17 +211,15 @@ export function createWebhookAnomalyTracker(options?: {
   /** HTTP status codes that should be counted as anomalies. */
   trackedStatusCodes?: readonly number[];
 }): WebhookAnomalyTracker {
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options?.maxTrackedKeys,
     WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
     { min: 1 },
   );
-  const ttlMs = resolveWebhookIntegerOption(
-    options?.ttlMs,
-    WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs,
-    { min: 0 },
-  );
-  const logEvery = resolveWebhookIntegerOption(
+  const ttlMs = resolveIntegerOption(options?.ttlMs, WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs, {
+    min: 0,
+  });
+  const logEvery = resolveIntegerOption(
     options?.logEvery,
     WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
     { min: 1 },
@@ -248,7 +229,7 @@ export function createWebhookAnomalyTracker(options?: {
 
   return {
     record: ({ key, statusCode, message, log, nowMs }) => {
-      if (!trackedStatusCodes.has(statusCode)) {
+      if (!key || !trackedStatusCodes.has(statusCode)) {
         return 0;
       }
       const next = counter.increment(key, nowMs);
@@ -258,7 +239,7 @@ export function createWebhookAnomalyTracker(options?: {
       }
       return next;
     },
-    size: () => counter.size(),
-    clear: () => counter.clear(),
+    size: counter.size,
+    clear: counter.clear,
   };
 }

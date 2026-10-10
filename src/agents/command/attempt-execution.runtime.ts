@@ -2,15 +2,22 @@
 // light shared helpers without pulling the full command attempt graph.
 export {
   buildAcpResult,
-  createAcpVisibleTextAccumulator,
+  createAcpToolLifecycleTracker,
   emitAcpAssistantDelta,
   emitAcpLifecycleEnd,
   emitAcpLifecycleError,
   emitAcpLifecycleStart,
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent,
+  resolveAcpLifecycleEndFields,
+} from "./acp-lifecycle.js";
+export { runAgentAttempt } from "./attempt-execution.js";
+export {
+  createAcpVisibleTextAccumulator,
+  sessionTranscriptHasContent,
+} from "./attempt-execution.helpers.js";
+export {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
-  runAgentAttempt,
-  sessionFileHasContent,
-} from "./attempt-execution.js";
+  resolveCliTranscriptReplyText,
+} from "./transcript-persistence.js";

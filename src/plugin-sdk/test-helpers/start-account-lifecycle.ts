@@ -2,7 +2,8 @@
  * Shared assertions for channel account startup lifecycle behavior.
  */
 import { expect, vi } from "vitest";
-import type { ChannelAccountSnapshot, ChannelGatewayContext } from "../testing.js";
+import type { ChannelGatewayContext } from "../../channels/plugins/types.adapters.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { createStartAccountContext } from "./start-account-context.js";
 
 export function startAccountAndTrackLifecycle<TAccount extends { accountId: string }>(params: {
@@ -11,17 +12,18 @@ export function startAccountAndTrackLifecycle<TAccount extends { accountId: stri
 }) {
   const patches: ChannelAccountSnapshot[] = [];
   const abort = new AbortController();
-  const task = params.startAccount(
-    createStartAccountContext({
-      account: params.account,
-      abortSignal: abort.signal,
-      statusPatchSink: (next) => patches.push({ ...next }),
-    }),
-  );
   let settled = false;
-  void task.then(() => {
-    settled = true;
-  });
+  const task = params
+    .startAccount(
+      createStartAccountContext({
+        account: params.account,
+        abortSignal: abort.signal,
+        statusPatchSink: (next) => patches.push({ ...next }),
+      }),
+    )
+    .finally(() => {
+      settled = true;
+    });
   return {
     abort,
     patches,
@@ -63,10 +65,14 @@ export async function expectPendingUntilAbort(params: {
   assertBeforeAbort?: () => void;
   assertAfterAbort?: () => void;
 }) {
-  await params.waitForStarted();
-  expect(params.isSettled()).toBe(false);
-  params.assertBeforeAbort?.();
-  await abortStartedAccount({ abort: params.abort, task: params.task });
+  try {
+    await Promise.race([params.waitForStarted(), params.task]);
+    expect(params.isSettled()).toBe(false);
+    params.assertBeforeAbort?.();
+  } finally {
+    // Failed assertions must still join late startup before another test can begin.
+    await abortStartedAccount({ abort: params.abort, task: params.task });
+  }
   params.assertAfterAbort?.();
 }
 

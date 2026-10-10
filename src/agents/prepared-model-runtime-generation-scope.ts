@@ -1,0 +1,86 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  runOutsideRemoteModelCatalogSnapshot,
+  withRemoteModelCatalogSnapshot,
+} from "../model-catalog/remote-overlay.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type {
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.types.js";
+
+type PreparedModelRuntimeGenerationScope = Readonly<{
+  generation: PreparedModelRuntimePluginGeneration;
+  borrowSnapshot?: () => PreparedModelRuntimeSnapshot | undefined;
+}>;
+
+// Global singleton keeps one scope instance across lazy module boundaries so a
+// wrapped turn and the nested embedded runner always share the same store.
+const PREPARED_MODEL_RUNTIME_PLUGIN_GENERATION_SCOPE_KEY: unique symbol = Symbol.for(
+  "openclaw.preparedModelRuntimePluginGenerationScope",
+);
+
+const preparedModelRuntimePluginGenerationScope = resolveGlobalSingleton<
+  AsyncLocalStorage<PreparedModelRuntimeGenerationScope | undefined>
+>(PREPARED_MODEL_RUNTIME_PLUGIN_GENERATION_SCOPE_KEY, () => new AsyncLocalStorage());
+
+/** Borrow authority closes before the retained generation begins asynchronous disposal. */
+export function scopePreparedModelRuntimeLease(lease: PreparedModelRuntimeLease) {
+  let open = true;
+  let disposal: Promise<void> | undefined;
+  return {
+    ...lease,
+    [Symbol.asyncDispose]() {
+      open = false;
+      return (disposal ??= lease[Symbol.asyncDispose]());
+    },
+    run<T>(run: () => T): T {
+      if (!open) {
+        throw new Error("Captured reply runtime lease is closed");
+      }
+      return withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, () =>
+        open ? lease.snapshot : undefined,
+      );
+    },
+  };
+}
+
+/** Keeps the exact admitted generation available to nested embedded agent runs. */
+export function withPreparedModelRuntimePluginGenerationScope<T>(
+  generation: PreparedModelRuntimePluginGeneration,
+  run: () => T,
+  borrowSnapshot?: () => PreparedModelRuntimeSnapshot | undefined,
+): T {
+  const inherited = preparedModelRuntimePluginGenerationScope.getStore();
+  const borrow =
+    borrowSnapshot ?? (inherited?.generation === generation ? inherited.borrowSnapshot : undefined);
+  return withRemoteModelCatalogSnapshot(generation.remoteCatalog, () =>
+    preparedModelRuntimePluginGenerationScope.run(
+      { generation, ...(borrow ? { borrowSnapshot: borrow } : {}) },
+      run,
+    ),
+  );
+}
+
+/** Detached queue drains re-admit on the current generation, never a predecessor's scope. */
+export function runOutsidePreparedModelRuntimePluginGenerationScope<T>(run: () => T): T {
+  return runOutsideRemoteModelCatalogSnapshot(() =>
+    preparedModelRuntimePluginGenerationScope.exit(run),
+  );
+}
+
+/** Exact admitted generation active for nested prepared model-runtime acquisition. */
+export function getPreparedModelRuntimePluginGeneration():
+  | PreparedModelRuntimePluginGeneration
+  | undefined {
+  return preparedModelRuntimePluginGenerationScope.getStore()?.generation;
+}
+
+/** Borrows the exact parent snapshot only while its owning turn lease remains open. */
+export function getPreparedModelRuntimeBorrowedSnapshot(
+  generation: PreparedModelRuntimePluginGeneration,
+): PreparedModelRuntimeSnapshot | undefined {
+  const current = preparedModelRuntimePluginGenerationScope.getStore();
+  return current?.generation === generation ? current.borrowSnapshot?.() : undefined;
+}

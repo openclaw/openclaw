@@ -6,6 +6,11 @@ import path from "node:path";
 
 // Temp-dir helpers share one mkdtemp root per suite prefix and hand out numbered
 // case dirs. That reduces filesystem churn while preserving per-test cleanup.
+// Roots are canonicalized (realpath) because macOS tmpdir sits behind a symlink
+// (/var -> /private/var) while production code realpaths state/session paths;
+// symlinked roots break tests that compare or intercept fs paths by equality.
+// Keep case directories private even with group-writable host umasks: secure
+// filesystem helpers validate every ancestor of their workspace.
 type PrefixRootState = {
   path: string;
   activeCount: number;
@@ -41,6 +46,7 @@ async function acquireAsyncPrefixRoot(options: {
   }
   const create = fs
     .mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix))
+    .then((root) => fs.realpath(root))
     .then((root) => ({ path: root, activeCount: 0 }));
   pendingAsyncPrefixRoots.set(key, create);
   try {
@@ -60,7 +66,9 @@ function acquireSyncPrefixRoot(options: { prefix: string; parentDir?: string }):
     cached.activeCount += 1;
     return cached;
   }
-  const root = fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix));
+  const root = fsSync.realpathSync(
+    fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
+  );
   const state = { path: root, activeCount: 1 };
   syncPrefixRoots.set(key, state);
   return state;
@@ -107,7 +115,7 @@ function releaseSyncPrefixRoot(options: { prefix: string; parentDir?: string }) 
   });
 }
 
-export async function withTempDir<T>(
+export async function withTestDir<T>(
   options: {
     prefix: string;
     parentDir?: string;
@@ -119,10 +127,10 @@ export async function withTempDir<T>(
   const base = path.join(root.path, `dir-${String(nextAsyncDirIndex)}`);
   nextAsyncDirIndex += 1;
   try {
-    await fs.mkdir(base, { recursive: true });
+    await fs.mkdir(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
     if (options.subdir) {
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     }
     return await run(dir);
   } finally {
@@ -143,17 +151,19 @@ export function createSuiteTempRootTracker(options: { prefix: string; parentDir?
   let nextIndex = 0;
 
   return {
-    async setup(): Promise<string> {
-      root = await fs.mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix));
+    setup: async (): Promise<string> => {
+      root = await fs.realpath(
+        await fs.mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
+      );
       nextIndex = 0;
       return root;
     },
-    async make(prefix = "case"): Promise<string> {
+    make: async (prefix = "case"): Promise<string> => {
       const dir = path.join(root, `${prefix}-${nextIndex++}`);
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       return dir;
     },
-    async cleanup(): Promise<void> {
+    cleanup: async (): Promise<void> => {
       if (!root) {
         return;
       }
@@ -182,10 +192,10 @@ export function withTempDirSync<T>(
   const base = path.join(root.path, `dir-${String(nextSyncDirIndex)}`);
   nextSyncDirIndex += 1;
   try {
-    fsSync.mkdirSync(base, { recursive: true });
+    fsSync.mkdirSync(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
     if (options.subdir) {
-      fsSync.mkdirSync(dir, { recursive: true });
+      fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
     return run(dir);
   } finally {

@@ -1,24 +1,28 @@
-// Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "../../../lib/record-shared.mjs";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
+import {
+  assertPathInside,
+  findPackageJson,
+  managedNpmRoot,
+  npmProjectRootForInstalledPackage,
+} from "../codex-install-utils.mjs";
+import { readPositiveIntEnv } from "../env-limits.mjs";
+import { readJson, writeJson } from "../fixtures/common.mjs";
+import {
+  resolveOpenClawConfigPath as configPath,
+  resolveOpenClawStateDir as stateDir,
+} from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 const agentTurnTimeoutSeconds = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS",
@@ -33,6 +37,7 @@ const AGENT_OUTPUT_MAX_BYTES = readPositiveIntEnv(
   1024 * 1024,
 );
 const SESSION_FILE_LIST_LIMIT = 20;
+const LIVE_PLUGIN_TOOL_SESSION_ID = "live-plugin-tool";
 const SESSION_SCAN_MAX_ENTRIES = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES",
   50_000,
@@ -46,14 +51,6 @@ function requireEnv(name) {
   return value;
 }
 
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
 function agentOutputPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_PATH || "/tmp/openclaw-agent.json";
 }
@@ -62,26 +59,17 @@ function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
 }
 
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function readNonEmptyString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 
-function normalizeToolCallId(value) {
-  const id = readNonEmptyString(value);
-  return id || undefined;
-}
-
-function stringifyToolResult(value) {
+function extractTranscriptText(value, stringifyUnknown = false) {
   if (typeof value === "string") {
     return value;
   }
   if (Array.isArray(value)) {
     return value
-      .map((entry) => stringifyToolResult(entry))
+      .map((entry) => extractTranscriptText(entry, stringifyUnknown))
       .filter(Boolean)
       .join("\n");
   }
@@ -89,27 +77,29 @@ function stringifyToolResult(value) {
     return value == null ? "" : String(value);
   }
   const nested = value.text ?? value.content ?? value.result ?? value.output;
-  return nested === undefined ? JSON.stringify(value) : stringifyToolResult(nested);
-}
-
-function extractTranscriptText(value) {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((entry) => extractTranscriptText(entry))
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (!isRecord(value)) {
-    return value == null ? "" : String(value);
-  }
-  return extractTranscriptText(value.text ?? value.content ?? value.result ?? value.output ?? "");
+  return nested === undefined && stringifyUnknown
+    ? JSON.stringify(value)
+    : extractTranscriptText(nested, stringifyUnknown);
 }
 
 function extractTranscriptToolCalls(message) {
   const calls = [];
+  if (message.role !== "assistant") {
+    return calls;
+  }
+  const appendCall = (call, functionRecord) => {
+    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
+    if (tool) {
+      calls.push({
+        id:
+          readNonEmptyString(call.id) ??
+          readNonEmptyString(call.toolCallId) ??
+          readNonEmptyString(call.toolUseId),
+        tool,
+        input: call.arguments ?? call.input ?? functionRecord?.arguments,
+      });
+    }
+  };
   const content = message.content;
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -120,17 +110,7 @@ function extractTranscriptToolCalls(message) {
       if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
         continue;
       }
-      const tool = readNonEmptyString(block.name);
-      if (!tool) {
-        continue;
-      }
-      calls.push({
-        id:
-          normalizeToolCallId(block.id) ??
-          normalizeToolCallId(block.toolCallId) ??
-          normalizeToolCallId(block.toolUseId),
-        tool,
-      });
+      appendCall(block);
     }
   }
 
@@ -141,18 +121,7 @@ function extractTranscriptToolCalls(message) {
     if (!isRecord(call)) {
       continue;
     }
-    const functionRecord = isRecord(call.function) ? call.function : undefined;
-    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
-    if (!tool) {
-      continue;
-    }
-    calls.push({
-      id:
-        normalizeToolCallId(call.id) ??
-        normalizeToolCallId(call.toolCallId) ??
-        normalizeToolCallId(call.toolUseId),
-      tool,
-    });
+    appendCall(call, isRecord(call.function) ? call.function : undefined);
   }
   return calls;
 }
@@ -179,10 +148,10 @@ function extractTranscriptToolResults(message) {
     const text = extractTranscriptText(message.content);
     results.push({
       id:
-        normalizeToolCallId(message.tool_call_id) ??
-        normalizeToolCallId(message.toolCallId) ??
-        normalizeToolCallId(message.toolUseId) ??
-        normalizeToolCallId(message.id),
+        readNonEmptyString(message.tool_call_id) ??
+        readNonEmptyString(message.toolCallId) ??
+        readNonEmptyString(message.toolUseId) ??
+        readNonEmptyString(message.id),
       ...(tool ? { tool } : {}),
       text,
       failure: isFailureLikeToolResult({
@@ -205,8 +174,9 @@ function extractTranscriptToolResults(message) {
     if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
       continue;
     }
-    const text = stringifyToolResult(
+    const text = extractTranscriptText(
       block.content ?? block.text ?? block.result ?? block.output ?? block.error ?? block.message,
+      true,
     );
     const blockTool =
       readNonEmptyString(block.toolName) ??
@@ -215,11 +185,11 @@ function extractTranscriptToolResults(message) {
       readNonEmptyString(block.tool);
     results.push({
       id:
-        normalizeToolCallId(block.tool_use_id) ??
-        normalizeToolCallId(block.toolUseId) ??
-        normalizeToolCallId(block.tool_call_id) ??
-        normalizeToolCallId(block.toolCallId) ??
-        normalizeToolCallId(block.id),
+        readNonEmptyString(block.tool_use_id) ??
+        readNonEmptyString(block.toolUseId) ??
+        readNonEmptyString(block.tool_call_id) ??
+        readNonEmptyString(block.toolCallId) ??
+        readNonEmptyString(block.id),
       ...(blockTool ? { tool: blockTool } : {}),
       text,
       failure: isFailureLikeToolResult({
@@ -243,14 +213,84 @@ function resultLinksToolCall(call, result, targetCallCount) {
   return targetCallCount === 1;
 }
 
+function matchesNestedToolEvidence(message, toolName, expected, dispatcherCalls) {
+  if (
+    message.role !== "custom" ||
+    message.customType !== "openclaw.nested-tool.v1" ||
+    message.display !== true ||
+    message.excludeFromContext !== true ||
+    message.content !== ""
+  ) {
+    return false;
+  }
+  const details = message.details;
+  if (
+    !isRecord(details) ||
+    details.toolName !== toolName ||
+    details.isError !== false ||
+    !readNonEmptyString(details.toolCallId) ||
+    !isRecord(details.result) ||
+    !Array.isArray(details.result.content)
+  ) {
+    return false;
+  }
+  const parentId = readNonEmptyString(details.parentToolCallId);
+  const text = extractTranscriptText(details.result.content);
+  return Boolean(
+    parentId &&
+    dispatcherCalls.has(parentId) &&
+    text.includes(expected) &&
+    !isFailureLikeToolResult({ text }),
+  );
+}
+
+function dispatcherSelectsTool(input, toolSelectors) {
+  let params = input;
+  if (typeof params === "string") {
+    try {
+      params = JSON.parse(params);
+    } catch {
+      return false;
+    }
+  }
+  if (!isRecord(params)) {
+    return false;
+  }
+  const keys = ["id", "toolId", "name"];
+  if (!keys.some((key) => Object.hasOwn(params, key))) {
+    params = params.args ?? params.input;
+  }
+  if (!isRecord(params)) {
+    return false;
+  }
+  const selectors = keys.filter((key) => Object.hasOwn(params, key));
+  // Other aliases can be target arguments; the correlated receipt identifies what ran.
+  return selectors.some((key) => toolSelectors.has(readNonEmptyString(params[key])));
+}
+
 function createToolEvidenceTracker(toolName, expected) {
+  const toolNames = new Set([toolName, "exec", "wait"]);
+  const toolSelectors = new Set([toolName, `openclaw:${requireEnv("PLUGIN_ID")}:${toolName}`]);
   const calls = [];
+  const dispatcherCalls = new Set();
   return {
     recordMessage(message) {
       for (const call of extractTranscriptToolCalls(message)) {
-        if (call.tool === toolName) {
+        if (toolNames.has(call.tool)) {
           calls.push(call);
         }
+        if (
+          call.id &&
+          call.tool === "tool_call" &&
+          dispatcherSelectsTool(call.input, toolSelectors)
+        ) {
+          dispatcherCalls.add(call.id);
+        }
+      }
+      // The package-only harness cannot import the core TS reader. Consume its
+      // durable terminal projection, never a marker echoed by the outer dispatcher.
+      if (matchesNestedToolEvidence(message, toolName, expected, dispatcherCalls)) {
+        return true;
       }
       for (const result of extractTranscriptToolResults(message)) {
         if (result.failure || !result.text.includes(expected)) {
@@ -373,26 +413,38 @@ function scanSessionTranscripts(sessionsDir, toolName, expected) {
   return { checkedFiles, filesChecked, found: false, missingDir: false };
 }
 
-function realPathMaybe(filePath) {
+function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected) {
+  if (!fs.existsSync(databasePath)) {
+    return { eventsChecked: 0, found: false };
+  }
+  const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return path.resolve(filePath);
-  }
-}
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
+      .get();
+    if (!table) {
+      return { eventsChecked: 0, found: false };
+    }
+    const rows = database
+      .prepare(
+        `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT ?`,
+      )
+      .all(sessionId, SESSION_SCAN_MAX_ENTRIES + 1);
+    if (rows.length > SESSION_SCAN_MAX_ENTRIES) {
+      throw new Error(`session transcript scan exceeded ${SESSION_SCAN_MAX_ENTRIES} SQLite events`);
+    }
 
-function assertPathInside(parentPath, childPath, label) {
-  const parent = realPathMaybe(parentPath);
-  const child = realPathMaybe(childPath);
-  const relative = path.relative(parent, child);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${child}`);
+    const tracker = createToolEvidenceTracker(toolName, expected);
+    for (const row of rows) {
+      const message = transcriptMessageFromLine(readSqliteTranscriptPayload(row));
+      if (message && tracker.recordMessage(message)) {
+        return { eventsChecked: rows.length, found: true };
+      }
+    }
+    return { eventsChecked: rows.length, found: false };
+  } finally {
+    database.close();
   }
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function installRecords() {
@@ -416,7 +468,7 @@ function pluginInstallPath() {
   if (record.source !== "npm" || record.artifactKind !== "npm-pack") {
     throw new Error(`expected npm-pack install record: ${JSON.stringify(record)}`);
   }
-  return String(record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+  return (record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 }
 
 function writeFixture() {
@@ -541,23 +593,17 @@ function configure() {
 
 function findDependencyPackageJson(packageName) {
   const installPath = pluginInstallPath();
-  const npmRoot = path.join(stateDir(), "npm");
+  const npmRoot = managedNpmRoot();
   const pluginName = requireEnv("PLUGIN_NAME");
-  const packageRoot = pluginName.split("/").reduce((current) => path.dirname(current), installPath);
-  const projectRoot =
-    path.basename(packageRoot) === "node_modules" ? path.dirname(packageRoot) : npmRoot;
-  return [
-    path.join(projectRoot, "node_modules", packageName, "package.json"),
-    path.join(installPath, "node_modules", packageName, "package.json"),
-    path.join(npmRoot, "node_modules", packageName, "package.json"),
-  ].find((candidate) => fs.existsSync(candidate));
+  const projectRoot = npmProjectRootForInstalledPackage(installPath, pluginName);
+  return findPackageJson(packageName, [projectRoot, installPath, npmRoot]);
 }
 
 function assertInstalled() {
   const pluginId = requireEnv("PLUGIN_ID");
   const pluginName = requireEnv("PLUGIN_NAME");
   const toolName = requireEnv("TOOL_NAME");
-  const npmRoot = path.join(stateDir(), "npm");
+  const npmRoot = managedNpmRoot();
   const installPath = pluginInstallPath();
   assertPathInside(npmRoot, installPath, "fixture plugin install path");
   const packageJson = path.join(installPath, "package.json");
@@ -610,13 +656,22 @@ function assertAgentTurn() {
       `live agent reply did not contain tool slug ${expected}:\nstdout tail=${tailText(stdout, ERROR_DETAIL_TAIL_BYTES)}\nstderr tail=${stderrTail}`,
     );
   }
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const scan = scanSessionTranscripts(sessionsDir, toolName, expected);
-  if (!scan.found) {
-    const checkedFiles = scan.checkedFiles.length > 0 ? scan.checkedFiles.join(", ") : "<none>";
-    const missingDir = scan.missingDir ? " sessions directory was missing." : "";
+  const agentStateDir = path.join(stateDir(), "agents", "main");
+  const sqliteScan = scanSqliteSessionTranscript(
+    path.join(agentStateDir, "agent", "openclaw-agent.sqlite"),
+    LIVE_PLUGIN_TOOL_SESSION_ID,
+    toolName,
+    expected,
+  );
+  const fileScan = sqliteScan.found
+    ? { checkedFiles: [], filesChecked: 0, found: false, missingDir: false }
+    : scanSessionTranscripts(path.join(agentStateDir, "sessions"), toolName, expected);
+  if (!sqliteScan.found && !fileScan.found) {
+    const checkedFiles =
+      fileScan.checkedFiles.length > 0 ? fileScan.checkedFiles.join(", ") : "<none>";
+    const missingDir = fileScan.missingDir ? " sessions directory was missing." : "";
     throw new Error(
-      `session transcript did not show ${toolName} returning ${expected}; missing causal tool-result evidence after checking ${scan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
+      `session transcript did not show ${toolName} returning ${expected}; missing causal tool-result evidence after checking ${sqliteScan.eventsChecked} SQLite event(s) and ${fileScan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
     );
   }
 }

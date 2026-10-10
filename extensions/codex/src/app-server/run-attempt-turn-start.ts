@@ -1,0 +1,244 @@
+import {
+  embeddedAgentLog,
+  formatErrorMessage,
+  runAgentHarnessLlmInputHook,
+  runAgentHarnessLlmOutputHook,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
+import {
+  buildCodexTurnStartFailureResult,
+  isInvalidCodexImagePayloadError,
+} from "./attempt-results.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
+import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
+import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import {
+  isCodexActiveCompactTurnError,
+  clearCodexBindingAfterInvalidImagePayload,
+  shouldUseFreshCodexThreadAfterContextEngineOverflow,
+} from "./run-attempt-state.js";
+import type {
+  CodexStartedTurn,
+  prepareCodexAttemptTurnRequest,
+} from "./run-attempt-turn-request.js";
+import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
+import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
+import {
+  CodexUsageLimitPromptError,
+  formatCodexTurnStartUsageLimitError,
+  markCodexAuthProfileBlockedFromRateLimits,
+} from "./usage-limit-error.js";
+import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
+
+export async function startCodexAttemptTurn(
+  resources: CodexAttemptResources,
+  turnRuntime: CodexAttemptTurnState,
+  notifications: CodexAttemptNotificationController,
+  requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
+): Promise<{ result: EmbeddedRunAttemptResult } | CodexStartedTurn> {
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
+  const { context, turnState, systemPromptReport } = prompt;
+  const { runtime, historyState, hookContext, hookRunner } = context;
+  const { connection, runtimeParams } = runtime;
+  const {
+    params,
+    runAbortController,
+    activeContextEngine,
+    bindingStore,
+    bindingIdentity,
+    appServer,
+    attemptStartedAt,
+    startupAuthProfileId,
+  } = connection;
+  const { state, turnIdRef } = turnRuntime;
+  const { waitForActiveNativeTurnCompletion } = notifications;
+  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent } =
+    requestRuntime;
+  let started: CodexStartedTurn | undefined;
+  // From this point, failure may include an accepted native write. Never return
+  // the warm claim idle merely because active-turn setup did not complete.
+  resourceState.turnStartAttempted = true;
+  try {
+    codexModelCallDiagnostics.emitStarted();
+    runAgentHarnessLlmInputHook({ event: buildLlmInputEvent(), ctx: hookContext, hookRunner });
+    started = await startCodexTurn();
+  } catch (error) {
+    let turnStartError = error;
+    if (!params.providerReviewAcknowledgment && isCodexActiveCompactTurnError(turnStartError)) {
+      embeddedAgentLog.info(
+        "codex app-server turn/start blocked by active compact turn; waiting to retry",
+        { threadId: resourceState.thread.threadId },
+      );
+      const compactTurnCompleted = await waitForActiveNativeTurnCompletion();
+      if (compactTurnCompleted && !runAbortController.signal.aborted) {
+        void emitCodexAppServerEvent(params, {
+          stream: "codex_app_server.lifecycle",
+          data: {
+            phase: "turn_start_retry_after_compact",
+            threadId: resourceState.thread.threadId,
+          },
+        });
+        try {
+          started = await startCodexTurn();
+        } catch (retryError) {
+          turnStartError = retryError;
+        }
+      }
+    }
+    if (
+      started === undefined &&
+      !params.providerReviewAcknowledgment &&
+      resourceState.thread.connectionScope !== "supervision" &&
+      shouldUseFreshCodexThreadAfterContextEngineOverflow({
+        error: turnStartError,
+        contextEngineActive: Boolean(activeContextEngine),
+        thread: resourceState.thread,
+      }) &&
+      resourceState.restartContextEngineCodexThread
+    ) {
+      try {
+        assertCodexBindingMayBeReplaced(
+          resourceState.thread,
+          "retrying an overflow on a fresh native thread",
+          params.expectedSessionRuntimeOwnership,
+        );
+        embeddedAgentLog.warn(
+          "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
+          { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
+        );
+        const clearedBinding = await clearCodexBindingForClient(
+          bindingStore,
+          bindingIdentity,
+          resourceState.thread,
+          connection.authority,
+        );
+        if (!clearedBinding) {
+          embeddedAgentLog.warn(
+            "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
+            { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
+          );
+        } else {
+          resourceState.thread = await resourceState.restartContextEngineCodexThread();
+          void emitCodexAppServerEvent(params, {
+            stream: "codex_app_server.lifecycle",
+            data: { phase: "thread_ready_retry", threadId: resourceState.thread.threadId },
+          });
+          started = await startCodexTurn();
+        }
+      } catch (retrySetupError) {
+        turnStartError = retrySetupError;
+      }
+    }
+    if (started === undefined) {
+      const usageLimitError = await formatCodexTurnStartUsageLimitError({
+        client: resourceState.client,
+        error: turnStartError,
+        errorNotification: state.latestStartupErrorNotification,
+        rateLimitsRevisionBeforeTurnStart: state.rateLimitsRevisionBeforeLastTurnStart,
+        timeoutMs: appServer.requestTimeoutMs,
+        signal: runAbortController.signal,
+      });
+      const message = usageLimitError?.message ?? formatErrorMessage(turnStartError);
+      if (!params.providerReviewAcknowledgment && isInvalidCodexImagePayloadError(message)) {
+        await clearCodexBindingAfterInvalidImagePayload(
+          bindingStore,
+          bindingIdentity,
+          {
+            phase: "turn_start",
+            threadId: resourceState.thread.threadId,
+            clientId: resourceState.thread.clientId,
+            error: message,
+          },
+          connection.authority,
+          params.expectedSessionRuntimeOwnership,
+        );
+      }
+      void emitCodexAppServerEvent(params, {
+        stream: "codex_app_server.lifecycle",
+        data: { phase: "turn_start_failed", error: message },
+      });
+      trajectoryRecorder?.recordEvent("session.ended", {
+        status: "error",
+        threadId: resourceState.thread.threadId,
+        timedOut: state.timeout !== undefined,
+        aborted: runAbortController.signal.aborted,
+        promptError: message,
+      });
+      resourceState.trajectoryEndRecorded = true;
+      runAgentHarnessLlmOutputHook({
+        event: {
+          ...buildLlmOutputEvent(),
+          assistantTexts: [],
+        },
+        ctx: hookContext,
+        hookRunner,
+      });
+      const failureKind = classifyCodexModelCallFailureKind({
+        error: turnStartError,
+        timedOut: state.timeout !== undefined,
+        runAborted: runAbortController.signal.aborted,
+        abortReason: runAbortController.signal.reason,
+        clientClosedAbort: state.clientClosedAbort,
+        formatError: formatErrorMessage,
+      });
+      codexModelCallDiagnostics.emitError(message, failureKind ? { failureKind } : {});
+      const messagesSnapshot = [
+        ...historyState.messages,
+        buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
+      ];
+      await runCodexAgentEndHook(params, {
+        event: {
+          messages: messagesSnapshot,
+          success: false,
+          error: message,
+          durationMs: Date.now() - attemptStartedAt,
+        },
+        ctx: hookContext,
+        hookRunner,
+      });
+      if (usageLimitError) {
+        await markCodexAuthProfileBlockedFromRateLimits({
+          params,
+          authProfileId: startupAuthProfileId,
+          rateLimits: usageLimitError.rateLimitsForProfile,
+        });
+      } else if (!isCodexContextRestartSelectionChangedError(turnStartError)) {
+        throw turnStartError;
+      }
+      const result = buildCodexTurnStartFailureResult({
+        params,
+        message,
+        ...(usageLimitError
+          ? { promptError: new CodexUsageLimitPromptError(usageLimitError.message) }
+          : {}),
+        messagesSnapshot,
+        systemPromptReport,
+      });
+      if (!usageLimitError) {
+        result.codexAppServerFailure = {
+          kind: "client_closed_before_turn_completed",
+          transport: appServer.start.transport,
+          threadId: resourceState.thread.threadId,
+          replaySafe: true,
+        };
+      }
+      return { result };
+    }
+  }
+  if (!started) {
+    throw new Error("codex app-server turn/start failed without an error");
+  }
+  const authoritySourceRef = context.attemptTools.scheduledAppAuthoritySourceRef;
+  if (resourceState.thread.pluginAppPolicyContext) {
+    authoritySourceRef.current = {
+      client: resourceState.client,
+      threadId: resourceState.thread.threadId,
+      policyContext: resourceState.thread.pluginAppPolicyContext,
+      configCwd: connection.effectiveCwd,
+    };
+  }
+  turnIdRef.current = started.turn.turn.id;
+  return started;
+}

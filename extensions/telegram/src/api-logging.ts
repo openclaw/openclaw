@@ -1,43 +1,28 @@
-// Telegram plugin module implements api logging behavior.
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 type TelegramApiLogger = (message: string) => void;
 
 type TelegramApiLoggingParams<T> = {
   operation: string;
   fn: () => Promise<T>;
-  runtime?: RuntimeEnv;
+  runtime?: Pick<RuntimeEnv, "error">;
   logger?: TelegramApiLogger;
   shouldLog?: (err: unknown) => boolean;
 };
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogger) {
-  if (logger) {
-    return logger;
-  }
-  if (runtime?.error) {
-    return runtime.error;
-  }
-  return (message: string) => fallbackLogger.error(message);
-}
-
-export async function withTelegramApiErrorLogging<T>({
-  operation,
-  fn,
-  runtime,
-  logger,
-  shouldLog,
-}: TelegramApiLoggingParams<T>): Promise<T> {
+export async function withTelegramApiErrorLogging<T>(
+  params: TelegramApiLoggingParams<T>,
+): Promise<T> {
+  const { operation, fn, runtime, logger, shouldLog } = params;
   try {
     return await fn();
   } catch (err) {
     if (!shouldLog || shouldLog(err)) {
       const errText = formatErrorMessage(err);
-      const log = resolveTelegramApiLogger(runtime, logger);
+      const log = logger ?? runtime?.error ?? ((message: string) => fallbackLogger.error(message));
       log(`telegram ${operation} failed: ${errText}`);
     }
     throw err;

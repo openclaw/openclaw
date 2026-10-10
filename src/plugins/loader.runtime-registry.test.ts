@@ -1,848 +1,712 @@
-// Verifies plugin loader runtime registry behavior.
-import fs from "node:fs";
-import os from "node:os";
+import fs, { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
-import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
+import { Command } from "commander";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import {
-  testing,
-  clearPluginLoaderCache,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { drainSystemEvents } from "../infra/system-events.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import {
+  resolveNativePluginModelAuth,
+  resolveNativePluginModelConfig,
+} from "./loader-runtime-load.js";
+import { PluginLoadFailureError } from "./loader-shared.js";
+import {
   clearPluginRegistryLoadCache,
+  loadAndActivateRootPluginRegistry,
+  loadOpenClawPluginCliRegistry,
   loadOpenClawPlugins,
-  resolveRuntimePluginRegistry,
+  loadPluginRegistryHandle,
 } from "./loader.js";
-import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
-  getMemoryEmbeddingProvider,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
-import {
-  buildMemoryPromptSection,
-  getMemoryRuntime,
-  listMemoryCorpusSupplements,
-  registerMemoryCapability,
-  registerMemoryCorpusSupplement,
-  registerMemoryPromptSupplement,
-  resolveMemoryFlushPlan,
-} from "./memory-state.js";
-import type { PluginRecord } from "./registry-types.js";
+  makePluginLoaderTempDir,
+  resetPluginLoaderTestStateForTest,
+  useNoBundledPlugins,
+  writePlugin,
+} from "./loader.test-fixtures.js";
+import * as nativeModule from "./native-module-require.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
+import { setActiveDegradedPlugins } from "./runtime-degraded-state.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  clearActivePluginRegistry,
+  commitStagedPluginRegistry,
+  getActivePluginRegistry,
+  rollbackStagedPluginRegistry,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "./runtime.js";
+import {
+  buildPluginRuntimeLoadOptions,
+  getPluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  setActiveDegradedPlugins([]);
+  resetPluginStateStoreForTests();
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
 });
 
-function createLoadedPluginRecord(id: string): PluginRecord {
-  return {
-    id,
-    name: id,
-    source: "test",
-    origin: "workspace",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
+it("keeps host config/state/system/model policy ownership across broad runtime loading", async () => {
+  const root = fs.realpathSync(makePluginLoaderTempDir());
+  const bundledDir = path.join(root, "bundled");
+  const observed = path.join(root, "observed.json");
+  const registration = `{ id: "state-cli", register(api) {
+      const runtimeStore = createPluginRuntimeStore({
+        pluginId: "state-cli-ts",
+        errorMessage: "state-cli runtime not initialized",
+      });
+      const sync = api.runtime.state.openSyncKeyedStore({ namespace: "registration", maxEntries: 2 });
+      runtimeStore.setRuntime(api.runtime);
+      const entries = sync.entries();
+      const modelConfig = api.runtime.modelConfig;
+      const selection = modelConfig.resolveAllowedModelRef({
+        cfg: api.config, catalog: [], raw: "fixture/allowed", defaultProvider: "fixture", manifestPlugins: [],
+      });
+      const runtimePolicy = modelConfig.resolveModelRuntimePolicy({
+        config: api.config, provider: "fixture", modelId: "allowed",
+      });
+      const provider = api.runtime.modelAuth.resolveProviderIdForAuth(" Fixture ", { metadataSnapshot: { plugins: [] } });
+      const system = api.runtime.system;
+      system.enqueueSystemEvent("registration", { sessionKey: "prepared-runtime-system" });
+      system.requestHeartbeat({ source: "other", intent: "immediate", reason: "registration", coalesceMs: 0 });
+      const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
+      fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, runtimePolicy, provider, config: api.runtime.config.current() }));
+      api.registerCli(({ program }) => program.command("state-proof").action(async () => {
+        const runtime = runtimeStore.getRuntime();
+        sync.register("before", { value: "retained" });
+        const chunks = runtime.channel.text.chunkText("channel runtime works", 100);
+        const version = runtime.version;
+        runtime.system.enqueueSystemEvent("materialized", { sessionKey: "prepared-runtime-system" });
+        runtime.system.requestHeartbeat({ source: "other", intent: "immediate", reason: "materialized", coalesceMs: 0 });
+        const row = await asyncStore.lookup("before");
+        fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ chunks, version, row }));
+      }), { commands: ["state-proof"] });
+    } };`;
+  const plugin = writePlugin({
+    id: "state-cli",
+    dir: path.join(bundledDir, "state-cli"),
+    filename: "index.ts",
+    body: `import fs from "node:fs"; import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store"; export default ${registration}`,
+  });
+  fs.writeFileSync(
+    path.join(plugin.dir, "cli-metadata.cjs"),
+    `const fs = require("node:fs"); const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store"); module.exports = ${registration}`,
+  );
+  await withEnvAsync(
+    {
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    },
+    async () => {
+      const heartbeat = vi.fn(async () => ({ status: "skipped" as const, reason: "disabled" }));
+      const disposeHeartbeat = setHeartbeatWakeHandler(heartbeat);
+      try {
+        const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
+        let fullRuntime: typeof import("./runtime/index.js") | null = null;
+        const nativeLoad = nativeModule.tryNativeRequireModule;
+        const factories = vi.fn(
+          (...args: Parameters<typeof import("./runtime/index.js").createPluginRuntime>) =>
+            fullRuntime!.createPluginRuntime(...args),
+        );
+        vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation(
+          (modulePath, options) => {
+            if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
+              if (!fullRuntime) {
+                throw new Error("broad runtime requested before state registration completed");
+              }
+              return { ok: true, moduleExport: { createPluginRuntime: factories } };
+            }
+            return nativeLoad(modulePath, options);
+          },
+        );
+        const modelAuth = resolveNativePluginModelAuth();
+        const modelConfig = resolveNativePluginModelConfig();
+        const hooks = {
+          dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
+        };
+        const nodes = {
+          list: vi.fn<PluginRuntime["nodes"]["list"]>(),
+          invoke: vi.fn<PluginRuntime["nodes"]["invoke"]>(),
+          openDuplex: vi.fn<PluginRuntime["nodes"]["openDuplex"]>(),
+        };
+        const dispatchReplyFromConfig =
+          vi.fn<PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]>();
+        const config = {
+          agents: {
+            defaults: { models: { "fixture/*": { agentRuntime: { id: "openclaw" } } } },
+          },
+          plugins: { entries: { [plugin.id]: { enabled: true } } },
+        };
+        setRuntimeConfigSnapshot(config);
+        const metadata = await loadOpenClawPluginCliRegistry({
+          config,
+          pluginSdkResolution: "src",
+        });
+        expect(metadata.plugins).toContainEqual(
+          expect.objectContaining({
+            id: plugin.id,
+            status: "error",
+            error: expect.stringContaining('unavailable during "cli-metadata"'),
+          }),
+        );
+        expect(fs.existsSync(observed)).toBe(false);
+        expect(resolveRuntime).not.toHaveBeenCalled();
+        const registry = loadPluginRegistryHandle({
+          config,
+          cache: false,
+          pluginSdkResolution: "src",
+          runtimeOptions: { hooks, nodes, dispatchReplyFromConfig, modelAuth, modelConfig },
+        });
+        expect(registry.plugins).toContainEqual(
+          expect.objectContaining({ id: plugin.id, status: "loaded" }),
+        );
+        expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
+          entries: [],
+          selection: { ref: { provider: "fixture", model: "allowed" }, key: "fixture/allowed" },
+          runtimePolicy: {
+            policy: { id: "openclaw" },
+            source: "model",
+            matchedProvider: "fixture",
+          },
+          provider: "fixture",
+          config,
+        });
+        expect(fs.existsSync(path.join(root, "state", "state", "openclaw.sqlite"))).toBe(false);
+        expect(resolveRuntime).not.toHaveBeenCalled();
+        const runtime = getPluginRegistryRuntime(registry)!;
+        const configApi = runtime.config;
+        const refreshedConfig = { ...config, agents: { defaults: { workspace: "/refreshed" } } };
+        setRuntimeConfigSnapshot(refreshedConfig);
+        expect(configApi.current()).toBe(refreshedConfig);
+        const state = runtime.state;
+        const system = runtime.system;
+        expect(system.requestHeartbeat).toBe(requestHeartbeat);
+        expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
+        expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
+        await vi.waitFor(() =>
+          expect(heartbeat).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: "registration" }),
+          ),
+        );
+        const command = await system.runCommandWithTimeout(
+          [process.execPath, "-e", 'process.stdout.write("system-ready")'],
+          { timeoutMs: 1_000, killProcessTree: true },
+        );
+        expect(command).toMatchObject({ stdout: "system-ready", code: 0, termination: "exit" });
+        const formatHint = () => "retained method";
+        system.formatNativeDependencyHint = formatHint;
+        const descriptors = {
+          config: Object.getOwnPropertyDescriptor(runtime, "config")!,
+          state: Object.getOwnPropertyDescriptor(runtime, "state")!,
+          system: Object.getOwnPropertyDescriptor(runtime, "system")!,
+          nodes: Object.getOwnPropertyDescriptor(runtime, "nodes")!,
+          modelAuth: Object.getOwnPropertyDescriptor(runtime, "modelAuth")!,
+          modelConfig: Object.getOwnPropertyDescriptor(runtime, "modelConfig")!,
+        };
+        expect(descriptors.nodes.get?.()).toBe(nodes);
+        for (const [key, facade] of [
+          ["modelAuth", modelAuth],
+          ["modelConfig", modelConfig],
+        ] as const) {
+          expect(runtime[key]).toBe(facade);
+          expect(descriptors[key].get?.()).toBe(facade);
+          expect(descriptors[key]).toEqual({
+            configurable: true,
+            enumerable: true,
+            get: expect.any(Function),
+            set: undefined,
+          });
+        }
+        for (const [key, prepared] of [
+          ["config", configApi],
+          ["state", state],
+          ["system", system],
+        ] as const) {
+          expect(descriptors[key].get?.()).toBe(prepared);
+        }
+        expect(resolveRuntime).not.toHaveBeenCalled();
+        const program = new Command();
+        await registry.cliRegistrars[0]!.register({
+          program,
+          parentPath: [],
+          config,
+          workspaceDir: undefined,
+          logger: { info() {}, warn() {}, error() {} },
+        });
+        expect(resolveRuntime).not.toHaveBeenCalled();
+        fullRuntime = await import("./runtime/index.js");
+        await program.parseAsync(["state-proof"], { from: "user" });
+        expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
+          chunks: ["channel runtime works"],
+          version: expect.any(String),
+          row: { value: "retained" },
+        });
+        expect(resolveRuntime).toHaveBeenCalledTimes(1);
+        expect(factories).toHaveBeenCalledTimes(1);
+        expect(runtime.config).toBe(configApi);
+        setRuntimeConfigSnapshot(config);
+        expect(configApi.current()).toBe(config);
+        expect(runtime.state).toBe(state);
+        expect(runtime.system).toBe(system);
+        expect(runtime.system.formatNativeDependencyHint({ packageName: "fixture" })).toBe(
+          "retained method",
+        );
+        expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["materialized"]);
+        await vi.waitFor(() =>
+          expect(heartbeat).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: "materialized" }),
+          ),
+        );
+        expect(runtime.hooks).toBe(hooks);
+        expect(runtime.nodes).toBe(nodes);
+        for (const [key, facade] of [
+          ["modelAuth", modelAuth],
+          ["modelConfig", modelConfig],
+        ] as const) {
+          expect(runtime[key]).toBe(facade);
+          expect(descriptors[key].get?.()).toBe(facade);
+          expect(Object.getOwnPropertyDescriptor(runtime, key)).toEqual({
+            configurable: true,
+            enumerable: true,
+            get: expect.any(Function),
+            set: undefined,
+          });
+          expect(Reflect.set(runtime, key, {})).toBe(false);
+          expect(runtime[key]).toBe(facade);
+        }
+        const replyRequest = {
+          ctx: { Body: "runtime registry reply", CommandAuthorized: false },
+          cfg: config,
+          dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+          replyOptions: { runId: "runtime-registry-reply" },
+        };
+        onTestFinished(async () => {
+          replyRequest.dispatcher.markComplete();
+          await replyRequest.dispatcher.waitForIdle();
+        });
+        const replyResult = { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+        dispatchReplyFromConfig.mockResolvedValueOnce(replyResult);
+        await expect(runtime.channel.reply.dispatchReplyFromConfig(replyRequest)).resolves.toBe(
+          replyResult,
+        );
+        expect(dispatchReplyFromConfig).toHaveBeenCalledExactlyOnceWith(replyRequest);
+        for (const key of [
+          "gateway",
+          "subagent",
+          "hooks",
+          "nodes",
+          "sandbox",
+          "worktrees",
+          "webSearch",
+        ] as const) {
+          const replacement = { ...runtime[key] };
+          expect.soft(Reflect.set(runtime, key, replacement), key).toBe(true);
+          expect.soft(runtime[key], key).toBe(replacement);
+          expect(Object.getOwnPropertyDescriptor(runtime, key)).toEqual({
+            value: replacement,
+            writable: true,
+            configurable: true,
+            enumerable: true,
+          });
+        }
+        expect(descriptors.nodes.get?.()).toBe(runtime.nodes);
+        for (const key of [
+          "tts",
+          "mediaUnderstanding",
+          "modelAuth",
+          "imageGeneration",
+          "videoGeneration",
+          "musicGeneration",
+          "llm",
+        ] as const) {
+          const descriptor = Object.getOwnPropertyDescriptor(runtime, key)!;
+          expect(descriptor).toMatchObject({ get: expect.any(Function), set: undefined });
+          expect(Reflect.set(runtime, key, {})).toBe(false);
+        }
+        for (const [key, prepared] of [
+          ["config", configApi],
+          ["state", state],
+          ["system", system],
+        ] as const) {
+          const descriptor = descriptors[key];
+          const replacement = { ...prepared };
+          expect(Reflect.set(runtime, key, replacement)).toBe(true);
+          expect(descriptor.get?.()).toBe(replacement);
+          descriptor.set?.(prepared);
+          expect(runtime[key]).toBe(prepared);
+          const setterError = new Error("runtime setter rejected");
+          const setter = vi.fn(function (this: unknown, value: unknown) {
+            if (value === setterError) {
+              throw setterError;
+            }
+          });
+          Object.defineProperty(runtime, key, {
+            configurable: true,
+            get(this: unknown) {
+              if (this === null || this === undefined) {
+                return this;
+              }
+              return this === runtime ? prepared : replacement;
+            },
+            set: setter,
+          });
+          expect(runtime[key]).toBe(prepared);
+          expect(descriptor.get?.()).toBe(replacement);
+          expect.soft(Reflect.get(runtime, key, null), "explicit null receiver").toBeNull();
+          expect
+            .soft(Reflect.get(runtime, key, undefined), "explicit undefined receiver")
+            .toBeUndefined();
+          for (const receiver of [runtime, null, undefined]) {
+            expect(Reflect.set(runtime, key, replacement, receiver)).toBe(true);
+            expect(setter.mock.contexts.at(-1)).toBe(receiver);
+          }
+          expect(() => Reflect.set(runtime, key, setterError)).toThrow(setterError);
+          Object.defineProperty(runtime, key, {
+            configurable: true,
+            value: prepared,
+            writable: false,
+          });
+          expect(Reflect.set(runtime, key, replacement)).toBe(false);
+          Reflect.deleteProperty(runtime, key);
+          expect(runtime[key]).toBeUndefined();
+          expect(descriptor.get?.()).toBeUndefined();
+        }
+        expect(resolveRuntime).toHaveBeenCalledTimes(1);
+      } finally {
+        disposeHeartbeat();
+        drainSystemEvents("agent:main:prepared-runtime-system");
+      }
+    },
+  );
+});
+
+it("reuses discovered registrations through prepared load options until invalidated", () => {
+  useNoBundledPlugins();
+  const plugin = writePlugin({
+    id: "prepared-cache",
+    body: 'module.exports = { id: "prepared-cache", register() {} };',
+  });
+  const options = {
+    config: {
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+        slots: { memory: "none" },
+      },
+    },
   };
-}
-
-function requireMemoryRuntime() {
-  const runtime = getMemoryRuntime();
-  if (!runtime) {
-    throw new Error("expected memory runtime registration");
+  const first = loadPluginRegistryHandle(options);
+  expect(first.plugins).toContainEqual(
+    expect.objectContaining({ id: plugin.id, status: "loaded" }),
+  );
+  const context = getPluginRuntimeLoadContext(first);
+  if (!context) {
+    throw new Error("Expected loader-owned context");
   }
-  return runtime;
-}
-
-function requireMemoryEmbeddingProvider(providerId: string) {
-  const provider = getMemoryEmbeddingProvider(providerId);
-  if (!provider) {
-    throw new Error(`expected ${providerId} memory embedding provider`);
-  }
-  return provider;
-}
-
-function makeOpenClawDevSourceRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-loader-dev-source-"));
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
-  fs.mkdirSync(path.join(root, "src"), { recursive: true });
-  fs.mkdirSync(path.join(root, "extensions"), { recursive: true });
-  return root;
-}
-
-describe("getCompatibleActivePluginRegistry", () => {
-  it("reuses the active registry only when the load context cache key matches", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        workspaceDir: "/tmp/workspace-b",
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: [],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        runtimeOptions: undefined,
-      }),
-    ).toBe(registry);
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        runtimeOptions: {
-          subagent: {} as CreatePluginRuntimeOptions["subagent"],
-        },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not treat a default-mode active registry as compatible with gateway binding", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("reuses an active full registry for compatible tool-discovery loads", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        activate: false,
-        toolDiscovery: true,
-      }),
-    ).toBe(registry);
-  });
-
-  it("reuses an active wider registry for compatible scoped runtime loads", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(createLoadedPluginRecord("demo"), createLoadedPluginRecord("other"));
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo", "other"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBe(registry);
-  });
-
-  it("does not reuse a wider registry for scoped loads when the load context changes", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(createLoadedPluginRecord("demo"), createLoadedPluginRecord("other"));
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo", "other"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        workspaceDir: "/tmp/workspace-b",
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        config: {
-          plugins: {
-            allow: ["demo"],
-            load: { paths: ["/tmp/changed.js"] },
-          },
-        },
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: ["missing"],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not reuse a default-mode active registry for gateway-bindable tool discovery", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        activate: false,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-        toolDiscovery: true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not embed activation secrets in the loader cache key", () => {
-    const { cacheKey } = testing.resolvePluginLoadCacheContext({
-      config: {
-        plugins: {
-          allow: ["telegram"],
-        },
-      },
-      activationSourceConfig: {
-        plugins: {
-          allow: ["telegram"],
-        },
-        channels: {
-          telegram: {
-            enabled: true,
-            botToken: "secret-token",
-          },
-        },
-      },
-      autoEnabledReasons: {
-        telegram: ["telegram configured"],
-      },
-    });
-
-    expect(cacheKey).not.toContain("secret-token");
-    expect(cacheKey).not.toContain("botToken");
-    expect(cacheKey).not.toContain("telegram configured");
-  });
-
-  it("separates dev source root precedence in the loader cache key", () => {
-    const devSourceRoot = makeOpenClawDevSourceRoot();
-    try {
-      const baseOptions = {
-        config: {
-          plugins: {
-            allow: ["demo"],
-            load: { paths: ["/tmp/demo.js"] },
-          },
-        },
-        env: { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: undefined },
-      };
-
-      const base = testing.resolvePluginLoadCacheContext(baseOptions).cacheKey;
-      const dev = testing.resolvePluginLoadCacheContext({
-        ...baseOptions,
-        env: { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot },
-      }).cacheKey;
-
-      expect(dev).not.toBe(base);
-    } finally {
-      fs.rmSync(devSourceRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("separates raw env substitution mode in the loader cache key", () => {
-    const baseOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          entries: {
-            demo: { config: { apiKey: "${DEMO_KEY}" } },
-          },
-        },
-      },
-    };
-
-    const plain = testing.resolvePluginLoadCacheContext(baseOptions).cacheKey;
-    const resolving = testing.resolvePluginLoadCacheContext({
-      ...baseOptions,
-      resolveRawConfigEnvVars: true,
-    }).cacheKey;
-
-    expect(resolving).not.toBe(plain);
-  });
-
-  it("does not embed raw resolved plugin config env values in the loader cache key", () => {
-    const { cacheKey } = testing.resolvePluginLoadCacheContext({
-      config: {
-        plugins: {
-          allow: ["demo"],
-          entries: {
-            demo: { config: { apiKey: "${DEMO_KEY}" } },
-          },
-        },
-      },
-      env: { ...process.env, DEMO_KEY: "resolved-demo-secret" },
-      resolveRawConfigEnvVars: true,
-    });
-
-    expect(cacheKey).not.toContain("resolved-demo-secret");
-    expect(cacheKey).not.toContain("apiKey");
-  });
-
-  it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry, "startup-registry");
-
-    expect(testing.getCompatibleActivePluginRegistry()).toBe(registry);
-  });
-
-  it("does not reuse the active registry when core gateway method names differ", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      coreGatewayHandlers: {
-        "sessions.get": () => undefined,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    expect(testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        coreGatewayHandlers: {
-          "sessions.get": () => undefined,
-          "sessions.list": () => undefined,
-        },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("reuses a scoped gateway-bindable registry for a matching default-mode tool scope", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBe(registry);
-  });
-
-  it("reuses a scoped gateway-bindable registry for a matching snapshot-mode tool scope", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        activate: false,
-      }),
-    ).toBe(registry);
-  });
-
-  it("does not reuse a scoped registry when the requested tool scope needs another plugin", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram", "tavily"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram", "tavily"],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not treat an unscoped request as compatible with the scoped startup registry", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram", "tavily"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not reuse a scoped gateway-bindable registry for an explicit subagent request", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        runtimeOptions: {
-          subagent: {} as CreatePluginRuntimeOptions["subagent"],
-        },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("reuses a scoped startup registry when only the request omits gateway methods", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    registry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = {
-      plugins: {
-        allow: ["acpx", "telegram"],
-      },
-    };
-    const startupOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-      }),
-    ).toBe(registry);
-  });
-
-  it("reuses a scoped gateway startup registry when dispatch omits built artifact preference", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    registry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = {
-      plugins: {
-        allow: ["acpx", "telegram"],
-      },
-    };
-    const startupOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-      preferBuiltPluginArtifacts: true,
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBe(registry);
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: {
-          plugins: {
-            allow: ["acpx", "telegram"],
-            load: { paths: ["/tmp/changed.js"] },
-          },
-        },
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBeUndefined();
-  });
+  const prepared = buildPluginRuntimeLoadOptions(context);
+  expect(loadPluginRegistryHandle({ ...prepared, throwOnLoadError: true })).toBe(first);
+  expect(loadPluginRegistryHandle({ ...prepared, cache: false })).not.toBe(first);
+  expect(
+    loadPluginRegistryHandle({
+      ...prepared,
+      config: { ...options.config, plugins: { ...options.config.plugins, enabled: false } },
+    }).plugins,
+  ).toContainEqual(expect.objectContaining({ id: plugin.id, status: "disabled" }));
+  clearPluginRegistryLoadCache();
+  const refreshed = loadPluginRegistryHandle(prepared);
+  expect(refreshed).not.toBe(first);
+  expect(refreshed.plugins).toContainEqual(
+    expect.objectContaining({ id: plugin.id, status: "loaded" }),
+  );
 });
 
-describe("resolveRuntimePluginRegistry", () => {
-  it("reuses the compatible active registry before attempting a fresh load", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
+describe("cached plugin load failures", () => {
+  it.each([
+    { name: "active root registry", load: loadAndActivateRootPluginRegistry, activates: true },
+    { name: "non-activating registry handle", load: loadPluginRegistryHandle, activates: false },
+  ])("enforces strict errors for a cached $name before activation", async ({ load, activates }) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-load-failure",
+      body: 'module.exports = { id: "cached-load-failure", register() { throw new Error("cached registration failed"); } };',
+    });
+    const options = {
       config: {
         plugins: {
-          allow: ["demo"],
+          allow: [plugin.id],
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
         },
       },
-      workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
+    const cached = await load(options);
+    expect(cached.plugins).toContainEqual(
+      expect.objectContaining({ id: plugin.id, status: "error" }),
+    );
 
-    expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
+    const active = createEmptyPluginRegistry();
+    // Staging preserves the cached generation until a successor commits its retirement.
+    stageActivePluginRegistry(active, "existing-registry", "default");
+
+    await expect(async () => load({ ...options, throwOnLoadError: true })).rejects.toThrow(
+      "cached registration failed",
+    );
+    expect(getActivePluginRegistry()).toBe(active);
+    expect(await load(options)).toBe(cached);
+    expect(getActivePluginRegistry()).toBe(activates ? cached : active);
   });
 
-  it("falls back to the current active runtime when no explicit load context is provided", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry, "startup-registry");
-
-    expect(resolveRuntimePluginRegistry()).toBe(registry);
-  });
-
-  it("does not treat an explicit empty plugin scope as the active runtime", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
+  it("reports only newly failed replacements while retaining the complete diagnostic registry", () => {
+    useNoBundledPlugins();
+    const broken = writePlugin({
+      id: "startup-broken",
+      body: 'throw new Error("retained startup failure");',
+    });
+    const healthy = writePlugin({
+      id: "healthy-replacement",
+      body: "module.exports = { register() {} };",
+    });
+    const options = {
       config: {
         plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
+          allow: [broken.id, healthy.id],
+          load: { paths: [broken.file, healthy.file] },
+          slots: { memory: "none" },
         },
       },
-      workspaceDir: "/tmp/workspace-a",
+      cache: false,
     };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
-    expect(scopedEmpty).not.toBe(registry);
-    expect(scopedEmpty?.plugins).toStrictEqual([]);
-  });
-
-  it("keeps the full workspace registry warm when scoped cron registries churn", () => {
-    testing.setMaxPluginRegistryCacheEntriesForTest(2);
+    const previous = loadPluginRegistryHandle(options);
+    const retained = previous.plugins.find((entry) => entry.id === broken.id);
+    expect(retained).toMatchObject({ status: "error" });
+    expect(previous.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "loaded",
+    });
+    fs.writeFileSync(healthy.file, 'throw new Error("new replacement failure");');
+    let failure: unknown;
     try {
-      const loadOptions = {
-        config: {
-          plugins: {
-            allow: ["alpha", "bravo", "charlie"],
-          },
-        },
-        workspaceDir: "/tmp/workspace-a",
-      };
-      const fullRegistry = loadOpenClawPlugins(loadOptions);
-
-      loadOpenClawPlugins({ ...loadOptions, onlyPluginIds: ["alpha"] });
-      loadOpenClawPlugins({ ...loadOptions, onlyPluginIds: ["bravo"] });
-
-      expect(resolveRuntimePluginRegistry(loadOptions)).toBe(fullRegistry);
-    } finally {
-      testing.setMaxPluginRegistryCacheEntriesForTest();
+      loadPluginRegistryHandle({
+        ...options,
+        previousRegistry: previous,
+        replacePluginIds: [healthy.id],
+        throwOnLoadError: true,
+      });
+    } catch (error) {
+      failure = error;
     }
+    expect(failure).toBeInstanceOf(PluginLoadFailureError);
+    if (!(failure instanceof PluginLoadFailureError)) {
+      throw failure;
+    }
+    expect(failure.pluginIds).toEqual([healthy.id]);
+    expect(failure.message).not.toContain(broken.id);
+    expect(failure.registry.plugins.find((entry) => entry.id === broken.id)).toBe(retained);
+    expect(failure.registry.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("new replacement failure"),
+    });
+    expect(failure.registry.diagnostics).toEqual(expect.arrayContaining(previous.diagnostics));
   });
-});
 
-describe("clearPluginLoaderCache", () => {
-  it("resets registered memory plugin registries", () => {
-    registerEmbeddingProvider({
-      id: "stale-embedding",
-      create: async () => ({ provider: null }),
+  it("does not reject an unrelated replacement for a re-evaluated startup quarantine", () => {
+    useNoBundledPlugins();
+    const broken = writePlugin({
+      id: "startup-quarantined",
+      body: 'throw new Error("quarantined plugin must not execute");',
     });
-    registerMemoryEmbeddingProvider({
-      id: "stale",
-      create: async () => ({ provider: null }),
+    const healthy = writePlugin({
+      id: "healthy-replacement",
+      body: "module.exports = { register() {} };",
     });
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => null,
-    });
-    registerMemoryPromptSupplement("memory-wiki", () => ["stale wiki supplement"]);
-    registerMemoryCapability("memory-core", {
-      promptBuilder: () => ["stale memory section"],
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 2,
-        reserveTokensFloor: 3,
-        prompt: "stale",
-        systemPrompt: "stale",
-        relativePath: "memory/stale.md",
-      }),
-      runtime: {
-        async getMemorySearchManager() {
-          return { manager: null };
-        },
-        resolveMemoryBackendConfig() {
-          return { backend: "builtin" as const };
+    const options = {
+      config: {
+        plugins: {
+          allow: [broken.id, healthy.id],
+          load: { paths: [broken.file, healthy.file] },
+          slots: { memory: "none" },
         },
       },
-    });
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
-      "stale memory section",
-      "stale wiki supplement",
+      cache: false,
+    };
+    setActiveDegradedPlugins([
+      {
+        pluginId: broken.id,
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-openclaw-peer-link",
+          detail:
+            'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
+          installPath: broken.dir,
+        },
+      },
     ]);
-    expect(listMemoryCorpusSupplements()).toHaveLength(1);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
-    expect(
-      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
-    ).toEqual({ backend: "builtin" });
-    expect(getEmbeddingProvider("stale-embedding")?.id).toBe("stale-embedding");
-    expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
+    const previous = loadPluginRegistryHandle(options);
+    const previousError = previous.plugins.find((entry) => entry.id === broken.id)?.error;
+    expect(previousError).toContain("missing-openclaw-peer-link");
 
-    clearPluginLoaderCache();
-
-    expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
-    expect(listMemoryCorpusSupplements()).toStrictEqual([]);
-    expect(resolveMemoryFlushPlan({})).toBeNull();
-    expect(getMemoryRuntime()).toBeUndefined();
-    expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
-  });
-});
-
-describe("loadOpenClawPlugins active runtime clearing", () => {
-  it("clears plugin-owned global providers before activating a new registry", () => {
-    registerEmbeddingProvider({
-      id: "stale-embedding",
-      create: async () => ({ provider: null }),
+    const replacement = loadPluginRegistryHandle({
+      ...options,
+      config: {
+        plugins: {
+          ...options.config.plugins,
+          entries: { [broken.id]: { enabled: true } },
+        },
+      },
+      previousRegistry: previous,
+      replacePluginIds: [healthy.id],
+      throwOnLoadError: true,
     });
-    registerCompactionProvider({
-      id: "stale-compaction",
-      label: "Stale Compaction",
-      summarize: async () => "stale",
+    expect(replacement.plugins.find((entry) => entry.id === broken.id)).toMatchObject({
+      status: "error",
+      error: previousError,
     });
-    registerMemoryEmbeddingProvider({
-      id: "stale-memory",
-      create: async () => ({ provider: null }),
+    expect(replacement.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "loaded",
     });
-
-    loadOpenClawPlugins({ onlyPluginIds: [] });
-
-    expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
-    expect(getCompactionProvider("stale-compaction")).toBeUndefined();
-    expect(getMemoryEmbeddingProvider("stale-memory")).toBeUndefined();
+    expect(() =>
+      loadPluginRegistryHandle({
+        ...options,
+        previousRegistry: previous,
+        replacePluginIds: [broken.id],
+        throwOnLoadError: true,
+      }),
+    ).toThrow(PluginLoadFailureError);
   });
 });
 
 describe("clearPluginRegistryLoadCache", () => {
-  it("preserves plugin-owned runtime registries while invalidating load snapshots", () => {
-    registerMemoryEmbeddingProvider({
-      id: "still-live",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryCapability("memory-core", {
-      promptBuilder: () => ["still live"],
-    });
+  it.each(["commit", "rollback"])(
+    "releases only the retired cache aliases after staged %s",
+    (action) => {
+      const original = createEmptyPluginRegistry();
+      const candidate = createEmptyPluginRegistry();
+      getPluginLoaderCacheState().set("original", original);
+      getPluginLoaderCacheState().set("original-alias", original);
+      getPluginLoaderCacheState().set("candidate", candidate);
+      getPluginLoaderCacheState().set("candidate-alias", candidate);
+      setActivePluginRegistry(original, "original");
+      const snapshot = captureActivePluginRegistrySnapshot();
 
-    clearPluginRegistryLoadCache();
+      stageActivePluginRegistry(candidate, "candidate", "default");
+      expect(getPluginLoaderCacheState().get("original") === original).toBe(true);
+      expect(getPluginLoaderCacheState().get("candidate") === candidate).toBe(true);
+      // Reusing a key must not let the old value's retirement evict its successor.
+      getPluginLoaderCacheState().set("reused-key", original);
+      getPluginLoaderCacheState().set("reused-key", candidate);
 
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["still live"]);
-    expect(requireMemoryEmbeddingProvider("still-live").id).toBe("still-live");
-  });
+      if (action === "commit") {
+        commitStagedPluginRegistry(original, candidate);
+      } else {
+        rollbackStagedPluginRegistry(snapshot);
+      }
 
-  it("invalidates full-workspace load snapshots", () => {
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
+      const committed = action === "commit";
+      for (const key of ["original", "original-alias"]) {
+        expect(getPluginLoaderCacheState().get(key) === original).toBe(!committed);
+      }
+      for (const key of ["candidate", "candidate-alias", "reused-key"]) {
+        expect(getPluginLoaderCacheState().get(key) === candidate).toBe(committed);
+      }
+    },
+  );
+
+  it.each(["clear", "replacement"])(
+    "rebuilds plugin registrations after runtime %s with unchanged load options",
+    async (retirement) => {
+      useNoBundledPlugins();
+      const event = `retirement-probe-${retirement}`;
+      const cleanup = vi.fn();
+      process.on(event, cleanup);
+      onTestFinished(() => {
+        process.off(event, cleanup);
+      });
+      const plugin = writePlugin({
+        id: "retirement-probe",
+        body: `module.exports = {
+          id: "retirement-probe",
+          register(api) {
+            api.registerRuntimeLifecycle({ id: "close", cleanup() { process.emit(${JSON.stringify(event)}); } });
+            api.registerTool({
+              name: "retirement_probe", description: "Read fixture lifetime",
+              parameters: { type: "object", properties: {} },
+              execute() { return { content: [{ type: "text", text: "live" }] }; },
+            });
+          },
+        };`,
+      });
+      writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: plugin.id,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          contracts: { tools: ["retirement_probe"] },
+        }),
+      );
+      const options = {
+        config: {
+          plugins: {
+            allow: [plugin.id],
+            load: { paths: [plugin.file] },
+            slots: { memory: "none" },
+          },
         },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const registry = loadOpenClawPlugins(loadOptions);
+      };
+      const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        const tool = registry.tools[0]!.factory({ config: options.config });
+        if (!tool || Array.isArray(tool)) {
+          throw new Error("expected one lifetime probe tool");
+        }
+        return tool;
+      };
+      const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+        await resolveTool(registry).execute("probe", {});
+      const original = loadOpenClawPlugins(options);
+      const retainedTool = resolveTool(original);
+      const originalKey = resolvePluginLoadCacheContext(options).cacheKey;
+      expect(loadOpenClawPlugins(options)).toBe(original);
+      expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
 
-    clearPluginRegistryLoadCache();
+      if (retirement === "clear") {
+        await clearActivePluginRegistry();
+      } else {
+        const replacementOptions = { ...options, workspaceDir: makePluginLoaderTempDir() };
+        const replacement = loadOpenClawPlugins(replacementOptions);
+        expect(replacement).not.toBe(original);
+        expect(await read(replacement)).toMatchObject({ content: [{ text: "live" }] });
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
+        expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
+        expect(
+          getPluginLoaderCacheState().get(
+            resolvePluginLoadCacheContext(replacementOptions).cacheKey,
+          ),
+        ).toBe(replacement);
+      }
 
-    expect(loadOpenClawPlugins(loadOptions)).not.toBe(registry);
-  });
+      expect(getPluginLoaderCacheState().get(originalKey) === undefined).toBe(true);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      await expect(read(original)).rejects.toThrow(/reloaded or disabled/);
+      expect(() => retainedTool.execute("probe", {})).toThrow(/reloaded or disabled/);
+      const reloaded = loadOpenClawPlugins(options);
+      expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });
+      expect(reloaded).not.toBe(original);
+      expect(loadOpenClawPlugins(options)).toBe(reloaded);
+    },
+  );
 });

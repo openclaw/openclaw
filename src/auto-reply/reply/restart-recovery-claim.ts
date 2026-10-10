@@ -1,0 +1,637 @@
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import {
+  buildRestartRecoveryClaimCleanupPatch,
+  hasRestartRecoverySourceClaim,
+  hasRestartRecoveryTerminalRun,
+  isMainRestartRecoveryCandidate,
+  recordLifecycleFence,
+} from "../../config/sessions/restart-recovery-state.js";
+import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
+import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import {
+  isTerminalSessionStatus,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions/types.js";
+import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../infra/agent-events.js";
+import {
+  createAgentRunStaleLifecycleError,
+  createRestartRecoveryClaimChangedError,
+  isAgentRunStaleLifecycleError,
+} from "../../infra/agent-lifecycle-error.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type {
+  UserTurnTranscriptRecorder,
+  UserTurnTranscriptTarget,
+} from "../../sessions/user-turn-transcript.types.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+
+type ReplyRestartRecoveryClaimController = {
+  admitUserTurn: (
+    recorder?: UserTurnTranscriptRecorder,
+  ) => Promise<"admitted" | "duplicate-source">;
+  beginBeforeAgentReply: () => Promise<boolean>;
+  checkpointBeforeAgentReply: (params: {
+    state?: RestartRecoveryBeforeAgentReplyState;
+    pendingFinalDelivery?: {
+      context?: DeliveryContext;
+      deliveries: NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"];
+      intentId: string;
+      text: string;
+    };
+  }) => Promise<void>;
+  clear: () => Promise<void>;
+  isArmed: () => Promise<boolean>;
+};
+
+/** Provider redelivery guard shared by ingress and the agent admission boundary. */
+export function isDuplicateRestartRecoverySource(
+  entry: SessionEntry | null | undefined,
+  sourceTurnId: unknown,
+): boolean {
+  const normalizedSourceTurnId = normalizeOptionalString(sourceTurnId);
+  return Boolean(
+    normalizedSourceTurnId &&
+    (hasRestartRecoveryTerminalRun(entry ?? undefined, normalizedSourceTurnId) ||
+      hasRestartRecoverySourceClaim(entry ?? undefined, normalizedSourceTurnId)),
+  );
+}
+
+export async function retireTerminalRestartRecoverySourceClaim(params: {
+  target: SessionEntryTargetPatchScope;
+  assertCurrent: SessionSourceAssertion;
+  sessionId: string;
+  sourceTurnId: string;
+}): Promise<SessionEntry | undefined> {
+  let didRetire = false;
+  const retired = await patchSessionEntryTarget(
+    params.target,
+    (current) => {
+      if (
+        current.sessionId !== params.sessionId ||
+        !isTerminalSessionStatus(current.status) ||
+        current.status === "interrupted" ||
+        current.abortedLastRun === true ||
+        current.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
+        !hasRestartRecoverySourceClaim(current, params.sourceTurnId)
+      ) {
+        return null;
+      }
+      didRetire = true;
+      return {
+        ...buildRestartRecoveryClaimCleanupPatch({
+          entry: current,
+          recordTerminalSource: true,
+          terminalSourceRunId: params.sourceTurnId,
+        }),
+        updatedAt: Date.now(),
+      };
+    },
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      workerGuard: { source: params.assertCurrent },
+    },
+  );
+  return didRetire ? (retired ?? undefined) : undefined;
+}
+
+export function createReplyRestartRecoveryClaimController(params: {
+  agentId: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  inputProvenance?: InputProvenance;
+  admissionRunId?: unknown;
+  executionRunId?: string;
+  lifecycleGeneration: string | undefined;
+  getEntry: () => SessionEntry | undefined;
+  getSessionId: () => string;
+  isRestartAbort: () => boolean;
+  resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
+  requesterAccountId?: unknown;
+  requesterSenderId?: unknown;
+  resolveUserTurnTarget?: (params: {
+    entry: SessionEntry;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }) => UserTurnTranscriptTarget | undefined;
+  sessionKey?: string;
+  setEntry: (entry: SessionEntry) => void;
+  sameChannelThreadRequired?: boolean;
+  sourceTurnId?: unknown;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  storePath?: string;
+}): ReplyRestartRecoveryClaimController {
+  let recoveryRunId = normalizeOptionalString(params.admissionRunId) ?? randomUUID();
+  const executionRunId = params.executionRunId ?? recoveryRunId;
+  const executionGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+  let recoverySourceRunId: string | undefined;
+  let trackedSessionId: string | undefined;
+  let trackedLifecycleRevision: string | undefined;
+  let tracked = false;
+  let confirmedArmed = false;
+  let readTarget: SessionEntryTargetPatchScope | undefined;
+  const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
+    if (
+      readTarget &&
+      (readTarget.agentId !== target.agentId ||
+        readTarget.storePath !== target.storePath ||
+        readTarget.target.canonicalKey !== target.target.canonicalKey ||
+        !isDeepStrictEqual(readTarget.readSource, target.readSource))
+    ) {
+      throw createRestartRecoveryClaimChangedError();
+    }
+    readTarget ??= target;
+  };
+  const preparedTarget = () => {
+    if (!readTarget) {
+      throw new Error("Restart recovery claim has no admitted session target");
+    }
+    return readTarget;
+  };
+  const isExecutionFence = (run: NonNullable<SessionEntry["restartRecoveryRuns"]>[number]) =>
+    run.runId === executionRunId && run.lifecycleGeneration === executionGeneration;
+  const isTrackedClaim = (entry: SessionEntry | undefined) =>
+    entry !== undefined &&
+    entry.sessionId === trackedSessionId &&
+    entry.sessionId === params.getSessionId() &&
+    (entry.restartRecoveryDeliveryRunId !== undefined
+      ? entry.restartRecoveryDeliveryRunId === recoveryRunId &&
+        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === recoverySourceRunId
+      : entry.restartRecoveryRuns?.some(isExecutionFence) === true);
+  const recordAdmittedClaim = (entry: SessionEntry, exactRunId?: string) => {
+    params.setEntry(entry);
+    recoveryRunId = exactRunId ?? recoveryRunId;
+    recoverySourceRunId = normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId);
+    trackedSessionId = entry.sessionId;
+    trackedLifecycleRevision = entry.lifecycleRevision;
+    tracked = exactRunId !== undefined || isTrackedClaim(entry);
+  };
+  const assertReadCurrent = () => {
+    if (params.lifecycleGeneration) {
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+    }
+  };
+
+  const assertClaimCurrent = (sessionId: string) => {
+    assertReadCurrent();
+    if (params.getSessionId() !== sessionId) {
+      throw createRestartRecoveryClaimChangedError();
+    }
+  };
+
+  const persistAdmissionPatch = async (options: {
+    entry: SessionEntry;
+    patch: SessionTranscriptTurnLifecyclePatch;
+    recorder?: UserTurnTranscriptRecorder;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }): Promise<SessionEntry> => {
+    const expectedSessionState = buildRestartRecoveryExpectedState(options.entry);
+    if (options.recorder && !options.recorder.hasPersisted()) {
+      const result = await options.recorder.persistApproved({
+        target: params.resolveUserTurnTarget?.({
+          entry: options.entry,
+          sessionId: options.sessionId,
+          sessionKey: options.sessionKey,
+          storePath: options.storePath,
+        }),
+        expectedSessionId: options.sessionId,
+        expectedSessionState,
+        sessionLifecyclePatch: options.patch,
+      });
+      if (!result?.sessionEntry) {
+        throw new Error("session changed before durable user-turn admission");
+      }
+      return result.sessionEntry;
+    }
+    let didCommit = false;
+    const persisted = await applySessionEntryTargetOperation(
+      preparedTarget(),
+      {
+        kind: "restart-admission",
+        sessionId: options.sessionId,
+        expectedSessionState,
+        patch: options.patch,
+      },
+      {
+        onCommitted: () => {
+          didCommit = true;
+        },
+        workerGuard: {
+          source: params.operatorAuthority?.assertCurrent,
+          assertCurrent: () => assertClaimCurrent(options.sessionId),
+        },
+      },
+    );
+    if (!didCommit || !persisted) {
+      throw createRestartRecoveryClaimChangedError();
+    }
+    return persisted;
+  };
+
+  const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (recorder) => {
+    if (!params.sessionKey || !params.storePath) {
+      await recorder?.persistApproved();
+      return "admitted";
+    }
+    const sessionId = params.getSessionId();
+    assertReadCurrent();
+    const hasPendingPlacementInput = () =>
+      Boolean(recorder?.getPendingInputMessage?.() && !recorder.hasPersisted());
+    const pendingPlacementInput = hasPendingPlacementInput();
+    const placementContext = pendingPlacementInput
+      ? resolveSessionWorkerPlacementContext()
+      : undefined;
+    const placementService = placementContext?.workerSessionPlacementService;
+    if (placementService && !placementService.prepareRuntimeRefresh) {
+      throw new Error("Worker placement observation service is unavailable");
+    }
+    const placementObservation = placementService?.prepareRuntimeRefresh
+      ? await placementService.prepareRuntimeRefresh(sessionId)
+      : undefined;
+    let entry: SessionEntry;
+    let stagedWorkerInput = false;
+    try {
+      const assertAdmissionCurrent = () => {
+        assertReadCurrent();
+        if (params.getSessionId() !== sessionId) {
+          throw new Error("session changed before durable user-turn admission");
+        }
+        if (hasPendingPlacementInput() !== pendingPlacementInput) {
+          throw new Error("pending user turn changed before durable user-turn admission");
+        }
+        if (placementContext?.workerSessionPlacementService !== placementService) {
+          throw new Error("Worker placement service changed before durable user-turn admission");
+        }
+        placementObservation?.assertCurrent();
+      };
+      const current =
+        (await readSessionEntryInWorker(
+          { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
+          assertAdmissionCurrent,
+          undefined,
+          recordReadTarget,
+        )) ?? params.getEntry();
+      assertAdmissionCurrent();
+      if (!current || current.sessionId !== sessionId) {
+        throw new Error("session changed before durable user-turn admission");
+      }
+      entry = current;
+      stagedWorkerInput = Boolean(
+        placementObservation?.placement && placementObservation.placement.state !== "local",
+      );
+    } finally {
+      // The observation selects admission; the claim writer owns its later durable guards.
+      placementObservation?.release();
+    }
+    const admissionRunId = normalizeOptionalString(params.admissionRunId);
+    const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+    const activeClaimRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
+    const isExactRecoveryClaim = admissionRunId && activeClaimRunId === admissionRunId;
+    if (sourceTurnId) {
+      if (hasRestartRecoveryTerminalRun(entry, sourceTurnId)) {
+        return "duplicate-source";
+      }
+      if (!isExactRecoveryClaim && hasRestartRecoverySourceClaim(entry, sourceTurnId)) {
+        const retired = await retireTerminalRestartRecoverySourceClaim({
+          target: preparedTarget(),
+          assertCurrent: assertReadCurrent,
+          sessionId,
+          sourceTurnId,
+        });
+        if (retired) {
+          params.setEntry(retired);
+        }
+        return "duplicate-source";
+      }
+    }
+    if (stagedWorkerInput) {
+      // A staged worker input belongs to placement admission, not local restart
+      // recovery. Its runtime writer consumes it only after setup and sync finish.
+      return "admitted";
+    }
+    if (isExactRecoveryClaim) {
+      if (isTerminalSessionStatus(entry.status) || entry.abortedLastRun === true) {
+        throw createRestartRecoveryClaimChangedError();
+      }
+      // Clear the retry verifier as the exact admitted claim crosses into execution.
+      const preservesTerminalReceipt =
+        entry.restartRecoveryDeliveryReceiptState === "terminal-pending";
+      const adopted = await persistAdmissionPatch({
+        entry,
+        patch: {
+          restartRecoveryBeforeAgentReplyState: undefined,
+          ...(preservesTerminalReceipt
+            ? {}
+            : {
+                restartRecoveryDeliveryReceiptState: undefined,
+                restartRecoveryDeliveryToolCallId: undefined,
+                restartRecoveryDeliveryRequestFingerprint: undefined,
+              }),
+          restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
+          updatedAt: Date.now(),
+        },
+        recorder,
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      });
+      recordAdmittedClaim(adopted, admissionRunId);
+      return "admitted";
+    }
+
+    const deliveryContext = params.resolveDeliveryContext(entry);
+    const recoverableDeliveryContext =
+      deliveryContext && sourceTurnId ? deliveryContext : undefined;
+    if (recoverableDeliveryContext) {
+      const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
+      const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
+      if (!recorder || persistedSourceTurnId !== sourceTurnId) {
+        throw new Error("channel restart recovery requires source-keyed user-turn admission");
+      }
+    }
+    const operatorSource =
+      !recoverableDeliveryContext && !sourceTurnId
+        ? createRestartRecoveryOperatorSource({
+            authority: params.operatorAuthority,
+            entry,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sourceRunId: recoveryRunId,
+            inputProvenance: params.inputProvenance,
+          })
+        : undefined;
+    if (
+      !recoverableDeliveryContext &&
+      !activeClaimRunId &&
+      (!recorder || recorder.hasPersisted()) &&
+      !operatorSource
+    ) {
+      // These turns have no admission write to extend; lifecycle start owns their claim.
+      return "admitted";
+    }
+    const updatedAt = Date.now();
+    const canTransferAbortedControlUiClaim = Boolean(
+      admissionRunId &&
+      activeClaimRunId &&
+      admissionRunId !== activeClaimRunId &&
+      entry.abortedLastRun === true &&
+      (entry.status === undefined || entry.status === "interrupted") &&
+      entry.pendingFinalDelivery === undefined &&
+      entry.restartRecoveryBeforeAgentReplyState === undefined &&
+      entry.restartRecoveryDeliveryReceiptState === undefined &&
+      entry.restartRecoverySourceIngress === "control-ui",
+    );
+    if (
+      activeClaimRunId &&
+      !canTransferAbortedControlUiClaim &&
+      (entry.abortedLastRun === true ||
+        !isTerminalSessionStatus(entry.status) ||
+        entry.status === "interrupted" ||
+        entry.restartRecoveryDeliveryReceiptState === "terminal-pending")
+    ) {
+      throw createRestartRecoveryClaimChangedError();
+    }
+    const retiredClaim = activeClaimRunId
+      ? buildRestartRecoveryClaimCleanupPatch({
+          entry,
+          recordTerminalSource: true,
+          terminalSourceRunId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
+        })
+      : {};
+    const transfersControlUiClaim = canTransferAbortedControlUiClaim && !recoverableDeliveryContext;
+    const hasDeliveryClaim = Boolean(
+      recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
+    );
+    const patch: SessionTranscriptTurnLifecyclePatch = {
+      ...retiredClaim,
+      abortedLastRun: false,
+      endedAt: undefined,
+      restartRecoveryBeforeAgentReplyState: undefined,
+      restartRecoveryDeliveryReceiptState: undefined,
+      restartRecoveryDeliveryToolCallId: undefined,
+      restartRecoveryDeliveryContext: recoverableDeliveryContext,
+      restartRecoveryDeliveryRequestFingerprint: undefined,
+      restartRecoveryDeliveryRunId: hasDeliveryClaim ? recoveryRunId : undefined,
+      restartRecoveryOperatorSource: operatorSource,
+      restartRecoveryDeliverySourceRunId:
+        transfersControlUiClaim || operatorSource
+          ? recoveryRunId
+          : recoverableDeliveryContext
+            ? sourceTurnId
+            : undefined,
+      restartRecoveryRequesterAccountId: transfersControlUiClaim
+        ? undefined
+        : normalizeOptionalString(params.requesterAccountId),
+      restartRecoveryRequesterSenderId: transfersControlUiClaim
+        ? undefined
+        : normalizeOptionalString(params.requesterSenderId),
+      restartRecoverySameChannelThreadRequired:
+        !transfersControlUiClaim && params.sameChannelThreadRequired === true ? true : undefined,
+      restartRecoverySourceIngress: recoverableDeliveryContext
+        ? "channel"
+        : transfersControlUiClaim
+          ? "control-ui"
+          : operatorSource?.snapshot.sourceIngress,
+      restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
+        ? undefined
+        : params.sourceReplyDeliveryMode,
+      runtimeMs: undefined,
+      startedAt: updatedAt,
+      status: undefined,
+      lastRunError: undefined,
+      updatedAt,
+    };
+    patch.restartRecoveryRuns = entry.restartRecoveryRuns;
+    if (isMainRestartRecoveryCandidate(entry, params.sessionKey)) {
+      recordLifecycleFence(patch, {
+        runId: executionRunId,
+        lifecycleGeneration: executionGeneration,
+      });
+    }
+    const persisted = await persistAdmissionPatch({
+      entry,
+      patch,
+      recorder,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    recordAdmittedClaim(persisted);
+    return "admitted";
+  };
+
+  const updateBeforeAgentReply = async (
+    expectedState: "pending" | undefined,
+    {
+      state,
+      pendingFinalDelivery,
+    }: Parameters<ReplyRestartRecoveryClaimController["checkpointBeforeAgentReply"]>[0],
+  ): Promise<void> => {
+    if (!tracked || !params.sessionKey || !params.storePath) {
+      return;
+    }
+    const updatedAt = Date.now();
+    const sessionId = params.getSessionId();
+    const persisted = await patchSessionEntryTarget(
+      preparedTarget(),
+      (current) =>
+        isTrackedClaim(current) && current.restartRecoveryBeforeAgentReplyState === expectedState
+          ? {
+              restartRecoveryBeforeAgentReplyState: state,
+              ...(pendingFinalDelivery
+                ? {
+                    pendingFinalDelivery: {
+                      ...(pendingFinalDelivery.text
+                        ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
+                        : { kind: "transport-only" as const }),
+                      createdAt: updatedAt,
+                      ...(pendingFinalDelivery.intentId
+                        ? { intentId: pendingFinalDelivery.intentId }
+                        : {}),
+                      deliveries: pendingFinalDelivery.deliveries,
+                      ...(pendingFinalDelivery.context
+                        ? { context: pendingFinalDelivery.context }
+                        : {}),
+                    },
+                    // Hook-owned replies are already terminal. A restart may only deliver this
+                    // checkpoint; it must never resume the model or broader tool surface.
+                    restartRecoveryForceSafeTools: true,
+                  }
+                : {}),
+              updatedAt,
+            }
+          : null,
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+        workerGuard: {
+          assertCurrent: () => assertClaimCurrent(sessionId),
+        },
+      },
+    );
+    if (!persisted) {
+      throw new Error(
+        `before_agent_reply ${expectedState === "pending" ? "checkpoint" : "start"} lost restart recovery ownership`,
+      );
+    }
+    params.setEntry(persisted);
+  };
+
+  const clear = async (): Promise<void> => {
+    const lifecycleGeneration = params.lifecycleGeneration;
+    if (
+      !tracked ||
+      !params.sessionKey ||
+      !params.storePath ||
+      !lifecycleGeneration ||
+      params.isRestartAbort()
+    ) {
+      return;
+    }
+    const sessionId = params.getSessionId();
+    if (sessionId !== trackedSessionId) {
+      return;
+    }
+    const expected = { sessionId, lifecycleRevision: trackedLifecycleRevision };
+    const persisted = await applySessionEntryTargetOperation(
+      preparedTarget(),
+      {
+        kind: "restart-claim-clear",
+        expected,
+        sessionId,
+        recoveryRunId,
+        recoverySourceRunId,
+        executionRunId,
+        executionGeneration,
+      },
+      {
+        // The worker owns row predicates; live host authority survives every admission wait.
+        workerGuard: {
+          assertCurrent: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            if (params.isRestartAbort()) {
+              throw createAgentRunStaleLifecycleError();
+            }
+            if (params.getSessionId() !== sessionId) {
+              throw createRestartRecoveryClaimChangedError();
+            }
+          },
+        },
+      },
+    );
+    // A refused reduction returns the current row; it cannot retarget this run's cache.
+    if (
+      persisted?.sessionId === expected.sessionId &&
+      persisted.lifecycleRevision === expected.lifecycleRevision
+    ) {
+      params.setEntry(persisted);
+    }
+  };
+
+  const isArmed = async (): Promise<boolean> => {
+    if (!tracked || !params.sessionKey || !params.storePath) {
+      return false;
+    }
+    const isRetiredRestart = () =>
+      params.lifecycleGeneration
+        ? params.isRestartAbort() &&
+          !isAgentEventLifecycleGenerationCurrent(params.lifecycleGeneration)
+        : false;
+    // Terminal settlement may reuse confirmed facts, but must not read successor storage.
+    if (isRetiredRestart()) {
+      return confirmedArmed;
+    }
+    try {
+      const persisted = await readSessionEntryInWorker(
+        { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
+        assertReadCurrent,
+        undefined,
+        recordReadTarget,
+      );
+      assertReadCurrent();
+      if (!confirmedArmed) {
+        const current = params.getEntry();
+        confirmedArmed =
+          (isTrackedClaim(persisted) && persisted?.abortedLastRun === true) ||
+          (isTrackedClaim(current) && current?.abortedLastRun === true);
+      }
+      return confirmedArmed;
+    } catch (error) {
+      if (isAgentRunStaleLifecycleError(error) && isRetiredRestart()) {
+        return confirmedArmed;
+      }
+      throw error;
+    }
+  };
+
+  return {
+    admitUserTurn,
+    async beginBeforeAgentReply() {
+      // `pending` records only the ambiguous plugin side-effect window. A
+      // finished unhandled hook clears it so recovery can re-enter normally.
+      await updateBeforeAgentReply(undefined, { state: "pending" });
+      return true;
+    },
+    checkpointBeforeAgentReply: (checkpoint) => updateBeforeAgentReply("pending", checkpoint),
+    clear,
+    isArmed,
+  };
+}

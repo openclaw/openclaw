@@ -1,12 +1,23 @@
 // Validation helpers for cron delivery targets before jobs enter runtime dispatch.
+/** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
+export function hasExplicitCronDeliveryTarget(plan: {
+  channel?: string;
+  to?: string;
+  threadId?: string | number;
+  accountId?: string;
+}): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+  );
+}
+
 function assertNonBlankStringField(field: string, value: unknown) {
-  if (value === undefined || value === null || typeof value !== "string") {
+  if (value === undefined || value === null) {
     return;
   }
-  if (value.trim()) {
-    return;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${field} must be a non-empty string`);
   }
-  throw new Error(`${field} must be a non-empty string`);
 }
 
 export function assertCronDeliveryInputNonBlankFields(delivery: unknown, fieldPrefix = "delivery") {

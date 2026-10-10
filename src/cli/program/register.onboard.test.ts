@@ -1,10 +1,12 @@
-// Register onboard tests cover onboarding command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
-  runCrestodian: vi.fn(),
+  acknowledgeOnboardRecommendationsCommand: vi.fn(),
+  onboardRecommendationsCommand: vi.fn(),
+  refreshOnboardRecommendationsCommand: vi.fn(),
+  runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -20,27 +22,17 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
 }));
 
-vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
-  CORE_ONBOARD_AUTH_FLAGS: [
-    {
-      cliOption: "--mistral-api-key <key>",
-      description: "Mistral API key",
-      optionKey: "mistralApiKey",
-    },
-    {
-      cliOption: "--openai-api-key <key>",
-      description: "OpenAI API key (core fallback)",
-      optionKey: "openaiApiKey",
-    },
-  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
-}));
-
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveProviderOnboardAuthFlags: () => [
     {
       cliOption: "--openai-api-key <key>",
       description: "OpenAI API key",
       optionKey: "openaiApiKey",
+    },
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "Another provider's conflicting API key flag",
+      optionKey: "anotherProviderApiKey",
     },
   ],
 }));
@@ -49,143 +41,209 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
-vi.mock("../../crestodian/crestodian.js", () => ({
-  runCrestodian: mocks.runCrestodian,
+vi.mock("../../commands/onboard-recommendations.js", () => ({
+  acknowledgeOnboardRecommendationsCommand: mocks.acknowledgeOnboardRecommendationsCommand,
+  onboardRecommendationsCommand: mocks.onboardRecommendationsCommand,
+  refreshOnboardRecommendationsCommand: mocks.refreshOnboardRecommendationsCommand,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../commands/system-agent-with-inference.js", () => ({
+  runSystemAgentWithInference: mocks.runSystemAgentWithInference,
+}));
+
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
-describe("registerOnboardCommand", () => {
-  async function runCli(args: string[]) {
-    const program = new Command();
-    registerOnboardCommand(program);
-    await program.parseAsync(args, { from: "user" });
-  }
+async function runCli(args: string[]) {
+  const program = new Command().enablePositionalOptions().exitOverride();
+  registerOnboardCommand(program);
+  await program.parseAsync(["onboard", ...args], { from: "user" });
+}
 
-  function setupWizardOptions(callIndex = 0): Record<string, unknown> {
-    const call = setupWizardCommandMock.mock.calls[callIndex];
-    if (!call) {
-      throw new Error(`expected setup wizard call ${callIndex}`);
-    }
-    expect(call[1]).toBe(runtime);
-    return call[0] as Record<string, unknown>;
-  }
+beforeEach(() => vi.resetAllMocks());
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.runCrestodian.mockResolvedValue(undefined);
-    setupWizardCommandMock.mockResolvedValue(undefined);
+describe("registered onboarding", () => {
+  it.each([
+    {
+      args: "recommendations --agent writer --json",
+      target: mocks.onboardRecommendationsCommand,
+      options: { agent: "writer", json: true },
+    },
+    {
+      args: "--json recommendations",
+      target: mocks.onboardRecommendationsCommand,
+      options: { json: true },
+    },
+    {
+      args: "recommendations acknowledge",
+      target: mocks.acknowledgeOnboardRecommendationsCommand,
+      options: { retry: undefined },
+    },
+    {
+      args: "recommendations acknowledge --retry chat-plugin @demo-owner/notes",
+      target: mocks.acknowledgeOnboardRecommendationsCommand,
+      options: { retry: ["chat-plugin", "@demo-owner/notes"] },
+    },
+    {
+      args: "recommendations --agent writer acknowledge --agent analyst",
+      target: mocks.acknowledgeOnboardRecommendationsCommand,
+      options: { agent: "analyst", retry: undefined },
+    },
+    {
+      args: "recommendations refresh",
+      target: mocks.refreshOnboardRecommendationsCommand,
+      options: {},
+    },
+  ])("routes $args", async ({ args, target, options }) => {
+    await runCli(args.split(" "));
+    expect(target).toHaveBeenCalledExactlyOnceWith(options, runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
-    await runCli(["onboard"]);
-
-    expect(setupWizardOptions().installDaemon).toBeUndefined();
-    expect(mocks.runCrestodian).not.toHaveBeenCalled();
-  });
-
-  it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
-    await runCli(["onboard", "--install-daemon"]);
-    expect(setupWizardOptions(0).installDaemon).toBe(true);
-
-    await runCli(["onboard", "--no-install-daemon"]);
-    expect(setupWizardOptions(1).installDaemon).toBe(false);
-
-    await runCli(["onboard", "--install-daemon", "--skip-daemon"]);
-    expect(setupWizardOptions(2).installDaemon).toBe(false);
-  });
-
-  it("parses numeric gateway port and drops invalid values", async () => {
-    await runCli(["onboard", "--gateway-port", "18789"]);
-    expect(setupWizardOptions(0).gatewayPort).toBe(18789);
-
-    await runCli(["onboard", "--gateway-port", "nope"]);
-    expect(setupWizardOptions(1).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "18789x"]);
-    expect(setupWizardOptions(2).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "99999"]);
-    expect(setupWizardOptions(3).gatewayPort).toBeUndefined();
-  });
-
-  it("forwards --reset-scope to setup wizard options", async () => {
-    await runCli(["onboard", "--reset", "--reset-scope", "full"]);
-    const options = setupWizardOptions();
-    expect(options.reset).toBe(true);
-    expect(options.resetScope).toBe("full");
-  });
-
-  it("forwards --skip-bootstrap to setup wizard options", async () => {
-    await runCli(["onboard", "--skip-bootstrap"]);
-    expect(setupWizardOptions().skipBootstrap).toBe(true);
-  });
-
-  it("parses --mistral-api-key and forwards mistralApiKey", async () => {
-    await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
-    expect(setupWizardOptions().mistralApiKey).toBe("sk-mistral-test"); // pragma: allowlist secret
-  });
-
-  it("dedupes provider auth flags before registering command options", async () => {
-    await runCli(["onboard", "--openai-api-key", "sk-openai-test"]);
-    expect(setupWizardOptions().openaiApiKey).toBe("sk-openai-test"); // pragma: allowlist secret
-  });
-
-  it("forwards --gateway-token-ref-env", async () => {
-    await runCli(["onboard", "--gateway-token-ref-env", "OPENCLAW_GATEWAY_TOKEN"]);
-    expect(setupWizardOptions().gatewayTokenRefEnv).toBe("OPENCLAW_GATEWAY_TOKEN");
-  });
-
-  it("forwards onboarding migration flags", async () => {
-    await runCli([
-      "onboard",
-      "--flow",
-      "import",
-      "--import-from",
-      "hermes",
-      "--import-source",
-      "/tmp/hermes",
-      "--import-secrets",
-    ]);
-    const options = setupWizardOptions();
-    expect(options.flow).toBe("import");
-    expect(options.importFrom).toBe("hermes");
-    expect(options.importSource).toBe("/tmp/hermes");
-    expect(options.importSecrets).toBe(true);
-  });
-
-  it("reports errors via runtime on setup wizard command failures", async () => {
-    setupWizardCommandMock.mockRejectedValueOnce(new Error("setup failed"));
-
-    await runCli(["onboard"]);
-
-    expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
+  it.each([
+    ["recommendations", mocks.onboardRecommendationsCommand],
+    ["recommendations acknowledge", mocks.acknowledgeOnboardRecommendationsCommand],
+    ["recommendations refresh", mocks.refreshOnboardRecommendationsCommand],
+  ] as const)("reports asynchronous storage failures for %s", async (args, target) => {
+    target.mockRejectedValueOnce(new Error("synthetic recommendation persistence failure"));
+    await runCli(args.split(" "));
+    expect(runtime.error).toHaveBeenCalledWith("synthetic recommendation persistence failure");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("routes --modern to Crestodian", async () => {
-    await runCli(["onboard", "--modern", "--json"]);
-
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(mocks.runCrestodian).toHaveBeenCalledWith({
-      message: undefined,
-      yes: false,
-      json: true,
-      interactive: true,
-    });
+  it("preserves an explicitly blank leaf agent over its parent", async () => {
+    await runCli(["recommendations", "--agent", "writer", "refresh", "--agent", ""]);
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledExactlyOnceWith(
+      { agent: "" },
+      runtime,
+    );
   });
 
-  it("uses a noninteractive overview for modern noninteractive onboarding", async () => {
-    await runCli(["onboard", "--modern", "--non-interactive"]);
-
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(mocks.runCrestodian).toHaveBeenCalledWith({
-      message: "overview",
-      yes: false,
-      json: false,
-      interactive: false,
+  it("inherits the parent agent instead of a leaf default", async () => {
+    const program = new Command().enablePositionalOptions().exitOverride();
+    registerOnboardCommand(program);
+    const recommendations = program.commands
+      .find((command) => command.name() === "onboard")
+      ?.commands.find((command) => command.name() === "recommendations");
+    const leaf = recommendations?.commands.find((command) => command.name() === "refresh");
+    if (!leaf) {
+      throw new Error("Expected registered recommendations refresh command");
+    }
+    leaf.setOptionValueWithSource("agent", "analyst", "default");
+    await program.parseAsync("onboard recommendations --agent writer refresh".split(" "), {
+      from: "user",
     });
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledExactlyOnceWith(
+      { agent: "writer" },
+      runtime,
+    );
+  });
+
+  it.each([
+    "--reset recommendations",
+    "--reset recommendations acknowledge",
+    "--reset recommendations refresh",
+    "recommendations --json acknowledge",
+    "recommendations --json refresh",
+    "--json --reset recommendations",
+  ])("rejects inapplicable recommendations options: %s", async (args) => {
+    await runCli(args.split(" "));
+    const flag = args.includes("--reset") ? "--reset" : "--json";
+    const message = `This recommendations command does not support parent option(s): ${flag}.`;
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    if (args.startsWith("--json")) {
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+        JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+      );
+    } else {
+      expect(runtime.log).not.toHaveBeenCalled();
+    }
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { args: [], installDaemon: undefined },
+    { args: ["--install-daemon"], installDaemon: true },
+    { args: ["--no-install-daemon"], installDaemon: false },
+  ])("resolves daemon installation for $args", async ({ args, installDaemon }) => {
+    await runCli(args);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ installDaemon }),
+      runtime,
+    );
+    expect(setupWizardCommandMock.mock.calls[0]?.[0]).not.toHaveProperty("tailscaleResetOnExit");
+  });
+
+  it.each(["", "not-a-port", "70000"])("rejects invalid gateway port %s", async (port) => {
+    await runCli(["--gateway-port", port]);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--gateway-port must be an integer between 1 and 65535.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting custom input flags with a JSON options error", async () => {
+    await runCli(["--custom-image-input", "--custom-text-input", "--json"]);
+    const message = "Use either --custom-image-input or --custom-text-input, not both.";
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      args: "--json --modern --non-interactive",
+      message: "Non-interactive setup requires explicit risk acknowledgement.",
+    },
+    {
+      args: "--modern --no-install-daemon",
+      message: "--modern cannot be combined with: --no-install-daemon.",
+    },
+  ])("rejects invalid modern options: $args", async ({ args, message }) => {
+    await runCli(args.split(" "));
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
+    if (args.startsWith("--json")) {
+      expect(runtime.log).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+        ok: false,
+        phase: "options",
+        message: expect.stringContaining(message),
+      });
+    }
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { args: "--modern --json", options: { json: true, interactive: true }, fallback: {} },
+    {
+      args: "--modern --non-interactive --accept-risk",
+      options: { json: false, interactive: false },
+      fallback: { acceptRisk: true },
+    },
+    {
+      args: "--modern --workspace /tmp/work --accept-risk",
+      options: { json: false, interactive: true, setupWorkspace: "/tmp/work" },
+      fallback: { workspace: "/tmp/work", acceptRisk: true },
+    },
+  ])("routes inference-gated onboarding for $args", async ({ args, options, fallback }) => {
+    await runCli(args.split(" "));
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledExactlyOnceWith(
+      { yes: false, welcomeVariant: "onboarding", ...options },
+      runtime,
+      fallback,
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 });

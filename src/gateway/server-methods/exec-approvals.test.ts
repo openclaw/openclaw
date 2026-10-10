@@ -1,17 +1,25 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { applyExecApprovalsUpdate } from "../../infra/exec-approvals-mutation.kernel.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const ensureExecApprovalsMock = vi.hoisted(() => vi.fn());
+const ensureExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
 const readExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
-const saveExecApprovalsMock = vi.hoisted(() => vi.fn());
+const updateExecApprovalsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/exec-approvals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/exec-approvals.js")>();
   return {
     ...actual,
-    ensureExecApprovals: ensureExecApprovalsMock,
-    readExecApprovalsSnapshot: readExecApprovalsSnapshotMock,
-    saveExecApprovals: saveExecApprovalsMock,
+    ensureExecApprovalsSnapshot: ensureExecApprovalsSnapshotMock,
+    readExecApprovalsSnapshotAsync: readExecApprovalsSnapshotMock,
+    updateExecApprovals: updateExecApprovalsMock,
   };
 });
 
@@ -27,21 +35,55 @@ function makeSnapshot(file: ExecApprovalsFile = { version: 1, agents: {} }) {
   };
 }
 
-describe("exec approvals gateway methods", () => {
-  it("returns a structured unavailable error when local approvals get cannot read state", async () => {
-    ensureExecApprovalsMock.mockImplementationOnce(() => {
-      throw new Error("permission denied while ensuring approvals");
-    });
-    const respond = vi.fn();
+async function callHandler(
+  method: string,
+  params: Record<string, unknown>,
+  context: GatewayRequestHandlerOptions["context"] = {} as never,
+  hasCurrentClientAuthority?: () => boolean,
+) {
+  const respond = vi.fn();
+  await expectDefined(
+    execApprovalsHandlers[method],
+    `${method} handler`,
+  )({
+    req: { type: "req", id: "request", method, params },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+    context,
+    hasCurrentClientAuthority,
+  });
+  return respond;
+}
 
-    await execApprovalsHandlers["exec.approvals.get"]({
-      req: { type: "req", id: "req-1", method: "exec.approvals.get", params: {} },
-      params: {},
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
+describe("exec approvals gateway methods", () => {
+  it("reports runtime defaults for fresh local approval state", async () => {
+    ensureExecApprovalsSnapshotMock.mockResolvedValueOnce(makeSnapshot({ version: 1, agents: {} }));
+
+    const respond = await callHandler("exec.approvals.get", {});
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: { version: 1, agents: {} },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      }),
+      undefined,
+    );
+  });
+
+  it("returns a structured unavailable error when local approvals get cannot read state", async () => {
+    ensureExecApprovalsSnapshotMock.mockRejectedValueOnce(
+      new Error("permission denied while ensuring approvals"),
+    );
+
+    const respond = await callHandler("exec.approvals.get", {});
 
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -54,20 +96,13 @@ describe("exec approvals gateway methods", () => {
   });
 
   it("returns a structured unavailable error when local approvals set cannot persist", async () => {
-    ensureExecApprovalsMock.mockReturnValue({ version: 1, agents: {} });
+    ensureExecApprovalsSnapshotMock.mockResolvedValue(makeSnapshot());
     readExecApprovalsSnapshotMock.mockReturnValue(makeSnapshot());
-    saveExecApprovalsMock.mockImplementationOnce(() => {
-      throw new Error("disk full while saving approvals");
-    });
-    const respond = vi.fn();
+    updateExecApprovalsMock.mockRejectedValueOnce(new Error("disk full while saving approvals"));
 
-    await execApprovalsHandlers["exec.approvals.set"]({
-      req: { type: "req", id: "req-2", method: "exec.approvals.set", params: {} },
-      params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
+    const respond = await callHandler("exec.approvals.set", {
+      baseHash: "base-hash",
+      file: { version: 1, agents: {} },
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -76,6 +111,446 @@ describe("exec approvals gateway methods", () => {
       expect.objectContaining({
         code: "UNAVAILABLE",
         message: expect.stringContaining("disk full while saving approvals"),
+      }),
+    );
+  });
+
+  it("responds with a conflict when the locked approvals update loses a race", async () => {
+    ensureExecApprovalsSnapshotMock.mockResolvedValue(makeSnapshot());
+    // A concurrent rollback can restore the caller's old hash after the CAS
+    // already failed; the failed CAS remains authoritative for this request.
+    readExecApprovalsSnapshotMock.mockReturnValue(makeSnapshot());
+    updateExecApprovalsMock.mockResolvedValueOnce(null);
+
+    const respond = await callHandler("exec.approvals.set", {
+      baseHash: "base-hash",
+      file: { version: 1, agents: {} },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("exec approvals changed since last load"),
+      }),
+    );
+  });
+
+  it("rejects a stale local save without recreating a deleted approvals file", async () => {
+    ensureExecApprovalsSnapshotMock.mockClear();
+    readExecApprovalsSnapshotMock.mockClear();
+    updateExecApprovalsMock.mockClear();
+    const missingSnapshot = {
+      ...makeSnapshot(),
+      exists: false,
+      raw: null,
+      hash: "sha256:missing",
+    };
+    readExecApprovalsSnapshotMock.mockReturnValueOnce(missingSnapshot);
+
+    const respond = await callHandler("exec.approvals.set", {
+      baseHash: "base-hash",
+      file: { version: 1, agents: {} },
+    });
+
+    expect(readExecApprovalsSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(ensureExecApprovalsSnapshotMock).not.toHaveBeenCalled();
+    expect(updateExecApprovalsMock).not.toHaveBeenCalled();
+    expect(missingSnapshot.file.socket).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("exec approvals changed since last load"),
+      }),
+    );
+  });
+
+  it("rejects a legacy caller revoked while reading the policy before a save", async () => {
+    let current = true;
+    updateExecApprovalsMock.mockClear();
+    readExecApprovalsSnapshotMock.mockImplementationOnce(async () => {
+      current = false;
+      return makeSnapshot();
+    });
+
+    const respond = await callHandler(
+      "exec.approvals.set",
+      { baseHash: "base-hash", file: { version: 1, agents: {} } },
+      undefined,
+      () => current,
+    );
+
+    expect(updateExecApprovalsMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Gateway requester authority changed"),
+      }),
+    );
+  });
+
+  it.each(["get", "set"])(
+    "rolls back a legacy %s mutation when requester authority ends before commit",
+    async (operation) => {
+      const actual = await vi.importActual<typeof import("../../infra/exec-approvals.js")>(
+        "../../infra/exec-approvals.js",
+      );
+      await withTempDir("exec-approvals-request-", async (stateDir) => {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          let current = true;
+          let commitObserved = false;
+          const before = actual.readExecApprovalsSnapshot();
+          const admissionSpy = probe.admission(workerAdmission, (request, grant, admit) => {
+            if (request.stage === "commit") {
+              commitObserved = true;
+              current = false;
+            }
+            admit(request, grant);
+          });
+          ensureExecApprovalsSnapshotMock.mockImplementationOnce(
+            actual.ensureExecApprovalsSnapshot,
+          );
+          readExecApprovalsSnapshotMock.mockImplementationOnce(
+            actual.readExecApprovalsSnapshotAsync,
+          );
+          updateExecApprovalsMock.mockImplementationOnce(actual.updateExecApprovals);
+          try {
+            const respond = await callHandler(
+              `exec.approvals.${operation}`,
+              operation === "set"
+                ? { baseHash: before.hash, file: { version: 1, defaults: { security: "deny" } } }
+                : {},
+              undefined,
+              () => current,
+            );
+            expect(commitObserved).toBe(true);
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("Gateway requester authority changed"),
+              }),
+            );
+            expect(actual.readExecApprovalsSnapshot().raw).toBe(before.raw);
+          } finally {
+            admissionSpy.mockRestore();
+            ensureExecApprovalsSnapshotMock.mockReset();
+            readExecApprovalsSnapshotMock.mockReset();
+            updateExecApprovalsMock.mockReset();
+            await closeOpenClawStateDatabaseAsync();
+          }
+        });
+      });
+    },
+  );
+
+  it("lets the locked update perform the first write for a missing approvals file", async () => {
+    ensureExecApprovalsSnapshotMock.mockClear();
+    readExecApprovalsSnapshotMock.mockClear();
+    updateExecApprovalsMock.mockReset();
+    const missingSnapshot = {
+      ...makeSnapshot(),
+      exists: false,
+      raw: null,
+      hash: "sha256:missing",
+    };
+    readExecApprovalsSnapshotMock.mockReturnValueOnce(missingSnapshot);
+    let createdFile: ExecApprovalsFile | undefined;
+    updateExecApprovalsMock.mockImplementationOnce(
+      async (
+        params: Parameters<typeof import("../../infra/exec-approvals.js").updateExecApprovals>[0],
+      ) => {
+        createdFile = applyExecApprovalsUpdate(missingSnapshot.file, params.update) ?? undefined;
+        if (!createdFile) {
+          throw new Error("expected first write");
+        }
+        return { ...makeSnapshot(createdFile), hash: "sha256:created" };
+      },
+    );
+
+    const respond = await callHandler("exec.approvals.set", {
+      file: { version: 1, agents: { main: {} } },
+    });
+
+    expect(ensureExecApprovalsSnapshotMock).not.toHaveBeenCalled();
+    expect(updateExecApprovalsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseHash: missingSnapshot.hash }),
+      expect.anything(),
+    );
+    expect(createdFile?.socket?.path).toBeTruthy();
+    expect(createdFile?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        hash: "sha256:created",
+        file: expect.objectContaining({ socket: { path: createdFile?.socket?.path } }),
+      }),
+      undefined,
+    );
+  });
+
+  it.each([
+    {
+      method: "exec.approvals.node.get" as const,
+      command: "system.execApprovals.get",
+      params: { nodeId: "node-1" },
+      commands: [],
+      config: {},
+    },
+    {
+      method: "exec.approvals.node.set" as const,
+      command: "system.execApprovals.set",
+      params: {
+        nodeId: "node-1",
+        file: { version: 1, agents: {} },
+        baseHash: "base-hash",
+      },
+      commands: ["system.execApprovals.set"],
+      config: { gateway: { nodes: { commands: { deny: ["system.execApprovals.set"] } } } },
+    },
+  ])("blocks $method outside the effective command policy", async (testCase) => {
+    const invoke = vi.fn();
+
+    const respond = await callHandler(testCase.method, testCase.params, {
+      getRuntimeConfig: () => testCase.config,
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-1",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          platform: "windows",
+          deviceFamily: "Windows",
+          declaredCommands: [testCase.command],
+          commands: testCase.commands,
+        }),
+        invoke,
+      },
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        details: expect.objectContaining({ command: testCase.command }),
+      }),
+    );
+  });
+
+  it("relays approved exec-approval commands", async () => {
+    const command = "system.execApprovals.get";
+    const payload = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "sha256:file",
+      file: { version: 1 },
+      resolvedDefaults: {
+        security: "deny",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    };
+    const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
+
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "node-1" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-1",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          clientId: "openclaw-macos",
+          clientMode: "node",
+          platform: "macOS 26.5.2",
+          deviceFamily: "Mac",
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke,
+      },
+    } as never);
+
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
+      command,
+      params: { includeResolvedDefaults: true },
+      onDispatchReady: expect.any(Function),
+    });
+    expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+  });
+
+  it.each([
+    {
+      label: "macOS CLI node",
+      clientId: "node-host",
+      clientMode: "node",
+      platform: "macos",
+      deviceFamily: "Mac",
+    },
+    {
+      label: "non-macOS app identity",
+      clientId: "openclaw-macos",
+      clientMode: "node",
+      platform: "linux",
+      deviceFamily: "Linux",
+    },
+    {
+      label: "non-node Mac App identity",
+      clientId: "openclaw-macos",
+      clientMode: "ui",
+      platform: "macOS 26.5.2",
+      deviceFamily: "Mac",
+    },
+  ])("keeps legacy exec-approval get params for $label", async (identity) => {
+    const command = "system.execApprovals.get";
+    const payload = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "sha256:file",
+      file: { version: 1 },
+    };
+    const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
+
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "node-1" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-1",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          clientId: identity.clientId,
+          clientMode: identity.clientMode,
+          platform: identity.platform,
+          deviceFamily: identity.deviceFamily,
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke,
+      },
+    } as never);
+
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
+      command,
+      params: {},
+      onDispatchReady: expect.any(Function),
+    });
+    expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+  });
+
+  it("relays host-native approval writes without file-shape translation", async () => {
+    const command = "system.execApprovals.set";
+    const invoke = vi.fn().mockResolvedValue({
+      ok: true,
+      payload: { updated: true, hash: "sha256:next" },
+    });
+    const params = {
+      nodeId: "windows-node",
+      native: {
+        defaultAction: "deny" as const,
+        rules: [{ pattern: "hostname", action: "allow" as const }],
+      },
+      baseHash: "sha256:current",
+    };
+
+    const respond = await callHandler("exec.approvals.node.set", params, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "windows-node",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          platform: "windows",
+          deviceFamily: "Windows",
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke,
+      },
+    } as never);
+
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "windows-node",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
+      command,
+      params: {
+        defaultAction: "deny",
+        rules: [{ pattern: "hostname", action: "allow" }],
+        baseHash: "sha256:current",
+      },
+      onDispatchReady: expect.any(Function),
+    });
+    expect(respond).toHaveBeenCalledWith(true, { updated: true, hash: "sha256:next" }, undefined);
+  });
+
+  it("rejects malformed node approval snapshots at the gateway boundary", async () => {
+    const command = "system.execApprovals.get";
+
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "windows-node" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "windows-node",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          platform: "windows",
+          deviceFamily: "Windows",
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke: vi.fn().mockResolvedValue({
+          ok: true,
+          payload: { enabled: true, hash: "sha256:current", rules: [] },
+        }),
+      },
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "node returned invalid exec approvals payload" }),
+    );
+  });
+
+  it("preserves unavailable details for unknown nodes", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { code: "NOT_CONNECTED", message: "node not connected" },
+    });
+
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "missing-node" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: { get: () => undefined, invoke },
+    } as never);
+
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "missing-node",
+      command: "system.execApprovals.get",
+      params: {},
+      onDispatchReady: expect.any(Function),
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: {
+          nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+          nodeCommandDispatched: false,
+        },
       }),
     );
   });

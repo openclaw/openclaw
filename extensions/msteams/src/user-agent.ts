@@ -1,4 +1,3 @@
-// Msteams plugin module implements user agent behavior.
 import { createRequire } from "node:module";
 import { getMSTeamsRuntime } from "./runtime.js";
 
@@ -32,11 +31,6 @@ function resolveOpenClawVersion(): string {
  * This lets the Teams backend track SDK usage while also identifying the
  * host application.
  */
-/** Reset the cached User-Agent (for testing). */
-export function resetUserAgentCache(): void {
-  cachedUserAgent = undefined;
-}
-
 export function buildUserAgent(): string {
   if (cachedUserAgent) {
     return cachedUserAgent;

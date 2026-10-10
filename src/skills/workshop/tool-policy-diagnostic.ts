@@ -1,0 +1,239 @@
+import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../../agents/conversation-capability-profile.js";
+import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
+import { resolveProviderToolPolicyEntry } from "../../agents/provider-tool-policy.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
+import type { ToolPolicyFilterEvent } from "../../agents/tool-policy-pipeline.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentToolsConfig } from "../../config/types.tools.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveSkillWorkshopToolConstructionBlock } from "./tool-availability.js";
+
+const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
+
+type SkillWorkshopToolPolicyDiagnostic = {
+  agentId: string;
+  source: string;
+  detail: string;
+  fix: string;
+  message: string;
+};
+
+function findAgent(config: OpenClawConfig, agentId: string) {
+  const listed = listAgentEntriesWithSource(config).find(
+    ({ entry }) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
+  );
+  if (!listed) {
+    return undefined;
+  }
+  // Report the canonical entries path; an id-less legacy list row (which
+  // normalizeAgentId maps to the default id) keeps its indexed path so the
+  // remediation never points at agents.entries.undefined.
+  const path =
+    listed.source.kind === "entries"
+      ? `agents.entries.${listed.source.key}`
+      : typeof listed.entry.id === "string" && listed.entry.id.length > 0
+        ? `agents.entries.${listed.entry.id}`
+        : `agents.list[${listed.source.index}]`;
+  return { path, entry: listed.entry };
+}
+
+function providerPolicyPath(params: {
+  tools: AgentToolsConfig | OpenClawConfig["tools"] | undefined;
+  basePath: string;
+  capabilityProfile: ResolvedConversationCapabilityProfile;
+}): { path: string; profile?: string; ownsAlsoAllow: boolean } | undefined {
+  const entry = resolveProviderToolPolicyEntry({
+    byProvider: params.tools?.byProvider,
+    modelProvider: params.capabilityProfile.model.provider,
+    modelId: params.capabilityProfile.model.id,
+  });
+  return entry
+    ? {
+        path: `${params.basePath}.byProvider[${JSON.stringify(entry.key)}]`,
+        profile: entry.policy.profile,
+        ownsAlsoAllow: Array.isArray(entry.policy.alsoAllow),
+      }
+    : undefined;
+}
+
+function describeExclusion(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  capabilityProfile: ResolvedConversationCapabilityProfile;
+  event: ToolPolicyFilterEvent;
+}): Pick<SkillWorkshopToolPolicyDiagnostic, "source" | "detail" | "fix"> {
+  const label = params.event.step.label;
+  const listed = findAgent(params.config, params.agentId);
+  const agent = listed?.entry.tools
+    ? {
+        path: `${listed.path}.tools`,
+        profile: listed.entry.tools.profile,
+        ownsAlsoAllow: Array.isArray(listed.entry.tools.alsoAllow),
+      }
+    : undefined;
+  const globalProvider = providerPolicyPath({
+    tools: params.config.tools,
+    basePath: "tools",
+    capabilityProfile: params.capabilityProfile,
+  });
+  const agentProvider = providerPolicyPath({
+    tools: listed?.entry.tools,
+    basePath: agent?.path ?? "agents.entries.*.tools",
+    capabilityProfile: params.capabilityProfile,
+  });
+
+  const providerProfile = label.startsWith("tools.byProvider.profile");
+  if (providerProfile || label.startsWith("tools.profile")) {
+    const scopes = providerProfile
+      ? [agentProvider, globalProvider]
+      : [
+          agent,
+          {
+            path: "tools",
+            profile: params.config.tools?.profile,
+            ownsAlsoAllow: Array.isArray(params.config.tools?.alsoAllow),
+          },
+        ];
+    const policyPath = scopes[0]?.profile ? scopes[0].path : scopes[1]?.path;
+    const source = policyPath ? `${policyPath}.profile` : "tools.byProvider.profile";
+    const grantOwner = scopes.find((scope) => scope?.ownsAlsoAllow)?.path ?? policyPath;
+    const profile = providerProfile
+      ? params.capabilityProfile.policy.providerProfile
+      : params.capabilityProfile.policy.profile;
+    return {
+      source,
+      detail: `${source}: ${JSON.stringify(profile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
+      fix: policyPath
+        ? `Add ${grantOwner}.alsoAllow: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`
+        : `Add ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} to the matching tools.byProvider alsoAllow list.`,
+    };
+  }
+
+  const normalizedLabel = label.startsWith(`agents.${params.agentId}.tools.byProvider`)
+    ? label.replace(
+        `agents.${params.agentId}.tools.byProvider`,
+        agentProvider?.path ?? `${agent?.path ?? "agents.entries.*.tools"}.byProvider`,
+      )
+    : label.startsWith("tools.byProvider")
+      ? label.replace("tools.byProvider", globalProvider?.path ?? "tools.byProvider")
+      : label
+          .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
+          .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
+  if (!isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { deny: params.event.policy.deny })) {
+    const source = normalizedLabel.replace(/\.allow$/, ".deny");
+    return {
+      source,
+      detail: `${source} denies ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
+      fix: `Remove the matching ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} deny entry from ${source}.`,
+    };
+  }
+  return {
+    source: normalizedLabel,
+    detail: `${normalizedLabel} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
+    fix: `Add ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} to ${normalizedLabel}.`,
+  };
+}
+
+type SkillWorkshopToolPolicyAvailability = {
+  available: boolean;
+  exclusion?: ToolPolicyFilterEvent;
+};
+
+function makeSkillWorkshopPolicyProbe(): AnyAgentTool {
+  return {
+    name: SKILL_WORKSHOP_TOOL_NAME,
+    label: SKILL_WORKSHOP_TOOL_NAME,
+    description: "Skill Workshop policy availability check.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ content: [], details: {} }),
+  } as AnyAgentTool;
+}
+
+/** Applies the real final tool-policy composition used by agent sessions and /learn. */
+export function resolveSkillWorkshopToolPolicyAvailability(params: {
+  config: OpenClawConfig;
+  conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
+}): SkillWorkshopToolPolicyAvailability {
+  let exclusion: ToolPolicyFilterEvent | undefined;
+  const tools = applyFinalEffectiveToolPolicy({
+    bundledTools: [makeSkillWorkshopPolicyProbe()],
+    config: params.config,
+    conversationCapabilityProfile: params.conversationCapabilityProfile,
+    warn: () => {},
+    onFilter: (event) => {
+      if (
+        !exclusion &&
+        event.before.some((tool) => tool.name === SKILL_WORKSHOP_TOOL_NAME) &&
+        !event.after.some((tool) => tool.name === SKILL_WORKSHOP_TOOL_NAME)
+      ) {
+        exclusion = event;
+      }
+    },
+  });
+  return {
+    available: tools.some((tool) => tool.name === SKILL_WORKSHOP_TOOL_NAME),
+    ...(exclusion ? { exclusion } : {}),
+  };
+}
+
+export function detectSkillWorkshopToolPolicyDiagnostic(params: {
+  config: OpenClawConfig;
+  workshopEnabled: boolean;
+  agentId?: string;
+}): SkillWorkshopToolPolicyDiagnostic | null {
+  if (!params.workshopEnabled) {
+    return null;
+  }
+  const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+  const prefix = `Skill Workshop is active, but ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} is hidden for agent ${JSON.stringify(agentId)}:`;
+  const sandbox = resolveSandboxConfigForAgent(params.config, agentId);
+  const constructionBlock = resolveSkillWorkshopToolConstructionBlock({
+    sandboxed: sandbox.mode !== "off",
+  });
+  if (constructionBlock) {
+    const agent = findAgent(params.config, agentId);
+    const source = agent?.entry.sandbox?.mode
+      ? `${agent.path}.sandbox.mode`
+      : "agents.defaults.sandbox.mode";
+    const detail = `${source}: ${JSON.stringify(sandbox.mode)}. ${sandbox.mode === "non-main" ? "In non-main sessions, " : ""}${constructionBlock.detail}`;
+    return {
+      agentId,
+      source,
+      detail,
+      fix: constructionBlock.fix,
+      message: `${prefix} ${detail} ${constructionBlock.fix}`,
+    };
+  }
+  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    config: params.config,
+    agentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+  const availability = resolveSkillWorkshopToolPolicyAvailability({
+    config: params.config,
+    conversationCapabilityProfile: capabilityProfile,
+  });
+  if (availability.available || !availability.exclusion) {
+    return null;
+  }
+  const explanation = describeExclusion({
+    config: params.config,
+    agentId,
+    capabilityProfile,
+    event: availability.exclusion,
+  });
+  return {
+    agentId,
+    ...explanation,
+    message: `${prefix} ${explanation.detail} ${explanation.fix}`,
+  };
+}

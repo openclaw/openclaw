@@ -1,5 +1,126 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
+
+/** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
+export async function createTestPluginGatewayRuntime(params: {
+  pluginId: string;
+  config: OpenClawConfig;
+}): Promise<{ gateway: PluginRuntime["gateway"]; close: () => Promise<void> }> {
+  const [
+    runtimeModule,
+    requestScope,
+    serverPlugins,
+    projectionModule,
+    projectionAccess,
+    dispatchTestSupport,
+  ] = await Promise.all([
+    import("../plugins/runtime/index.js"),
+    import("../plugins/runtime/gateway-request-scope.js"),
+    import("../gateway/server-plugins.js"),
+    import("../gateway/session-row-projection.js"),
+    import("../gateway/session-row-projection-access.js"),
+    import("../gateway/server-plugin-in-process-dispatch.test-support.js"),
+  ]);
+  const gatewayContext: GatewayRequestContext = {
+    ...dispatchTestSupport.createContext(),
+    getRuntimeConfig: () => params.config,
+    getCommittedRuntimeConfig: () => params.config,
+  };
+  const projection = await projectionModule.createSessionRowProjection({
+    cfg: params.config,
+    modelCatalog: [],
+  });
+  projectionAccess.bindSessionRowProjection(gatewayContext, () => projection);
+  await projection.ensureMaterialized();
+  const base = runtimeModule.createPluginRuntime().gateway;
+  const resolveGatewayContext = () => gatewayContext;
+  let closed = false;
+  return {
+    gateway: {
+      ...base,
+      isAvailable: async () => !closed,
+      request: <T>(
+        method: string,
+        requestParams?: Record<string, unknown>,
+        options?: Parameters<PluginRuntime["gateway"]["request"]>[2],
+      ) =>
+        requestScope.withPluginRuntimePluginScope(
+          { pluginId: params.pluginId, pluginOrigin: "bundled" },
+          () =>
+            serverPlugins.dispatchTrustedPluginGatewayMethod<T>(
+              method,
+              requestParams,
+              options,
+              resolveGatewayContext,
+            ),
+        ),
+    },
+    async close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      await projection.ensureMaterialized();
+      projection.dispose();
+    },
+  };
+}
+
+type AgentHarnessHostTestAttempt = Omit<
+  Parameters<
+    typeof import("../agents/harness/host-capability.js").createAgentHarnessHostCapabilities
+  >[0]["attempt"],
+  "admittedRunContext" | "hostCapabilities" | "disableToolSearch" | "sessionReadScopeKey"
+>;
+
+/** Builds the production admitted-run host boundary for plugin integration tests. */
+export async function createAgentHarnessHostCapabilitiesForTest(params: {
+  attempt: AgentHarnessHostTestAttempt;
+  pluginId: string;
+  nativeModelPolicySupport?: "exact";
+  operatorSource?: Pick<
+    AdmittedRunOperatorAuthority,
+    "profileId" | "scopes" | "assertCurrent" | "modelPolicy" | "onModelPolicyChanged"
+  >;
+}) {
+  const {
+    createAdmittedRunOperatorAuthority,
+    createOperationalRunInstanceRef,
+    prepareAgentRunAdmission,
+  } = await import("../agents/admitted-run-context.js");
+  const { createAgentHarnessHostCapabilities } =
+    await import("../agents/harness/host-capability.js");
+  const admission = prepareAgentRunAdmission({
+    cfg: params.attempt.config ?? {},
+    operatorAuthority: params.operatorSource
+      ? createAdmittedRunOperatorAuthority(params.operatorSource)
+      : undefined,
+    facts: {
+      runId: params.attempt.runId,
+      agentId: params.attempt.agentId ?? "main",
+      ingress: { kind: "system", boundary: "plugin-test-runtime", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef(params.attempt.runId),
+  });
+  const admittedRunContext = await admission.admit("plugin-harness", params.pluginId);
+  const host = createAgentHarnessHostCapabilities({
+    attempt: { ...params.attempt, admittedRunContext },
+    pluginId: params.pluginId,
+    nativeModelPolicySupport: params.nativeModelPolicySupport,
+  });
+  return {
+    capabilities: host.capabilities,
+    close: () => {
+      host.close();
+      admission.close();
+    },
+  };
+}
+
 export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
 export {
   createEmptyPluginRegistry,
@@ -13,13 +134,15 @@ export {
   resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
-export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 export {
   emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest,
   emitTrustedSecurityEvent,
 } from "../infra/diagnostic-events.js";
+export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
@@ -28,13 +151,20 @@ export {
 } from "../plugins/hook-runner-global.js";
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
+export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+export { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
+export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
+export { useProviderToolSchemaRuntimeForTest } from "./test-helpers/provider-tool-schemas.test-support.js";
+export { useBundledProviderPolicyArtifactsForTest } from "./test-helpers/provider-policy-artifacts.test-support.js";
+export { mockPublishedModelRuntimeForTest } from "./test-helpers/published-model-runtime.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 export {
+  createPluginRegistryOwner,
+  disposePluginRegistryInstances,
   getActivePluginRegistry,
-  releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -49,7 +179,6 @@ export { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js"
 export {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
-  resolveProviderWizardOptions,
   setProviderWizardProvidersResolverForTest,
 } from "../plugins/provider-wizard.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";
@@ -61,12 +190,6 @@ export {
   restoreRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
-export {
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
-  restoreRegisteredMemoryEmbeddingProviders,
-  type RegisteredMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";
@@ -80,12 +203,7 @@ export {
   requireRegisteredProvider,
   type RegisteredProviderCollections,
 } from "../test-utils/plugin-registration.js";
-export {
-  createNonExitingRuntimeEnv,
-  createNonExitingTypedRuntimeEnv,
-  createRuntimeEnv,
-  createTypedRuntimeEnv,
-} from "../test-utils/plugin-runtime-env.js";
+export { createNonExitingRuntimeEnv, createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 export {
   createPluginSetupWizardAdapter,
   createPluginSetupWizardConfigure,
@@ -99,18 +217,34 @@ export {
   runSetupWizardConfigure,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-  selectFirstWizardOption,
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+type AdmittedHostCapabilityTestFixtureFactory =
+  typeof import("../agents/harness/host-capability.test-support.js").createAdmittedHostCapabilityTestFixture;
+
+// Keep unrelated consumers of this test barrel out of the host capability runtime.
+export async function createAdmittedHostCapabilityTestFixture(
+  ...args: Parameters<AdmittedHostCapabilityTestFixtureFactory>
+): ReturnType<AdmittedHostCapabilityTestFixtureFactory> {
+  const fixture = await import("../agents/harness/host-capability.test-support.js");
+  return fixture.createAdmittedHostCapabilityTestFixture(...args);
+}
+export async function loadWebFetchToolFactoryForTest() {
+  return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
+}
+export async function loadUserTurnTranscriptRecorderFactoryForTest() {
+  return (await import("../sessions/user-turn-transcript.js")).createUserTurnTranscriptRecorder;
+}
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {
   createCapturedPluginRegistration,
   type CapturedPluginRegistration,
 } from "../plugins/captured-registration.js";
-export { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
 export {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,
 } from "./test-helpers/plugin-runtime-mock.js";
+
+export { createHookRunner } from "../plugins/hooks.js";

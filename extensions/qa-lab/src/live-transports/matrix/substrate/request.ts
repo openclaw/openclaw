@@ -1,0 +1,68 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+
+export type MatrixQaFetchLike = typeof fetch;
+
+const MATRIX_QA_JSON_MAX_BYTES = 16 * 1024 * 1024;
+
+type MatrixQaRequestResult<T> = {
+  status: number;
+  body: T;
+};
+
+export async function readMatrixQaJsonResponse(response: Response): Promise<unknown> {
+  // Overflow must escape the malformed-JSON fallback.
+  const bytes = await readResponseWithLimit(response, MATRIX_QA_JSON_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`Matrix homeserver response exceeds ${maxBytes} bytes`),
+  });
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return {};
+  }
+}
+
+export async function requestMatrixJson<T>(params: {
+  accessToken?: string;
+  baseUrl: string;
+  body?: unknown;
+  endpoint: string;
+  fetchImpl: MatrixQaFetchLike;
+  method: "DELETE" | "GET" | "POST" | "PUT";
+  okStatuses?: number[];
+  query?: Record<string, string | number | undefined>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}): Promise<MatrixQaRequestResult<T>> {
+  const url = new URL(params.endpoint, params.baseUrl);
+  for (const [key, value] of Object.entries(params.query ?? {})) {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  const response = await params.fetchImpl(url, {
+    method: params.method,
+    headers: {
+      accept: "application/json",
+      ...(params.body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
+    },
+    ...(params.body !== undefined ? { body: JSON.stringify(params.body) } : {}),
+    signal: params.signal ?? AbortSignal.timeout(resolveTimerTimeoutMs(params.timeoutMs, 20_000)),
+  });
+  const body = await readMatrixQaJsonResponse(response);
+  const okStatuses = params.okStatuses ?? [200];
+  if (!okStatuses.includes(response.status)) {
+    const details =
+      typeof body === "object" &&
+      body !== null &&
+      typeof (body as { error?: unknown }).error === "string"
+        ? (body as { error: string }).error
+        : `${params.method} ${params.endpoint} failed with status ${response.status}`;
+    throw new Error(details);
+  }
+  return {
+    status: response.status,
+    body: body as T,
+  };
+}

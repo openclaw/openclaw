@@ -8,7 +8,9 @@ import {
   readPositiveIntegerParam,
   readNumberParam,
   readReactionParams,
+  readStringArrayParam,
   readStringOrNumberParam,
+  ToolInputError,
 } from "./common.js";
 
 type TestActions = {
@@ -39,6 +41,58 @@ describe("readStringOrNumberParam", () => {
   it("trims strings", () => {
     const params = { chatId: "  abc  " };
     expect(readStringOrNumberParam(params, "chatId")).toBe("abc");
+  });
+});
+
+describe("readStringArrayParam", () => {
+  it.each([
+    { value: "  alpha  ", expected: ["alpha"] },
+    { value: [" beta ", "", 7, null, "alpha", "beta"], expected: ["beta", "alpha", "beta"] },
+    { value: [], expected: undefined },
+    { value: [" ", false, {}], expected: undefined },
+    { value: " ", expected: undefined },
+    { value: undefined, expected: undefined },
+    { value: null, expected: undefined },
+    { value: 7, expected: undefined },
+  ])("normalizes $value without coercing nonstrings", ({ value, expected }) => {
+    expect(readStringArrayParam({ itemIds: value }, "itemIds")).toEqual(expected);
+  });
+
+  it("preserves direct-key precedence over snake-case aliases", () => {
+    expect(readStringArrayParam({ item_ids: [" first ", "second"] }, "itemIds")).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(readStringArrayParam({ itemIds: ["direct"], item_ids: ["alias"] }, "itemIds")).toEqual([
+      "direct",
+    ]);
+    expect(
+      readStringArrayParam({ itemIds: undefined, item_ids: ["alias"] }, "itemIds"),
+    ).toBeUndefined();
+  });
+
+  it("keeps required errors and custom labels after normalization", () => {
+    expect(() => readStringArrayParam({}, "itemIds", { required: true })).toThrow(
+      new ToolInputError("itemIds required"),
+    );
+    expect(() =>
+      readStringArrayParam({ itemIds: [" ", 7] }, "itemIds", {
+        required: true,
+        label: "items",
+      }),
+    ).toThrow(new ToolInputError("items required"));
+    expect(readStringArrayParam({ itemIds: " first " }, "itemIds", { required: true })).toEqual([
+      "first",
+    ]);
+  });
+
+  it("always trims and drops blanks despite scalar-string options", () => {
+    expect(
+      readStringArrayParam({ itemIds: [" first ", " "] }, "itemIds", {
+        trim: false,
+        allowEmpty: true,
+      }),
+    ).toEqual(["first"]);
   });
 });
 
@@ -132,9 +186,42 @@ describe("readNumberParam", () => {
     ).toThrow("deleteDays must be an integer from 0 to 7");
   });
 
+  it("treats empty or whitespace-only strings as unset for optional positive integer params", () => {
+    // Tool-calling models routinely emit empty-string defaults for optional
+    // params (e.g. Telegram replyTo/threadId) they are not actually setting.
+    // An empty/whitespace string carries no value and must not throw.
+    expect(readPositiveIntegerParam({ replyTo: "" }, "replyTo")).toBeUndefined();
+    expect(readPositiveIntegerParam({ threadId: "   " }, "threadId")).toBeUndefined();
+    expect(readPositiveIntegerParam({ replyTo: "\t\n" }, "replyTo")).toBeUndefined();
+    // Genuinely invalid present values must still throw.
+    expect(() => readPositiveIntegerParam({ replyTo: "0" }, "replyTo")).toThrow(
+      "replyTo must be a positive integer",
+    );
+    expect(() => readPositiveIntegerParam({ replyTo: 0 }, "replyTo")).toThrow(
+      "replyTo must be a positive integer",
+    );
+    expect(() => readPositiveIntegerParam({ replyTo: "-3" }, "replyTo")).toThrow(
+      "replyTo must be a positive integer",
+    );
+  });
+
+  it("treats empty or whitespace-only strings as unset for optional non-negative integer params", () => {
+    expect(readNonNegativeIntegerParam({ position: "" }, "position")).toBeUndefined();
+    expect(readNonNegativeIntegerParam({ position: "  " }, "position")).toBeUndefined();
+    // A present, valid zero is still a real value.
+    expect(readNonNegativeIntegerParam({ position: "0" }, "position")).toBe(0);
+    expect(readNonNegativeIntegerParam({ position: 0 }, "position")).toBe(0);
+    // Genuinely invalid present values must still throw.
+    expect(() => readNonNegativeIntegerParam({ position: "4.5" }, "position")).toThrow(
+      "position must be a non-negative integer",
+    );
+  });
+
   it("throws for invalid present bounded finite number params", () => {
     expect(readFiniteNumberParam({ quality: "0.75" }, "quality")).toBe(0.75);
     expect(readFiniteNumberParam({ quality: null }, "quality")).toBeUndefined();
+    expect(readFiniteNumberParam({ quality: "" }, "quality")).toBeUndefined();
+    expect(readFiniteNumberParam({ quality: " \t\n" }, "quality")).toBeUndefined();
     expect(() => readFiniteNumberParam({ quality: "0.8jpg" }, "quality")).toThrow(
       "quality must be a finite number",
     );

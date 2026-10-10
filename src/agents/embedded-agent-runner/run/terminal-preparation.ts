@@ -1,0 +1,338 @@
+import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
+import type { AssistantMessage } from "../../../llm/types.js";
+import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
+import type { AuthProfileStore } from "../../auth-profiles.js";
+import { sanitizeAssistantVisibleStreamText } from "../../embedded-agent-utils.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { isProviderModelRerouted } from "../../provider-model-route.js";
+import type { ReplyDeliveryState } from "../../reply-completion.js";
+import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
+import type { NormalizedUsage } from "../../usage.js";
+import {
+  hasMessagingToolDeliveryEvidence,
+  resolveSourceReplyDelivery,
+} from "../delivery-evidence.js";
+import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
+import { resolveEmbeddedRunTerminalToolFailure } from "../terminal-tool-failure.js";
+import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import type { UsageAccumulator } from "../usage-accumulator.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
+import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import {
+  buildUsageAgentMetaFields,
+  normalizeAssistantUsageForContext,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
+  resolveReportedModelRef,
+} from "./helpers.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
+import { buildEmbeddedRunPayloads } from "./payloads.js";
+import { resolveProviderRefusal } from "./provider-refusal.js";
+import { buildTraceToolSummary, resolveSuccessfulToolNames } from "./run-attempt-result.js";
+import {
+  isEmbeddedRunTerminalInterrupted,
+  isEmbeddedRunTerminalTimeout,
+  isEmbeddedRunTimeoutFinal,
+  type EmbeddedRunTerminalState,
+} from "./terminal-outcome.js";
+import {
+  mergeAttemptToolMediaPayloads,
+  type createPendingToolMediaCarry,
+} from "./tool-media-payloads.js";
+
+export function prepareEmbeddedRunTerminal(input: {
+  mergeToolMedia?: ReturnType<typeof createPendingToolMediaCarry>["merge"];
+  runParams: RunEmbeddedAgentInternalParams;
+  replyDeliveryState?: ReplyDeliveryState;
+  attempt: EmbeddedRunAttemptWithReceiptEvidence;
+  currentAttemptCompletedAssistant?: AssistantMessage;
+  provider: string;
+  providerOwner?: PreparedProviderFailoverOwner;
+  model: string;
+  activeErrorContext: { provider: string; model: string };
+  authProfileStore: AuthProfileStore;
+  authProfileId?: string;
+  sessionIdUsed: string;
+  sessionFileUsed?: string;
+  outerContextTokenMeta: { contextTokens?: number; contextTokensSource?: "resolved-v1" };
+  usageAccumulator: UsageAccumulator;
+  lastRunPromptUsage?: NormalizedUsage;
+  contextRecoveryState: EmbeddedRunContextRecoveryState;
+  resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
+  terminalState: EmbeddedRunTerminalState;
+}) {
+  const { runParams, attempt } = input;
+  const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
+    attempt.terminal,
+  );
+  const timedOutDuringPrompt =
+    isEmbeddedRunTerminalTimeout(input.terminalState.outcome) &&
+    !timedOutDuringCompaction &&
+    !timedOutDuringToolExecution;
+  const timeoutFinal = isEmbeddedRunTimeoutFinal(attempt);
+  // Session transcript fallbacks can reference an earlier rewritten turn.
+  // Terminal delivery and metadata must stay scoped to this model attempt.
+  const terminalAssistant = input.currentAttemptCompletedAssistant;
+  const usageMeta = buildUsageAgentMetaFields({
+    usageAccumulator: input.usageAccumulator,
+    latestUsage: normalizeAssistantUsageForContext(terminalAssistant),
+    lastRunPromptUsage: input.lastRunPromptUsage,
+  });
+  // A runtime can observe its model without emitting message_end. That scoped
+  // attribution is useful here, but is not completed text or usage evidence.
+  const attributionAssistant = terminalAssistant ?? attempt.currentAttemptAssistant;
+  const requestedModelRef = { provider: input.provider, model: input.model };
+  const reportedModelRef = resolveReportedModelRef({
+    ...(attempt.runtimeModelSelection ?? requestedModelRef),
+    assistant: attributionAssistant,
+  });
+  const responseModel = attributionAssistant?.responseModel?.trim() || reportedModelRef.model;
+  const effectiveModelRef = { ...reportedModelRef, responseModel };
+  // The turn's answer: an earlier completed answer the terminal message kept, else the terminal.
+  const answerAssistant = attempt.keptAnswer?.assistant ?? terminalAssistant;
+  const finalAssistantStopReason = (answerAssistant?.stopReason ?? "").trim().toLowerCase();
+  const terminalAssistantCanOwnFinalText =
+    finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
+  const costUsd = estimateAggregateUsageCost({
+    usage: usageMeta.usage,
+    provider: reportedModelRef.provider,
+    model: reportedModelRef.model,
+    config: runParams.config,
+    agentDir: runParams.agentDir,
+  });
+  // Attempt normalization already folded every attempt (terminal included)
+  // into the accumulator, so read it directly instead of re-adding the attempt.
+  const runAssistantTurns = input.usageAccumulator.assistantTurns;
+  const contextTokens = attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens;
+  // The outer window was resolved for the prepared model. A different reported identity is
+  // persisted next to it, so only the prepared model may carry its trusted provenance.
+  const outerContextTokensSource =
+    reportedModelRef.provider === input.provider && reportedModelRef.model === input.model
+      ? (input.outerContextTokenMeta.contextTokensSource ?? "resolved")
+      : "resolved";
+  const agentMeta: EmbeddedAgentMeta = {
+    sessionId: input.sessionIdUsed,
+    sessionFile: input.sessionFileUsed,
+    provider: reportedModelRef.provider,
+    model: reportedModelRef.model,
+    contextTokens,
+    ...(contextTokens !== undefined
+      ? {
+          contextTokensSource:
+            attempt.contextTokens !== undefined
+              ? (attempt.contextTokensSource ?? "resolved")
+              : outerContextTokensSource,
+        }
+      : {}),
+    agentHarnessId: attempt.agentHarnessId,
+    providerRefusal: resolveProviderRefusal(attributionAssistant),
+    ...(attempt.runtimeModelSelection
+      ? { runtimeModelSelection: attempt.runtimeModelSelection }
+      : {}),
+    credentialSource: attempt.modelAttempt?.credentialSource,
+    usage: usageMeta.usage,
+    lastCallUsage: usageMeta.lastCallUsage,
+    promptTokens: usageMeta.promptTokens,
+    ...(input.contextRecoveryState.lastContextBudgetStatus
+      ? { contextBudgetStatus: input.contextRecoveryState.lastContextBudgetStatus }
+      : {}),
+    compactionCount:
+      input.contextRecoveryState.autoCompactionCount > 0
+        ? input.contextRecoveryState.autoCompactionCount
+        : undefined,
+    compactionTokensAfter: input.contextRecoveryState.lastCompactionTokensAfter,
+    // Absent attempt engagement (plugin harness routes) intentionally reads as
+    // false so config-enabled-but-unengaged code mode is visible to consumers.
+    codeModeEngaged: attempt.codeModeEngaged === true,
+    ...(runAssistantTurns > 0 ? { assistantTurns: runAssistantTurns } : {}),
+    ...(input.usageAccumulator.bridgeCalls
+      ? { bridgeCalls: { ...input.usageAccumulator.bridgeCalls } }
+      : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+  };
+  const attemptFinalText = attempt.assistantTexts
+    .map((text) => sanitizeAssistantVisibleStreamText(text))
+    .findLast((text) => text.trim().length > 0)
+    ?.trim();
+  const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
+    ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
+    : undefined;
+  const finalAssistantRawText = terminalAssistantCanOwnFinalText
+    ? (resolveFinalAssistantRawText(answerAssistant) ?? attemptFinalText)
+    : undefined;
+  const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
+  Object.assign(agentMeta, {
+    terminalReceipt: {
+      runId: runParams.runId,
+      sessionId: input.sessionIdUsed,
+      turnId: terminalTurnId?.trim() || runParams.runId,
+      requested: requestedModelRef,
+      effective: effectiveModelRef,
+      successfulToolNames: resolveSuccessfulToolNames(attempt),
+      assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
+      sourceReplyDelivered: resolveSourceReplyDelivery(attempt) === "delivered" ? true : undefined,
+      rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef),
+    } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
+  });
+  const cleanYield = attempt.yieldDetected && input.terminalState.outcome.status === "ok";
+  // Yield cleanup can abort the tool-call assistant before message_end. The
+  // canonical successful pause owns that outcome, not the cleanup error text
+  // or an earlier completed cycle. Keep this attempt's streamed text below.
+  const payloadAssistant = cleanYield
+    ? undefined
+    : attempt.yieldDetected
+      ? attempt.lastAssistant
+      : input.currentAttemptCompletedAssistant;
+  const payloads = buildEmbeddedRunPayloads({
+    ...attempt,
+    assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
+    lastAssistant: payloadAssistant,
+    currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
+    // A clean yield is a handoff, not a terminal tool failure. Keep the error
+    // on the attempt for diagnostics without turning the pause into a warning.
+    lastToolError: cleanYield ? undefined : attempt.lastToolError,
+    config: runParams.config,
+    isCronTrigger: runParams.trigger === "cron",
+    // A conversation's continuation keeps conversational silence and failure reporting.
+    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
+    sessionKey: runParams.sessionKey ?? runParams.sessionId,
+    provider: input.activeErrorContext.provider,
+    providerOwner: input.providerOwner,
+    model: input.activeErrorContext.model,
+    authMode: input.authProfileId
+      ? input.authProfileStore.profiles?.[input.authProfileId]?.type
+      : undefined,
+    verboseLevel: runParams.verboseLevel,
+    reasoningLevel: runParams.reasoningLevel,
+    thinkingLevel: runParams.thinkLevel,
+    toolResultFormat: input.resolvedToolResultFormat,
+    didDeliverSourceReplyViaMessageTool: resolveSourceReplyDelivery(attempt) === "delivered",
+    sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+    agentId: runParams.agentId,
+    runId: runParams.runId,
+    // Owned timeout failures retain produced output; explicit cancellation still suppresses it.
+    runAborted:
+      isEmbeddedRunTerminalInterrupted(input.terminalState.outcome) &&
+      !(timedOutDuringPrompt && timeoutFinal),
+    runStopReason: input.terminalState.outcome.stopReason,
+    deferAssistantTimeoutError:
+      timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
+  }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
+  const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
+  const payloadsWithToolMedia = mergeToolMedia(
+    {
+      payloads,
+      toolMediaUrls: attempt.toolMediaUrls,
+      // Preserve harness provenance through terminal delivery. Without it,
+      // message-tool-only routes silently drop native runtime artifacts.
+      hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
+      toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
+        attempt,
+        attempt.toolMediaUrls,
+        runParams.admittedRunContext?.operationalRunInstance,
+      ),
+      toolAudioAsVoice: attempt.toolAudioAsVoice,
+      toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+      sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+    },
+    runParams.admittedRunContext?.operationalRunInstance,
+  );
+  const recoveredFinalAssistantTextAfterPromptTimeout =
+    timedOutDuringPrompt &&
+    !timeoutFinal &&
+    ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
+      ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
+      : undefined;
+  const payloadAlreadyContainsRecoveredFinalAssistant =
+    recoveredFinalAssistantTextAfterPromptTimeout
+      ? (payloadsWithToolMedia ?? []).some(
+          (payload) =>
+            payload?.isError !== true &&
+            payload?.isReasoning !== true &&
+            typeof payload.text === "string" &&
+            payload.text.trim() === recoveredFinalAssistantTextAfterPromptTimeout,
+        )
+      : false;
+  const recoveredFinalAssistantPayloadsAfterPromptTimeout =
+    recoveredFinalAssistantTextAfterPromptTimeout && !payloadAlreadyContainsRecoveredFinalAssistant
+      ? replacePartialAssistantPayload({
+          payloads: payloadsWithToolMedia,
+          assistantTexts: attempt.assistantTexts,
+          recoveredText: recoveredFinalAssistantTextAfterPromptTimeout,
+        })
+      : undefined;
+  const hasSuccessfulFinalAssistantAfterPromptTimeout =
+    timedOutDuringPrompt &&
+    Boolean(
+      payloadAlreadyContainsRecoveredFinalAssistant ||
+      recoveredFinalAssistantPayloadsAfterPromptTimeout?.length,
+    );
+  const hasPartialAssistantTextAfterPromptTimeout =
+    timedOutDuringPrompt &&
+    (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
+    !attempt.clientToolCalls &&
+    !attempt.yieldDetected &&
+    !attempt.didSendViaMessagingTool &&
+    !attempt.didSendDeterministicApprovalPrompt &&
+    !attempt.lastToolError &&
+    (attempt.toolMetas?.length ?? 0) === 0;
+  const attemptToolSummary = buildTraceToolSummary(attempt);
+  const failureSignal = resolveEmbeddedRunFailureSignal({
+    trigger: runParams.trigger,
+    lastToolError: attempt.lastToolError,
+  });
+  const terminalToolFailure = resolveEmbeddedRunTerminalToolFailure({
+    trigger: runParams.trigger,
+    codeModeEngaged: attempt.codeModeEngaged,
+    lastToolError: attempt.lastToolError,
+  });
+  return {
+    agentMeta,
+    replyDeliveryState: input.replyDeliveryState ?? "missing",
+    reportedModelRef,
+    finalAssistantVisibleText,
+    finalAssistantRawText,
+    payloads,
+    payloadsWithToolMedia,
+    timedOutDuringPrompt,
+    recoveredFinalAssistantPayloadsAfterPromptTimeout,
+    hasSuccessfulFinalAssistantAfterPromptTimeout,
+    hasPartialAssistantTextAfterPromptTimeout,
+    attemptToolSummary,
+    failureSignal,
+    terminalToolFailure,
+  };
+}
+
+function replacePartialAssistantPayload(input: {
+  payloads: EmbeddedAgentRunResult["payloads"];
+  assistantTexts?: string[];
+  recoveredText: string;
+}): NonNullable<EmbeddedAgentRunResult["payloads"]> {
+  const payloads = input.payloads ? [...input.payloads] : [];
+  const assistantTextSignatures = new Set(
+    (input.assistantTexts ?? []).map((text) => text.trim()).filter((text) => text.length > 0),
+  );
+  // The attempt can contain completed assistant blocks before its partial tail.
+  // Recover the latest matching payload or we can overwrite already-delivered text.
+  const partialPayloadIndex = payloads.findLastIndex(
+    (payload) =>
+      payload.isError !== true &&
+      payload.isReasoning !== true &&
+      typeof payload.text === "string" &&
+      assistantTextSignatures.has(payload.text.trim()),
+  );
+  const partialPayload = payloads[partialPayloadIndex];
+  if (!partialPayload) {
+    return [...payloads, { text: input.recoveredText }];
+  }
+  payloads[partialPayloadIndex] = copyReplyPayloadMetadata(partialPayload, {
+    ...partialPayload,
+    text: input.recoveredText,
+  });
+  return payloads;
+}

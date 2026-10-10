@@ -5,19 +5,38 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
-  buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
-  type QaEvidenceStatus,
+  splitQaModelRef,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/src/evidence-summary.js";
+} from "../../../../extensions/qa-lab/test-api.js";
+import {
+  parsePlatformList,
+  resolveParallelsProviderAuth,
+} from "../../../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
+import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
+import {
+  createQaScriptBlockedStatusTracker,
+  createQaScriptEvidenceWriter,
+  type QaScriptEvidenceStatus,
+} from "../runtime/script-evidence.js";
 
 const SCENARIO_ID = "clawhub-release-candidate-checklist";
 const SCENARIO_TITLE = "ClawHub release candidate npm package install proof";
 const SOURCE_PATH = "test/e2e/qa-lab/plugins/clawhub-release-candidate-install.ts";
-const COVERAGE_ID = "clawhub.npm-pack-local-release-candidate-installs";
 const DEFAULT_TARBALL_ENV = "OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL";
 const CHECKOUT_BUILD_RESULT_PREFIX = "__OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL__";
 const execFileAsync = promisify(execFile);
+const CLAWHUB_BLOCKED_PREREQUISITE_PATTERNS = [
+  /\bprlctl\b/i,
+  /failed to detect parallels host ip/i,
+  /vm .*not found/i,
+  /could not resolve .*vm/i,
+  /no .*vm/i,
+  /parallels desktop .*not/i,
+  /api key/i,
+  /provider auth/i,
+];
 
 type ProducerOptions = {
   artifactBase: string;
@@ -36,11 +55,21 @@ type ParallelsSummary = {
 };
 
 type ProofResult = {
-  artifacts: Array<{ kind: string; path: string }>;
+  artifacts?: Array<{ filePath: string; kind: string }>;
   details?: string;
   durationMs: number;
-  status: QaEvidenceStatus;
+  status: QaScriptEvidenceStatus;
 };
+
+class ParallelsProofError extends Error {
+  constructor(
+    message: string,
+    readonly evidenceStatus: QaScriptEvidenceStatus,
+  ) {
+    super(message);
+    this.name = "ParallelsProofError";
+  }
+}
 
 function usage() {
   return `Usage: node --import tsx ${SOURCE_PATH} --artifact-base <dir> [options]
@@ -142,19 +171,6 @@ async function writeJson(filePath: string, value: unknown) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-async function appendText(filePath: string, text: string) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.appendFile(filePath, text, "utf8");
-}
-
-function relativeArtifactPath(options: ProducerOptions, filePath: string) {
-  return path.relative(options.artifactBase, filePath) || path.basename(filePath);
-}
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function resolveCandidateTarball(options: ProducerOptions) {
   const explicitTarball = process.env[options.tarballEnv]?.trim();
   if (explicitTarball) {
@@ -223,9 +239,9 @@ async function validateCandidateTarball(tarballPath: string) {
 }
 
 async function runParallelsProof(params: {
-  logPath: string;
   options: ProducerOptions;
   tarballPath: string;
+  writer: ReturnType<typeof createClawHubEvidenceWriter>;
 }) {
   const args = [
     "scripts/e2e/parallels-npm-update-smoke.sh",
@@ -236,42 +252,38 @@ async function runParallelsProof(params: {
   if (params.options.platform) {
     args.push("--platform", params.options.platform);
   }
-  await appendText(params.logPath, `$ bash ${args.map((arg) => JSON.stringify(arg)).join(" ")}\n`);
+  params.writer.appendLog(`$ bash ${args.map((arg) => JSON.stringify(arg)).join(" ")}\n`);
 
-  return await new Promise<{ stderr: string; stdout: string }>((resolve, reject) => {
+  return await new Promise<string>((resolve, reject) => {
     const child = spawn("bash", args, {
       cwd: params.options.repoRoot,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput(1024 * 1024);
+    const statusTracker = createQaScriptBlockedStatusTracker(CLAWHUB_BLOCKED_PREREQUISITE_PATTERNS);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      params.writer.appendLog(chunk);
+      stdout.append(chunk);
+      statusTracker.append(chunk);
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      params.writer.appendLog(chunk);
+      statusTracker.append(chunk);
     });
     child.on("error", reject);
     child.on("close", (status, signal) => {
-      const output = [
-        stdout ? `\n--- stdout ---\n${stdout}` : "",
-        stderr ? `\n--- stderr ---\n${stderr}` : "",
-      ].join("");
-      appendText(params.logPath, output)
-        .then(() => {
-          if (status === 0 && !signal) {
-            resolve({ stderr, stdout });
-            return;
-          }
-          const reason = signal
-            ? `Parallels npm-update proof terminated by ${signal}`
-            : `Parallels npm-update proof exited with ${status ?? 1}`;
-          reject(new Error(`${reason}\n${stderr || stdout}`));
-        })
-        .catch(reject);
+      const stdoutText = stdout.text();
+      if (status === 0 && !signal) {
+        resolve(stdoutText);
+        return;
+      }
+      const reason = signal
+        ? `Parallels npm-update proof terminated by ${signal}`
+        : `Parallels npm-update proof exited with ${status ?? 1}`;
+      reject(new ParallelsProofError(reason, statusTracker.status()));
     });
   });
 }
@@ -343,30 +355,76 @@ function assertParallelsSummary(params: {
 }
 
 function isBlockedPrerequisiteFailure(message: string) {
-  return [
-    /\bprlctl\b/i,
-    /failed to detect parallels host ip/i,
-    /vm .*not found/i,
-    /could not resolve .*vm/i,
-    /no .*vm/i,
-    /parallels desktop .*not/i,
-    /api key/i,
-    /provider auth/i,
-  ].some((pattern) => pattern.test(message));
+  return CLAWHUB_BLOCKED_PREREQUISITE_PATTERNS.some((pattern) => pattern.test(message));
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
+function resolveParallelsEvidenceIdentity(options: ProducerOptions) {
+  try {
+    // Match the child runner's default OpenAI route without changing its arguments.
+    const models = Array.from(
+      parsePlatformList(options.platform || "all"),
+      (platform) =>
+        resolveParallelsProviderAuth({ provider: "openai", platform }, process.env).auth.modelId,
+    );
+    const refs = models.map(splitQaModelRef);
+    // Malformed qualified refs must not prevent writing the blocked evidence.
+    if (
+      models.some(
+        (value, index) =>
+          value.includes("/") && (!refs[index]?.provider.trim() || !refs[index]?.model.trim()),
+      )
+    ) {
+      return { primaryModel: "" };
+    }
+    const [model] = models;
+    const providerId = refs[0]?.provider.trim();
+    return {
+      primaryModel: model?.trim() && models.every((value) => value === model) ? model : "",
+      providerId:
+        providerId && refs.every((ref) => ref?.provider.trim() === providerId)
+          ? providerId
+          : undefined,
+    };
+  } catch {
+    // Invalid metadata must not replace the producer's blocked or failure result.
+    return { primaryModel: "" };
+  }
+}
+
+function createClawHubEvidenceWriter(options: ProducerOptions) {
+  return createQaScriptEvidenceWriter({
+    artifactBase: options.artifactBase,
+    logFileName: "parallels-npm-update.log",
+    ...resolveParallelsEvidenceIdentity(options),
+    providerMode: "live-frontier",
+    repoRoot: options.repoRoot,
+    target: {
+      id: SCENARIO_ID,
+      title: SCENARIO_TITLE,
+      sourcePath: SOURCE_PATH,
+      docsRefs: ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"],
+      codeRefs: [
+        SOURCE_PATH,
+        "scripts/e2e/parallels-npm-update-smoke.sh",
+        "scripts/e2e/parallels/npm-update-smoke.ts",
+        "test/scripts/release-candidate-checklist.test.ts",
+      ],
+    },
+  });
+}
+
+async function produceProof(
+  options: ProducerOptions,
+  writer: ReturnType<typeof createClawHubEvidenceWriter>,
+): Promise<ProofResult> {
   const startedAt = Date.now();
   await fs.mkdir(options.artifactBase, { recursive: true });
-  const logPath = path.join(options.artifactBase, "parallels-npm-update.log");
   const summaryPath = path.join(options.artifactBase, "parallels-summary.json");
-  const artifacts = [{ kind: "log", path: relativeArtifactPath(options, logPath) }];
 
   try {
     const tarballPath = await resolveCandidateTarball(options);
     if (!tarballPath) {
       return {
-        artifacts,
         details: `${options.tarballEnv} is not set; provide a candidate .tgz or pass --build-from-checkout.`,
         durationMs: Math.max(1, Date.now() - startedAt),
         status: "blocked",
@@ -374,12 +432,11 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
     }
     await fs.access(tarballPath);
     const metadata = await validateCandidateTarball(tarballPath);
-    await appendText(
-      logPath,
+    writer.appendLog(
       `candidate: ${tarballPath}\nversion: ${metadata.version}\nbuild commit: ${metadata.buildCommit}\n`,
     );
-    const commandResult = await runParallelsProof({ logPath, options, tarballPath });
-    const summary = parseParallelsSummary(commandResult.stdout);
+    const commandOutput = await runParallelsProof({ options, tarballPath, writer });
+    const summary = parseParallelsSummary(commandOutput);
     assertParallelsSummary({
       summary,
       tarballPath,
@@ -387,20 +444,21 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
     });
     await writeJson(summaryPath, summary);
     return {
-      artifacts: [
-        ...artifacts,
-        { kind: "summary", path: relativeArtifactPath(options, summaryPath) },
-      ],
+      artifacts: [{ kind: "summary", filePath: "parallels-summary.json" }],
       details: `candidate ${metadata.version} installed fresh and updated through Parallels npm semantics`,
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     };
   } catch (error) {
     const details = formatErrorMessage(error);
-    const status: QaEvidenceStatus = isBlockedPrerequisiteFailure(details) ? "blocked" : "fail";
-    await appendText(logPath, `\n${status}: ${details}\n`);
+    const status: QaScriptEvidenceStatus =
+      error instanceof ParallelsProofError
+        ? error.evidenceStatus
+        : isBlockedPrerequisiteFailure(details)
+          ? "blocked"
+          : "fail";
+    writer.appendLog(`\n${status}: ${details}\n`);
     return {
-      artifacts,
       details,
       durationMs: Math.max(1, Date.now() - startedAt),
       status,
@@ -408,55 +466,12 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-function buildEvidence(params: {
-  options: ProducerOptions;
-  result: ProofResult;
-}): QaEvidenceSummaryJson {
-  return buildScriptEvidenceSummary({
-    artifactPaths: params.result.artifacts,
-    evidenceMode: "full",
-    env: process.env,
-    generatedAt: new Date().toISOString(),
-    primaryModel: "mock-openai/gpt-5.5",
-    providerMode: "mock-openai",
-    repoRoot: params.options.repoRoot,
-    runner: "script",
-    targets: [
-      {
-        id: SCENARIO_ID,
-        title: SCENARIO_TITLE,
-        sourcePath: SOURCE_PATH,
-        primaryCoverageIds: [COVERAGE_ID],
-        docsRefs: ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"],
-        codeRefs: [
-          SOURCE_PATH,
-          "scripts/e2e/parallels-npm-update-smoke.sh",
-          "scripts/e2e/parallels/npm-update-smoke.ts",
-          "test/scripts/release-candidate-checklist.test.ts",
-        ],
-      },
-    ],
-    results: [
-      {
-        id: SCENARIO_ID,
-        status: params.result.status,
-        durationMs: params.result.durationMs,
-        failureMessage: params.result.details,
-      },
-    ],
-  });
-}
-
 export async function runClawHubReleaseCandidateInstallProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
-  const result = await produceProof(options);
-  const evidence = buildEvidence({ options, result });
-  await writeJson(path.join(options.artifactBase, QA_EVIDENCE_FILENAME), evidence);
-  await writeJson(path.join(options.artifactBase, "latest-run.json"), {
-    qaEvidence: QA_EVIDENCE_FILENAME,
-  });
-  return evidence;
+  const writer = createClawHubEvidenceWriter(options);
+  const result = await produceProof(options, writer);
+  return await writer.write(result);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

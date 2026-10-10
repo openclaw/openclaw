@@ -2,6 +2,27 @@ import AppKit
 import Foundation
 import OSLog
 
+enum AppTerminationTiming {
+    static let cleanupDeadlineSeconds = 2.0
+    static let signalExitFailsafeSeconds = 3.0
+
+    static func cleanupDeadlineSeconds(
+        hasAppHostedGateway: Bool,
+        operationTimeout: TimeInterval = 0) -> TimeInterval
+    {
+        self.cleanupDeadlineSeconds + max(
+            operationTimeout, hasAppHostedGateway ? GatewayChildSupervisor.shutdownTimeoutSeconds : 0)
+    }
+
+    static func signalExitFailsafeSeconds(
+        hasAppHostedGateway: Bool,
+        operationTimeout: TimeInterval = 0) -> TimeInterval
+    {
+        self.signalExitFailsafeSeconds + max(
+            operationTimeout, hasAppHostedGateway ? GatewayChildSupervisor.shutdownTimeoutSeconds : 0)
+    }
+}
+
 @MainActor
 final class TerminationSignalWatcher {
     static let shared = TerminationSignalWatcher()
@@ -43,10 +64,18 @@ final class TerminationSignalWatcher {
         // Ensure any pairing prompt can't accidentally approve during shutdown.
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
-        NSApp.terminate(nil)
+        Self.scheduleExitFailsafe()
+        AppDelegate.requestTermination()
+    }
 
-        // Safety net: don't hang forever if something blocks termination.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+    static func scheduleExitFailsafe() {
+        let deadline = AppTerminationTiming.signalExitFailsafeSeconds(
+            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway,
+            operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
+        // Keep the last-resort exit independent of a stuck main actor or AppKit loop.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + deadline)
+        {
             exit(0)
         }
     }

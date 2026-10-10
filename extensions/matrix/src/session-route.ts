@@ -1,4 +1,3 @@
-// Matrix plugin module implements session route behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelOutboundSessionRoute,
@@ -10,7 +9,11 @@ import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-s
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
 import { resolveMatrixStoredSessionMeta } from "./matrix/session-store-metadata.js";
-import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
+import {
+  isMatrixQualifiedUserId,
+  isMatrixRoomId,
+  resolveMatrixTargetIdentity,
+} from "./matrix/target-ids.js";
 
 function resolveEffectiveMatrixAccountId(
   params: Pick<ChannelOutboundSessionRouteParams, "cfg" | "accountId">,
@@ -75,12 +78,12 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     return null;
   }
   const effectiveAccountId = resolveEffectiveMatrixAccountId(params);
+  const dmSessionScope = resolveMatrixDmSessionScope({
+    cfg: params.cfg,
+    accountId: effectiveAccountId,
+  });
   const roomScopedDmId =
-    target.kind === "user" &&
-    resolveMatrixDmSessionScope({
-      cfg: params.cfg,
-      accountId: effectiveAccountId,
-    }) === "per-room"
+    target.kind === "user" && dmSessionScope === "per-room"
       ? resolveMatrixCurrentDmRoomId({
           cfg: params.cfg,
           agentId: params.agentId,
@@ -105,6 +108,12 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     agentId: params.agentId,
     channel: "matrix",
     accountId: effectiveAccountId,
+    recipientSessionExact:
+      target.kind === "room"
+        ? dmSessionScope === "per-room" && isMatrixRoomId(target.id)
+        : dmSessionScope === "per-user"
+          ? isMatrixQualifiedUserId(target.id)
+          : roomScopedDmId !== undefined,
     peer,
     chatType,
     from,
@@ -115,6 +124,8 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     replyToId: params.replyToId,
     threadId: params.threadId,
     currentSessionKey: params.currentSessionKey,
+    // Matrix m.thread identifies the session; m.in_reply_to may name a different child event.
+    precedence: ["threadId", "replyToId", "currentSession"],
     normalizeThreadId: (threadId) => threadId,
     canRecoverCurrentThread: ({ route }) =>
       route.peer.kind !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",

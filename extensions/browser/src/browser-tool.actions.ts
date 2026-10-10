@@ -1,50 +1,47 @@
-/**
- * Browser agent tool action executors.
- *
- * Converts model-facing parameters into browser control client calls and wraps
- * browser-originated text as untrusted content before returning it to agents.
- */
+/** Browser actions wrap page-controlled text as untrusted content before returning it to agents. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
-  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-  browserAct,
-  browserConsoleMessages,
-  browserSnapshot,
-  browserTabs,
-  getBrowserProfileCapabilities,
-  getRuntimeConfig,
-  imageResultFromFile,
-  jsonResult,
+  asNullableObjectRecord,
   normalizeOptionalString,
   readStringValue,
-  resolveBrowserConfig,
-  resolveProfile,
-  resolveRuntimeImageSanitization,
-  wrapExternalContent,
-} from "./browser-tool.runtime.js";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
-  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
-} from "./browser/constants.js";
-import { neutralizeMediaDirectives } from "./browser/vision.js";
-
-const browserToolActionDeps = {
+  appendNavigatedPageState,
+  formatBrowserDebugLogResult,
+  wrapBrowserExternalJson,
+  wrapBrowserExternalText,
+} from "./browser-tool.snapshot.js";
+import { EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS } from "./browser/act-policy.js";
+import type {
+  BrowserBatchAbort,
+  BrowserBatchActionResult,
+} from "./browser/client-actions-types.js";
+import {
   browserAct,
   browserConsoleMessages,
-  browserSnapshot,
-  browserTabs,
-  getRuntimeConfig,
-  imageResultFromFile,
-};
-
-const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
+  browserDownload,
+  browserWaitForDownload,
+} from "./browser/client-actions.js";
+import type { BrowserClientTarget } from "./browser/client-request.js";
+import { browserTabs, type BrowserTabsResult } from "./browser/client.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+} from "./browser/constants.js";
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
-type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return readPositiveIntegerParam({ value }, "value", {
@@ -58,7 +55,17 @@ function normalizeNonNegativeDurationMs(value: unknown): number | undefined {
   });
 }
 
-function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
+function withLocalActTimeout(
+  request: BrowserActRequest,
+  usesChromeMcp: boolean,
+): BrowserActRequest {
+  if (
+    normalizePositiveTimeoutMs("timeoutMs" in request ? request.timeoutMs : undefined) !==
+      undefined ||
+    (usesChromeMcp && !EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS.has(request.kind))
+  ) {
+    return request;
+  }
   switch (request.kind) {
     case "click":
     case "type":
@@ -69,582 +76,435 @@ function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
     case "fill":
     case "evaluate":
     case "wait":
-      return true;
+      return { ...request, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS };
     default:
-      return false;
+      return request;
   }
 }
-
-function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
-  switch (request.kind) {
-    case "type":
-    case "hover":
-    case "scrollIntoView":
-    case "drag":
-    case "select":
-    case "fill":
-    case "evaluate":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function usesExistingSessionProfile(profileName: string | undefined): boolean {
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, profileName ?? resolved.defaultProfile);
-  return profile ? getBrowserProfileCapabilities(profile).usesChromeMcp : false;
-}
-
-function withConfiguredActTimeout(
-  request: BrowserActRequest,
-  profileName: string | undefined,
-): BrowserActRequest {
-  const typedRequest = request as BrowserActRequestWithTimeout;
-  if (normalizePositiveTimeoutMs(typedRequest.timeoutMs) !== undefined) {
-    return request;
-  }
-  if (!supportsBrowserActTimeout(request)) {
-    return request;
-  }
-  if (existingSessionRejectsActTimeout(request) && usesExistingSessionProfile(profileName)) {
-    // Chrome MCP existing-session actions reject per-call timeouts for these
-    // operations, so default timeout injection must stay disabled there.
-    return request;
-  }
-
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const configuredTimeout =
-    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
-  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
-}
-
-function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
-  const candidateTimeouts: number[] = [];
-  const explicitTimeout = normalizePositiveTimeoutMs(
-    (request as BrowserActRequestWithTimeout).timeoutMs,
-  );
-  if (explicitTimeout !== undefined) {
-    candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-  }
-  if (request.kind === "wait") {
-    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
-    if (waitDuration !== undefined) {
-      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-    }
-  }
-  return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
-}
-
-export const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      browserAct: typeof browserAct;
-      browserConsoleMessages: typeof browserConsoleMessages;
-      browserSnapshot: typeof browserSnapshot;
-      browserTabs: typeof browserTabs;
-      imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
-    }> | null,
-  ) {
-    browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
-    browserToolActionDeps.browserConsoleMessages =
-      overrides?.browserConsoleMessages ?? browserConsoleMessages;
-    browserToolActionDeps.browserSnapshot = overrides?.browserSnapshot ?? browserSnapshot;
-    browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
-    browserToolActionDeps.imageResultFromFile =
-      overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
-  },
-};
-
-type BrowserProxyRequest = (opts: {
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-}) => Promise<unknown>;
-
-type BrowserTabLike = {
-  suggestedTargetId?: unknown;
-  tabId?: unknown;
-  label?: unknown;
-  title?: unknown;
-  url?: unknown;
-  type?: unknown;
-  targetId?: unknown;
-  wsUrl?: unknown;
-};
 
 function formatAgentTab(tab: unknown): Record<string, unknown> {
-  if (!tab || typeof tab !== "object") {
+  const source = asNullableObjectRecord(tab);
+  if (!source) {
     return { value: tab };
   }
-  const source = tab as BrowserTabLike;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
+  const webExtensionTabId =
+    typeof source.webExtensionTabId === "number" &&
+    Number.isSafeInteger(source.webExtensionTabId) &&
+    source.webExtensionTabId >= 0
+      ? source.webExtensionTabId
+      : undefined;
   const label = readStringValue(source.label);
   const suggestedTargetId = readStringValue(source.suggestedTargetId) ?? label ?? tabId ?? targetId;
   return {
     ...(suggestedTargetId ? { suggestedTargetId } : {}),
     ...(tabId ? { tabId } : {}),
+    ...(webExtensionTabId !== undefined ? { webExtensionTabId } : {}),
     ...(label ? { label } : {}),
     title: source.title,
     url: source.url,
+    ...(source.urlUnavailableReason === "navigation_blocked" ||
+    source.urlUnavailableReason === "navigation_check_failed"
+      ? { urlUnavailableReason: source.urlUnavailableReason }
+      : {}),
     type: source.type,
     ...(targetId ? { targetId } : {}),
     ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
   };
 }
 
-function wrapBrowserExternalJson(params: {
-  kind: "snapshot" | "console" | "tabs";
-  payload: unknown;
-  includeWarning?: boolean;
-}): { wrappedText: string; safeDetails: Record<string, unknown> } {
-  const extractedText = JSON.stringify(
-    params.payload,
-    (_key: string, value: unknown) =>
-      typeof value === "string" ? neutralizeMediaDirectives(value) : value,
-    2,
-  );
-  // Browser tabs, snapshots, and console output are page-controlled data. Keep
-  // text wrapped even when details carry the structured fields for callers.
-  const wrappedText = wrapExternalContent(extractedText, {
-    source: "browser",
-    includeWarning: params.includeWarning ?? true,
-  });
-  return {
-    wrappedText,
-    safeDetails: {
-      ok: true,
-      externalContent: {
-        untrusted: true,
-        source: "browser",
-        kind: params.kind,
-        wrapped: true,
-      },
-    },
-  };
-}
-
-function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
-  const formattedTabs = tabs.map((tab) => formatAgentTab(tab));
+function formatTabsToolResult(result: {
+  running: boolean;
+  tabs: unknown[];
+}): AgentToolResult<unknown> {
+  const formattedTabs = result.tabs.map(formatAgentTab);
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
-    payload: { tabs: formattedTabs },
+    payload: { running: result.running, tabs: formattedTabs },
     includeWarning: false,
   });
-  const content: AgentToolResult<unknown>["content"] = [
-    { type: "text", text: wrapped.wrappedText },
-  ];
-  return {
-    content,
-    details: {
-      ...wrapped.safeDetails,
-      tabCount: tabs.length,
-      tabs: formattedTabs,
-    },
-  };
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    running: result.running,
+    tabCount: formattedTabs.length,
+    tabs: formattedTabs,
+  });
 }
 
-function formatConsoleToolResult(result: {
-  targetId?: string;
-  url?: string;
-  messages?: unknown[];
+/** Protect page-controlled model text while preserving the shipped structured result contract. */
+export function formatBrowserExternalToolResult(params: {
+  kind: "act" | "download" | "tabs";
+  payload: unknown;
 }): AgentToolResult<unknown> {
+  const wrapped = wrapBrowserExternalJson({
+    kind: params.kind,
+    payload: params.payload,
+    includeWarning: false,
+  });
+  // The Browser tool already marks the turn as network-tainted, and replay
+  // strips details; changing this public structured payload breaks callers.
+  return textResult(wrapped.wrappedText, params.payload);
+}
+
+function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean {
+  const status =
+    err && typeof err === "object" && "status" in err ? (err as { status?: unknown }).status : null;
+  const msg = String(err);
+  const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
+  return usesChromeMcp && isTabNotFound;
+}
+
+function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): boolean {
+  if (request.kind !== "wait" || normalizeNonNegativeDurationMs(request.timeMs) === undefined) {
+    return false;
+  }
+  return [
+    request.fn,
+    request.text,
+    request.textGone,
+    request.selector,
+    request.url,
+    request.loadState,
+  ].every((value) => !normalizeOptionalString(value));
+}
+
+export async function executeTabsAction(params: {
+  target: BrowserClientTarget;
+  profile?: string;
+  timeoutMs?: number;
+  targetId?: string;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  const { target, profile, timeoutMs } = params;
+  const result = await browserTabs(target, {
+    profile,
+    timeoutMs,
+    signal: params.signal,
+  });
+  const tabs = result.tabs.filter(
+    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+  );
+  return formatTabsToolResult({ running: result.running, tabs });
+}
+
+/** Validate the /act wire payload's abort summary once for note and page-state decisions. */
+function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
+  const aborted = asNullableObjectRecord(asNullableObjectRecord(result)?.aborted);
+  if (!aborted) {
+    return null;
+  }
+  const { reason, afterAction, url, skipped } = aborted;
+  if (
+    (reason !== "navigation" && reason !== "closed") ||
+    typeof afterAction !== "number" ||
+    typeof url !== "string" ||
+    typeof skipped !== "number"
+  ) {
+    return null;
+  }
+  return { reason, afterAction, url, skipped };
+}
+
+function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | null): boolean {
+  if (aborted?.reason === "navigation") {
+    return true;
+  }
+  const results = (result as { results?: unknown } | null | undefined)?.results;
+  return (
+    Array.isArray(results) &&
+    results.some(
+      (entry) => (entry as Partial<BrowserBatchActionResult> | undefined)?.navigated === true,
+    )
+  );
+}
+
+export async function executeConsoleAction(params: {
+  input: Record<string, unknown>;
+  target: BrowserClientTarget;
+  profile?: string;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  const { input, target, profile } = params;
+  const result = await browserConsoleMessages(target, {
+    level: normalizeOptionalString(input.level),
+    targetId: normalizeOptionalString(input.targetId),
+    profile,
+    signal: params.signal,
+  });
   const wrapped = wrapBrowserExternalJson({
     kind: "console",
     payload: result,
     includeWarning: false,
   });
-  return {
-    content: [{ type: "text" as const, text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      targetId: readStringValue(result.targetId),
-      url: readStringValue(result.url),
-      messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-    },
-  };
-}
-
-function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
-  if (!profile) {
-    return false;
-  }
-  if (profile === "user") {
-    const msg = String(err);
-    return msg.includes("404:") && msg.includes("tab not found");
-  }
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const browserProfile = resolveProfile(resolved, profile);
-  if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
-    return false;
-  }
-  const msg = String(err);
-  return msg.includes("404:") && msg.includes("tab not found");
-}
-
-function stripTargetIdFromActRequest(
-  request: Parameters<typeof browserAct>[1],
-): Parameters<typeof browserAct>[1] | null {
-  const targetId = normalizeOptionalString(request.targetId);
-  if (!targetId) {
-    return null;
-  }
-  const retryRequest = { ...request };
-  delete retryRequest.targetId;
-  return retryRequest as Parameters<typeof browserAct>[1];
-}
-
-function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>[1]): boolean {
-  const typedRequest = request as Partial<Record<"kind" | "action", unknown>>;
-  const kind =
-    typeof typedRequest.kind === "string"
-      ? typedRequest.kind
-      : typeof typedRequest.action === "string"
-        ? typedRequest.action
-        : "";
-  return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
-}
-
-function isAriaRefsUnsupportedError(err: unknown): boolean {
-  const msg = String(err).toLowerCase();
-  return msg.includes("refs=aria") && msg.includes("not support");
-}
-
-function withRoleRefsFallback<T extends { refs?: "aria" | "role" }>(
-  snapshotQuery: T,
-): T & { refs: "role" } {
-  return {
-    ...snapshotQuery,
-    refs: "role",
-  };
-}
-
-export async function executeTabsAction(params: {
-  baseUrl?: string;
-  profile?: string;
-  timeoutMs?: number;
-  proxyRequest: BrowserProxyRequest | null;
-}): Promise<AgentToolResult<unknown>> {
-  const { baseUrl, profile, timeoutMs, proxyRequest } = params;
-  if (proxyRequest) {
-    const result = await proxyRequest({
-      method: "GET",
-      path: "/tabs",
-      profile,
-      timeoutMs,
-    });
-    const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
-    return formatTabsToolResult(tabs);
-  }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
-  return formatTabsToolResult(tabs);
-}
-
-/** Execute and format browser snapshots for agent consumption. */
-export async function executeSnapshotAction(params: {
-  input: Record<string, unknown>;
-  baseUrl?: string;
-  profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
-  onTabActivity?: (targetId: string | undefined) => void;
-}): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest } = params;
-  const snapshotDefaults = browserToolActionDeps.getRuntimeConfig().browser?.snapshotDefaults;
-  const format: "ai" | "aria" | undefined =
-    input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
-  const formatExplicit = format !== undefined;
-  const mode: "efficient" | undefined =
-    input.mode === "efficient"
-      ? "efficient"
-      : !formatExplicit && format !== "aria" && snapshotDefaults?.mode === "efficient"
-        ? "efficient"
-        : undefined;
-  const labels = typeof input.labels === "boolean" ? input.labels : undefined;
-  const urls = typeof input.urls === "boolean" ? input.urls : undefined;
-  const refs: "aria" | "role" | undefined =
-    input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
-  const hasMaxChars = Object.hasOwn(input, "maxChars");
-  const targetId = normalizeOptionalString(input.targetId);
-  const limit = readPositiveIntegerParam(input, "limit", {
-    message: "limit must be a positive integer.",
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    targetId: readStringValue(result.targetId),
+    url: readStringValue(result.url),
+    messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
   });
-  const maxCharsRaw = readNonNegativeIntegerParam(input, "maxChars", {
-    message: "maxChars must be a non-negative integer.",
-  });
-  const maxChars = maxCharsRaw !== undefined && maxCharsRaw > 0 ? maxCharsRaw : undefined;
-  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
-  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth = readNonNegativeIntegerParam(input, "depth", {
-    message: "depth must be a non-negative integer.",
-  });
-  const selector = normalizeOptionalString(input.selector);
-  const frame = normalizeOptionalString(input.frame);
-  const resolvedMaxChars =
-    format === "ai"
-      ? hasMaxChars
-        ? maxChars
-        : mode === "efficient"
-          ? undefined
-          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : hasMaxChars
-        ? maxChars
-        : undefined;
-  // AI snapshots have a compact default cap; ARIA snapshots keep full structure
-  // unless maxChars is explicit, because agents often need complete node refs.
-  const snapshotTimeoutMs =
-    readPositiveIntegerParam(input, "timeoutMs", {
-      message: "timeoutMs must be a positive integer.",
-    }) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
-  const snapshotQuery = {
-    ...(format ? { format } : {}),
-    targetId,
-    limit,
-    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-    refs,
-    interactive,
-    compact,
-    depth,
-    selector,
-    frame,
-    labels,
-    urls,
-    mode,
-    timeoutMs: snapshotTimeoutMs,
-  };
-  let refsFallback: "role" | undefined;
-  const readSnapshot = async (query: typeof snapshotQuery) =>
-    proxyRequest
-      ? ((await proxyRequest({
-          method: "GET",
-          path: "/snapshot",
-          profile,
-          query,
-          timeoutMs: snapshotTimeoutMs,
-        })) as Awaited<ReturnType<typeof browserSnapshot>>)
-      : await browserToolActionDeps.browserSnapshot(baseUrl, {
-          ...query,
-          profile,
-        });
-  let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
-  try {
-    snapshot = await readSnapshot(snapshotQuery);
-  } catch (err) {
-    if (refs !== "aria" || !isAriaRefsUnsupportedError(err)) {
-      throw err;
-    }
-    refsFallback = "role";
-    snapshot = await readSnapshot(withRoleRefsFallback(snapshotQuery));
-  }
-  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
-  if (snapshot.format === "ai") {
-    const dialogStateFields = {
-      ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
-      ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
-    };
-    if (snapshot.blockedByDialog) {
-      const wrapped = wrapBrowserExternalJson({
-        kind: "snapshot",
-        payload: {
-          format: snapshot.format,
-          targetId: snapshot.targetId,
-          url: snapshot.url,
-          ...dialogStateFields,
-        },
-      });
-      return {
-        content: [{ type: "text" as const, text: wrapped.wrappedText }],
-        details: {
-          ...wrapped.safeDetails,
-          format: snapshot.format,
-          targetId: snapshot.targetId,
-          url: snapshot.url,
-          ...dialogStateFields,
-        },
-      };
-    }
-    const extractedText = snapshot.snapshot ?? "";
-    const wrappedSnapshot = wrapExternalContent(neutralizeMediaDirectives(extractedText), {
-      source: "browser",
-      includeWarning: true,
-    });
-    const safeDetails = {
-      ok: true,
-      format: snapshot.format,
-      targetId: snapshot.targetId,
-      url: snapshot.url,
-      truncated: snapshot.truncated,
-      stats: snapshot.stats,
-      refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
-      labels: snapshot.labels,
-      labelsCount: snapshot.labelsCount,
-      labelsSkipped: snapshot.labelsSkipped,
-      annotations: snapshot.annotations,
-      imagePath: snapshot.imagePath,
-      imageType: snapshot.imageType,
-      refsFallback,
-      ...dialogStateFields,
-      externalContent: {
-        untrusted: true,
-        source: "browser",
-        kind: "snapshot",
-        format: "ai",
-        wrapped: true,
-      },
-    };
-    if (labels && snapshot.imagePath) {
-      return await browserToolActionDeps.imageResultFromFile({
-        label: "browser:snapshot",
-        path: snapshot.imagePath,
-        extraText: wrappedSnapshot,
-        details: safeDetails,
-        imageSanitization: resolveRuntimeImageSanitization(),
-      });
-    }
-    return {
-      content: [{ type: "text" as const, text: wrappedSnapshot }],
-      details: safeDetails,
-    };
-  }
-  {
-    const wrapped = wrapBrowserExternalJson({
-      kind: "snapshot",
-      payload: snapshot,
-    });
-    return {
-      content: [{ type: "text" as const, text: wrapped.wrappedText }],
-      details: {
-        ...wrapped.safeDetails,
-        format: "aria",
-        targetId: snapshot.targetId,
-        url: snapshot.url,
-        nodeCount: snapshot.nodes.length,
-        ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
-        ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
-        externalContent: {
-          untrusted: true,
-          source: "browser",
-          kind: "snapshot",
-          format: "aria",
-          wrapped: true,
-        },
-      },
-    };
-  }
 }
 
-/** Execute browser console retrieval and wrap page-controlled messages. */
-export async function executeConsoleAction(params: {
-  input: Record<string, unknown>;
-  baseUrl?: string;
-  profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
-}): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest } = params;
-  const level = normalizeOptionalString(input.level);
-  const targetId = normalizeOptionalString(input.targetId);
-  if (proxyRequest) {
-    const result = (await proxyRequest({
-      method: "GET",
-      path: "/console",
-      profile,
-      query: {
-        level,
-        targetId,
-      },
-    })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
-    return formatConsoleToolResult(result);
-  }
-  const result = await browserToolActionDeps.browserConsoleMessages(baseUrl, {
-    level,
-    targetId,
+/** Read browser debug logs, keeping counts aligned with the bounded payload. */
+export async function executeDebugLogAction(
+  kind: "requests" | "errors",
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, target, profile, signal } = params;
+  const limit =
+    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
+    50;
+  const options = {
+    targetId: normalizeOptionalString(input.targetId),
+    clear: typeof input.clear === "boolean" ? input.clear : undefined,
     profile,
-  });
-  return formatConsoleToolResult(result);
+    signal,
+  };
+  if (kind === "requests") {
+    const result = await browserRequests(target, {
+      ...options,
+      filter: normalizeOptionalString(input.filter),
+    });
+    return formatBrowserDebugLogResult(kind, result, result.requests, limit);
+  }
+  const result = await browserErrors(target, options);
+  return formatBrowserDebugLogResult("errors", result, result.errors, limit);
 }
 
-/** Execute browser actions with profile-aware timeout defaults and stale-tab recovery. */
+/** Extract visible page prose with the same trust boundary as snapshots. */
+export async function executeTextAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, target, profile, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const selector = normalizeOptionalString(input.selector);
+  const maxChars = Math.min(
+    readPositiveIntegerParam(input, "maxChars", {
+      message: "maxChars must be a positive integer.",
+    }) ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+    DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  );
+  const result = await browserPageText(target, {
+    targetId,
+    selector,
+    maxChars,
+    profile,
+    signal,
+  });
+  const wrapped = wrapBrowserExternalText({
+    value: result.text,
+    marker: "\n[truncated — retry with a narrower selector]",
+    includeWarning: true,
+    maxChars,
+    prefix: result.truncated
+      ? "Page text was truncated. Retry with a narrower selector."
+      : undefined,
+  });
+  return textResult(wrapped.text, {
+    ok: result.ok,
+    targetId: result.targetId,
+    url: result.url,
+    truncated: result.truncated || wrapped.truncated,
+    externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
+  });
+}
+
+/** Apply settings in order and pin later changes to the first resolved tab. */
+export async function executeEmulateAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, target, profile, signal } = params;
+  const settings = [
+    ["device", "device", "name"],
+    ["colorScheme", "media", "colorScheme"],
+    ["timezoneId", "timezone", "timezoneId"],
+    ["locale", "locale", "locale"],
+  ] as const;
+  const requested = settings.flatMap(([field, setting, key]) => {
+    const value = normalizeOptionalString(input[field]);
+    return value ? [{ field, setting, key, value }] : [];
+  });
+  if (requested.length === 0) {
+    throw new Error("emulate requires at least one of device, colorScheme, timezoneId, or locale.");
+  }
+  const colorScheme = requested.find(({ field }) => field === "colorScheme")?.value;
+  if (colorScheme && !["dark", "light", "no-preference", "none"].includes(colorScheme)) {
+    throw new Error("colorScheme must be dark|light|no-preference|none.");
+  }
+  let targetId = normalizeOptionalString(input.targetId);
+  for (const { setting, key, value } of requested) {
+    const body = { targetId, [key]: value };
+    const result = await browserEmulateSetting(target, {
+      setting,
+      body,
+      profile,
+      signal,
+    });
+    targetId = result.targetId ?? targetId;
+  }
+  return jsonResult({ ok: true, targetId, applied: requested.map(({ field }) => field) });
+}
+
+export async function executeDownloadAction(
+  params: Parameters<typeof executeConsoleAction>[0] & {
+    action: "download" | "waitfordownload";
+    onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  },
+): Promise<AgentToolResult<unknown>> {
+  const { action, input, target, profile } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
+  const options = { targetId, timeoutMs, profile, signal: params.signal };
+  const result =
+    action === "download"
+      ? await browserDownload(target, {
+          ...options,
+          ref: readStringParam(input, "ref", { required: true }),
+          path: readStringParam(input, "path", { required: true }),
+        })
+      : await browserWaitForDownload(target, {
+          ...options,
+          path: readStringParam(input, "path"),
+        });
+  await params.onTabActivity?.(
+    readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+  );
+  return formatBrowserExternalToolResult({ kind: "download", payload: result });
+}
+
+/** Execute browser actions with route-owned timeout semantics and stale-tab recovery. */
 export async function executeActAction(params: {
   request: BrowserActRequest;
   baseUrl?: string;
   profile?: string;
+  usesChromeMcp: boolean;
   proxyRequest: BrowserProxyRequest | null;
-  onTabActivity?: (targetId: string | undefined) => void;
+  signal?: AbortSignal;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  onTabClose?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
-  const effectiveRequest = withConfiguredActTimeout(request, profile);
+  if ("timeoutMs" in request && request.timeoutMs !== undefined) {
+    normalizePositiveTimeoutMs(request.timeoutMs);
+  }
+  const effectiveRequest = proxyRequest
+    ? request
+    : withLocalActTimeout(request, params.usesChromeMcp);
+  // resolvedTargetId is the id the act actually ran against (retry paths swap
+  // it), so page-state capture must use it rather than the original request's.
+  const finishActResult = async (result: unknown, resolvedTargetId: string | undefined) => {
+    const aborted = readBrowserBatchAbort(result);
+    const onTabResult =
+      effectiveRequest.kind === "close" || aborted?.reason === "closed"
+        ? params.onTabClose
+        : params.onTabActivity;
+    await onTabResult?.(resolvedTargetId);
+    const formatted = formatActToolResult(result, aborted);
+    if (!actObservedNavigation(result, aborted)) {
+      return formatted;
+    }
+    // Batch aborts snapshot at navigation commit, so a slow page can still be
+    // loading; the model may need one follow-up snapshot for late content.
+    return await appendNavigatedPageState({
+      result: formatted,
+      targetId: resolvedTargetId,
+      target: proxyRequest ?? baseUrl,
+      profile,
+      signal: params.signal,
+    });
+  };
+  const dispatchAct = async (actionRequest: BrowserActRequest) => {
+    const result = await browserAct(proxyRequest ?? baseUrl, actionRequest, {
+      profile,
+      signal: params.signal,
+    });
+    return {
+      result,
+      targetId:
+        readStringValue((result as { targetId?: unknown }).targetId) ??
+        readStringValue(actionRequest.targetId),
+    };
+  };
+  let dispatched: Awaited<ReturnType<typeof dispatchAct>>;
   try {
-    const result = proxyRequest
-      ? await proxyRequest({
-          method: "POST",
-          path: "/act",
-          profile,
-          body: effectiveRequest,
-          timeoutMs: resolveActProxyTimeoutMs(effectiveRequest),
-        })
-      : await browserToolActionDeps.browserAct(baseUrl, effectiveRequest, {
-          profile,
-        });
-    params.onTabActivity?.(
-      readStringValue((result as { targetId?: unknown }).targetId) ??
-        readStringValue(effectiveRequest.targetId),
-    );
-    return jsonResult(result);
+    dispatched = await dispatchAct(effectiveRequest);
   } catch (err) {
-    if (isChromeStaleTargetError(profile, err)) {
-      const retryRequest = stripTargetIdFromActRequest(effectiveRequest);
-      const tabs = proxyRequest
-        ? ((
-            (await proxyRequest({
-              method: "GET",
-              path: "/tabs",
-              profile,
-            })) as { tabs?: unknown[] }
-          ).tabs ?? [])
-        : await browserToolActionDeps.browserTabs(baseUrl, { profile }).catch(() => []);
-      // Some user-browser targetIds can go stale between snapshots and actions.
-      // Only retry safe read-only actions, and only when exactly one tab remains attached.
-      if (retryRequest && canRetryChromeActWithoutTargetId(effectiveRequest) && tabs.length === 1) {
-        try {
-          const retryResult = proxyRequest
-            ? await proxyRequest({
-                method: "POST",
-                path: "/act",
-                profile,
-                body: retryRequest,
-                timeoutMs: resolveActProxyTimeoutMs(retryRequest),
-              })
-            : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
-                profile,
-              });
-          params.onTabActivity?.(
-            readStringValue((retryResult as { targetId?: unknown }).targetId) ??
-              readStringValue(retryRequest.targetId),
-          );
-          return jsonResult(retryResult);
-        } catch {
-          // Fall through to explicit stale-target guidance.
-        }
+    const proxyRoute = proxyRequest?.route();
+    const usesChromeMcp = proxyRequest
+      ? proxyRoute?.status === "resolved" && proxyRoute.driver === "existing-session"
+      : params.usesChromeMcp;
+    const recoveryProfile =
+      proxyRoute?.status === "resolved" ? proxyRoute.profile : (profile ?? "default");
+    if (isChromeStaleTargetError(usesChromeMcp, err)) {
+      let tabRefreshError: unknown;
+      const availability = await browserTabs(proxyRequest ?? baseUrl, {
+        profile,
+        signal: params.signal,
+      }).catch((refreshError: unknown): BrowserTabsResult => {
+        params.signal?.throwIfAborted();
+        tabRefreshError = refreshError;
+        return { running: false, tabs: [] };
+      });
+      const tabs = availability.tabs;
+      const freshTargetId =
+        tabs.length === 1
+          ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
+          : undefined;
+      const retryRequest =
+        freshTargetId && normalizeOptionalString(effectiveRequest.targetId)
+          ? { ...effectiveRequest, targetId: freshTargetId }
+          : null;
+      // This is same-agent continuity, not identity recovery: only target-independent
+      // waits may retry, against the one freshly listed tab. Ref-scoped and scripted
+      // operations require explicit fresh selection (and a fresh snapshot for refs).
+      if (retryRequest && canRetryChromeActAfterSoleTargetRefresh(effectiveRequest)) {
+        const retried = await dispatchAct(retryRequest);
+        return await finishActResult(retried.result, retried.targetId);
+      }
+      if (tabRefreshError) {
+        throw new Error(
+          `Chrome tab not found for profile="${recoveryProfile}", and refreshing tabs failed: ${formatErrorMessage(tabRefreshError)}. Run action=tabs profile="${recoveryProfile}" and retry with a returned targetId.`,
+          { cause: err },
+        );
+      }
+      if (!availability.running) {
+        throw new Error(
+          `Browser tabs are unavailable for profile="${recoveryProfile}". Reconnect or start that browser profile, then run action=tabs and retry.`,
+          { cause: err },
+        );
       }
       if (!tabs.length) {
         throw new Error(
-          `No browser tabs found for profile="${profile}". Make sure the configured Chromium-based browser (v144+) is running and has open tabs, then retry.`,
+          `No browser tabs found for profile="${recoveryProfile}". Make sure the configured Chromium-based browser (v144+) is running and has open tabs, then retry.`,
           { cause: err },
         );
       }
       throw new Error(
-        `Chrome tab not found (stale targetId?). Run action=tabs profile="${profile}" and use one of the returned targetIds.`,
+        `Chrome tab not found (stale targetId?). Run action=tabs profile="${recoveryProfile}" and use one of the returned targetIds.`,
         { cause: err },
       );
     }
     throw err;
   }
+  return await finishActResult(dispatched.result, dispatched.targetId);
 }
-export { testing as __testing };
+
+function formatActToolResult(
+  result: unknown,
+  aborted: BrowserBatchAbort | null,
+): AgentToolResult<unknown> {
+  const formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
+  if (!aborted) {
+    return formatted;
+  }
+  // Navigation aborts get fresh page state (or an unavailable hint) appended by
+  // finishActResult, so only the closed case tells the model to snapshot manually.
+  const note =
+    aborted.reason === "navigation"
+      ? `Batch aborted after action ${aborted.afterAction} because the page navigated; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
+      : `Batch aborted after action ${aborted.afterAction} because the page or browser context closed; ${aborted.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
+  return {
+    ...formatted,
+    content: [...formatted.content, { type: "text", text: note }],
+  };
+}

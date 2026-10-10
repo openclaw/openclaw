@@ -1,262 +1,250 @@
-// Tool allowlist tests cover tool availability for isolated cron runs.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE } from "../run-diagnostics.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
-  listWebSearchProvidersMock,
+  clearActiveRuntimeWebToolsMetadata,
+  setActiveRuntimeWebToolsMetadata,
+} from "../../secrets/runtime-web-tools-state.js";
+import type { CronStoredJob } from "../types.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
+import {
+  hasUsableWebSearchProviderMock,
   loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveDeliveryTargetMock,
-  resolveWebSearchProviderIdMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
-const RUN_TOOLS_ALLOW_TIMEOUT_MS = 300_000;
-
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const options = { timeout: 300_000 };
+const command = "Command to run:\n- command: python3 scripts/check_mail.py";
+const policy: NonNullable<CronStoredJob["scheduledToolPolicy"]> = {
+  version: 1,
+  mode: "account",
+  ownerSessionKey: "agent:main:whatsapp:group:team",
+  ownerAccountId: "default",
+};
 
-function makeParams() {
-  return {
-    cfg: {},
-    deps: {} as never,
+function makeParams(
+  toolsAllow: string[],
+  payload: Partial<Extract<CronStoredJob["payload"], { kind: "agentTurn" }>> = {},
+  job: Partial<CronStoredJob> = {},
+) {
+  return makeIsolatedAgentParamsFixture({
+    message: "check allowed tools",
+    sessionKey: "cron:tools-allow",
     job: {
       id: "tools-allow",
       name: "Tools Allow",
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "check allowed tools" },
       delivery: { mode: "none" },
-    } as never,
-    message: "check allowed tools",
-    sessionKey: "cron:tools-allow",
-  };
-}
-
-function makeParamsWithToolsAllow(toolsAllow: string[]) {
-  const params = makeParams();
-  const job = params.job as Record<string, unknown>;
-  return {
-    ...params,
-    job: {
-      ...job,
-      payload: {
-        kind: "agentTurn",
-        message: "check allowed tools",
-        toolsAllow,
+      owner: { agentId: "main", sessionKey: policy.ownerSessionKey, accountId: "default" },
+      scheduledToolPolicy: policy,
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "external", channel: "whatsapp" },
       },
-    } as never,
-  };
-}
-
-function makeParamsWithDefaultToolsAllow(toolsAllow: string[]) {
-  const params = makeParams();
-  const job = params.job as Record<string, unknown>;
-  return {
-    ...params,
-    job: {
+      payload: { kind: "agentTurn", message: "check allowed tools", toolsAllow, ...payload },
       ...job,
-      payload: {
-        kind: "agentTurn",
-        message: "check allowed tools",
-        toolsAllow,
-        toolsAllowIsDefault: true,
-      },
-    } as never,
-  };
+    },
+  });
 }
 
-function requireEmbeddedAgentCall(): {
-  jobId?: string;
-  toolsAllow?: string[];
-} {
-  const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
-    | {
-        jobId?: string;
-        toolsAllow?: string[];
-      }
-    | undefined;
-  if (!call) {
-    throw new Error("Expected embedded OpenClaw agent call for toolsAllow passthrough");
-  }
-  return call;
-}
-
-describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
-  let previousFastTestEnv: string | undefined;
-
+describe("runCronIsolatedAgentTurn toolsAllow", () => {
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
   beforeEach(() => {
-    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    resetRunCronIsolatedAgentTurnHarness();
-    resolveDeliveryTargetMock.mockResolvedValue({
-      channel: "forum",
-      to: "123",
-      accountId: undefined,
-      error: undefined,
-    });
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const result = await run(provider, model);
-      return { result, provider, model, attempts: [] };
-    });
+    clearActiveRuntimeWebToolsMetadata();
+    mockRunCronFallbackPassthrough();
+  });
+  afterEach(clearActiveRuntimeWebToolsMetadata);
+
+  it("keeps accountless legacy jobs on the sender-policy path", options, async () => {
+    await runCronIsolatedAgentTurn(
+      makeParams(["cron"], {}, { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } }),
+    );
+    const call = runEmbeddedAgentMock.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call.toolsAllow).toEqual(["cron"]);
+    expect(call.scheduledToolPolicy).toBeUndefined();
   });
 
-  afterEach(() => {
-    if (previousFastTestEnv == null) {
-      vi.unstubAllEnvs();
-      delete process.env.OPENCLAW_TEST_FAST;
-      return;
-    }
-    vi.stubEnv("OPENCLAW_TEST_FAST", previousFastTestEnv);
-  });
-
-  it(
-    "passes through isolated cron toolsAllow=cron self-removal path",
-    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
-    async () => {
-      await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["cron"]));
-
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      const call = requireEmbeddedAgentCall();
-      expect(call.jobId).toBe("tools-allow");
-      expect(call.toolsAllow).toEqual(["cron"]);
-    },
-  );
-
-  it(
-    "preserves cron toolsAllow casing for downstream policy resolution",
-    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
-    async () => {
-      await runCronIsolatedAgentTurn(makeParamsWithToolsAllow([" CRON "]));
-
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      const call = requireEmbeddedAgentCall();
-      expect(call.jobId).toBe("tools-allow");
-      expect(call.toolsAllow).toEqual([" CRON "]);
-    },
-  );
-
-  it(
-    "passes through non-cron toolsAllow entries",
-    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
-    async () => {
-      await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["maniple__check_idle_workers"]));
-
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      const call = requireEmbeddedAgentCall();
-      expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
-    },
-  );
-
-  it(
-    "adds cron diagnostics when web_search is allowed without a selected provider",
-    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
-    async () => {
-      listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
-      resolveWebSearchProviderIdMock.mockReturnValue("");
-
-      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
-
-      expect(result.status).toBe("ok");
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      const call = requireEmbeddedAgentCall();
-      expect(call.toolsAllow).toEqual(["web_search"]);
-      expect(result.diagnostics?.summary).toBe(MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE);
-      expect(result.diagnostics?.entries).toEqual([
+  it("preserves local provenance for scheduled message tools", options, async () => {
+    await runCronIsolatedAgentTurn(
+      makeParams(
+        ["message"],
+        { toolsAllowIsDefault: true },
         {
-          ts: expect.any(Number),
-          source: "cron-preflight",
-          severity: "warn",
-          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
-          toolName: "web_search",
+          toolsAllowProvenance: {
+            version: 1,
+            source: "final-executable-surface",
+            callerOrigin: { kind: "local" },
+          },
         },
-      ]);
+      ),
+    );
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.scheduledToolPolicy).toEqual({
+      ...policy,
+      ownerOrigin: { kind: "local" },
+    });
+  });
+
+  it("runs a command prompt from an automatic snapshot without shell tools", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true, message: command }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(["*"]);
+  });
+
+  it.each([
+    { label: "runs with its owner's tools", job: {}, expected: ["*"] },
+    {
+      label: "keeps its list without a valid owner policy",
+      job: { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } },
+      expected: ["message", "read"],
     },
-  );
+    {
+      label: "keeps its list behind a condition trigger",
+      job: { trigger: { script: "return { fire: true }" } },
+      expected: ["message", "read"],
+    },
+  ])("an automatic creator snapshot $label", options, async ({ job, expected }) => {
+    // Older builds saved this snapshot without the creator's native shell.
+    await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true }, job),
+    );
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(expected);
+  });
 
-  it(
-    "does not warn for default-derived toolsAllow that includes web_search",
-    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
-    async () => {
-      listWebSearchProvidersMock.mockReturnValue([]);
-
+  it.each([
+    ["unavailable shell tools", ["terminal", "node_exec", "node_process"]],
+    ["a blank entry", [" "]],
+  ])(
+    "rejects command prompts with %s before model execution",
+    options,
+    async (_label, toolsAllow) => {
       const result = await runCronIsolatedAgentTurn(
-        makeParamsWithDefaultToolsAllow(["web_search"]),
+        makeParams(toolsAllow, { message: `${command}\n- workdir: /srv/openclaw` }),
       );
-
-      expect(result.status).toBe("ok");
-      expect(result.diagnostics).toBeUndefined();
+      expect(result).toMatchObject({
+        status: "error",
+        admissionDisposition: "rejected",
+        error: expect.stringContaining(
+          "openclaw automations edit tools-allow --tools exec,process",
+        ),
+        diagnostics: {
+          summary: expect.stringContaining("No command was executed"),
+          entries: [expect.objectContaining({ source: "cron-preflight", severity: "error" })],
+        },
+      });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(resolveConfiguredModelRefMock).not.toHaveBeenCalled();
     },
   );
 
-  it(
-    "does not warn when native web_search suppresses the managed provider tool",
-    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
-    async () => {
-      listWebSearchProvidersMock.mockReturnValue([]);
-      resolveConfiguredModelRefMock.mockReturnValue({
-        provider: "gateway",
-        model: "gpt-5.5",
+  it.each([
+    { toolsAllow: ["exec", "read"], message: `${command}\n- workdir: /srv/openclaw` },
+    { toolsAllow: ["process"], message: command },
+  ])(
+    "runs command prompts with the account-bound cap $toolsAllow",
+    options,
+    async ({ toolsAllow, message }) => {
+      const result = await runCronIsolatedAgentTurn(makeParams(toolsAllow, { message }));
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      const call = runEmbeddedAgentMock.mock.calls[0]?.[0];
+      expect(call.jobId).toBe("tools-allow");
+      expect(call.toolsAllow).toEqual(toolsAllow);
+      expect(call.scheduledToolPolicy).toEqual({
+        ...policy,
+        ownerOrigin: { kind: "external", channel: "whatsapp" },
       });
-      loadModelCatalogMock.mockResolvedValue([
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "gateway",
-          api: "openai-chatgpt-responses",
-        },
-      ]);
+    },
+  );
 
-      const result = await runCronIsolatedAgentTurn({
-        ...makeParamsWithToolsAllow(["web_search"]),
-        cfg: {
-          tools: {
-            web: {
-              search: {
-                enabled: true,
-                openaiCodex: {
-                  enabled: true,
-                  mode: "cached",
-                },
-              },
-            },
+  it("uses the prepared plugin-scoped web search provider", options, async () => {
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerSource: "auto-detect",
+        selectedProvider: "brave",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    });
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(["web_search"]),
+      cfg: {
+        plugins: {
+          entries: {
+            brave: { enabled: true, config: { webSearch: { apiKey: "token-oversized" } } },
           },
         },
-      });
+      },
+    });
+    expect(result.status).toBe("ok");
+    expect(result.diagnostics).toBeUndefined();
+    expect(hasUsableWebSearchProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/agent-dir",
+        preferRuntimeProviders: true,
+        runtimeWebSearch: expect.objectContaining({ selectedProvider: "brave" }),
+      }),
+    );
+  });
 
-      expect(result.status).toBe("ok");
-      expect(result.diagnostics).toBeUndefined();
-    },
-  );
-
-  it(
-    "keeps web_search provider diagnostics when the run aborts",
-    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
-    async () => {
-      listWebSearchProvidersMock.mockReturnValue([]);
-      resolveWebSearchProviderIdMock.mockReturnValue("");
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          payloads: [],
-          meta: {
-            aborted: true,
-            agentMeta: {},
-          },
+  it("does not warn when native web_search supplies the tool", options, async () => {
+    resolveConfiguredModelRefMock.mockReturnValue({ provider: "gateway", model: "gpt-5.5" });
+    loadModelCatalogMock.mockResolvedValue([
+      { id: "gpt-5.5", name: "GPT-5.5", provider: "gateway", api: "openai-chatgpt-responses" },
+    ]);
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(["web_search"]),
+      cfg: {
+        tools: {
+          web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
         },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
+      },
+    });
+    expect(result.status).toBe("ok");
+    expect(result.diagnostics).toBeUndefined();
+  });
 
-      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+  it("does not warn about web_search recorded in an automatic snapshot", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["read", "web_search"],
+        { toolsAllowIsDefault: true },
+        { trigger: { script: "return { fire: true }" } },
+      ),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.diagnostics).toBeUndefined();
+  });
 
-      expect(result.status).toBe("error");
-      expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
-        MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
-        "cron isolated agent run aborted",
-      ]);
-    },
-  );
+  it("keeps missing web_search provider diagnostics when the run aborts", options, async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: { result: { payloads: [], meta: { aborted: true, agentMeta: {} } } },
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    });
+    const result = await runCronIsolatedAgentTurn(makeParams(["web_search"]));
+    expect(result.status).toBe("error");
+    expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+      "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.",
+      "cron isolated agent run aborted",
+    ]);
+    expect(result.diagnostics?.entries[0]).toMatchObject({
+      source: "cron-preflight",
+      severity: "warn",
+      toolName: "web_search",
+      ts: expect.any(Number),
+    });
+  });
 });

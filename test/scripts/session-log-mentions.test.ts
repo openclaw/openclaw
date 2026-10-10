@@ -1,51 +1,60 @@
 // Session Log Mentions tests cover session log mentions script behavior.
-import { mkdtempSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   countSessionLogMentions,
   readSessionLogMentionLimits,
 } from "../../scripts/e2e/lib/session-log-mentions.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
-function makeTempRoot() {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-session-log-mentions-"));
-  tempRoots.push(root);
-  return root;
+async function writeSqliteTranscript(events: string[], storage: "legacy" | "zstd" = "legacy") {
+  const root = tempRoots.make("openclaw-session-log-mentions-");
+  const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+  await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+  const db = new DatabaseSync(sqlitePath);
+  try {
+    db.exec(`
+      CREATE TABLE transcript_events (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
+    `);
+    const insert = db.prepare(
+      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    );
+    events.forEach((event, index) => insert.run("sqlite-session", index + 1, event, index + 1));
+    if (storage === "zstd") {
+      db.exec(
+        "ALTER TABLE transcript_events ADD COLUMN event_zstd BLOB; ALTER TABLE transcript_events ADD COLUMN event_utf8_bytes INTEGER",
+      );
+      const update = db.prepare(
+        "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ? WHERE seq = ?",
+      );
+      for (const row of db.prepare("SELECT seq, event_json FROM transcript_events").all()) {
+        if (typeof row.event_json !== "string" || typeof row.seq !== "number") {
+          throw new Error("Invalid transcript fixture row");
+        }
+        const bytes = Buffer.from(row.event_json, "utf8");
+        update.run(zstdCompressSync(bytes), bytes.byteLength, row.seq);
+      }
+    }
+  } finally {
+    db.close();
+  }
+  return path.join(root, "agents", "main", "sessions");
 }
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-
 describe("session log mention scanner", () => {
-  it("counts mentions across bounded session logs", async () => {
-    const root = makeTempRoot();
-    await fs.writeFile(path.join(root, "one.jsonl"), "API.read MCP.fixture API.read\n");
-    await fs.writeFile(path.join(root, "two.jsonl"), "MCP.fixture\n");
-    await fs.writeFile(path.join(root, "ignored.txt"), "API.read\n");
-
-    await expect(
-      countSessionLogMentions({
-        sessionsDir: root,
-        needles: {
-          apiFileRead: "API.read",
-          mcpNamespace: "MCP.fixture",
-        },
-      }),
-    ).resolves.toEqual({
-      apiFileRead: 2,
-      mcpNamespace: 2,
-    });
-  });
-
   it("does not count user prompt lines as runtime mention proof", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(
       path.join(root, "prompts.jsonl"),
       [
@@ -61,7 +70,7 @@ describe("session log mention scanner", () => {
         }),
         JSON.stringify({
           role: "assistant",
-          content: "API.read MCP.fixture fixture__lookup_note",
+          content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
         }),
         "raw transcript fallback API.read",
         "",
@@ -75,30 +84,70 @@ describe("session log mention scanner", () => {
           apiFileRead: "API.read",
           mcpNamespace: "MCP.fixture",
           mcpTool: "fixture__lookup_note",
+          toolSearchPollution: 'catalog.search("lookup note"',
         },
       }),
     ).resolves.toEqual({
       apiFileRead: 2,
       mcpNamespace: 1,
       mcpTool: 1,
+      toolSearchPollution: 1,
     });
   });
 
-  it("returns zero counts when the sessions directory is absent", async () => {
+  it("counts mentions from zstd SQLite transcript rows", async () => {
+    const sessionsDir = await writeSqliteTranscript(
+      [
+        JSON.stringify({
+          message: { role: "user", content: "Use API.read and MCP.fixture from the prompt." },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
+          },
+        }),
+      ],
+      "zstd",
+    );
+
     await expect(
       countSessionLogMentions({
-        sessionsDir: path.join(makeTempRoot(), "missing"),
+        sessionsDir,
+        needles: {
+          apiFileRead: "API.read",
+          mcpNamespace: "MCP.fixture",
+          mcpTool: "fixture__lookup_note",
+          toolSearchPollution: 'catalog.search("lookup note"',
+        },
+      }),
+    ).resolves.toEqual({
+      apiFileRead: 1,
+      mcpNamespace: 1,
+      mcpTool: 1,
+      toolSearchPollution: 1,
+    });
+  });
+
+  it("rejects oversized SQLite transcript rows before counting them", async () => {
+    const sessionsDir = await writeSqliteTranscript(["API.read ".repeat(16)]);
+
+    await expect(
+      countSessionLogMentions({
+        limits: { fileMaxBytes: 32, totalMaxBytes: 1024 },
+        sessionsDir,
         needles: {
           apiFileRead: "API.read",
         },
       }),
-    ).resolves.toEqual({
-      apiFileRead: 0,
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: expect.stringContaining("per-file limit"),
     });
   });
 
   it("rejects oversized session log files before loading them", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(path.join(root, "huge.jsonl"), "x".repeat(64));
 
     await expect(
@@ -116,7 +165,7 @@ describe("session log mention scanner", () => {
   });
 
   it("rejects aggregate session log scans that exceed the total ceiling", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(path.join(root, "one.jsonl"), "x".repeat(24));
     await fs.writeFile(path.join(root, "two.jsonl"), "x".repeat(24));
 

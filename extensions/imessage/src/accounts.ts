@@ -1,14 +1,21 @@
-// Imessage plugin module implements accounts behavior.
+import { statSync } from "node:fs";
+import path from "node:path";
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
-  createAccountListHelpers,
   normalizeAccountId,
-  resolveMergedAccountConfig,
+  resolveAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
+import {
+  expandIMessageUserPath,
+  resolveIMessageHomeDir,
+  resolveLocalIMessageChatDbPath,
+} from "./cli-path.js";
+import { getCachedIMessageRemoteHost } from "./remote-host.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -18,7 +25,11 @@ export type ResolvedIMessageAccount = {
   configured: boolean;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("imessage", {
+const {
+  listAccountIds,
+  resolveDefaultAccountId,
+  resolveAccountConfig: resolveMergedIMessageAccountConfig,
+} = createAccountListHelpers<IMessageAccountConfig>("imessage", {
   implicitDefaultAccount: {
     channelKeys: ["cliPath", "dbPath"],
   },
@@ -26,59 +37,16 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("im
 export const listIMessageAccountIds = listAccountIds;
 export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 
-function resolveIMessageAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): IMessageAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
-}
-
 type IMessageStreamingConfig = NonNullable<IMessageAccountConfig["streaming"]>;
 
-function asStreamingConfigObject(value: unknown): IMessageStreamingConfig | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as IMessageStreamingConfig)
-    : undefined;
-}
-
-function asOwnBooleanProperty(value: unknown, key: string): boolean | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  return Object.hasOwn(record, key) && typeof record[key] === "boolean" ? record[key] : undefined;
-}
-
 function mergeIMessageStreamingConfig(
-  base: unknown,
-  account: unknown,
-  accountFlatBlockStreaming: unknown,
+  baseConfig: IMessageStreamingConfig | undefined,
+  accountConfig: IMessageStreamingConfig | undefined,
 ): IMessageStreamingConfig | undefined {
-  const baseConfig = asStreamingConfigObject(base);
-  const accountConfig = asStreamingConfigObject(account);
-  const accountBlockEnabled = asOwnBooleanProperty(accountConfig?.block, "enabled");
-  const flatAccountBlockEnabled =
-    accountBlockEnabled === undefined && typeof accountFlatBlockStreaming === "boolean"
-      ? accountFlatBlockStreaming
-      : undefined;
-  const applyFlatAccountBlockEnabled = (
-    config: IMessageStreamingConfig | undefined,
-  ): IMessageStreamingConfig | undefined => {
-    if (flatAccountBlockEnabled === undefined || config === undefined) {
-      return config;
-    }
-    return {
-      ...config,
-      block: {
-        ...config.block,
-        enabled: flatAccountBlockEnabled,
-      },
-    };
-  };
   if (!baseConfig || !accountConfig) {
-    return applyFlatAccountBlockEnabled(accountConfig ?? baseConfig);
+    return accountConfig ?? baseConfig;
   }
-  return applyFlatAccountBlockEnabled({
+  return {
     ...baseConfig,
     ...accountConfig,
     ...(baseConfig.block || accountConfig.block
@@ -97,24 +65,17 @@ function mergeIMessageStreamingConfig(
           },
         }
       : {}),
-  });
+  };
 }
 
 function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMessageAccountConfig {
-  const accountConfig = resolveIMessageAccountConfig(cfg, accountId);
-  const merged = resolveMergedAccountConfig<IMessageAccountConfig>({
-    channelConfig: cfg.channels?.imessage as IMessageAccountConfig | undefined,
-    accounts: cfg.channels?.imessage?.accounts as
-      | Record<string, Partial<IMessageAccountConfig>>
-      | undefined,
-    accountId,
-  });
+  const accountConfig = resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
+  const merged = resolveMergedIMessageAccountConfig(cfg, accountId);
   const streaming = mergeIMessageStreamingConfig(
-    (cfg.channels?.imessage as Record<string, unknown> | undefined)?.streaming,
-    (accountConfig as Record<string, unknown> | undefined)?.streaming,
-    (accountConfig as Record<string, unknown> | undefined)?.blockStreaming,
+    cfg.channels?.imessage?.streaming,
+    accountConfig?.streaming,
   );
-  return streaming !== undefined ? ({ ...merged, streaming } as IMessageAccountConfig) : merged;
+  return streaming !== undefined ? { ...merged, streaming } : merged;
 }
 
 export function resolveIMessageAccount(params: {
@@ -128,6 +89,7 @@ export function resolveIMessageAccount(params: {
   const merged = mergeIMessageAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const configured = Boolean(
+    merged.enabled === true ||
     merged.cliPath?.trim() ||
     merged.dbPath?.trim() ||
     merged.service ||
@@ -164,38 +126,54 @@ function normalizeIMessageDbPath(value: string | undefined | null): string {
 // Stable signature for the local Messages backend an iMessage account targets.
 // Two enabled accounts that share a signature watch the same source, which
 // caused duplicate inbound handling in openclaw/openclaw#65141.
-export function resolveIMessageAccountSourceSignature(account: ResolvedIMessageAccount): string {
-  return JSON.stringify([
-    normalizeIMessageCliPath(account.config.cliPath),
-    normalizeIMessageDbPath(account.config.dbPath),
-  ]);
+function resolveIMessageAccountSourceSignature(account: ResolvedIMessageAccount): string {
+  const cliPath = normalizeIMessageCliPath(account.config.cliPath);
+  const dbPath = normalizeIMessageDbPath(account.config.dbPath);
+  const remoteHost = getCachedIMessageRemoteHost({
+    cliPath,
+    remoteHost: account.config.remoteHost,
+  });
+  // A remote path belongs to the SSH host and must not expand against the local home.
+  if (remoteHost) {
+    return JSON.stringify([cliPath, dbPath, remoteHost]);
+  }
+  const home = resolveIMessageHomeDir();
+  const localDbPath = dbPath
+    ? expandIMessageUserPath(dbPath)
+    : home
+      ? path.join(home, "Library", "Messages", "chat.db")
+      : undefined;
+  // Preserve the exact executable: same-basename SSH wrappers can target different hosts.
+  return JSON.stringify([cliPath, localDbPath ? path.resolve(localDbPath) : "", ""]);
 }
 
-function resolveIMessageAccountSourceOwner(params: {
-  cfg: OpenClawConfig;
-  signature: string;
-}): string | undefined {
-  // Prefer an explicit named account over the implicit "default" so that
-  // bindings tied to the named account keep working (openclaw/openclaw#65141).
-  let defaultOwner: string | undefined;
-  for (const candidateAccountId of listIMessageAccountIds(params.cfg)) {
-    const candidate = resolveIMessageAccount({
-      cfg: params.cfg,
-      accountId: candidateAccountId,
-    });
-    if (!candidate.enabled) {
+function groupIMessageAccountsBySource(cfg: OpenClawConfig) {
+  const groups = new Map<string, ResolvedIMessageAccount[]>();
+  for (const accountId of listIMessageAccountIds(cfg)) {
+    const account = resolveIMessageAccount({ cfg, accountId });
+    if (!account.enabled || !account.configured) {
       continue;
     }
-    if (resolveIMessageAccountSourceSignature(candidate) !== params.signature) {
-      continue;
-    }
-    if (candidate.accountId === DEFAULT_ACCOUNT_ID) {
-      defaultOwner ??= candidate.accountId;
-      continue;
-    }
-    return candidate.accountId;
+    const signature = resolveIMessageAccountSourceSignature(account);
+    const accounts = groups.get(signature) ?? [];
+    accounts.push(account);
+    groups.set(signature, accounts);
   }
-  return defaultOwner;
+  return groups;
+}
+
+function resolveIMessageAccountSourceOwner(accounts: readonly ResolvedIMessageAccount[]) {
+  // Named accounts precede the implicit default so their bindings remain usable.
+  return accounts.find((account) => account.accountId !== DEFAULT_ACCOUNT_ID) ?? accounts[0];
+}
+
+function resolveIMessageDatabaseFileIdentity(dbPath: string): string | undefined {
+  try {
+    const stats = statSync(dbPath);
+    return stats.isFile() ? `${stats.dev}:${stats.ino}` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -210,14 +188,14 @@ export function resolveIMessageDuplicateSourceOwner(params: {
   cfg: OpenClawConfig;
   account: ResolvedIMessageAccount;
 }): string | undefined {
-  if (!params.account.enabled) {
+  if (!params.account.enabled || !params.account.configured) {
     return undefined;
   }
-  const owner = resolveIMessageAccountSourceOwner({
-    cfg: params.cfg,
-    signature: resolveIMessageAccountSourceSignature(params.account),
-  });
-  return owner && owner !== params.account.accountId ? owner : undefined;
+  const signature = resolveIMessageAccountSourceSignature(params.account);
+  const owner = resolveIMessageAccountSourceOwner(
+    groupIMessageAccountsBySource(params.cfg).get(signature) ?? [],
+  );
+  return owner && owner.accountId !== params.account.accountId ? owner.accountId : undefined;
 }
 
 export function listEnabledIMessageAccounts(cfg: OpenClawConfig): ResolvedIMessageAccount[] {
@@ -226,33 +204,69 @@ export function listEnabledIMessageAccounts(cfg: OpenClawConfig): ResolvedIMessa
     .filter((account) => account.enabled);
 }
 
+export function hasExclusiveIMessageLocalDatabase(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedIMessageAccount;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+}): boolean {
+  if (params.remoteHost?.trim()) {
+    return false;
+  }
+  const otherAccounts = listEnabledIMessageAccounts(params.cfg).filter(
+    (candidate) => candidate.accountId !== params.account.accountId,
+  );
+  if (otherAccounts.length === 0) {
+    return true;
+  }
+
+  const selectedDbPath = resolveLocalIMessageChatDbPath({
+    cliPath: params.cliPath,
+    dbPath: params.dbPath,
+    remoteHost: params.remoteHost ?? params.account.config.remoteHost,
+  });
+  if (!selectedDbPath) {
+    return false;
+  }
+
+  const selectedDbIdentity = resolveIMessageDatabaseFileIdentity(selectedDbPath);
+  if (!selectedDbIdentity) {
+    return false;
+  }
+
+  for (const candidate of otherAccounts) {
+    if (candidate.config.remoteHost?.trim()) {
+      continue;
+    }
+    const candidateDbPath = resolveLocalIMessageChatDbPath({
+      cliPath: candidate.config.cliPath?.trim() || "imsg",
+      dbPath: candidate.config.dbPath?.trim() || undefined,
+    });
+    if (!candidateDbPath) {
+      return false;
+    }
+    const candidateDbIdentity = resolveIMessageDatabaseFileIdentity(candidateDbPath);
+    if (!candidateDbIdentity || candidateDbIdentity === selectedDbIdentity) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function collectIMessageDuplicateAccountSourceWarnings(params: {
   cfg: OpenClawConfig;
 }): string[] {
-  const groups = new Map<string, ResolvedIMessageAccount[]>();
-  for (const accountId of listIMessageAccountIds(params.cfg)) {
-    const account = resolveIMessageAccount({ cfg: params.cfg, accountId });
-    if (!account.enabled) {
-      continue;
-    }
-    const signature = resolveIMessageAccountSourceSignature(account);
-    const existing = groups.get(signature);
-    if (existing) {
-      existing.push(account);
-    } else {
-      groups.set(signature, [account]);
-    }
-  }
+  const groups = groupIMessageAccountsBySource(params.cfg);
   const warnings: string[] = [];
   for (const collisions of groups.values()) {
     if (collisions.length < 2) {
       continue;
     }
-    const ownerId = resolveIMessageAccountSourceOwner({
-      cfg: params.cfg,
-      signature: resolveIMessageAccountSourceSignature(collisions[0]),
-    });
-    const owner = collisions.find((a) => a.accountId === ownerId) ?? collisions[0];
+    const owner = expectDefined(
+      resolveIMessageAccountSourceOwner(collisions),
+      "duplicate iMessage account source",
+    );
     const duplicates = collisions.filter((a) => a.accountId !== owner.accountId);
     const dupIds = duplicates.map((a) => `"${a.accountId}"`).join(", ");
     const cliPath = normalizeIMessageCliPath(owner.config.cliPath);

@@ -1,6 +1,8 @@
-// Tokenjuice tests cover index plugin behavior.
-import fs from "node:fs";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createAgentToolResultMiddlewareRunner,
+  type OpenClawAgentToolResult,
+} from "openclaw/plugin-sdk/agent-harness";
+import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { tokenjuiceFactory, createTokenjuiceOpenClawEmbeddedExtension } = vi.hoisted(() => {
@@ -17,122 +19,120 @@ vi.mock("./runtime-api.js", () => ({
 }));
 
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middleware.js";
+
+const toolResultHandler =
+  vi.fn<
+    (event: {
+      toolName: string;
+      details: Record<string, unknown>;
+    }) => Promise<Partial<OpenClawAgentToolResult> | void>
+  >();
+
+async function applyBashResult(details: unknown) {
+  const result = await createTokenjuiceAgentToolResultMiddleware()(
+    {
+      toolCallId: "tool-call-tokenjuice-bash",
+      toolName: "bash",
+      args: { command: "cat /tmp/out.txt", workdir: "/tmp/openclaw-tokenjuice-test" },
+      result: { content: [{ type: "text", text: "file contents\n" }], details },
+      isError: false,
+    },
+    { runtime: "openclaw" },
+  );
+  return { received: toolResultHandler.mock.calls[0]?.[0], result };
+}
 
 describe("tokenjuice plugin", () => {
   beforeEach(() => {
     createTokenjuiceOpenClawEmbeddedExtension.mockClear();
     tokenjuiceFactory.mockClear();
+    toolResultHandler.mockReset().mockResolvedValue(undefined);
+    tokenjuiceFactory.mockImplementation(
+      (api: { on: (event: string, handler: unknown) => void }) => {
+        api.on("tool_result", toolResultHandler);
+      },
+    );
   });
 
   it("is opt-in by default", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { enabledByDefault?: unknown };
-
-    expect(manifest.enabledByDefault).toBeUndefined();
+    expect(manifest).not.toHaveProperty("enabledByDefault");
   });
 
-  it("registers tokenjuice tool result middleware for OpenClaw and Codex runtimes", () => {
-    const registerAgentToolResultMiddleware = vi.fn();
-
-    plugin.register(
-      createTestPluginApi({
-        id: "tokenjuice",
-        name: "tokenjuice",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: {} as never,
-        registerAgentToolResultMiddleware,
-      }),
-    );
+  it("registers tokenjuice tool result middleware for OpenClaw, Codex, and Agents API runtimes", () => {
+    const captured = capturePluginRegistration({
+      id: "tokenjuice",
+      contracts: manifest.contracts,
+      register(api) {
+        plugin.register(api);
+      },
+    });
 
     expect(createTokenjuiceOpenClawEmbeddedExtension).toHaveBeenCalledTimes(1);
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
-    const registration = registerAgentToolResultMiddleware.mock.calls[0];
-    expect(typeof registration?.[0]).toBe("function");
-    expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
+    const registration = captured.agentToolResultMiddlewares[0];
+    expect(typeof registration?.handler).toBe("function");
+    expect(registration?.runtimes).toEqual(["openclaw", "codex", "agentsapi"]);
   });
 
-  it("synthesises exec fields when bash provides metadata-only details (no status)", async () => {
-    let received:
-      | {
-          details: unknown;
-        }
-      | undefined;
-    tokenjuiceFactory.mockImplementationOnce(
-      (api: { on: (event: string, handler: unknown) => void }) => {
-        api.on("tool_result", async (event: typeof received) => {
-          received = event;
-        });
-      },
-    );
-
-    const middleware = createTokenjuiceAgentToolResultMiddleware();
-    await middleware(
-      {
-        toolCallId: "tool-call-tokenjuice-bash-meta",
-        toolName: "bash",
-        args: { command: "cat /tmp/out.txt", workdir: "/tmp/openclaw-tokenjuice-test" },
-        result: {
-          content: [{ type: "text", text: "file contents\n" }],
-          details: {
-            truncation: { reason: "max_bytes" },
-            fullOutputPath: "/tmp/out.txt",
-          },
-        },
-        isError: false,
-      },
-      { runtime: "openclaw" },
-    );
+  it("synthesises exec status when bash provides metadata-only details", async () => {
+    const { received } = await applyBashResult({
+      truncation: { reason: "max_bytes" },
+      fullOutputPath: "/tmp/out.txt",
+    });
 
     expect(received?.details).toMatchObject({
       status: "completed",
-      aggregated: "file contents\n",
       exitCode: 0,
       truncation: { reason: "max_bytes" },
       fullOutputPath: "/tmp/out.txt",
     });
+    expect(received?.details).not.toHaveProperty("aggregated");
   });
 
-  it("passes through bash details that already have a status field unchanged", async () => {
-    let received:
-      | {
-          details: unknown;
-        }
-      | undefined;
-    tokenjuiceFactory.mockImplementationOnce(
-      (api: { on: (event: string, handler: unknown) => void }) => {
-        api.on("tool_result", async (event: typeof received) => {
-          received = event;
-        });
-      },
-    );
-
+  it("passes through status metadata without duplicate aggregated output", async () => {
     const existingDetails = {
       status: "completed",
       aggregated: "pre-built output",
       exitCode: 0,
       cwd: "/existing/cwd",
     };
+    const { received } = await applyBashResult(existingDetails);
 
-    const middleware = createTokenjuiceAgentToolResultMiddleware();
-    await middleware(
-      {
-        toolCallId: "tool-call-tokenjuice-bash-existing",
-        toolName: "bash",
-        args: { command: "echo hi", workdir: "/tmp" },
-        result: {
-          content: [{ type: "text", text: "hi\n" }],
-          details: existingDetails,
-        },
-        isError: false,
+    expect(received?.details).toEqual({
+      status: "completed",
+      exitCode: 0,
+      cwd: "/existing/cwd",
+    });
+    expect(received?.details).not.toBe(existingDetails);
+  });
+
+  it("keeps compacted exec results below the middleware details limit", async () => {
+    toolResultHandler.mockImplementationOnce(async (event) => ({
+      content: [{ type: "text", text: "compacted" }],
+      details: { ...event.details, tokenjuice: { compacted: true } },
+    }));
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      createTokenjuiceAgentToolResultMiddleware(),
+    ]);
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "tool-call-tokenjuice-large",
+      toolName: "exec",
+      args: { command: "seq 1 30000" },
+      result: {
+        content: [{ type: "text", text: "x".repeat(120_000) }],
+        details: undefined,
       },
-      { runtime: "openclaw" },
-    );
+    });
 
-    expect(received?.details).toBe(existingDetails);
+    expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
+    expect(result.details).toEqual({
+      status: "completed",
+      exitCode: 0,
+      tokenjuice: { compacted: true },
+    });
   });
 
   it.each([
@@ -142,84 +142,22 @@ describe("tokenjuice plugin", () => {
     ["timeout flag", { timedOut: true }, "failed", 1],
     ["error value", { error: "command failed" }, "failed", 1],
     ["successful exit code", { exitCode: 0 }, "completed", 0],
-    ["successful flag", { success: true }, "completed", 0],
   ])(
     "adds a canonical status while preserving bash details with a %s",
     async (_label, existingDetails, status, exitCode) => {
-      let received:
-        | {
-            details: unknown;
-          }
-        | undefined;
-      tokenjuiceFactory.mockImplementationOnce(
-        (api: { on: (event: string, handler: unknown) => void }) => {
-          api.on("tool_result", async (event: typeof received) => {
-            received = event;
-          });
-        },
-      );
-
-      const middleware = createTokenjuiceAgentToolResultMiddleware();
-      await middleware(
-        {
-          toolCallId: "tool-call-tokenjuice-bash-terminal",
-          toolName: "bash",
-          args: { command: "exit 7", workdir: "/tmp" },
-          result: {
-            content: [{ type: "text", text: "failed\n" }],
-            details: existingDetails,
-          },
-          isError: false,
-        },
-        { runtime: "openclaw" },
-      );
-
-      expect(received?.details).toMatchObject({
-        ...existingDetails,
-        status,
-        exitCode,
-      });
+      const { received } = await applyBashResult(existingDetails);
+      expect(received?.details).toMatchObject({ ...existingDetails, status, exitCode });
     },
   );
 
   it("normalizes bash results without details before passing them to tokenjuice", async () => {
-    let received:
-      | {
-          toolName: string;
-          input: Record<string, unknown>;
-          content: unknown;
-          details: unknown;
-          isError?: boolean;
-        }
-      | undefined;
-    tokenjuiceFactory.mockImplementationOnce(
-      (api: { on: (event: string, handler: unknown) => void }) => {
-        api.on("tool_result", async (event: typeof received) => {
-          received = event;
-          return { content: [{ type: "text", text: "compacted" }] };
-        });
-      },
-    );
-
-    const middleware = createTokenjuiceAgentToolResultMiddleware();
-    const result = await middleware(
-      {
-        toolCallId: "tool-call-tokenjuice-bash",
-        toolName: "bash",
-        args: { command: "printf 'hello\\n'", workdir: "/tmp/openclaw-tokenjuice-test" },
-        result: { content: [{ type: "text", text: "hello\n" }], details: undefined },
-        isError: false,
-      },
-      { runtime: "openclaw" },
-    );
+    toolResultHandler.mockResolvedValueOnce({ content: [{ type: "text", text: "compacted" }] });
+    const { received, result } = await applyBashResult(undefined);
 
     expect(received?.toolName).toBe("bash");
-    expect(received?.details).toMatchObject({
-      status: "completed",
-      aggregated: "hello\n",
-      exitCode: 0,
-    });
+    expect(received?.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(received?.details).not.toHaveProperty("cwd");
+    expect(received?.details).not.toHaveProperty("aggregated");
     expect(result?.result.content).toEqual([{ type: "text", text: "compacted" }]);
   });
 });

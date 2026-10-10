@@ -1,0 +1,189 @@
+/** Serializes run-owned transcript callbacks and bounds teardown settlement. */
+import { AsyncLocalStorage } from "node:async_hooks";
+import { toErrorObject } from "../../../infra/errors.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { settlesWithin } from "../../../shared/settle-within.js";
+import { log } from "../logger.js";
+
+const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
+
+/** Per-attempt transcript write state carried by the owned AsyncLocalStorage. */
+export type LifecycleOwner = {
+  active: boolean;
+  nestedTail: Promise<void>;
+  pendingOperations: Set<Promise<void>>;
+};
+
+export type EmbeddedAttemptTranscriptLifecycle = {
+  withTranscriptWrite<T>(run: () => Promise<T> | T): Promise<T>;
+  beginCleanup(): Promise<void>;
+  dispose(): Promise<void>;
+};
+
+export function createEmbeddedAttemptTranscriptLifecycle(
+  params: {
+    runId?: string;
+    sessionId?: string;
+  },
+  deps: {
+    /** Override how the lifecycle owner store is constructed, so tests can hold a reference to the per-attempt AsyncLocalStorage. Defaults to an owned instance. */
+    createLifecycleStore?: () => AsyncLocalStorage<LifecycleOwner>;
+  } = {},
+): EmbeddedAttemptTranscriptLifecycle {
+  let disposed = false;
+  let lifecycle = Promise.resolve();
+  let cleanupDrain: Promise<void> | undefined;
+  let disposePromise: Promise<void> | undefined;
+  let pendingWrites = 0;
+  const lifecycleOwner = deps.createLifecycleStore?.() ?? new AsyncLocalStorage<LifecycleOwner>();
+
+  const createLifecycleOwner = (): LifecycleOwner => ({
+    active: true,
+    nestedTail: Promise.resolve(),
+    pendingOperations: new Set(),
+  });
+  const drainLifecycleOwner = async (owner: LifecycleOwner): Promise<void> => {
+    let firstError: Error | undefined;
+    while (owner.pendingOperations.size > 0) {
+      const pending = [...owner.pendingOperations];
+      owner.pendingOperations.clear();
+      const settled = await Promise.allSettled(pending);
+      const rejected = settled.find((result) => result.status === "rejected");
+      if (firstError === undefined && rejected?.status === "rejected") {
+        firstError = toErrorObject(rejected.reason, "nested transcript write failed");
+      }
+    }
+    if (firstError !== undefined) {
+      throw firstError;
+    }
+  };
+  const runLifecycleOwner = async <T>(
+    owner: LifecycleOwner,
+    run: () => Promise<T> | T,
+  ): Promise<T> => {
+    let value: T | undefined;
+    let primaryError: Error | undefined;
+    try {
+      value = await lifecycleOwner.run(owner, async () => await run());
+    } catch (error) {
+      primaryError = toErrorObject(error, "transcript write failed");
+    }
+    let drainError: Error | undefined;
+    try {
+      await drainLifecycleOwner(owner);
+    } catch (error) {
+      drainError = toErrorObject(error, "nested transcript drain failed");
+    } finally {
+      owner.active = false;
+    }
+    if (
+      primaryError !== undefined &&
+      drainError !== undefined &&
+      drainError !== primaryError &&
+      primaryError.cause === undefined
+    ) {
+      try {
+        primaryError.cause = drainError;
+      } catch {
+        // Frozen callback errors remain primary; drain failure is secondary.
+      }
+    }
+    const failure = primaryError ?? drainError;
+    if (failure !== undefined) {
+      throw failure;
+    }
+    return value as T;
+  };
+  const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
+    const inheritedOwner = lifecycleOwner.getStore();
+    if (inheritedOwner?.active) {
+      const operation = inheritedOwner.nestedTail.then(
+        async () => await runLifecycleOwner(createLifecycleOwner(), run),
+      );
+      inheritedOwner.nestedTail = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      const propagated = operation.then(() => undefined);
+      void propagated.catch(() => {});
+      inheritedOwner.pendingOperations.add(propagated);
+      return await operation;
+    }
+
+    const previous = lifecycle;
+    const { promise, resolve: release } = createDeferredCore();
+    lifecycle = promise;
+    await previous;
+    const owner = createLifecycleOwner();
+    try {
+      return await runLifecycleOwner(owner, run);
+    } finally {
+      release();
+    }
+  };
+  const settleWithinTeardownBudget = async (operation: Promise<void>): Promise<void> => {
+    if (!(await settlesWithin(operation, TRANSCRIPT_TEARDOWN_BUDGET_MS))) {
+      log.error(
+        `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
+          `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
+          `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,
+      );
+    }
+  };
+  const beginCleanup = async (): Promise<void> => {
+    const currentOwner = lifecycleOwner.getStore();
+    if (currentOwner?.active) {
+      throw new Error("cannot start attempt cleanup inside a transcript write callback");
+    }
+    // Release the owned AsyncLocalStorage only after the serialized drain actually
+    // settles, never when the bounded teardown budget merely expires. Disabling it
+    // early would make a still-running transcript callback lose its store (its
+    // nested writes would be rejected as disposed) and, once that callback finishes,
+    // the queued drain would re-run() the instance with no later disable to release
+    // it. Attaching the release to the drain itself keeps bounded teardown and only
+    // frees context that no admitted callback can still observe. See #141122.
+    cleanupDrain ??= settleWithinTeardownBudget(
+      serializeLifecycle(() => {
+        lifecycleOwner.disable();
+      }),
+    );
+    await cleanupDrain;
+  };
+
+  return {
+    withTranscriptWrite: (run) => {
+      const activeDescendant = lifecycleOwner.getStore()?.active === true;
+      if ((cleanupDrain || disposed) && !activeDescendant) {
+        const rejected = Promise.reject(
+          new Error(
+            disposed
+              ? "attempt disposed before transcript write"
+              : "attempt cleanup started before transcript write",
+          ),
+        );
+        void rejected.catch(() => {});
+        return rejected;
+      }
+      pendingWrites += 1;
+      const operation = serializeLifecycle(run);
+      void operation
+        .finally(() => {
+          pendingWrites -= 1;
+        })
+        .catch(() => {});
+      return operation;
+    },
+    beginCleanup,
+    dispose: async () => {
+      const currentOwner = lifecycleOwner.getStore();
+      if (currentOwner?.active) {
+        throw new Error("cannot dispose an attempt from inside a transcript write callback");
+      }
+      disposePromise ??= (async () => {
+        await beginCleanup();
+        disposed = true;
+      })();
+      await disposePromise;
+    },
+  };
+}

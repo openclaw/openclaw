@@ -1,11 +1,10 @@
-// Qa Lab plugin module implements self check behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import type { QaBusState } from "./bus-state.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
+import { renderQaMarkdownReport } from "./report.js";
 import { runQaScenario, type QaScenarioResult } from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 
@@ -23,7 +22,7 @@ export function isQaSelfCheckSuccessful(result: QaSelfCheckResult): boolean {
   );
 }
 
-export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
+function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
   if (params?.outputPath) {
     return params.outputPath;
   }
@@ -41,10 +40,13 @@ export async function runQaSelfCheckAgainstState(params: {
   waitTimeoutMs?: number;
 }): Promise<QaSelfCheckResult> {
   const startedAt = new Date();
-  const transport = createQaTransportAdapter({
-    id: params.transportId ?? "qa-channel",
+  const transportFactoryResult = await createQaTransportAdapter({
+    channelId: params.transportId ?? "qa-channel",
+    driver: params.transportId ?? "qa-channel",
+    outputDir: path.dirname(resolveQaSelfCheckOutputPath(params)),
     state: params.state,
   });
+  const transport = transportFactoryResult.adapter;
   params.state.reset();
   const scenarioResult = await runQaScenario(
     createQaSelfCheckScenario({ waitTimeoutMs: params.waitTimeoutMs }),
@@ -83,14 +85,7 @@ export async function runQaSelfCheckAgainstState(params: {
     startedAt,
     finishedAt,
     checks,
-    scenarios: [
-      {
-        name: scenarioResult.name,
-        status: scenarioResult.status,
-        details: scenarioResult.details,
-        steps: scenarioResult.steps,
-      },
-    ],
+    scenarios: [scenarioResult],
     timeline,
     notes: params.notes ?? [
       "Vertical slice: qa-channel + qa-lab bus + private debugger surface.",
@@ -98,12 +93,10 @@ export async function runQaSelfCheckAgainstState(params: {
     ],
   });
 
-  const outputPath = resolveQaSelfCheckOutputPath({
-    outputPath: params.outputPath,
-    repoRoot: params.repoRoot,
-  });
+  const outputPath = resolveQaSelfCheckOutputPath(params);
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, report, "utf8");
+  await transportFactoryResult.cleanupWithoutGateway();
 
   return {
     outputPath,

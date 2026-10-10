@@ -1,9 +1,6 @@
-// Matrix tests cover verification utils plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isMatrixVerificationEventType,
-  isMatrixVerificationNoticeBody,
-  isMatrixVerificationRequestMsgType,
   isMatrixVerificationRoomMessage,
 } from "./verification-utils.js";
 
@@ -13,16 +10,16 @@ describe("matrix verification message classifiers", () => {
     expect(isMatrixVerificationEventType("m.room.message")).toBe(false);
   });
 
-  it("recognizes verification request message type", () => {
-    expect(isMatrixVerificationRequestMsgType("m.key.verification.request")).toBe(true);
-    expect(isMatrixVerificationRequestMsgType("m.text")).toBe(false);
-  });
-
   it("recognizes verification notice bodies", () => {
     expect(
-      isMatrixVerificationNoticeBody("Matrix verification started with @alice:example.org."),
+      isMatrixVerificationRoomMessage({
+        msgtype: "m.notice",
+        body: "Matrix verification started with @alice:example.org.",
+      }),
     ).toBe(true);
-    expect(isMatrixVerificationNoticeBody("hello world")).toBe(false);
+    expect(isMatrixVerificationRoomMessage({ msgtype: "m.notice", body: "hello world" })).toBe(
+      false,
+    );
   });
 
   it("classifies verification room messages", () => {

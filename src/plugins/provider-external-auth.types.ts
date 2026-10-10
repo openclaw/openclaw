@@ -2,6 +2,14 @@
 import type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInputMode } from "./provider-auth-types.js";
+
+export type ProviderAuthOptionBag = {
+  token?: string;
+  tokenProvider?: string;
+  secretInputMode?: SecretInputMode;
+  [key: string]: unknown;
+};
 
 /** Context for resolving synthetic provider credentials from config. */
 export type ProviderResolveSyntheticAuthContext = {
@@ -16,6 +24,8 @@ export type ProviderSyntheticAuthResult = {
   source: string;
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
   expiresAt?: number;
+  /** Native presence authorizes only this runtime, never a provider bearer request. */
+  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
 };
 
 /** Context for resolving external provider auth profiles. */
@@ -27,10 +37,6 @@ export type ProviderResolveExternalAuthProfilesContext = {
   store: AuthProfileStore;
 };
 
-/** OAuth-specific external auth profile resolution context. */
-export type ProviderResolveExternalOAuthProfilesContext =
-  ProviderResolveExternalAuthProfilesContext;
-
 /** External auth profile credential resolved for a provider. */
 export type ProviderExternalAuthProfile = {
   profileId: string;
@@ -38,5 +44,10 @@ export type ProviderExternalAuthProfile = {
   persistence?: "runtime-only" | "persisted";
 };
 
-/** OAuth-specific provider external auth profile alias. */
-export type ProviderExternalOAuthProfile = ProviderExternalAuthProfile;
+/** Internal synchronous resolver shared by provider hooks and auth-store overlays. */
+export type ProviderExternalAuthProfileResolver = (params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveExternalAuthProfilesContext;
+}) => ProviderExternalAuthProfile[];

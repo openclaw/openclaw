@@ -1,4 +1,3 @@
-// Tlon API module exposes the plugin public contract.
 export {
   createDedupeCache,
   createLoggerBackedRuntime,
@@ -10,7 +9,6 @@ export {
   type RuntimeEnv,
   SsrFBlockedError,
   type SsrFPolicy,
-  ssrfPolicyFromAllowPrivateNetwork,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./runtime-api.js";
 export { tlonPlugin } from "./src/channel.js";

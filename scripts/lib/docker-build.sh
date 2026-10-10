@@ -9,6 +9,23 @@ if ! declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
   source "$DOCKER_BUILD_LIB_DIR/docker-e2e-container.sh"
 fi
 
+docker_build_resolve_platform() {
+  local host_arch
+  if [[ -n "$1" ]]; then
+    printf "%s" "$1"
+    return
+  fi
+  host_arch="$(uname -m)"
+  case "$host_arch" in
+    arm64 | aarch64)
+      printf "linux/arm64"
+      ;;
+    *)
+      printf "linux/amd64"
+      ;;
+  esac
+}
+
 docker_build_on_missing_enabled() {
   case "${OPENCLAW_DOCKER_BUILD_ON_MISSING:-}" in
     1 | true | TRUE | yes | YES)
@@ -34,7 +51,7 @@ docker_build_command() {
     fi
   fi
 
-  printf '%s\0' env DOCKER_BUILDKIT=1 "${build_cmd[@]}" "$@"
+  printf '%s\0' env DOCKER_BUILDKIT=1 "${build_cmd[@]}" --progress=plain --build-arg GITHUB_ACTIONS "$@"
 }
 
 docker_build_args_need_buildx() {
@@ -51,13 +68,13 @@ docker_build_args_need_buildx() {
 docker_build_transient_failure() {
   local log_file="$1"
   grep -Eqi \
-    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable|failed to fetch oauth token:.*(5[0-9][0-9]|Gateway Timeout)|unexpected status from .*: 5[0-9][0-9]|TLS handshake timeout|net/http: TLS handshake timeout|i/o timeout|connection reset by peer' \
+    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable|failed to fetch oauth token:.*(5[0-9][0-9]|Gateway Timeout)|unexpected status from .*: 5[0-9][0-9]|TLS handshake timeout|net/http: TLS handshake timeout|ConnectTimeoutError|Connect Timeout Error|i/o timeout|connection reset by peer' \
     "$log_file"
 }
 
 docker_build_resource_exhausted_failure() {
   local log_file="$1"
-  grep -Eqi 'ResourceExhausted|cannot allocate memory|out of memory|exit code: 137|signal: killed|Killed' "$log_file"
+  grep -Eqi 'ResourceExhausted|cannot allocate memory|out of memory|exit code: 137|signal: killed|fatal error: killed signal terminated program|(^|#[0-9]+ [0-9.]+ )Killed[[:space:]]*$' "$log_file"
 }
 
 docker_build_print_resource_exhausted_hint() {
@@ -118,6 +135,22 @@ docker_build_run_command() {
   "$@"
 }
 
+docker_build_maybe_print_heartbeat() {
+  local label="$1"
+  local elapsed_seconds="$2"
+  local next_heartbeat="$3"
+  local log_file="$4"
+  if [ "$elapsed_seconds" -lt "$next_heartbeat" ]; then
+    return 1
+  fi
+  local log_bytes="0"
+  if [ -f "$log_file" ]; then
+    log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+    log_bytes="${log_bytes//[[:space:]]/}"
+  fi
+  echo "Docker build $label still running (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)..."
+}
+
 docker_build_run_logged() {
   local label="$1"
   local timeout_value="$2"
@@ -137,24 +170,6 @@ docker_build_run_logged() {
   previous_int_trap="$(trap -p INT || true)"
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
-
-  docker_build_restore_signal_traps() {
-    if [ -n "$previous_int_trap" ]; then
-      eval "$previous_int_trap"
-    else
-      trap - INT
-    fi
-    if [ -n "$previous_term_trap" ]; then
-      eval "$previous_term_trap"
-    else
-      trap - TERM
-    fi
-    if [ -n "$previous_hup_trap" ]; then
-      eval "$previous_hup_trap"
-    else
-      trap - HUP
-    fi
-  }
 
   docker_build_signal_process_tree() {
     local signal="$1"
@@ -184,7 +199,7 @@ docker_build_run_logged() {
       docker_build_signal_process_tree "$signal" "$build_pid"
       wait "$build_pid" 2>/dev/null || true
     fi
-    docker_build_restore_signal_traps
+    docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
     return "$exit_code"
   }
 
@@ -195,25 +210,27 @@ docker_build_run_logged() {
   docker_build_run_command "$timeout_value" "$@" >"$log_file" 2>&1 &
   build_pid="$!"
   while kill -0 "$build_pid" 2>/dev/null; do
-    /bin/sleep 1 &
+    # Poll promptly so short builds do not pay a one-second wrapper tax.
+    /bin/sleep 0.1 &
     heartbeat_sleep_pid="$!"
     wait "$heartbeat_sleep_pid" 2>/dev/null || true
     heartbeat_sleep_pid=""
     local elapsed_seconds=$((SECONDS - started_at))
-    if [ "$elapsed_seconds" -ge "$next_heartbeat" ] && kill -0 "$build_pid" 2>/dev/null; then
-      local log_bytes="0"
-      if [ -f "$log_file" ]; then
-        log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
-        log_bytes="${log_bytes//[[:space:]]/}"
-      fi
-      echo "Docker build $label still running (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)..."
+    if kill -0 "$build_pid" 2>/dev/null && \
+      docker_build_maybe_print_heartbeat "$label" "$elapsed_seconds" "$next_heartbeat" "$log_file"; then
       next_heartbeat=$((elapsed_seconds + heartbeat_seconds))
     fi
   done
 
   wait "$build_pid" || build_status="$?"
-  docker_build_restore_signal_traps
+  docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
   return "$build_status"
+}
+
+docker_build_relay_limit_warnings() {
+  if grep -q '::warning file=.*col=0,title=' "$1"; then
+    node "$DOCKER_BUILD_LIB_DIR/../relay-build-limit-warnings.mts" "$1"
+  fi
 }
 
 docker_build_with_retries() {
@@ -235,11 +252,13 @@ docker_build_with_retries() {
   while true; do
     log_file="$(docker_e2e_run_log "$label")"
     if docker_build_run_logged "$label" "$timeout_value" "$log_file" "${command[@]}"; then
+      docker_build_relay_limit_warnings "$log_file"
       rm -f "$log_file"
       return 0
     else
       build_status="$?"
     fi
+    docker_build_relay_limit_warnings "$log_file"
 
     if docker_build_signal_exit_status "$build_status"; then
       rm -f "$log_file"
@@ -255,7 +274,7 @@ docker_build_with_retries() {
       return 1
     fi
 
-    echo "Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
+    echo "::warning::Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
     docker_e2e_print_log "$log_file"
     rm -f "$log_file"
     attempt=$((attempt + 1))

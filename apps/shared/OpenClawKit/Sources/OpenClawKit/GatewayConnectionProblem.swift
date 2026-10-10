@@ -1,7 +1,23 @@
 import Foundation
 
+/// Ingress authorization belongs to the app, independently from Gateway device credentials.
+public struct GatewayExternalAuthorizationError: Error, LocalizedError, Sendable {
+    public init() {}
+
+    public var errorDescription: String? {
+        "This gateway requires browser sign-in. Open Gateway settings to continue."
+    }
+}
+
 public struct GatewayConnectionProblem: Equatable, Sendable {
+    public enum PresentationText: Equatable, Sendable {
+        case localized(String)
+        case localizedFormat(String, [String])
+        case verbatim(String)
+    }
+
     public enum Kind: String, Equatable, Sendable {
+        case externalAuthorizationRequired
         case gatewayAuthTokenMissing
         case gatewayAuthTokenMismatch
         case gatewayAuthTokenNotConfigured
@@ -51,6 +67,9 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
     public let title: String
     public let message: String
     public let actionLabel: String?
+    public let titlePresentation: PresentationText
+    public let messagePresentation: PresentationText
+    public let actionLabelPresentation: PresentationText?
     public let actionCommand: String?
     public let docsURL: URL?
     public let requestId: String?
@@ -68,6 +87,9 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         title: String,
         message: String,
         actionLabel: String? = nil,
+        titlePresentation: PresentationText? = nil,
+        messagePresentation: PresentationText? = nil,
+        actionLabelPresentation: PresentationText? = nil,
         actionCommand: String? = nil,
         docsURL: URL? = nil,
         requestId: String? = nil,
@@ -83,16 +105,20 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         self.owner = owner
         self.title = title
         self.message = message
-        self.actionLabel = Self.trimmedOrNil(actionLabel)
-        self.actionCommand = Self.trimmedOrNil(actionCommand)
+        self.actionLabel = actionLabel?.trimmedNonEmpty
+        self.titlePresentation = titlePresentation ?? .localized(title)
+        self.messagePresentation = messagePresentation ?? .localized(message)
+        self.actionLabelPresentation = actionLabelPresentation
+            ?? self.actionLabel.map(PresentationText.localized)
+        self.actionCommand = actionCommand?.trimmedNonEmpty
         self.docsURL = docsURL
-        self.requestId = Self.trimmedOrNil(requestId)
+        self.requestId = requestId?.trimmedNonEmpty
         self.retryable = retryable
         self.pauseReconnect = pauseReconnect
-        self.technicalDetails = Self.trimmedOrNil(technicalDetails)
-        self.tlsStoreKey = Self.trimmedOrNil(tlsStoreKey)
-        self.tlsExpectedFingerprint = Self.trimmedOrNil(tlsExpectedFingerprint)
-        self.tlsObservedFingerprint = Self.trimmedOrNil(tlsObservedFingerprint)
+        self.technicalDetails = technicalDetails?.trimmedNonEmpty
+        self.tlsStoreKey = tlsStoreKey?.trimmedNonEmpty
+        self.tlsExpectedFingerprint = tlsExpectedFingerprint?.trimmedNonEmpty
+        self.tlsObservedFingerprint = tlsObservedFingerprint?.trimmedNonEmpty
         self.tlsSystemTrustOk = tlsSystemTrustOk
     }
 
@@ -145,14 +171,21 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
             && self.tlsStoreKey != nil
             && self.tlsObservedFingerprint != nil
     }
-
-    private static func trimmedOrNil(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }
 
 public enum GatewayConnectionProblemMapper {
+    fileprivate struct AuthProblemDefaults {
+        let kind: GatewayConnectionProblem.Kind
+        let owner: GatewayConnectionProblem.Owner
+        let title: String
+        let message: String
+        var actionLabel: String?
+        var actionCommand: String?
+        var docsURLString: String?
+        var retryable = false
+        var pauseReconnect = true
+    }
+
     public static func map(
         error: Error,
         preserving previousProblem: GatewayConnectionProblem? = nil) -> GatewayConnectionProblem?
@@ -192,6 +225,16 @@ public enum GatewayConnectionProblemMapper {
     }
 
     private static func rawMap(_ error: Error) -> GatewayConnectionProblem? {
+        if error is GatewayExternalAuthorizationError {
+            return GatewayConnectionProblem(
+                kind: .externalAuthorizationRequired,
+                owner: .iphone,
+                title: "Browser sign-in required",
+                message: "Sign in to this gateway in the browser, then continue with OpenClaw pairing.",
+                actionLabel: "Sign in",
+                retryable: true,
+                pauseReconnect: true)
+        }
         if let authError = error as? GatewayConnectAuthError {
             return self.map(authError)
         }
@@ -205,361 +248,213 @@ public enum GatewayConnectionProblemMapper {
     }
 
     private static func map(_ authError: GatewayConnectAuthError) -> GatewayConnectionProblem {
-        let pairingCommand = self.approvalCommand(requestId: authError.requestId)
+        self.problem(self.authDefaults(for: authError), authError: authError)
+    }
 
+    private static func authDefaults(for authError: GatewayConnectAuthError) -> AuthProblemDefaults {
         switch authError.detail {
         case .authTokenMissing:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .gatewayAuthTokenMissing,
                 owner: .both,
-                title: authError.titleOverride ?? "Gateway token required",
-                message: authError.userMessageOverride
-                    ?? "This gateway requires an auth token, but this device did not send one.",
-                actionLabel: authError.actionLabel ?? "Open Settings",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/authentication"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Gateway token required",
+                message: "This gateway requires an auth token, but this device did not send one.",
+                actionLabel: "Open Settings",
+                docsURLString: "https://docs.openclaw.ai/gateway/authentication")
         case .authTokenMismatch:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .gatewayAuthTokenMismatch,
                 owner: .both,
-                title: authError.titleOverride ?? "Gateway token is out of date",
-                message: authError.userMessageOverride
-                    ?? "The token on this device does not match the gateway token.",
-                actionLabel: authError
-                    .actionLabel ?? (authError.canRetryWithDeviceToken ? "Retry once" : "Update gateway token"),
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/authentication"),
-                requestId: authError.requestId,
-                retryable: authError.retryableOverride ?? authError.canRetryWithDeviceToken,
-                pauseReconnect: authError.pauseReconnectOverride ?? !authError.canRetryWithDeviceToken,
-                authError: authError)
+                title: "Gateway token is out of date",
+                message: "The token on this device does not match the gateway token.",
+                actionLabel: authError.canRetryWithDeviceToken ? "Retry once" : "Update gateway token",
+                docsURLString: "https://docs.openclaw.ai/gateway/authentication",
+                retryable: authError.canRetryWithDeviceToken,
+                pauseReconnect: !authError.canRetryWithDeviceToken)
         case .authTokenNotConfigured:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .gatewayAuthTokenNotConfigured,
                 owner: .gateway,
-                title: authError.titleOverride ?? "Gateway token is not configured",
-                message: authError.userMessageOverride
-                    ?? "This gateway is set to token auth, but no gateway token is configured on the gateway.",
-                actionLabel: authError.actionLabel ?? "Fix on gateway",
-                actionCommand: authError.actionCommand ?? "openclaw config set gateway.auth.token <new-token>",
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/authentication"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Gateway token is not configured",
+                message: "This gateway is set to token auth, but no gateway token is configured on the gateway.",
+                actionLabel: "Fix on gateway",
+                actionCommand: "openclaw config set gateway.auth.token <new-token>",
+                docsURLString: "https://docs.openclaw.ai/gateway/authentication")
         case .authPasswordMissing:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .gatewayAuthPasswordMissing,
                 owner: .both,
-                title: authError.titleOverride ?? "Gateway password required",
-                message: authError.userMessageOverride
-                    ?? "This gateway requires a password, but this device did not send one.",
-                actionLabel: authError.actionLabel ?? "Open Settings",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/authentication"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Gateway password required",
+                message: "This gateway requires a password, but this device did not send one.",
+                actionLabel: "Open Settings",
+                docsURLString: "https://docs.openclaw.ai/gateway/authentication")
         case .authPasswordMismatch:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .gatewayAuthPasswordMismatch,
                 owner: .both,
-                title: authError.titleOverride ?? "Gateway password is out of date",
-                message: authError.userMessageOverride
-                    ?? "The saved password on this device does not match the gateway password.",
-                actionLabel: authError.actionLabel ?? "Update password",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/authentication"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Gateway password is out of date",
+                message: "The saved password on this device does not match the gateway password.",
+                actionLabel: "Update password",
+                docsURLString: "https://docs.openclaw.ai/gateway/authentication")
         case .authPasswordNotConfigured:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .gatewayAuthPasswordNotConfigured,
                 owner: .gateway,
-                title: authError.titleOverride ?? "Gateway password is not configured",
-                message: authError.userMessageOverride
-                    ?? "This gateway is set to password auth, but no gateway password is configured on the gateway.",
-                actionLabel: authError.actionLabel ?? "Fix on gateway",
-                actionCommand: authError.actionCommand ?? "openclaw config set gateway.auth.password <new-password>",
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/authentication"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Gateway password is not configured",
+                message:
+                "This gateway is set to password auth, but no gateway password is configured on the gateway.",
+                actionLabel: "Fix on gateway",
+                actionCommand: "openclaw config set gateway.auth.password <new-password>",
+                docsURLString: "https://docs.openclaw.ai/gateway/authentication")
         case .authBootstrapTokenInvalid:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .bootstrapTokenInvalid,
                 owner: .iphone,
-                title: authError.titleOverride ?? "Setup code expired",
-                message: authError.userMessageOverride
-                    ?? "The setup QR or bootstrap token is no longer valid.",
-                actionLabel: authError.actionLabel ?? "Scan QR again",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/platforms/ios"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Setup code no longer valid",
+                message: "Get a fresh setup code from the Gateway owner, then scan or enter it again.",
+                actionLabel: "Scan QR again",
+                docsURLString: "https://docs.openclaw.ai/platforms/ios")
         case .authDeviceTokenMismatch:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .deviceTokenMismatch,
                 owner: .both,
-                title: authError.titleOverride ?? "This device's saved device token is no longer valid",
-                message: authError.userMessageOverride
-                    ?? "The gateway rejected the stored device token for this role.",
-                actionLabel: authError.actionLabel ?? "Repair pairing",
-                actionCommand: authError.actionCommand ?? pairingCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "This device's saved device token is no longer valid",
+                message: "The gateway rejected the stored device token for this role.",
+                actionLabel: "Repair pairing",
+                actionCommand: self.approvalCommand(requestId: authError.requestId),
+                docsURLString: "https://docs.openclaw.ai/gateway/pairing")
         case .authScopeMismatch:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .deviceTokenScopeMismatch,
                 owner: .both,
-                title: authError.titleOverride ?? "Device permissions need approval",
-                message: authError.userMessageOverride
-                    ?? "The gateway accepted this device token but rejected the requested operator scopes.",
-                actionLabel: authError.actionLabel ?? "Review pairing",
-                actionCommand: authError.actionCommand ?? pairingCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .pairingRequired:
-            return self.pairingProblem(for: authError)
-        case .protocolMismatch:
-            return self.protocolMismatchProblem(for: authError)
+                title: "Device permissions need approval",
+                message: "The gateway accepted this device token but rejected the requested operator scopes.",
+                actionLabel: "Review pairing",
+                actionCommand: self.approvalCommand(requestId: authError.requestId),
+                docsURLString: "https://docs.openclaw.ai/gateway/pairing")
         case .controlUiDeviceIdentityRequired, .deviceIdentityRequired:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .deviceIdentityRequired,
                 owner: .iphone,
-                title: authError.titleOverride ?? "Secure device identity is required",
-                message: authError.userMessageOverride
-                    ??
-                    "This connection must include a signed device identity before the gateway can bind permissions to this device.",
-                actionLabel: authError.actionLabel ?? "Retry from the app",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/platforms/ios"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Secure device identity is required",
+                message: "This connection must include a signed device identity before the gateway can bind "
+                    + "permissions to this device.",
+                actionLabel: "Retry from the app",
+                docsURLString: "https://docs.openclaw.ai/platforms/ios")
         case .deviceAuthSignatureExpired:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .deviceSignatureExpired,
                 owner: .iphone,
-                title: authError.titleOverride ?? "Secure handshake expired",
-                message: authError.userMessageOverride ?? "The device signature is too old to use.",
-                actionLabel: authError.actionLabel ?? "Check device time",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                requestId: authError.requestId,
-                retryable: true,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Secure handshake expired",
+                message: "The device signature is too old to use.",
+                actionLabel: "Check device time",
+                docsURLString: "https://docs.openclaw.ai/gateway/troubleshooting",
+                retryable: true)
         case .deviceAuthNonceRequired:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .deviceNonceRequired,
                 owner: .iphone,
-                title: authError.titleOverride ?? "Secure handshake is incomplete",
-                message: authError.userMessageOverride
-                    ?? "The gateway expected a one-time challenge response, but the nonce was missing.",
-                actionLabel: authError.actionLabel ?? "Retry",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                requestId: authError.requestId,
-                retryable: true,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Secure handshake is incomplete",
+                message: "The gateway expected a one-time challenge response, but the nonce was missing.",
+                actionLabel: "Retry",
+                docsURLString: "https://docs.openclaw.ai/gateway/troubleshooting",
+                retryable: true)
         case .deviceAuthNonceMismatch:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .deviceNonceMismatch,
                 owner: .iphone,
-                title: authError.titleOverride ?? "Secure handshake did not match",
-                message: authError.userMessageOverride ?? "The challenge response was stale or mismatched.",
-                actionLabel: authError.actionLabel ?? "Retry",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                requestId: authError.requestId,
-                retryable: true,
-                pauseReconnect: true,
-                authError: authError)
-        case .deviceAuthSignatureInvalid, .deviceAuthInvalid:
-            return self.problem(
-                kind: .deviceSignatureInvalid,
-                owner: .iphone,
-                title: authError.titleOverride ?? "This device identity could not be verified",
-                message: authError.userMessageOverride
-                    ?? "The gateway could not verify the identity this device presented.",
-                actionLabel: authError.actionLabel ?? "Re-pair this device",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .deviceAuthPublicKeyInvalid:
-            return self.problem(
-                kind: .devicePublicKeyInvalid,
-                owner: .iphone,
-                title: authError.titleOverride ?? "This device identity could not be verified",
-                message: authError.userMessageOverride
-                    ?? "The gateway could not verify the public key this device presented.",
-                actionLabel: authError.actionLabel ?? "Re-pair this device",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .deviceAuthDeviceIdMismatch:
-            return self.problem(
-                kind: .deviceIdMismatch,
-                owner: .iphone,
-                title: authError.titleOverride ?? "This device identity could not be verified",
-                message: authError.userMessageOverride
-                    ?? "The gateway rejected the device identity because the device ID did not match.",
-                actionLabel: authError.actionLabel ?? "Re-pair this device",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .authTailscaleIdentityMissing:
-            return self.problem(
-                kind: .tailscaleIdentityMissing,
-                owner: .network,
-                title: authError.titleOverride ?? "Tailscale identity check failed",
-                message: authError.userMessageOverride
-                    ?? "This connection expected Tailscale identity headers, but they were not available.",
-                actionLabel: authError.actionLabel ?? "Turn on Tailscale",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/tailscale"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .authTailscaleProxyMissing:
-            return self.problem(
-                kind: .tailscaleProxyMissing,
-                owner: .network,
-                title: authError.titleOverride ?? "Tailscale identity check failed",
-                message: authError.userMessageOverride
-                    ?? "The gateway expected a Tailscale auth proxy, but it was not configured.",
-                actionLabel: authError.actionLabel ?? "Review Tailscale setup",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/tailscale"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .authTailscaleWhoisFailed:
-            return self.problem(
-                kind: .tailscaleWhoisFailed,
-                owner: .network,
-                title: authError.titleOverride ?? "Tailscale identity check failed",
-                message: authError.userMessageOverride
-                    ?? "The gateway could not verify this Tailscale client identity.",
-                actionLabel: authError.actionLabel ?? "Review Tailscale setup",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/tailscale"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .authTailscaleIdentityMismatch:
-            return self.problem(
-                kind: .tailscaleIdentityMismatch,
-                owner: .network,
-                title: authError.titleOverride ?? "Tailscale identity check failed",
-                message: authError.userMessageOverride
-                    ?? "The forwarded Tailscale identity did not match the verified identity.",
-                actionLabel: authError.actionLabel ?? "Review Tailscale setup",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/tailscale"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+                title: "Secure handshake did not match",
+                message: "The challenge response was stale or mismatched.",
+                actionLabel: "Retry",
+                docsURLString: "https://docs.openclaw.ai/gateway/troubleshooting",
+                retryable: true)
+        case .deviceAuthSignatureInvalid, .deviceAuthInvalid,
+             .deviceAuthPublicKeyInvalid, .deviceAuthDeviceIdMismatch:
+            self.identityVerificationProblem(for: authError.detail)
+        case .pairingRequired:
+            self.pairingProblem(for: authError)
+        case .protocolMismatch:
+            self.protocolMismatchProblem(for: authError)
+        case .authTailscaleIdentityMissing, .authTailscaleProxyMissing,
+             .authTailscaleWhoisFailed, .authTailscaleIdentityMismatch:
+            self.tailscaleIdentityProblem(for: authError.detail)
         case .authRateLimited:
-            return self.problem(
+            AuthProblemDefaults(
                 kind: .authRateLimited,
                 owner: .gateway,
-                title: authError.titleOverride ?? "Too many failed attempts",
-                message: authError.userMessageOverride
-                    ?? "The gateway is temporarily refusing new auth attempts after repeated failures.",
-                actionLabel: authError.actionLabel ?? "Wait and retry",
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(
-                    authError.docsURLString,
-                    fallback: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                requestId: authError.requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case .authRequired, .authUnauthorized, .none:
-            return self.problem(
+                title: "Too many failed attempts",
+                message: "The gateway is temporarily refusing new auth attempts after repeated failures.",
+                actionLabel: "Wait and retry",
+                docsURLString: "https://docs.openclaw.ai/gateway/troubleshooting")
+        case .authRequired, .authUnauthorized, .authVerifiedUserRequired, .none:
+            AuthProblemDefaults(
                 kind: .unknown,
-                owner: authError.ownerRaw.flatMap { self.owner(from: $0) } ?? .unknown,
-                title: authError.titleOverride ?? "Gateway rejected the connection",
-                message: authError.userMessageOverride ?? authError.message,
-                actionLabel: authError.actionLabel,
-                actionCommand: authError.actionCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: nil),
-                requestId: authError.requestId,
-                retryable: authError.retryableOverride ?? false,
-                pauseReconnect: authError.pauseReconnectOverride ?? authError.isNonRecoverable,
-                authError: authError)
+                owner: .unknown,
+                title: "Gateway rejected the connection",
+                message: authError.message,
+                pauseReconnect: authError.isNonRecoverable)
         }
     }
 
+    private static func identityVerificationProblem(
+        for detail: GatewayConnectAuthDetailCode?) -> AuthProblemDefaults
+    {
+        switch detail {
+        case .deviceAuthPublicKeyInvalid:
+            AuthProblemDefaults(
+                identityKind: .devicePublicKeyInvalid,
+                message: "The gateway could not verify the public key this device presented.")
+        case .deviceAuthDeviceIdMismatch:
+            AuthProblemDefaults(
+                identityKind: .deviceIdMismatch,
+                message: "The gateway rejected the device identity because the device ID did not match.")
+        default:
+            // The exhaustive dispatcher admits only signature, public-key, and device-ID failures.
+            AuthProblemDefaults(
+                identityKind: .deviceSignatureInvalid,
+                message: "The gateway could not verify the identity this device presented.")
+        }
+    }
+
+    private static func tailscaleIdentityProblem(
+        for detail: GatewayConnectAuthDetailCode?) -> AuthProblemDefaults
+    {
+        switch detail {
+        case .authTailscaleIdentityMissing:
+            AuthProblemDefaults(
+                tailscaleKind: .tailscaleIdentityMissing,
+                message: "This connection expected Tailscale identity headers, but they were not available.",
+                actionLabel: "Turn on Tailscale")
+        case .authTailscaleProxyMissing:
+            AuthProblemDefaults(
+                tailscaleKind: .tailscaleProxyMissing,
+                message: "The gateway expected a Tailscale auth proxy, but it was not configured.",
+                actionLabel: "Review Tailscale setup")
+        case .authTailscaleWhoisFailed:
+            AuthProblemDefaults(
+                tailscaleKind: .tailscaleWhoisFailed,
+                message: "The gateway could not verify this Tailscale client identity.",
+                actionLabel: "Review Tailscale setup")
+        default:
+            // The exhaustive dispatcher admits only the four Tailscale identity failures.
+            AuthProblemDefaults(
+                tailscaleKind: .tailscaleIdentityMismatch,
+                message: "The forwarded Tailscale identity did not match the verified identity.",
+                actionLabel: "Review Tailscale setup")
+        }
+    }
+}
+
+extension GatewayConnectionProblemMapper {
     private static func map(_ responseError: GatewayResponseError) -> GatewayConnectionProblem? {
         let code = responseError.code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         if code == "NOT_PAIRED" || responseError.detailsReason == "not-paired" {
             let authError = GatewayConnectAuthError(
                 message: responseError.message,
-                detailCodeRaw: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+                detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
                 canRetryWithDeviceToken: false,
-                recommendedNextStepRaw: nil,
-                requestId: self.stringValue(responseError.details["requestId"]?.value),
-                detailsReason: responseError.detailsReason,
-                ownerRaw: nil,
-                titleOverride: nil,
-                userMessageOverride: nil,
-                actionLabel: nil,
-                actionCommand: nil,
-                docsURLString: nil,
-                retryableOverride: nil,
-                pauseReconnectOverride: nil)
+                requestId: responseError.details["requestId"]?.stringValue?.trimmedNonEmpty,
+                detailsReason: responseError.detailsReason)
             return self.map(authError)
         }
         return nil
@@ -572,12 +467,25 @@ public enum GatewayConnectionProblemMapper {
             let trustedSuffix = failure.systemTrustOk
                 ? " The new certificate is trusted by this device; this is commonly caused by certificate rotation."
                 : " This device could not verify the new certificate."
+            let message = "The saved TLS certificate pin for \(failure.host) "
+                + "no longer matches the gateway certificate.\(trustedSuffix)"
+            // Keep the extraction keys contiguous for the native localization inventory.
+            // swiftlint:disable line_length
+            let messagePresentation: GatewayConnectionProblem.PresentationText = failure.systemTrustOk
+                ? .localizedFormat(
+                    "The saved TLS certificate pin for %@ no longer matches the gateway certificate. The new certificate is trusted by this device; this is commonly caused by certificate rotation.",
+                    [failure.host])
+                : .localizedFormat(
+                    "The saved TLS certificate pin for %@ no longer matches the gateway certificate. This device could not verify the new certificate.",
+                    [failure.host])
+            // swiftlint:enable line_length
             return GatewayConnectionProblem(
                 kind: .tlsPinMismatch,
                 owner: failure.systemTrustOk ? .network : .unknown,
                 title: "Gateway certificate changed",
-                message: "The saved TLS certificate pin for \(failure.host) no longer matches the gateway certificate.\(trustedSuffix)",
+                message: message,
                 actionLabel: "Review certificate",
+                messagePresentation: messagePresentation,
                 actionCommand: nil,
                 docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
                 retryable: false,
@@ -594,6 +502,9 @@ public enum GatewayConnectionProblemMapper {
                 title: "Gateway certificate unavailable",
                 message: "OpenClaw could not read the gateway certificate for \(failure.host).",
                 actionLabel: "Retry",
+                messagePresentation: .localizedFormat(
+                    "OpenClaw could not read the gateway certificate for %@.",
+                    [failure.host]),
                 actionCommand: nil,
                 docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
                 retryable: true,
@@ -606,6 +517,42 @@ public enum GatewayConnectionProblemMapper {
                 title: "Gateway certificate is not trusted",
                 message: "This device does not trust the TLS certificate presented by \(failure.host).",
                 actionLabel: "Check certificate",
+                messagePresentation: .localizedFormat(
+                    "This device does not trust the TLS certificate presented by %@.",
+                    [failure.host]),
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: false,
+                pauseReconnect: true,
+                technicalDetails: tlsError.localizedDescription)
+        case .pinStorageUnavailable:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUnavailable,
+                owner: .unknown,
+                title: "Gateway certificate unavailable",
+                message: "OpenClaw could not securely save the TLS certificate pin for \(failure.host).",
+                actionLabel: "Retry",
+                titlePresentation: .localized("Gateway certificate unavailable"),
+                messagePresentation: .localizedFormat(
+                    "OpenClaw could not securely save the TLS certificate pin for %@.",
+                    [failure.host]),
+                actionLabelPresentation: .localized("Retry"),
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: true,
+                pauseReconnect: false,
+                technicalDetails: tlsError.localizedDescription)
+        case .authorityMismatch:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUntrusted,
+                owner: .network,
+                title: "Gateway certificate is not trusted",
+                message: "The TLS challenge came from a different host or port than the requested Gateway.",
+                actionLabel: "Check certificate",
+                titlePresentation: .localized("Gateway certificate is not trusted"),
+                messagePresentation: .localized(
+                    "The TLS challenge came from a different host or port than the requested Gateway."),
+                actionLabelPresentation: .localized("Check certificate"),
                 actionCommand: nil,
                 docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
                 retryable: false,
@@ -617,299 +564,196 @@ public enum GatewayConnectionProblemMapper {
     private static func mapTransportError(_ error: Error) -> GatewayConnectionProblem? {
         let nsError = error as NSError
         let rawMessage = nsError.userInfo[NSLocalizedDescriptionKey] as? String ?? nsError.localizedDescription
-        let lower = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if lower.isEmpty {
-            return nil
-        }
+        let message = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !message.isEmpty else { return nil }
 
-        let urlErrorCode = URLError.Code(rawValue: nsError.code)
-        if nsError.domain == URLError.errorDomain {
-            switch urlErrorCode {
-            case .timedOut:
-                return GatewayConnectionProblem(
-                    kind: .timeout,
-                    owner: .network,
-                    title: "Connection timed out",
-                    message: "The gateway did not respond before the connection timed out.",
-                    actionLabel: "Retry",
-                    actionCommand: nil,
-                    docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                    retryable: true,
-                    pauseReconnect: false,
-                    technicalDetails: rawMessage)
-            case .cannotConnectToHost:
-                return GatewayConnectionProblem(
-                    kind: .connectionRefused,
-                    owner: .network,
-                    title: "Gateway refused the connection",
-                    message: "The gateway host was reachable, but it refused the connection.",
-                    actionLabel: "Retry",
-                    actionCommand: nil,
-                    docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                    retryable: true,
-                    pauseReconnect: false,
-                    technicalDetails: rawMessage)
-            case .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet, .networkConnectionLost,
-                 .internationalRoamingOff, .callIsActive, .dataNotAllowed:
-                return GatewayConnectionProblem(
-                    kind: .reachabilityFailed,
-                    owner: .network,
-                    title: "Gateway is not reachable",
-                    message: "OpenClaw could not reach the gateway over the current network.",
-                    actionLabel: "Check network",
-                    actionCommand: nil,
-                    docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                    retryable: true,
-                    pauseReconnect: false,
-                    technicalDetails: rawMessage)
-            case .cancelled:
-                return GatewayConnectionProblem(
-                    kind: .websocketCancelled,
-                    owner: .network,
-                    title: "Connection interrupted",
-                    message: "The connection to the gateway was interrupted before setup completed.",
-                    actionLabel: "Retry",
-                    actionCommand: nil,
-                    docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                    retryable: true,
-                    pauseReconnect: false,
-                    technicalDetails: rawMessage)
-            default:
-                break
-            }
-        }
+        let typedKind = nsError.domain == URLError.errorDomain
+            ? self.transportKind(for: URLError.Code(rawValue: nsError.code))
+            : nil
+        guard let kind = typedKind ?? self.transportKind(for: message) else { return nil }
+        return self.transportProblem(kind: kind, technicalDetails: rawMessage)
+    }
 
-        if lower.contains("timed out") {
-            return GatewayConnectionProblem(
-                kind: .timeout,
-                owner: .network,
-                title: "Connection timed out",
-                message: "The gateway did not respond before the connection timed out.",
-                actionLabel: "Retry",
-                actionCommand: nil,
-                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                retryable: true,
-                pauseReconnect: false,
-                technicalDetails: rawMessage)
+    private static func transportKind(for code: URLError.Code) -> GatewayConnectionProblem.Kind? {
+        switch code {
+        case .timedOut: .timeout
+        case .cannotConnectToHost: .connectionRefused
+        case .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet, .networkConnectionLost,
+             .internationalRoamingOff, .callIsActive, .dataNotAllowed: .reachabilityFailed
+        case .cancelled: .websocketCancelled
+        default: nil
         }
-        if lower.contains("connection refused") || lower.contains("refused") {
-            return GatewayConnectionProblem(
-                kind: .connectionRefused,
-                owner: .network,
-                title: "Gateway refused the connection",
-                message: "The gateway host was reachable, but it refused the connection.",
-                actionLabel: "Retry",
-                actionCommand: nil,
-                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                retryable: true,
-                pauseReconnect: false,
-                technicalDetails: rawMessage)
-        }
-        if lower.contains("cannot find host") || lower.contains("could not connect") || lower
-            .contains("network is unreachable")
-        {
-            return GatewayConnectionProblem(
-                kind: .reachabilityFailed,
-                owner: .network,
-                title: "Gateway is not reachable",
-                message: "OpenClaw could not reach the gateway over the current network.",
-                actionLabel: "Check network",
-                actionCommand: nil,
-                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                retryable: true,
-                pauseReconnect: false,
-                technicalDetails: rawMessage)
-        }
-        if lower.contains("cancelled") || lower.contains("canceled") {
-            return GatewayConnectionProblem(
-                kind: .websocketCancelled,
-                owner: .network,
-                title: "Connection interrupted",
-                message: "The connection to the gateway was interrupted before setup completed.",
-                actionLabel: "Retry",
-                actionCommand: nil,
-                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
-                retryable: true,
-                pauseReconnect: false,
-                technicalDetails: rawMessage)
-        }
+    }
+
+    private static func transportKind(for message: String) -> GatewayConnectionProblem.Kind? {
+        if message.contains("timed out") { return .timeout }
+        if message.contains("refused") { return .connectionRefused }
+        let unreachable = ["cannot find host", "could not connect", "network is unreachable"]
+        if unreachable.contains(where: message.contains) { return .reachabilityFailed }
+        if message.contains("cancelled") || message.contains("canceled") { return .websocketCancelled }
         return nil
     }
 
-    private static func pairingProblem(for authError: GatewayConnectAuthError) -> GatewayConnectionProblem {
-        let requestId = authError.requestId
-        let pairingCommand = self.approvalCommand(requestId: requestId)
-
-        switch authError.detailsReason {
-        case "role-upgrade":
-            return self.problem(
-                kind: .pairingRoleUpgradeRequired,
-                owner: .gateway,
-                title: authError.titleOverride ?? "Additional approval required",
-                message: authError.userMessageOverride
-                    ??
-                    "This device is already paired, but it is requesting a new role that was not previously approved.",
-                actionLabel: authError.actionLabel ?? "Approve on gateway",
-                actionCommand: authError.actionCommand ?? pairingCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case "scope-upgrade":
-            return self.problem(
-                kind: .pairingScopeUpgradeRequired,
-                owner: .gateway,
-                title: authError.titleOverride ?? "Additional permissions required",
-                message: authError.userMessageOverride
-                    ?? "This device is already paired, but it is requesting new permissions that require approval.",
-                actionLabel: authError.actionLabel ?? "Approve on gateway",
-                actionCommand: authError.actionCommand ?? pairingCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
-        case "metadata-upgrade":
-            return self.problem(
-                kind: .pairingMetadataUpgradeRequired,
-                owner: .gateway,
-                title: authError.titleOverride ?? "Device approval needs refresh",
-                message: authError.userMessageOverride
-                    ??
-                    "The gateway detected a change in this device's approved identity metadata and requires re-approval.",
-                actionLabel: authError.actionLabel ?? "Approve on gateway",
-                actionCommand: authError.actionCommand ?? pairingCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+    private static func transportProblem(
+        kind: GatewayConnectionProblem.Kind,
+        technicalDetails: String) -> GatewayConnectionProblem
+    {
+        let facts: (title: String, message: String, actionLabel: String) = switch kind {
+        case .timeout:
+            ("Connection timed out", "The gateway did not respond before the connection timed out.", "Retry")
+        case .connectionRefused:
+            (
+                "Gateway refused the connection",
+                "The gateway host was reachable, but it refused the connection.",
+                "Retry")
+        case .reachabilityFailed:
+            (
+                "Gateway is not reachable",
+                "OpenClaw could not reach the gateway over the current network.",
+                "Check network")
+        case .websocketCancelled:
+            ("Connection interrupted", "The connection to the gateway was interrupted before setup completed.", "Retry")
         default:
-            return self.problem(
-                kind: .pairingRequired,
-                owner: .gateway,
-                title: authError.titleOverride ?? "This device is not approved yet",
-                message: authError.userMessageOverride
-                    ?? "The gateway received the connection request, but this device must be approved first.",
-                actionLabel: authError.actionLabel ?? "Approve on gateway",
-                actionCommand: authError.actionCommand ?? pairingCommand,
-                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
-                requestId: requestId,
-                retryable: false,
-                pauseReconnect: true,
-                authError: authError)
+            preconditionFailure("Unexpected transport problem kind")
         }
+        return GatewayConnectionProblem(
+            kind: kind,
+            owner: .network,
+            title: facts.title,
+            message: facts.message,
+            actionLabel: facts.actionLabel,
+            docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+            retryable: true,
+            pauseReconnect: false,
+            technicalDetails: technicalDetails)
     }
 
-    private static func protocolMismatchProblem(for authError: GatewayConnectAuthError) -> GatewayConnectionProblem {
+    private static func pairingProblem(for authError: GatewayConnectAuthError) -> AuthProblemDefaults {
+        let kind: GatewayConnectionProblem.Kind
+        let title: String
+        let message: String
+        switch authError.detailsReason {
+        case "role-upgrade":
+            kind = .pairingRoleUpgradeRequired
+            title = "Additional approval required"
+            message = "This device is already paired, but it is requesting a new role "
+                + "that was not previously approved."
+        case "scope-upgrade":
+            kind = .pairingScopeUpgradeRequired
+            title = "Additional permissions required"
+            message = "This device is already paired, but it is requesting new permissions that require approval."
+        case "metadata-upgrade":
+            kind = .pairingMetadataUpgradeRequired
+            title = "Device approval needs refresh"
+            message = "The gateway detected a change in this device's approved identity metadata "
+                + "and requires re-approval."
+        default:
+            kind = .pairingRequired
+            title = "This device is not approved yet"
+            message = "The gateway received the connection request, but this device must be approved first."
+        }
+        return AuthProblemDefaults(
+            kind: kind,
+            owner: .gateway,
+            title: title,
+            message: message,
+            actionLabel: "Approve on gateway",
+            actionCommand: self.approvalCommand(requestId: authError.requestId),
+            docsURLString: "https://docs.openclaw.ai/gateway/pairing")
+    }
+
+    private static func protocolMismatchProblem(for authError: GatewayConnectAuthError) -> AuthProblemDefaults {
         let title: String
         let message: String
         let owner: GatewayConnectionProblem.Owner
         let actionLabel: String
+        let actionCommand: String?
         if let clientMax = authError.clientMaxProtocol,
            let expected = authError.expectedProtocol,
            clientMax < expected
         {
-            title = authError.titleOverride ?? "App update required"
-            message = authError.userMessageOverride
-                ?? "This app is older than the gateway. Update OpenClaw on this device, then retry."
+            title = "App update required"
+            message = "This app is older than the gateway. Update OpenClaw on this device, then retry."
             owner = .iphone
-            actionLabel = authError.actionLabel ?? "Update app"
+            actionLabel = "Update app"
+            actionCommand = nil
         } else if let clientMin = authError.clientMinProtocol,
                   let expected = authError.expectedProtocol,
                   clientMin > expected
         {
-            title = authError.titleOverride ?? "Gateway update required"
-            message = authError.userMessageOverride
-                ?? "The gateway is older than this app. Update OpenClaw on the gateway host, then retry."
+            title = "Gateway update required"
+            message = "The gateway is older than this app. Update OpenClaw on the gateway host, then retry."
             owner = .gateway
-            actionLabel = authError.actionLabel ?? "Update gateway"
+            actionLabel = "Copy update command"
+            actionCommand = "openclaw update"
         } else {
-            title = authError.titleOverride ?? "OpenClaw update required"
-            message = authError.userMessageOverride
-                ?? "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry."
+            title = "OpenClaw update required"
+            message = "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry."
             owner = .both
-            actionLabel = authError.actionLabel ?? "Update OpenClaw"
+            actionLabel = "Update OpenClaw"
+            actionCommand = nil
         }
-        return self.problem(
+        return AuthProblemDefaults(
             kind: .protocolMismatch,
             owner: owner,
             title: title,
             message: message,
             actionLabel: actionLabel,
-            actionCommand: authError.actionCommand,
-            docsURL: self.docsURL(
-                authError.docsURLString,
-                fallback: "https://docs.openclaw.ai/gateway/troubleshooting"),
-            requestId: authError.requestId,
-            retryable: false,
-            pauseReconnect: true,
-            authError: authError)
+            actionCommand: actionCommand,
+            docsURLString: "https://docs.openclaw.ai/gateway/troubleshooting")
     }
 
     private static func problem(
-        kind: GatewayConnectionProblem.Kind,
-        owner: GatewayConnectionProblem.Owner,
-        title: String,
-        message: String,
-        actionLabel: String?,
-        actionCommand: String?,
-        docsURL: URL?,
-        requestId: String?,
-        retryable: Bool,
-        pauseReconnect: Bool,
+        _ defaults: AuthProblemDefaults,
         authError: GatewayConnectAuthError)
         -> GatewayConnectionProblem
     {
-        GatewayConnectionProblem(
-            kind: kind,
-            owner: authError.ownerRaw.flatMap(self.owner(from:)) ?? owner,
+        let title = authError.titleOverride ?? defaults.title
+        let message = authError.userMessageOverride ?? defaults.message
+        let actionLabel = authError.actionLabel ?? defaults.actionLabel
+        return GatewayConnectionProblem(
+            kind: defaults.kind,
+            owner: authError.ownerRaw.flatMap(self.owner(from:)) ?? defaults.owner,
             title: title,
             message: message,
             actionLabel: actionLabel,
-            actionCommand: actionCommand,
-            docsURL: docsURL,
-            requestId: requestId,
-            retryable: authError.retryableOverride ?? retryable,
-            pauseReconnect: authError.pauseReconnectOverride ?? pauseReconnect,
+            titlePresentation: authError.titleOverride == nil
+                ? .localized(title)
+                : .verbatim(title),
+            messagePresentation: authError.userMessageOverride == nil
+                && message != authError.message
+                ? .localized(message)
+                : .verbatim(message),
+            actionLabelPresentation: authError.actionLabel == nil
+                ? actionLabel.map(GatewayConnectionProblem.PresentationText.localized)
+                : actionLabel.map(GatewayConnectionProblem.PresentationText.verbatim),
+            actionCommand: authError.actionCommand ?? defaults.actionCommand,
+            docsURL: self.docsURL(authError.docsURLString, fallback: defaults.docsURLString),
+            requestId: authError.requestId,
+            retryable: authError.retryableOverride ?? defaults.retryable,
+            pauseReconnect: authError.pauseReconnectOverride ?? defaults.pauseReconnect,
             technicalDetails: self.technicalDetails(for: authError))
     }
 
     private static func approvalCommand(requestId: String?) -> String {
-        if let requestId = self.nonEmpty(requestId) {
-            return "openclaw devices approve \(requestId)"
-        }
-        return "openclaw devices list"
+        requestId?.trimmedNonEmpty.map { "openclaw devices approve \($0)" }
+            ?? "openclaw devices list"
     }
 
     private static func technicalDetails(for authError: GatewayConnectAuthError) -> String? {
-        var parts: [String] = []
-        if let detail = self.nonEmpty(authError.detailCodeRaw) {
-            parts.append(detail)
-        }
-        if let reason = self.nonEmpty(authError.detailsReason) {
-            parts.append("reason=\(reason)")
-        }
-        if let requestId = self.nonEmpty(authError.requestId) {
-            parts.append("requestId=\(requestId)")
-        }
-        if let nextStep = self.nonEmpty(authError.recommendedNextStepRaw) {
-            parts.append("next=\(nextStep)")
-        }
-        if authError.canRetryWithDeviceToken {
-            parts.append("deviceTokenRetry=true")
-        }
-        if let clientRange = self.protocolRange(min: authError.clientMinProtocol, max: authError.clientMaxProtocol) {
-            parts.append("clientProtocol=\(clientRange)")
-        }
-        if let expected = authError.expectedProtocol {
-            parts.append("gatewayProtocol=\(expected)")
-        }
-        if let minimumProbe = authError.minimumProbeProtocol {
-            parts.append("probeMin=\(minimumProbe)")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        var parts: [String?] = [
+            authError.detailCodeRaw?.trimmedNonEmpty,
+            authError.detailsReason?.trimmedNonEmpty.map { "reason=\($0)" },
+            authError.requestId?.trimmedNonEmpty.map { "requestId=\($0)" },
+            authError.recommendedNextStepRaw?.trimmedNonEmpty.map { "next=\($0)" },
+            self.protocolRange(min: authError.clientMinProtocol, max: authError.clientMaxProtocol)
+                .map { "clientProtocol=\($0)" },
+            authError.expectedProtocol.map { "gatewayProtocol=\($0)" },
+            authError.minimumProbeProtocol.map { "probeMin=\($0)" },
+        ]
+        if authError.canRetryWithDeviceToken { parts.insert("deviceTokenRetry=true", at: 4) }
+        let details = parts.compactMap(\.self)
+        return details.isEmpty ? nil : details.joined(separator: " · ")
     }
 
     private static func protocolRange(min: Int?, max: Int?) -> String? {
@@ -928,38 +772,42 @@ public enum GatewayConnectionProblemMapper {
     }
 
     private static func docsURL(_ preferred: String?, fallback: String?) -> URL? {
-        if let preferred = self.nonEmpty(preferred), let url = URL(string: preferred) {
-            return url
-        }
-        if let fallback = self.nonEmpty(fallback), let url = URL(string: fallback) {
-            return url
-        }
-        return nil
+        preferred?.trimmedNonEmpty.flatMap { URL(string: $0) }
+            ?? fallback?.trimmedNonEmpty.flatMap { URL(string: $0) }
     }
 
     private static func owner(from raw: String) -> GatewayConnectionProblem.Owner? {
         switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "gateway":
-            .gateway
-        case "iphone", "ios", "device":
-            .iphone
-        case "both":
-            .both
-        case "network":
-            .network
-        case "unknown", "":
-            .unknown
-        default:
-            nil
+        case "ios", "device": .iphone
+        case "": .unknown
+        case let normalized:
+            GatewayConnectionProblem.Owner(rawValue: normalized)
         }
     }
+}
 
-    private static func stringValue(_ value: Any?) -> String? {
-        self.nonEmpty(value as? String)
+extension GatewayConnectionProblemMapper.AuthProblemDefaults {
+    fileprivate init(identityKind: GatewayConnectionProblem.Kind, message: String) {
+        self = GatewayConnectionProblemMapper.AuthProblemDefaults(
+            kind: identityKind,
+            owner: .iphone,
+            title: "This device identity could not be verified",
+            message: message,
+            actionLabel: "Re-pair this device",
+            docsURLString: "https://docs.openclaw.ai/gateway/pairing")
     }
 
-    private static func nonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+    fileprivate init(
+        tailscaleKind: GatewayConnectionProblem.Kind,
+        message: String,
+        actionLabel: String)
+    {
+        self = GatewayConnectionProblemMapper.AuthProblemDefaults(
+            kind: tailscaleKind,
+            owner: .network,
+            title: "Tailscale identity check failed",
+            message: message,
+            actionLabel: actionLabel,
+            docsURLString: "https://docs.openclaw.ai/gateway/tailscale")
     }
 }

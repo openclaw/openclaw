@@ -1,24 +1,48 @@
 /**
- * Syntax highlighting renderer for terminal-friendly formatted output.
- *
  * Highlight.js emits HTML spans; this module walks that small HTML subset and
  * maps active scopes to caller-provided text formatters.
  */
-import hljs from "highlight.js";
-import { decodeHtmlEntityAt } from "./html.js";
+import { createRequire } from "node:module";
+import { decodeHtmlEntities } from "../../shared/html-entities.js";
 
-/** Formatter applied to highlighted text segments. */
-export type HighlightFormatter = (text: string) => string;
-/** Mapping from highlight.js scope names to text formatters. */
-export type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
+type HighlightJs = {
+  getLanguage(name: string): unknown;
+  highlight(
+    code: string,
+    options: { language: string; ignoreIllegals: boolean },
+  ): { value: string };
+};
 
-/** Options used when highlighting code and rendering themed text. */
-export interface HighlightOptions {
-  language?: string;
-  ignoreIllegals?: boolean;
-  languageSubset?: string[];
-  theme?: HighlightTheme;
+let highlightJsRuntime: HighlightJs | undefined;
+
+function isHighlightJs(value: unknown): value is HighlightJs {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "getLanguage" in value &&
+    typeof value.getLanguage === "function" &&
+    "highlight" in value &&
+    typeof value.highlight === "function"
+  );
 }
+
+function loadHighlightJsRuntime(): HighlightJs {
+  if (highlightJsRuntime) {
+    return highlightJsRuntime;
+  }
+  // highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
+  // silently re-inject DOM globals into the DOM-free core program. Load it
+  // untyped and validate the narrow API we use instead of importing its types.
+  const runtime: unknown = createRequire(import.meta.url)("highlight.js");
+  if (!isHighlightJs(runtime)) {
+    throw new TypeError("highlight.js did not expose the expected Node API");
+  }
+  return (highlightJsRuntime = runtime);
+}
+
+type HighlightFormatter = (text: string) => string;
+/** Mapping from highlight.js scope names to text formatters. */
+type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
 
 const SPAN_CLOSE = "</span>";
 const HIGHLIGHT_CLASS_PREFIX = "hljs-";
@@ -45,19 +69,13 @@ function getScopeFormatter(scope: string, theme: HighlightTheme): HighlightForma
     return exact;
   }
 
-  const dotIndex = scope.indexOf(".");
-  if (dotIndex !== -1) {
-    const prefixFormatter = theme[scope.slice(0, dotIndex)];
-    if (prefixFormatter) {
-      return prefixFormatter;
-    }
-  }
-
-  const dashIndex = scope.indexOf("-");
-  if (dashIndex !== -1) {
-    const prefixFormatter = theme[scope.slice(0, dashIndex)];
-    if (prefixFormatter) {
-      return prefixFormatter;
+  for (const separator of [".", "-"]) {
+    const index = scope.indexOf(separator);
+    if (index !== -1) {
+      const prefixFormatter = theme[scope.slice(0, index)];
+      if (prefixFormatter) {
+        return prefixFormatter;
+      }
     }
   }
 
@@ -96,7 +114,7 @@ function isSpanOpenTagStart(html: string, index: number): boolean {
 }
 
 /** Renders highlight.js span HTML into themed plain text. */
-export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
+function renderHighlightedHtml(html: string, theme: HighlightTheme): string {
   let output = "";
   let textBuffer = "";
   const scopes: Array<string | undefined> = [];
@@ -105,8 +123,9 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
     if (!textBuffer) {
       return;
     }
+    const decodedText = decodeHtmlEntities(textBuffer);
     const formatter = getActiveFormatter(scopes, theme);
-    output += formatter ? formatter(textBuffer) : textBuffer;
+    output += formatter ? formatter(decodedText) : decodedText;
     textBuffer = "";
   };
 
@@ -127,20 +146,9 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 
     if (html.startsWith(SPAN_CLOSE, index)) {
       flushText();
-      if (scopes.length > 0) {
-        scopes.pop();
-      }
+      scopes.pop();
       index += SPAN_CLOSE.length;
       continue;
-    }
-
-    if (html[index] === "&") {
-      const decoded = decodeHtmlEntityAt(html, index);
-      if (decoded) {
-        textBuffer += decoded.text;
-        index += decoded.length;
-        continue;
-      }
     }
 
     textBuffer += html[index];
@@ -151,18 +159,12 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
   return output;
 }
 
-/** Highlights code using an explicit language or highlight.js auto-detection. */
-export function highlight(code: string, options: HighlightOptions = {}): string {
-  const html = options.language
-    ? hljs.highlight(code, {
-        language: options.language,
-        ignoreIllegals: options.ignoreIllegals,
-      }).value
-    : hljs.highlightAuto(code, options.languageSubset).value;
-  return renderHighlightedHtml(html, options.theme);
+/** Highlights code after the caller has selected a registered language. */
+export function highlight(code: string, language: string, theme: HighlightTheme): string {
+  const { value } = loadHighlightJsRuntime().highlight(code, { language, ignoreIllegals: true });
+  return renderHighlightedHtml(value, theme);
 }
 
-/** Returns whether highlight.js has a registered language by this name. */
 export function supportsLanguage(name: string): boolean {
-  return hljs.getLanguage(name) !== undefined;
+  return loadHighlightJsRuntime().getLanguage(name) !== undefined;
 }

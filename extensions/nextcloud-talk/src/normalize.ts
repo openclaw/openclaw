@@ -1,29 +1,12 @@
-// Nextcloud Talk helper module supports normalize behavior.
 export function stripNextcloudTalkTargetPrefix(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  let normalized = trimmed;
-
-  if (normalized.startsWith("nextcloud-talk:")) {
-    normalized = normalized.slice("nextcloud-talk:".length).trim();
-  } else if (normalized.startsWith("nc-talk:")) {
-    normalized = normalized.slice("nc-talk:".length).trim();
-  } else if (normalized.startsWith("nc:")) {
-    normalized = normalized.slice("nc:".length).trim();
-  }
-
-  if (normalized.startsWith("room:")) {
-    normalized = normalized.slice("room:".length).trim();
-  }
-
-  if (!normalized) {
-    return undefined;
-  }
-
-  return normalized;
+  return (
+    raw
+      .trim()
+      .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+      .trim()
+      .replace(/^room:/i, "")
+      .trim() || undefined
+  );
 }
 
 export function normalizeNextcloudTalkMessagingTarget(raw: string): string | undefined {
@@ -37,7 +20,7 @@ export function looksLikeNextcloudTalkTargetId(raw: string): boolean {
     return false;
   }
 
-  if (/^(nextcloud-talk|nc-talk|nc):/i.test(trimmed)) {
+  if (/^(nextcloud-talk|nc-talk|nc|room):/i.test(trimmed)) {
     return true;
   }
 

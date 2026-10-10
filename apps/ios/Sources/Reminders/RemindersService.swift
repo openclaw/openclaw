@@ -3,17 +3,20 @@ import Foundation
 import OpenClawKit
 
 final class RemindersService: RemindersServicing {
+    private let reminderAuthorizationStatus: @Sendable () -> EKAuthorizationStatus
+
+    init(
+        reminderAuthorizationStatus: @escaping @Sendable () -> EKAuthorizationStatus = {
+            EKEventStore.authorizationStatus(for: .reminder)
+        })
+    {
+        self.reminderAuthorizationStatus = reminderAuthorizationStatus
+    }
+
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
-        let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized: Bool = if status == .notDetermined || status == .writeOnly {
-            await Self.requestFullReminderAccess()
-        } else {
-            EventKitAuthorization.allowsRead(status: status)
-        }
-        guard authorized else {
-            throw NSError(domain: "Reminders", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
-            ])
+        let status = self.reminderAuthorizationStatus()
+        guard DevicePermissionStatusMap.eventKitRead(status) == .granted else {
+            throw Self.error(1, "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission")
         }
 
         let store = EKEventStore()
@@ -21,7 +24,7 @@ final class RemindersService: RemindersServicing {
         let statusFilter = params.status ?? .incomplete
 
         let predicate = store.predicateForReminders(in: nil)
-        let payload: [OpenClawReminderPayload] = try await withCheckedThrowingContinuation { cont in
+        let payload: [OpenClawReminderPayload] = await withCheckedContinuation { cont in
             store.fetchReminders(matching: predicate) { items in
                 let formatter = ISO8601DateFormatter()
                 let filtered = (items ?? []).filter { reminder in
@@ -34,15 +37,8 @@ final class RemindersService: RemindersServicing {
                         !reminder.isCompleted
                     }
                 }
-                let selected = Array(filtered.prefix(limit))
-                let payload = selected.map { reminder in
-                    let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
-                    return OpenClawReminderPayload(
-                        identifier: reminder.calendarItemIdentifier,
-                        title: reminder.title,
-                        dueISO: due.map { formatter.string(from: $0) },
-                        completed: reminder.isCompleted,
-                        listName: reminder.calendar.title)
+                let payload = filtered.prefix(limit).map { reminder in
+                    Self.payload(from: reminder, formatter: formatter)
                 }
                 cont.resume(returning: payload)
             }
@@ -52,24 +48,15 @@ final class RemindersService: RemindersServicing {
     }
 
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
-        let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized: Bool = if status == .notDetermined {
-            await Self.requestFullReminderAccess()
-        } else {
-            EventKitAuthorization.allowsWrite(status: status)
-        }
-        guard authorized else {
-            throw NSError(domain: "Reminders", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
-            ])
+        let status = self.reminderAuthorizationStatus()
+        guard DevicePermissionStatusMap.eventKitWrite(status) == .granted else {
+            throw Self.error(2, "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission")
         }
 
         let store = EKEventStore()
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
-            throw NSError(domain: "Reminders", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_INVALID: title required",
-            ])
+            throw Self.error(3, "REMINDERS_INVALID: title required")
         }
 
         let reminder = EKReminder(eventStore: store)
@@ -82,39 +69,47 @@ final class RemindersService: RemindersServicing {
             listId: params.listId,
             listName: params.listName)
 
-        if let dueISO = params.dueISO?.trimmingCharacters(in: .whitespacesAndNewlines), !dueISO.isEmpty {
-            let formatter = ISO8601DateFormatter()
-            guard let dueDate = formatter.date(from: dueISO) else {
-                throw NSError(domain: "Reminders", code: 4, userInfo: [
-                    NSLocalizedDescriptionKey: "REMINDERS_INVALID: dueISO must be ISO-8601",
-                ])
-            }
-            reminder.dueDateComponents = Calendar.current.dateComponents(
-                [.year, .month, .day, .hour, .minute, .second],
-                from: dueDate)
-        }
+        try Self.applyDueISO(params.dueISO, to: reminder)
 
         try store.save(reminder, commit: true)
 
-        let formatter = ISO8601DateFormatter()
-        let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
-        let payload = OpenClawReminderPayload(
+        return OpenClawRemindersAddPayload(reminder: Self.payload(from: reminder, formatter: ISO8601DateFormatter()))
+    }
+
+    static func payload(from reminder: EKReminder, formatter: ISO8601DateFormatter) -> OpenClawReminderPayload {
+        let due = reminder.dueDateComponents?.date
+        return OpenClawReminderPayload(
             identifier: reminder.calendarItemIdentifier,
             title: reminder.title,
             dueISO: due.map { formatter.string(from: $0) },
             completed: reminder.isCompleted,
             listName: reminder.calendar.title)
-
-        return OpenClawRemindersAddPayload(reminder: payload)
     }
 
-    private static func requestFullReminderAccess() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToReminders { granted, _ in
-                completion(granted)
-            }
+    static func applyDueISO(
+        _ rawDueISO: String?,
+        to reminder: EKReminder,
+        timeZone: TimeZone = .current) throws
+    {
+        guard let dueISO = rawDueISO?.trimmingCharacters(in: .whitespacesAndNewlines), !dueISO.isEmpty else {
+            return
         }
+        let formatter = ISO8601DateFormatter()
+        guard let dueDate = formatter.date(from: dueISO) else {
+            throw Self.error(4, "REMINDERS_INVALID: dueISO must be ISO-8601")
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var components = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: dueDate)
+        components.calendar = calendar
+        components.timeZone = timeZone
+        // EventKit requires a Gregorian due calendar and a matching start date on iOS.
+        reminder.startDateComponents = components
+        reminder.dueDateComponents = components
+        reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
     }
 
     private static func resolveList(
@@ -134,17 +129,17 @@ final class RemindersService: RemindersServicing {
             }) {
                 return calendar
             }
-            throw NSError(domain: "Reminders", code: 5, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_LIST_NOT_FOUND: no list named \(title)",
-            ])
+            throw Self.error(5, "REMINDERS_LIST_NOT_FOUND: no list named \(title)")
         }
 
         if let fallback = store.defaultCalendarForNewReminders() {
             return fallback
         }
 
-        throw NSError(domain: "Reminders", code: 6, userInfo: [
-            NSLocalizedDescriptionKey: "REMINDERS_LIST_NOT_FOUND: no default list",
-        ])
+        throw Self.error(6, "REMINDERS_LIST_NOT_FOUND: no default list")
+    }
+
+    private static func error(_ code: Int, _ message: String) -> NSError {
+        NSError(domain: "Reminders", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

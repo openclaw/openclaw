@@ -1,5 +1,6 @@
 // Context-engine public types define the pluggable context-management lifecycle.
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { NormalizedUsage } from "../agents/usage.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -109,22 +110,6 @@ export type ContextEngineRuntimeSettings = {
   };
 };
 
-export class ContextEngineRuntimeSettingsUnavailableError extends Error {
-  readonly code = "context_engine_runtime_settings_unavailable";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnavailableError";
-  }
-}
-
-export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
-  readonly code = "context_engine_runtime_settings_unsupported";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnsupportedError";
-  }
-}
-
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -137,10 +122,39 @@ export type CompactResult = {
     details?: unknown;
     /** Session id after compaction, when the runtime rotated transcripts. */
     sessionId?: string;
-    /** Session file after compaction, when the runtime rotated transcripts. */
+    /** Typed post-compaction live session target; successor when the runtime rotated transcripts. */
+    sessionTarget?: ContextEngineSessionTarget;
+    /**
+     * Raw session file path after compaction.
+     *
+     * @deprecated Use `sessionTarget`. Shipped plugin-sdk contract: released
+     * third-party context engines (v2026.6.x and earlier) report rotated
+     * transcripts through this field. Remove once typed session targets are
+     * the only successor contract.
+     */
     sessionFile?: string;
   };
 };
+
+/**
+ * Resolve the post-compaction live transcript identity from a compact result.
+ *
+ * Prefers the typed `sessionTarget`. Reading the raw fields is the named
+ * compat path for shipped third-party engines that predate `sessionTarget`;
+ * it is removed together with the deprecated `sessionFile` result field.
+ */
+export function resolveCompactionSuccessorTranscript(result: CompactResult): {
+  sessionId?: string;
+  sessionFile?: string;
+} {
+  const target = result.result?.sessionTarget;
+  return {
+    sessionId: target?.sessionId ?? result.result?.sessionId,
+    // Storage-neutral targets carry no raw locator; the deprecated raw field on
+    // the result remains the only file-era locator shipped engines report.
+    sessionFile: result.result?.sessionFile,
+  };
+}
 
 export type IngestResult = {
   /** Whether the message was ingested (false if duplicate or no-op) */
@@ -165,6 +179,11 @@ export type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
+  acceptedHostParams?: string[];
+  transcriptSemantics?: {
+    currentTurnFence?: "before-current-turn-entry-v1";
+    turnAdvancementIdempotency?: "atomic-idempotent-v1";
+  };
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
   /**
@@ -195,7 +214,9 @@ export type TranscriptRewriteReplacement = {
   message: AgentMessage;
 };
 
-export type TranscriptRewriteRequest = {
+// Local-only: engines consume this shape structurally via rewriteTranscriptEntries;
+// the last named importer was the deleted destructive rewrite path (#115271).
+type TranscriptRewriteRequest = {
   /** Message entry replacements to apply in one branch-and-reappend pass. */
   replacements: TranscriptRewriteReplacement[];
   /** Optional entry-id set that must cover every active-branch entry from the first replacement onward. */
@@ -217,23 +238,27 @@ export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
 
 type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
 
-type ContextEnginePromptCacheUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
+type ContextEnginePromptCacheUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "total"
+>;
 
 type ContextEnginePromptCacheObservationChangeCode =
+  | "historyRewrite"
+  | "compaction"
+  | "pruning"
+  | "runtimeContextCarrier"
+  | "imageCleanup"
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"
   | "systemPrompt"
+  | "systemPromptSuffix"
   | "tools"
   | "transport";
 
-type ContextEnginePromptCacheObservationChange = {
+export type ContextEnginePromptCacheObservationChange = {
   code: ContextEnginePromptCacheObservationChangeCode;
   detail: string;
 };
@@ -258,6 +283,30 @@ export type ContextEnginePromptCacheInfo = {
   expiresAt?: number;
 };
 
+type ContextEngineTranscriptStorageInfo = {
+  /**
+   * Authoritative transcript backend for this runtime turn.
+   *
+   * Hosts may still pass legacy locator fields such as `sessionFile` for older
+   * plugin contracts, but context engines should use this field to decide
+   * whether that locator is a live transcript source.
+   */
+  kind: "sqlite";
+};
+
+export type ContextEngineSessionTarget = {
+  /** Agent that owns the session in the runtime store. */
+  agentId?: string;
+  /** Runtime session id to compact. */
+  sessionId?: string;
+  /** Stable session key used for aliases, policy, and store resolution. */
+  sessionKey?: string;
+  /** Session store path that scopes the SQLite-backed runtime session. */
+  storePath?: string;
+  /** Optional transport thread identity for session target resolution. */
+  threadId?: string | number;
+};
+
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
@@ -274,6 +323,10 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
   promptCache?: ContextEnginePromptCacheInfo;
+  /** Authoritative transcript backend for this turn. */
+  transcriptStorage?: ContextEngineTranscriptStorageInfo;
+  /** Storage-neutral runtime session target for compaction delegation. */
+  sessionTarget?: ContextEngineSessionTarget;
   /**
    * Safe transcript rewrite helper implemented by the runtime.
    *
@@ -307,8 +360,11 @@ export interface ContextEngine {
   bootstrap?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<BootstrapResult>;
 
   /**
@@ -320,9 +376,16 @@ export interface ContextEngine {
   maintain?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
+    /**
+     * Optional caller cancellation for maintenance work that may block.
+     * Engines should reject promptly when this signal aborts.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
   /**
@@ -355,6 +418,8 @@ export interface ContextEngine {
   afterTurn?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -369,6 +434,24 @@ export interface ContextEngine {
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void>;
+
+  /**
+   * Atomically and idempotently commit one accepted durable transcript turn.
+   * Messages span the admitted user entry through the accepted terminal entry.
+   * Hosts may retry the same advancement key after process or plugin failure.
+   */
+  commitTurn?(params: {
+    advancementKey: string;
+    admission: import("../config/sessions/transcript-entry-anchor.js").TranscriptTurnAdmission;
+    terminal: import("../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
+    messages: AgentMessage[];
+    sessionId: string;
+    sessionKey?: string;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
+    isHeartbeat?: boolean;
+  }): Promise<{ status: "committed" | "duplicate" }>;
 
   /**
    * Assemble model context under a token budget.
@@ -389,6 +472,7 @@ export interface ContextEngine {
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<AssembleResult>;
 
   /**
@@ -403,8 +487,11 @@ export interface ContextEngine {
    */
   compact(params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    /** Caller-resolved owner agent for global session aliases. */
+    agentId?: string;
+    /** Storage-neutral runtime session target for delegated compaction. */
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;

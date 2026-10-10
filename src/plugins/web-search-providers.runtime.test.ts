@@ -1,11 +1,14 @@
 /** Covers runtime loading and sorting for plugin web search providers. */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import * as publicArtifacts from "./web-provider-public-artifacts.explicit.js";
 
 type RegistryModule = typeof import("./registry.js");
 type RuntimeModule = typeof import("./runtime.js");
 type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
 type PluginAutoEnableModule = typeof import("../config/plugin-auto-enable.js");
-type WebSearchProvidersSharedModule = typeof import("./web-search-providers.shared.js");
 type PluginManifestRegistry = import("./manifest-registry.js").PluginManifestRegistry;
 type LoadPluginManifestRegistryForPluginRegistry =
   typeof import("./plugin-registry.js").loadPluginManifestRegistryForPluginRegistry;
@@ -26,12 +29,12 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
 ] as const;
 
 let createEmptyPluginRegistry: RegistryModule["createEmptyPluginRegistry"];
-let loadPluginManifestRegistryMock: ReturnType<
-  typeof vi.fn<LoadPluginManifestRegistryForPluginRegistry>
->;
-let loadInstalledPluginManifestRegistryMock: ReturnType<
-  typeof vi.fn<LoadPluginManifestRegistryForInstalledIndex>
->;
+const { loadPluginManifestRegistryMock, loadInstalledPluginManifestRegistryMock } = vi.hoisted(
+  () => ({
+    loadPluginManifestRegistryMock: vi.fn<LoadPluginManifestRegistryForPluginRegistry>(),
+    loadInstalledPluginManifestRegistryMock: vi.fn<LoadPluginManifestRegistryForInstalledIndex>(),
+  }),
+);
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
 let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
@@ -39,9 +42,7 @@ let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let loaderModule: typeof import("./loader.js");
 let pluginAutoEnableModule: PluginAutoEnableModule;
 let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
-let webSearchProvidersSharedModule: WebSearchProvidersSharedModule;
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
-let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
@@ -209,12 +210,7 @@ function expectLoaderCallCount(count: number) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(count);
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireLastCallFirstArg(
   mock: { mock: { calls: readonly (readonly unknown[])[] } },
@@ -253,176 +249,54 @@ function expectAutoEnabledWebSearchLoad(params: {
   expect(plugins.allow).toEqual([...params.expectedAllow]);
 }
 
-function expectSnapshotLoaderCalls(params: {
-  config: { plugins?: Record<string, unknown> };
-  env: NodeJS.ProcessEnv;
-  mutate: () => void;
-  expectedLoaderCalls: number;
-}) {
-  resolvePluginWebSearchProviders(
-    createSnapshotParams({
-      config: params.config,
-      env: params.env,
-    }),
-  );
-  params.mutate();
-  resolvePluginWebSearchProviders(
-    createSnapshotParams({
-      config: params.config,
-      env: params.env,
-    }),
-  );
-  expectLoaderCallCount(params.expectedLoaderCalls);
-}
-
-function createRuntimeWebSearchProvider(params: {
-  pluginId: string;
-  pluginName: string;
-  id: string;
-  label: string;
-  hint: string;
-  envVar: string;
-  signupUrl: string;
-  credentialPath: string;
-}) {
+vi.mock("./manifest-registry.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
   return {
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    provider: {
-      id: params.id,
-      label: params.label,
-      hint: params.hint,
-      envVars: [params.envVar],
-      placeholder: `${params.id}-...`,
-      signupUrl: params.signupUrl,
-      autoDetectOrder: 1,
-      credentialPath: params.credentialPath,
-      getCredentialValue: () => "configured",
-      setCredentialValue: () => {},
-      createTool: () => ({
-        description: params.id,
-        parameters: {},
-        execute: async () => ({}),
-      }),
-    },
-    source: "test" as const,
+    ...actual,
+    loadPluginManifestRegistryCore: (
+      ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
+    ) => loadPluginManifestRegistryMock(...args),
   };
-}
-
-function createBraveRuntimeWebSearchProvider() {
-  return createRuntimeWebSearchProvider({
-    pluginId: "brave",
-    pluginName: "Brave",
-    id: "brave",
-    label: "Brave Search",
-    hint: "Brave runtime provider",
-    envVar: "BRAVE_API_KEY",
-    signupUrl: "https://example.com/brave",
-    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-  });
-}
-
-function createActiveBraveRegistryFixture(params?: {
-  includeResolutionWorkspaceDir?: boolean;
-  activeWorkspaceDir?: string;
-}) {
-  const env = createWebSearchEnv();
-  const rawConfig = createBraveAllowConfig();
-  const { config, activationSourceConfig, autoEnabledReasons } =
-    webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
-      config: rawConfig,
-      ...(params?.includeResolutionWorkspaceDir
-        ? { workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE }
-        : {}),
-      env,
-    });
-  const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
-    config,
-    activationSourceConfig,
-    autoEnabledReasons,
-    workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-    env,
-    onlyPluginIds: ["brave"],
-    cache: true,
-    activate: false,
-  });
-  const registry = createEmptyPluginRegistry();
-  registry.plugins.push({ id: "brave", status: "loaded" } as never);
-  registry.webSearchProviders.push(createBraveRuntimeWebSearchProvider());
-  setActivePluginRegistry(registry, cacheKey, "default", params?.activeWorkspaceDir);
-
-  return { env, rawConfig };
-}
-
-function expectRuntimeProviderResolution(
-  providers: ReturnType<WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"]>,
-  expected: readonly string[],
-) {
-  expect(toRuntimeProviderKeys(providers)).toEqual([...expected]);
-  expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-}
+});
+vi.mock("./plugin-registry-snapshot.js", async () => {
+  const actual = await vi.importActual<typeof import("./plugin-registry-snapshot.js")>(
+    "./plugin-registry-snapshot.js",
+  );
+  return {
+    ...actual,
+    loadPluginRegistrySnapshotWithMetadata: () => ({
+      source: "derived",
+      snapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "__test_manifest_registry_fixture__" }],
+      }).index,
+      diagnostics: [],
+    }),
+  };
+});
+vi.mock("./manifest-registry-installed.js", async () => {
+  const actual = await vi.importActual<typeof import("./manifest-registry-installed.js")>(
+    "./manifest-registry-installed.js",
+  );
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: (
+      ...args: Parameters<LoadPluginManifestRegistryForInstalledIndex>
+    ) => loadInstalledPluginManifestRegistryMock(...args),
+  };
+});
 
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
-    loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForPluginRegistry>();
-    loadInstalledPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForInstalledIndex>();
-    vi.doMock("./manifest-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
-      return {
-        ...actual,
-        loadPluginManifestRegistry: (
-          ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
-        ) => loadPluginManifestRegistryMock(...args),
-      };
-    });
-    vi.doMock("./plugin-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
-      return {
-        ...actual,
-        loadPluginRegistrySnapshotWithMetadata: () => ({
-          source: "derived",
-          snapshot: {
-            plugins: [
-              {
-                pluginId: "__test_manifest_registry_fixture__",
-                origin: "bundled",
-                enabled: true,
-              },
-            ],
-          },
-          diagnostics: [],
-        }),
-        loadPluginManifestRegistryForPluginRegistry: (
-          ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
-        ) => loadPluginManifestRegistryMock(...args),
-      };
-    });
-    vi.doMock("./manifest-registry-installed.js", async () => {
-      const actual = await vi.importActual<typeof import("./manifest-registry-installed.js")>(
-        "./manifest-registry-installed.js",
-      );
-      return {
-        ...actual,
-        loadPluginManifestRegistryForInstalledIndex: (
-          ...args: Parameters<LoadPluginManifestRegistryForInstalledIndex>
-        ) => loadInstalledPluginManifestRegistryMock(...args),
-      };
-    });
-
     ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
-    webSearchProvidersSharedModule = await import("./web-search-providers.shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
       await import("./web-search-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
     applyPluginAutoEnableSpy?.mockRestore();
     applyPluginAutoEnableSpy = vi
       .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
@@ -451,7 +325,6 @@ describe("resolvePluginWebSearchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 
@@ -460,6 +333,63 @@ describe("resolvePluginWebSearchProviders", () => {
 
     expectBundledRuntimeProviderKeys(providers);
     expectLoaderCallCount(1);
+  });
+
+  it("loads only the selected runtime when a bundled search tool is created", () => {
+    loadInstalledPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        createWebSearchManifestRecord({ id: "brave", providerId: "brave" }),
+        createWebSearchManifestRecord({ id: "google", providerId: "gemini" }),
+      ],
+      diagnostics: [],
+    });
+    vi.spyOn(
+      publicArtifacts,
+      "resolveBundledExplicitWebSearchProvidersFromPublicArtifacts",
+    ).mockReturnValue([
+      createWebSearchTestProvider({
+        pluginId: "brave",
+        id: "brave",
+        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+        createTool: () => null,
+      }),
+      createWebSearchTestProvider({
+        pluginId: "google",
+        id: "gemini",
+        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+        createTool: () => null,
+      }),
+    ]);
+    const config = {
+      plugins: {
+        allow: ["brave", "google"],
+        entries: { brave: { enabled: true }, google: { enabled: true } },
+      },
+    };
+
+    const providers = resolveRuntimeWebSearchProviders(createSnapshotParams({ config }));
+    expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave", "google:gemini"]);
+    expectLoaderCallCount(0);
+
+    expect(providers[0]?.createTool({ config })?.description).toBe("brave");
+    expectLoaderCallCount(1);
+    expect(
+      requireLastCallFirstArg(loadOpenClawPluginsMock, "loadOpenClawPlugins").onlyPluginIds,
+    ).toEqual(["brave"]);
+  });
+
+  it("does not discover explicitly disabled bundled providers", () => {
+    loadInstalledPluginManifestRegistryMock.mockReturnValue({
+      plugins: [createWebSearchManifestRecord({ id: "brave", providerId: "brave" })],
+      diagnostics: [],
+    });
+    const providers = resolveRuntimeWebSearchProviders({
+      config: { plugins: { entries: { brave: { enabled: false } } } },
+      onlyPluginIds: ["brave"],
+    });
+
+    expect(providers).toEqual([]);
+    expectLoaderCallCount(0);
   });
 
   it("loads manifest-declared web-search providers in setup mode", () => {
@@ -474,6 +404,46 @@ describe("resolvePluginWebSearchProviders", () => {
 
     expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves Moonshot region and model setup without activating the plugin", async () => {
+    loadInstalledPluginManifestRegistryMock.mockReturnValueOnce({
+      plugins: [createWebSearchManifestRecord({ id: "moonshot", providerId: "kimi" })],
+      diagnostics: [],
+    });
+    const config = { plugins: { allow: ["moonshot"] } };
+    const providers = resolvePluginWebSearchProviders({ config, mode: "setup" });
+    const provider = providers[0];
+    if (!provider?.runSetup) {
+      throw new Error("Expected Moonshot web-search setup from the public artifact");
+    }
+    const select = vi.fn(async (params: { initialValue?: unknown }) => params.initialValue);
+
+    const next = await provider.runSetup({
+      config,
+      runtime: {} as never,
+      prompter: { select } as never,
+    });
+
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(select.mock.calls.map(([params]) => requireRecord(params).message)).toEqual([
+      "Kimi API region",
+      "Kimi web search model",
+    ]);
+    expect(next).toMatchObject({
+      plugins: {
+        entries: {
+          moonshot: {
+            config: {
+              webSearch: {
+                baseUrl: "https://api.moonshot.ai/v1",
+                model: "kimi-k2.6",
+              },
+            },
+          },
+        },
+      },
+    });
   });
 
   it("loads plugin web-search providers from the auto-enabled config snapshot", () => {
@@ -555,142 +525,5 @@ describe("resolvePluginWebSearchProviders", () => {
     const loaderParams = requireLastCallFirstArg(loadOpenClawPluginsMock, "loadOpenClawPlugins");
     expect(loaderParams.workspaceDir).toBe("/tmp/runtime-workspace");
     expect(loaderParams.onlyPluginIds).toEqual(["brave"]);
-  });
-  it("reuses a compatible active registry for snapshot resolution when config is provided", () => {
-    const { env, rawConfig } = createActiveBraveRegistryFixture();
-
-    const providers = resolvePluginWebSearchProviders({
-      config: rawConfig,
-      workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-      env,
-    });
-
-    expectRuntimeProviderResolution(providers, ["brave:brave"]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("inherits workspaceDir from the active registry for compatible web-search snapshot reuse", () => {
-    const { env, rawConfig } = createActiveBraveRegistryFixture({
-      includeResolutionWorkspaceDir: true,
-      activeWorkspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-    });
-
-    const providers = resolvePluginWebSearchProviders({
-      config: rawConfig,
-      env,
-    });
-
-    expectRuntimeProviderResolution(providers, ["brave:brave"]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("uses the inherited active workspace for each web-search resolution", () => {
-    const env = createWebSearchEnv();
-    const rawConfig = createBraveAllowConfig();
-
-    setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-a");
-    resolvePluginWebSearchProviders({
-      config: rawConfig,
-      env,
-    });
-
-    setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-b");
-    resolvePluginWebSearchProviders({
-      config: rawConfig,
-      env,
-    });
-
-    expectLoaderCallCount(2);
-  });
-
-  it("resolves current config contents when config changes in place", () => {
-    const config = createBraveAllowConfig();
-    const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
-
-    expectSnapshotLoaderCalls({
-      config,
-      env,
-      mutate: () => {
-        config.plugins = { allow: ["perplexity"] };
-      },
-      expectedLoaderCalls: 2,
-    });
-  });
-
-  it("resolves current env contents when env changes in place", () => {
-    const config = createBraveAllowConfig();
-    const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
-
-    expectSnapshotLoaderCalls({
-      config,
-      env,
-      mutate: () => {
-        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
-      },
-      expectedLoaderCalls: 2,
-    });
-  });
-
-  it("does not reuse snapshot provider loads across host Vitest env changes", () => {
-    const originalVitest = process.env.VITEST;
-    const config = {};
-    const env = createWebSearchEnv();
-
-    try {
-      delete process.env.VITEST;
-      resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-
-      process.env.VITEST = "1";
-      resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-    } finally {
-      if (originalVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = originalVitest;
-      }
-    }
-
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    {
-      name: "prefers the active plugin registry for runtime resolution",
-      setupRegistry: () => {
-        const registry = createEmptyPluginRegistry();
-        registry.webSearchProviders.push(
-          createRuntimeWebSearchProvider({
-            pluginId: "custom-search",
-            pluginName: "Custom Search",
-            id: "custom",
-            label: "Custom Search",
-            hint: "Custom runtime provider",
-            envVar: "CUSTOM_SEARCH_API_KEY",
-            signupUrl: "https://example.com/signup",
-            credentialPath: "tools.web.search.custom.apiKey",
-          }),
-        );
-        setActivePluginRegistry(registry);
-      },
-      params: {},
-      expected: ["custom-search:custom"],
-    },
-    {
-      name: "reuses a compatible active registry for runtime resolution when config is provided",
-      setupRegistry: () => {
-        const { env, rawConfig } = createActiveBraveRegistryFixture();
-        return {
-          config: rawConfig,
-          workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-          env,
-        };
-      },
-      expected: ["brave:brave"],
-    },
-  ] as const)("$name", ({ setupRegistry, params, expected }) => {
-    const runtimeParams = setupRegistry() ?? params ?? {};
-    const providers = resolveRuntimeWebSearchProviders(runtimeParams);
-
-    expectRuntimeProviderResolution(providers, expected);
   });
 });

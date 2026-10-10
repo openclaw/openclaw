@@ -5,29 +5,77 @@ read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy b
 status: active
 ---
 
-Manage sandbox runtimes for isolated agent execution.
+Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, SSH targets, or OpenShell backends.
 
-## Overview
-
-OpenClaw can run agents in isolated sandbox runtimes for security. The `sandbox` commands help you inspect and recreate those runtimes after updates or configuration changes.
-
-Today that usually means:
-
-- Docker sandbox containers
-- SSH sandbox runtimes when `agents.defaults.sandbox.backend = "ssh"`
-- OpenShell sandbox runtimes when `agents.defaults.sandbox.backend = "openshell"`
-
-For `ssh` and OpenShell `remote`, recreate matters more than with Docker:
-
-- the remote workspace is canonical after the initial seed
-- `openclaw sandbox recreate` deletes that canonical remote workspace for the selected scope
-- next use seeds it again from the current local workspace
+[`openclaw agent exec`](/cli/agent#agent-exec) preserves a sandbox selected by the inherited config or `--config`, including its execution routing. Without a configured sandbox, its defaults allow full Gateway-host execution and restrict filesystem tools to `--cwd`. `--isolated` and `--auth-env-only` skip config inheritance and use those defaults.
 
 ## Commands
 
+### `openclaw sandbox list`
+
+List sandbox runtimes with status, backend, config match, age, idle time, and associated session/agent.
+
+For configured plugin-provided backends such as OpenShell, the CLI loads the
+owning backend plugin before checking live runtime status. Browser-only
+operations do not require backend plugin activation.
+
+```bash
+openclaw sandbox list
+openclaw sandbox list --browser  # browser containers only
+openclaw sandbox list --json
+```
+
+### `openclaw sandbox recreate`
+
+Remove sandbox runtimes to force recreation with current config. Runtimes are recreated automatically the next time the agent is used.
+
+```bash
+openclaw sandbox recreate --all
+openclaw sandbox recreate --agent mybot        # includes agent:mybot:* sub-sessions
+openclaw sandbox recreate --session "agent:main:main"
+openclaw sandbox recreate --browser --all      # only browser containers
+openclaw sandbox recreate --all --force        # skip confirmation
+```
+
+Options:
+
+- `--all`: recreate all sandbox containers
+- `--session <key>`: recreate the runtime with this exact scope key (as shown by `sandbox list`); no short-name expansion
+- `--agent <id>`: recreate runtimes for one agent (matches `agent:<id>` and `agent:<id>:*`)
+- `--browser`: only affect browser containers
+- `--force`: skip the confirmation prompt
+
+Pass exactly one of `--all`, `--session`, or `--agent`.
+
+Recreation requires exclusive offline ownership of the selected state directory.
+If its Gateway is running, the command refuses before inspecting or removing
+runtimes. Stop the Gateway through its service owner, wait for ownership to
+release, then rerun the command. Offline ownership stays held through confirmation
+and accepted teardown; a starting Gateway waits until cleanup settles. `--force`
+does not bypass this ownership check.
+
+See [local state owner routing](/gateway/protocol/versioning#local-state-owner-routing)
+for owner discovery, refusal states, and compatibility boundaries.
+
+Scoped recreation selects registry entries before inspecting their backends. An
+unrelated runtime on another Podman connection or an unavailable backend does not
+block `--session` or `--agent`. The selected runtime still requires its recorded
+target to be active and reachable; `--force` only skips the confirmation prompt.
+Browser-only recreation does not inspect regular sandbox runtimes.
+
+When recorded Podman targets differ, an unscoped `sandbox list` can still fail its
+target check. Restore the affected runtime's original connection, use its known
+exact scope key with `recreate --session`, and review the preview before confirming.
+If you do not know the exact scope, keep the registry intact; do not guess a key,
+broaden to `--all`, or rewrite its recorded target to bypass validation.
+
+For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
+
 ### `openclaw sandbox explain`
 
-Inspect the **effective** sandbox mode/scope/workspace access, sandbox tool policy, and elevated gates (with fix-it config key paths).
+Inspect the effective sandbox mode/scope/workspace access, sandbox tool policy, and elevated-tool gates (with fix-it config key paths).
+
+The report keeps `workspaceRoot` as the configured sandbox root and separately shows the effective host workspace, backend runtime workdir, and Docker mount table. For `workspaceAccess: "rw"`, the effective host workspace is the agent workspace rather than a directory below `workspaceRoot`.
 
 ```bash
 openclaw sandbox explain
@@ -36,146 +84,44 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-### `openclaw sandbox list`
+Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
+An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
 
-List all sandbox runtimes with their status and configuration.
+## Why recreate is needed
 
-```bash
-openclaw sandbox list
-openclaw sandbox list --browser  # List only browser containers
-openclaw sandbox list --json     # JSON output
-```
-
-**Output includes:**
-
-- Runtime name and status
-- Backend (`docker`, `openshell`, etc.)
-- Config label and whether it matches current config
-- Age (time since creation)
-- Idle time (time since last use)
-- Associated session/agent
-
-### `openclaw sandbox recreate`
-
-Remove sandbox runtimes to force recreation with updated config.
-
-```bash
-openclaw sandbox recreate --all                # Recreate all containers
-openclaw sandbox recreate --session main       # Specific session
-openclaw sandbox recreate --agent mybot        # Specific agent
-openclaw sandbox recreate --browser            # Only browser containers
-openclaw sandbox recreate --all --force        # Skip confirmation
-```
-
-**Options:**
-
-- `--all`: Recreate all sandbox containers
-- `--session <key>`: Recreate container for specific session
-- `--agent <id>`: Recreate containers for specific agent
-- `--browser`: Only recreate browser containers
-- `--force`: Skip confirmation prompt
-
-<Note>
-Runtimes are automatically recreated when the agent is next used.
-</Note>
-
-## Use cases
-
-### After updating a Docker image
-
-```bash
-# Pull new image
-docker pull openclaw-sandbox:latest
-docker tag openclaw-sandbox:latest openclaw-sandbox:bookworm-slim
-
-# Update config to use new image
-# Edit config: agents.defaults.sandbox.docker.image (or agents.list[].sandbox.docker.image)
-
-# Recreate containers
-openclaw sandbox recreate --all
-```
-
-### After changing sandbox configuration
-
-```bash
-# Edit config: agents.defaults.sandbox.* (or agents.list[].sandbox.*)
-
-# Recreate to apply new config
-openclaw sandbox recreate --all
-```
-
-### After changing SSH target or SSH auth material
-
-```bash
-# Edit config:
-# - agents.defaults.sandbox.backend
-# - agents.defaults.sandbox.ssh.target
-# - agents.defaults.sandbox.ssh.workspaceRoot
-# - agents.defaults.sandbox.ssh.identityFile / certificateFile / knownHostsFile
-# - agents.defaults.sandbox.ssh.identityData / certificateData / knownHostsData
-
-openclaw sandbox recreate --all
-```
-
-For the core `ssh` backend, recreate deletes the per-scope remote workspace root
-on the SSH target. The next run seeds it again from the local workspace.
-
-### After changing OpenShell source, policy, or mode
-
-```bash
-# Edit config:
-# - agents.defaults.sandbox.backend
-# - plugins.entries.openshell.config.from
-# - plugins.entries.openshell.config.mode
-# - plugins.entries.openshell.config.policy
-
-openclaw sandbox recreate --all
-```
-
-For OpenShell `remote` mode, recreate deletes the canonical remote workspace
-for that scope. The next run seeds it again from the local workspace.
-
-### After changing setupCommand
-
-```bash
-openclaw sandbox recreate --all
-# or just one agent:
-openclaw sandbox recreate --agent family
-```
-
-### For a specific agent only
-
-```bash
-# Update only one agent's containers
-openclaw sandbox recreate --agent alfred
-```
-
-## Why this is needed
-
-When you update sandbox configuration:
-
-- Existing runtimes continue running with old settings.
-- Runtimes are only pruned after 24h of inactivity.
-- Regularly-used agents keep old runtimes alive indefinitely.
-
-Use `openclaw sandbox recreate` to force removal of old runtimes. They are recreated automatically with current settings when next needed.
+Updating sandbox config does not affect running containers: existing runtimes keep their old settings, and idle runtimes are only pruned after `prune.idleHours` (default 24h). Regularly used agents can keep stale runtimes alive indefinitely. `openclaw sandbox recreate` removes the old runtime so the next use rebuilds it from current config.
 
 <Tip>
 Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses the Gateway's runtime registry and avoids mismatches when scope or session keys change.
 </Tip>
 
+## Common triggers
+
+Run `openclaw sandbox recreate --all` after any of these changes:
+
+- Container sandbox image update: `agents.defaults.sandbox.docker.image`
+- Sandbox config: `agents.defaults.sandbox.*`
+- SSH target/auth: `agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`
+- OpenShell source/policy/mode: `plugins.entries.openshell.config.{from,mode,policy}`
+- `setupCommand` — `--agent <id>` recreates one agent instead of all
+
+<Note>
+Runtimes are automatically recreated when the agent is next used.
+</Note>
+
 ## Registry migration
 
-OpenClaw stores sandbox runtime metadata in the shared SQLite state database. Older installs may still have legacy sandbox registry files:
+Sandbox runtime metadata lives in the shared SQLite state database. Older installs may have legacy registry files that regular reads no longer rewrite:
 
 - `~/.openclaw/sandbox/containers.json`
 - `~/.openclaw/sandbox/browsers.json`
+- one JSON shard per container/browser under `~/.openclaw/sandbox/containers/` or `~/.openclaw/sandbox/browsers/`
 
-Some upgrades may also have one JSON shard per container/browser under `~/.openclaw/sandbox/containers/` or `~/.openclaw/sandbox/browsers/`. Regular sandbox runtime reads do not rewrite those legacy sources. Run `openclaw doctor --fix` to migrate valid legacy entries into SQLite. Invalid legacy files are quarantined so one bad old registry cannot hide current runtime entries.
+Run `openclaw doctor --fix` to migrate valid legacy entries into SQLite. Invalid legacy files are quarantined so a corrupt old registry cannot hide current runtime entries.
 
 ## Configuration
 
-Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
+Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.entries.*.sandbox`):
 
 ```jsonc
 {
@@ -183,7 +129,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
-        "backend": "docker", // docker, ssh, openshell
+        "backend": "docker", // docker, podman, ssh; openshell is plugin-provided
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",
@@ -191,8 +137,8 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
           // ... more Docker options
         },
         "prune": {
-          "idleHours": 24, // Auto-prune after 24h idle
-          "maxAgeDays": 7, // Auto-prune after 7 days
+          "idleHours": 24, // auto-prune after 24h idle
+          "maxAgeDays": 7, // auto-prune after 7 days
         },
       },
     },
@@ -206,3 +152,4 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 - [Sandboxing](/gateway/sandboxing)
 - [Agent workspace](/concepts/agent-workspace)
 - [Doctor](/gateway/doctor): checks sandbox setup.
+- [OpenShell](/gateway/openshell) — a managed sandbox backend driven through the `openshell` CLI

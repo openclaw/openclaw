@@ -1,6 +1,3 @@
-/**
- * Resolves cache-TTL eligibility and session markers for prompt-cache retention.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -10,16 +7,15 @@ import {
   isAnthropicModelRef,
 } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
+import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
-type CacheTtlEntryData = {
+type CacheTtlEntryData = CacheTtlContext & {
   timestamp: number;
-  provider?: string;
-  modelId?: string;
 };
 
 type CacheTtlContext = {
@@ -27,11 +23,11 @@ type CacheTtlContext = {
   modelId?: string;
 };
 
-/** Returns whether this provider/model pair supports cache-TTL session markers. */
 export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
   modelApi?: string,
+  route?: Pick<ProviderCacheTtlEligibilityContext, "baseUrl" | "supportsPromptCacheKey">,
 ): boolean {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
@@ -41,12 +37,19 @@ export function isCacheTtlEligibleProvider(
       provider: normalizedProvider,
       modelId: normalizedModelId,
       modelApi,
+      baseUrl: route?.baseUrl,
+      supportsPromptCacheKey: route?.supportsPromptCacheKey,
     },
   });
   if (pluginEligibility !== undefined) {
     return pluginEligibility;
   }
   return (
+    // Config-only OpenAI-compatible providers have no hook; require an explicit opt-in.
+    (route?.supportsPromptCacheKey === true &&
+      (modelApi === "openai-responses" ||
+        modelApi === "openai-completions" ||
+        modelApi === "openai-chatgpt-responses")) ||
     isAnthropicFamilyCacheTtlEligible({
       provider: normalizedProvider,
       modelId: normalizedModelId,
@@ -57,56 +60,34 @@ export function isCacheTtlEligibleProvider(
   );
 }
 
-function normalizeCacheTtlKey(value: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
-
-function matchesCacheTtlContext(
-  data: Partial<CacheTtlEntryData> | undefined,
-  context: CacheTtlContext | undefined,
-): boolean {
-  if (!context) {
-    return true;
-  }
-  const expectedProvider = normalizeCacheTtlKey(context.provider);
-  if (expectedProvider && normalizeCacheTtlKey(data?.provider) !== expectedProvider) {
-    return false;
-  }
-  const expectedModelId = normalizeCacheTtlKey(context.modelId);
-  if (expectedModelId && normalizeCacheTtlKey(data?.modelId) !== expectedModelId) {
-    return false;
-  }
-  return true;
-}
-
-/** Reads the most recent cache-TTL marker that matches the optional provider/model context. */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,
 ): number | null {
-  const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
-  if (!sm?.getEntries) {
-    return null;
-  }
   try {
-    const entries = sm.getEntries();
-    let last: number | null = null;
+    const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
+    const entries = sm?.getEntries ? sm.getEntries() : [];
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       if (entry?.type !== "custom" || entry?.customType !== CACHE_TTL_CUSTOM_TYPE) {
         continue;
       }
       const data = entry?.data as Partial<CacheTtlEntryData> | undefined;
-      if (!matchesCacheTtlContext(data, context)) {
+      if (
+        context &&
+        !(["provider", "modelId"] as const).every((key) => {
+          const expected = normalizeOptionalLowercaseString(context[key]);
+          return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
+        })
+      ) {
         continue;
       }
       const ts = typeof data?.timestamp === "number" ? data.timestamp : null;
       if (ts && Number.isFinite(ts)) {
-        last = ts;
-        break;
+        return ts;
       }
     }
-    return last;
+    return null;
   } catch {
     return null;
   }

@@ -1,34 +1,22 @@
-// Transcript streaming reads large JSONL files forward or backward without whole-file buffering.
 import fs from "node:fs";
 import readline from "node:readline";
+import { hasErrnoCode } from "../../infra/errors.js";
 import { readFileRangeAsync } from "./file-range.js";
-
-// Shared streaming helpers for JSONL session transcripts.
-//
-// Callers historically read the entire transcript with `fs.readFile` before
-// splitting on newlines. That worked fine for short sessions but produced real
-// memory pressure on long-running ones where transcripts grow to tens or
-// hundreds of MB (see #54296). These helpers replace the whole-file reads with
-// either a forward `readline` stream or a chunked reverse scan. Both are bounded
-// to a small chunk plus the current line and preserve the malformed-line
-// tolerance and "first/last match wins" semantics callers rely on.
 
 const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
 const MAX_REVERSE_CHUNK_BYTES = 1024 * 1024;
 const MIN_REVERSE_CHUNK_BYTES = 1024;
 
-export type TranscriptStreamOptions = {
+type TranscriptStreamOptions = {
   signal?: AbortSignal;
 };
 
-export type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
+type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
   /** Bytes read per reverse scan chunk. Clamped to [1KiB, 1MiB]. */
   chunkBytes?: number;
 };
 
 /**
- * Stream the non-empty, trimmed JSONL lines of a transcript file in order.
- *
  * Returns an empty async iterator if the file does not exist, is empty, or is
  * not a regular file. Honours `options.signal` between lines so long scans can
  * cooperate with abort signals.
@@ -40,8 +28,11 @@ export async function* streamSessionTranscriptLines(
   let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(filePath);
-  } catch {
-    return;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
   }
   if (!stat.isFile() || stat.size <= 0) {
     return;
@@ -69,10 +60,7 @@ export async function* streamSessionTranscriptLines(
 }
 
 /**
- * Stream the non-empty, trimmed JSONL lines of a transcript file in reverse
- * (newest-first) order.
- *
- * Returns an empty async iterator if the file cannot be opened, is empty, or is
+ * Returns an empty async iterator if the file does not exist, is empty, or is
  * not a regular file. The implementation splits on newline bytes before UTF-8
  * decoding so multibyte characters survive arbitrary chunk boundaries.
  */
@@ -88,8 +76,11 @@ export async function* streamSessionTranscriptLinesReverse(
   let fileHandle: Awaited<ReturnType<typeof fs.promises.open>>;
   try {
     fileHandle = await fs.promises.open(filePath, "r");
-  } catch {
-    return;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
   }
   try {
     const stat = await fileHandle.stat();
@@ -114,7 +105,10 @@ export async function* streamSessionTranscriptLinesReverse(
         if (combined[index] !== 0x0a) {
           continue;
         }
-        const line = decodeTrimmedLine(combined.subarray(index + 1, lineEnd));
+        const line = combined
+          .subarray(index + 1, lineEnd)
+          .toString("utf-8")
+          .trim();
         if (line) {
           yield line;
           if (options.signal?.aborted) {
@@ -126,16 +120,11 @@ export async function* streamSessionTranscriptLinesReverse(
       carry = combined.subarray(0, lineEnd);
     }
 
-    const firstLine = decodeTrimmedLine(carry);
+    const firstLine = carry.toString("utf-8").trim();
     if (firstLine && !options.signal?.aborted) {
       yield firstLine;
     }
   } finally {
     await fileHandle.close().catch(() => undefined);
   }
-}
-
-function decodeTrimmedLine(line: Buffer): string {
-  const trimmed = line.toString("utf-8").trim();
-  return trimmed;
 }

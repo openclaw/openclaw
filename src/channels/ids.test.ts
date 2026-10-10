@@ -1,35 +1,15 @@
 // Channel id tests cover identifier normalization and validation helpers.
-import { describe, expect, it } from "vitest";
-import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
-import {
-  CHAT_CHANNEL_ALIASES,
-  CHAT_CHANNEL_ORDER,
-  normalizeChatChannelId,
-  type ChatChannelId,
-} from "./ids.js";
+import { describe, expect, it, vi } from "vitest";
+import { findChatChannelLabel, normalizeChatChannelId } from "./ids.js";
 
-function collectChatChannelAliases(): Record<string, ChatChannelId> {
-  const aliases = new Map<string, ChatChannelId>();
+vi.hoisted(() => {
+  // Runtime setup can import channel IDs before this file's schema guard.
+  vi.resetModules();
+});
 
-  for (const entry of listBundledChannelCatalogEntries()) {
-    const rawId = entry.id.trim();
-    if (!rawId || !CHAT_CHANNEL_ORDER.includes(rawId)) {
-      continue;
-    }
-    const channelId = rawId;
-    for (const alias of entry.aliases ?? []) {
-      const normalizedAlias = alias.trim().toLowerCase();
-      if (!normalizedAlias) {
-        continue;
-      }
-      aliases.set(normalizedAlias, channelId);
-    }
-  }
-
-  return Object.fromEntries(
-    [...aliases.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-  ) as Record<string, ChatChannelId>;
-}
+vi.mock("../config/bundled-channel-config-metadata.generated.js", () => {
+  throw new Error("Channel ID normalization must not load channel configuration schemas");
+});
 
 describe("channel ids", () => {
   it("normalizes built-in aliases + trims whitespace", () => {
@@ -42,7 +22,15 @@ describe("channel ids", () => {
     expect(normalizeChatChannelId("nope")).toBeNull();
   });
 
-  it("matches channel catalog alias metadata", () => {
-    expect(CHAT_CHANNEL_ALIASES).toEqual(collectChatChannelAliases());
+  it.each([
+    ["whatsapp", "WhatsApp"],
+    ["GOOGLE-CHAT", "Google Chat"],
+  ])("finds the exact generated label for %s", (channel, label) => {
+    expect(findChatChannelLabel(channel)).toBe(label);
+  });
+
+  it("does not fall back to runtime metadata for unknown channels", () => {
+    expect(findChatChannelLabel("external-chat")).toBeUndefined();
+    expect(findChatChannelLabel(" ")).toBeUndefined();
   });
 });

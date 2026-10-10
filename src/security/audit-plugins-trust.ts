@@ -1,13 +1,16 @@
-// Audits installed plugins for trust, provenance, and filesystem risks.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import type { InstallRecordBase } from "../config/zod-schema.installs.js";
+import { readHookInstalls } from "../hooks/installs.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
@@ -16,37 +19,7 @@ import {
   loadPluginRegistrySnapshot,
 } from "../plugins/plugin-registry.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
-import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
-
-type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
-
-type PluginTrustPolicyDeps = {
-  isToolAllowedByPolicies: typeof import("../agents/tool-policy-match.js").isToolAllowedByPolicies;
-  pickSandboxToolPolicy: typeof import("../agents/sandbox-tool-policy.js").pickSandboxToolPolicy;
-  resolveSandboxConfigForAgent: typeof import("../agents/sandbox/config.js").resolveSandboxConfigForAgent;
-  resolveSandboxToolPolicyForAgent: typeof import("../agents/sandbox/tool-policy.js").resolveSandboxToolPolicyForAgent;
-  resolveToolProfilePolicy: typeof import("../agents/tool-policy.js").resolveToolProfilePolicy;
-};
-
-let pluginTrustPolicyDepsPromise: Promise<PluginTrustPolicyDeps> | undefined;
-
-/** Lazily load tool-policy helpers so basic security imports avoid agent policy modules. */
-async function loadPluginTrustPolicyDeps(): Promise<PluginTrustPolicyDeps> {
-  pluginTrustPolicyDepsPromise ??= Promise.all([
-    import("../agents/sandbox/config.js"),
-    import("../agents/sandbox/tool-policy.js"),
-    import("../agents/tool-policy-match.js"),
-    import("../agents/tool-policy.js"),
-    import("../agents/sandbox-tool-policy.js"),
-  ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
-    isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
-    pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
-    resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
-    resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
-    resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
-  }));
-  return await pluginTrustPolicyDepsPromise;
-}
+import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 
 function readChannelCommandSetting(
   cfg: OpenClawConfig,
@@ -85,7 +58,7 @@ async function isChannelPluginConfigured(
     let resolvedAccount: unknown = inspected;
     if (!resolvedAccount) {
       try {
-        resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+        resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
       } catch {
         resolvedAccount = null;
       }
@@ -127,60 +100,6 @@ async function isChannelPluginConfigured(
   return false;
 }
 
-async function listInstalledPluginDirs(params: {
-  stateDir: string;
-  onReadError?: (error: unknown) => void;
-}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await fs.stat(extensionsDir).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return null;
-  });
-  if (!st?.isDirectory()) {
-    return { extensionsDir, pluginDirs: [] };
-  }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return [];
-  });
-  const pluginDirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
-    .filter(Boolean);
-  return { extensionsDir, pluginDirs };
-}
-
-function resolveToolPolicies(params: {
-  cfg: OpenClawConfig;
-  deps: PluginTrustPolicyDeps;
-  agentTools?: AgentToolsConfig;
-  sandboxMode?: "off" | "non-main" | "all";
-  agentId?: string | null;
-}): Array<SandboxToolPolicy | undefined> {
-  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
-  const profilePolicy = params.deps.resolveToolProfilePolicy(profile);
-  const policies: Array<SandboxToolPolicy | undefined> = [
-    profilePolicy,
-    params.deps.pickSandboxToolPolicy(params.cfg.tools ?? undefined),
-    params.deps.pickSandboxToolPolicy(params.agentTools),
-  ];
-  if (params.sandboxMode === "all") {
-    policies.push(
-      params.deps.resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined),
-    );
-  }
-  return policies;
-}
-
-function normalizePluginIdSet(entries: string[]): Set<string> {
-  return new Set(
-    entries
-      .map((entry) => normalizeOptionalLowercaseString(entry))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
-}
-
 function resolveEnabledExtensionPluginIds(params: {
   cfg: OpenClawConfig;
   pluginDirs: string[];
@@ -190,16 +109,9 @@ function resolveEnabledExtensionPluginIds(params: {
     return [];
   }
 
-  const allowSet = normalizePluginIdSet(normalized.allow);
-  const denySet = normalizePluginIdSet(normalized.deny);
-  const entryById = new Map<string, { enabled?: boolean }>();
-  for (const [id, entry] of Object.entries(normalized.entries)) {
-    const normalizedId = normalizeOptionalLowercaseString(id);
-    if (!normalizedId) {
-      continue;
-    }
-    entryById.set(normalizedId, entry);
-  }
+  const allowSet = new Set(normalized.allow);
+  const denySet = new Set(normalized.deny);
+  const entryById = new Map(Object.entries(normalized.entries));
 
   const enabled: string[] = [];
   for (const id of params.pluginDirs) {
@@ -247,20 +159,12 @@ function hasProviderPluginAllow(params: {
   byProvider?: Record<string, { allow?: string[]; alsoAllow?: string[]; deny?: string[] }>;
   enabledPluginIds: Set<string>;
 }): boolean {
-  if (!params.byProvider) {
-    return false;
-  }
-  for (const policy of Object.values(params.byProvider)) {
-    if (
-      hasExplicitPluginAllow({
-        allowEntries: collectAllowEntries(policy),
-        enabledPluginIds: params.enabledPluginIds,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return Object.values(params.byProvider ?? {}).some((policy) =>
+    hasExplicitPluginAllow({
+      allowEntries: collectAllowEntries(policy),
+      enabledPluginIds: params.enabledPluginIds,
+    }),
+  );
 }
 
 function isPinnedRegistrySpec(spec: string): boolean {
@@ -274,6 +178,35 @@ function isPinnedRegistrySpec(spec: string): boolean {
   }
   const version = value.slice(at + 1).trim();
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
+}
+
+async function analyzeNpmInstalls(
+  installs: Array<[string, Omit<InstallRecordBase, "source">]>,
+  stateDir: string,
+  directory: "extensions" | "hooks",
+) {
+  const unpinned = installs
+    .filter(([, record]) => typeof record.spec === "string" && !isPinnedRegistrySpec(record.spec))
+    .map(([id, record]) => `${id} (${record.spec})`);
+  const missingIntegrity = installs
+    .filter(([, record]) => typeof record.integrity !== "string" || record.integrity.trim() === "")
+    .map(([id]) => id);
+  const versionDrift: string[] = [];
+  for (const [id, record] of installs) {
+    const recordedVersion = record.resolvedVersion ?? record.version;
+    if (!recordedVersion) {
+      continue;
+    }
+    // Installed package.json is the local truth; registry metadata drift means
+    // update/reinstall should refresh the recorded supply-chain evidence.
+    const installPath = record.installPath ?? path.join(stateDir, directory, id);
+    const installedVersion = await readInstalledPackageVersion(installPath);
+    if (!installedVersion || installedVersion === recordedVersion) {
+      continue;
+    }
+    versionDrift.push(`${id} (recorded ${recordedVersion}, installed ${installedVersion})`);
+  }
+  return { unpinned, missingIntegrity, versionDrift };
 }
 
 /** Collect supply-chain and reachable-tool findings for installed plugins and hook packs. */
@@ -374,19 +307,31 @@ export async function collectPluginsTrustFindings(params: {
       pluginDirs,
     });
     if (enabledExtensionPluginIds.length > 0) {
-      const deps = await loadPluginTrustPolicyDeps();
+      const [
+        { resolveSandboxConfigForAgent },
+        { resolveSandboxToolPolicyForAgent },
+        { isToolAllowedByPolicies },
+        { resolveToolProfilePolicy },
+        { pickSandboxToolPolicy },
+      ] = await Promise.all([
+        import("../agents/sandbox/config.js"),
+        import("../agents/sandbox/tool-policy.js"),
+        import("../agents/tool-policy-match.js"),
+        import("../agents/tool-policy.js"),
+        import("../agents/sandbox-tool-policy.js"),
+      ]);
       const enabledPluginSet = new Set(enabledExtensionPluginIds);
       const contexts: Array<{
         label: string;
         agentId?: string;
         tools?: AgentToolsConfig;
       }> = [{ label: "default" }];
-      for (const entry of params.cfg.agents?.list ?? []) {
+      for (const entry of listAgentEntries(params.cfg)) {
         if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
           continue;
         }
         contexts.push({
-          label: `agents.list.${entry.id}`,
+          label: `agents.entries.${entry.id}`,
           agentId: entry.id,
           tools: entry.tools,
         });
@@ -395,18 +340,20 @@ export async function collectPluginsTrustFindings(params: {
       const permissiveContexts: string[] = [];
       for (const context of contexts) {
         const profile = context.tools?.profile ?? params.cfg.tools?.profile;
-        const restrictiveProfile = Boolean(deps.resolveToolProfilePolicy(profile));
-        const sandboxMode = deps.resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
+        const profilePolicy = resolveToolProfilePolicy(profile);
+        const restrictiveProfile = Boolean(profilePolicy);
+        const sandboxMode = resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
         // Probe with a synthetic plugin tool id: broad allow policies will allow
         // it, while restrictive profiles or explicit allowlists should not.
-        const policies = resolveToolPolicies({
-          cfg: params.cfg,
-          deps,
-          agentTools: context.tools,
-          sandboxMode,
-          agentId: context.agentId,
-        });
-        const broadPolicy = deps.isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
+        const policies: Array<SandboxToolPolicy | undefined> = [
+          profilePolicy,
+          pickSandboxToolPolicy(params.cfg.tools ?? undefined),
+          pickSandboxToolPolicy(context.tools),
+        ];
+        if (sandboxMode === "all") {
+          policies.push(resolveSandboxToolPolicyForAgent(params.cfg, context.agentId));
+        }
+        const broadPolicy = isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
         const explicitPluginAllow =
           !restrictiveProfile &&
           (hasExplicitPluginAllow({
@@ -453,121 +400,77 @@ export async function collectPluginsTrustFindings(params: {
     ([, record]) => record?.source === "npm",
   );
   if (npmPluginInstalls.length > 0) {
-    const unpinned = npmPluginInstalls
-      .filter(([, record]) => typeof record.spec === "string" && !isPinnedRegistrySpec(record.spec))
-      .map(([pluginId, record]) => `${pluginId} (${record.spec})`);
-    if (unpinned.length > 0) {
+    const metadata = await analyzeNpmInstalls(npmPluginInstalls, params.stateDir, "extensions");
+    if (metadata.unpinned.length > 0) {
       findings.push({
         checkId: "plugins.installs_unpinned_npm_specs",
         severity: "warn",
         title: "Plugin index includes unpinned npm specs",
-        detail: `Unpinned plugin index install records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
+        detail: `Unpinned plugin index install records:\n${metadata.unpinned.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
       });
     }
 
-    const missingIntegrity = npmPluginInstalls
-      .filter(
-        ([, record]) => typeof record.integrity !== "string" || record.integrity.trim() === "",
-      )
-      .map(([pluginId]) => pluginId);
-    if (missingIntegrity.length > 0) {
+    if (metadata.missingIntegrity.length > 0) {
       findings.push({
         checkId: "plugins.installs_missing_integrity",
         severity: "warn",
         title: "Plugin index is missing integrity metadata",
-        detail: `Plugin index records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
+        detail: `Plugin index records missing integrity:\n${metadata.missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
       });
     }
 
-    const pluginVersionDrift: string[] = [];
-    for (const [pluginId, record] of npmPluginInstalls) {
-      const recordedVersion = record.resolvedVersion ?? record.version;
-      if (!recordedVersion) {
-        continue;
-      }
-      // Installed package.json is the local truth; registry metadata drift means
-      // update/reinstall should refresh the recorded supply-chain evidence.
-      const installPath = record.installPath ?? path.join(params.stateDir, "extensions", pluginId);
-      const installedVersion = await readInstalledPackageVersion(installPath);
-      if (!installedVersion || installedVersion === recordedVersion) {
-        continue;
-      }
-      pluginVersionDrift.push(
-        `${pluginId} (recorded ${recordedVersion}, installed ${installedVersion})`,
-      );
-    }
-    if (pluginVersionDrift.length > 0) {
+    if (metadata.versionDrift.length > 0) {
       findings.push({
         checkId: "plugins.installs_version_drift",
         severity: "warn",
         title: "Plugin index records drift from installed package versions",
-        detail: `Detected plugin install metadata drift:\n${pluginVersionDrift.map((entry) => `- ${entry}`).join("\n")}`,
+        detail: `Detected plugin install metadata drift:\n${metadata.versionDrift.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",
       });
     }
   }
 
-  const hookInstalls = params.cfg.hooks?.internal?.installs ?? {};
+  const hookInstalls = readHookInstalls({
+    env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+  });
   const npmHookInstalls = Object.entries(hookInstalls).filter(
     ([, record]) => record?.source === "npm",
   );
   if (npmHookInstalls.length > 0) {
-    const unpinned = npmHookInstalls
-      .filter(([, record]) => typeof record.spec === "string" && !isPinnedRegistrySpec(record.spec))
-      .map(([hookId, record]) => `${hookId} (${record.spec})`);
-    if (unpinned.length > 0) {
+    const metadata = await analyzeNpmInstalls(npmHookInstalls, params.stateDir, "hooks");
+    if (metadata.unpinned.length > 0) {
       findings.push({
         checkId: "hooks.installs_unpinned_npm_specs",
         severity: "warn",
         title: "Hook installs include unpinned npm specs",
-        detail: `Unpinned hook install records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
+        detail: `Unpinned hook install records:\n${metadata.unpinned.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Pin hook install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
       });
     }
 
-    const missingIntegrity = npmHookInstalls
-      .filter(
-        ([, record]) => typeof record.integrity !== "string" || record.integrity.trim() === "",
-      )
-      .map(([hookId]) => hookId);
-    if (missingIntegrity.length > 0) {
+    if (metadata.missingIntegrity.length > 0) {
       findings.push({
         checkId: "hooks.installs_missing_integrity",
         severity: "warn",
         title: "Hook installs are missing integrity metadata",
-        detail: `Hook install records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
+        detail: `Hook install records missing integrity:\n${metadata.missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Reinstall or update hooks to refresh install metadata with resolved integrity hashes.",
       });
     }
 
-    const hookVersionDrift: string[] = [];
-    for (const [hookId, record] of npmHookInstalls) {
-      const recordedVersion = record.resolvedVersion ?? record.version;
-      if (!recordedVersion) {
-        continue;
-      }
-      const installPath = record.installPath ?? path.join(params.stateDir, "hooks", hookId);
-      const installedVersion = await readInstalledPackageVersion(installPath);
-      if (!installedVersion || installedVersion === recordedVersion) {
-        continue;
-      }
-      hookVersionDrift.push(
-        `${hookId} (recorded ${recordedVersion}, installed ${installedVersion})`,
-      );
-    }
-    if (hookVersionDrift.length > 0) {
+    if (metadata.versionDrift.length > 0) {
       findings.push({
         checkId: "hooks.installs_version_drift",
         severity: "warn",
         title: "Hook install records drift from installed package versions",
-        detail: `Detected hook install metadata drift:\n${hookVersionDrift.map((entry) => `- ${entry}`).join("\n")}`,
+        detail: `Detected hook install metadata drift:\n${metadata.versionDrift.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Run `openclaw hooks update --all` (or reinstall affected hooks) to refresh install metadata.",
       });

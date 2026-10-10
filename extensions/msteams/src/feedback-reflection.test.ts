@@ -1,279 +1,185 @@
-// Msteams tests cover feedback reflection plugin behavior.
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type {
+  PluginStateCompareIntent,
+  PluginStateCompareResult,
+  PluginStateKeyedStore,
+  PluginStateObservation,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeSessionLearning } from "./feedback-reflection-store.js";
-import {
-  buildFeedbackEvent,
-  buildReflectionPrompt,
-  clearReflectionCooldowns,
-  isReflectionAllowed,
-  loadSessionLearnings,
-  parseReflectionResponse,
-  recordReflectionTime,
-} from "./feedback-reflection.js";
-import { setMSTeamsRuntime } from "./runtime.js";
-import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { runFeedbackReflection } from "./feedback-reflection.js";
+import type { MSTeamsApp } from "./sdk.js";
 
-const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+type LearningEntry = { sessionKey: string; learnings: string[]; updatedAt: number };
+type ComparisonStore = Pick<PluginStateKeyedStore<LearningEntry>, "observe" | "compareAndApply">;
 
-// Matches an unpaired UTF-16 surrogate (lone high or lone low), without relying
-// on the ES2024 String.prototype.isWellFormed() runtime API.
-const UNPAIRED_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const mocks = vi.hoisted(() => {
+  const observe = vi.fn<(key: string) => Promise<PluginStateObservation<LearningEntry>>>();
+  const compareAndApply =
+    vi.fn<
+      (
+        key: string,
+        comparison: string,
+        intent: PluginStateCompareIntent<LearningEntry>,
+      ) => Promise<PluginStateCompareResult<LearningEntry>>
+    >();
+  return {
+    observe,
+    compareAndApply,
+    openKeyedStore: vi.fn<() => ComparisonStore>(),
+    reflect: vi.fn(),
+    send: vi.fn(),
+  };
+});
 
-describe("buildFeedbackEvent", () => {
-  it("builds a well-formed custom event", () => {
-    const event = buildFeedbackEvent({
-      messageId: "msg-123",
-      value: "negative",
-      comment: "too verbose",
-      sessionKey: "msteams:user1",
-      agentId: "default",
-      conversationId: "19:abc",
+vi.mock("./runtime.js", () => ({
+  getMSTeamsRuntime: () => ({ state: { openKeyedStore: mocks.openKeyedStore } }),
+}));
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+  DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS: 300_000,
+  runChannelFeedbackReflection: mocks.reflect,
+}));
+vi.mock("./sdk-proactive.js", () => ({ sendMSTeamsActivityWithReference: mocks.send }));
+vi.mock("./messenger.js", () => ({ buildConversationReference: (value: unknown) => value }));
+
+const params = { storePath: "/synthetic/sessions", sessionKey: "session", learning: "repeat" };
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.observe.mockResolvedValue({ value: undefined, comparison: "absent" });
+  mocks.compareAndApply.mockResolvedValue({ status: "applied" });
+  mocks.openKeyedStore.mockReturnValue({
+    observe: mocks.observe,
+    compareAndApply: mocks.compareAndApply,
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe("MSTeams feedback learning persistence", () => {
+  it("rebases an append after conflict, retaining ten entries and duplicate learnings", async () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValue(200);
+    const current = {
+      sessionKey: "session",
+      learnings: [...Array.from({ length: 9 }, (_, index) => String(index)), "repeat"],
+      updatedAt: 90,
+    };
+    mocks.compareAndApply.mockResolvedValueOnce({
+      status: "conflict",
+      current: { value: current, comparison: "current" },
     });
 
-    expect(event.type).toBe("custom");
-    expect(event.event).toBe("feedback");
-    expect(event.value).toBe("negative");
-    expect(event.comment).toBe("too verbose");
-    expect(event.messageId).toBe("msg-123");
-    expect(event.ts).toBeGreaterThan(0);
+    await storeSessionLearning(params);
+
+    expect(mocks.compareAndApply).toHaveBeenLastCalledWith(expect.any(String), "current", {
+      operation: "update",
+      action: "set",
+      value: {
+        sessionKey: "session",
+        learnings: [...current.learnings.slice(1), "repeat"],
+        updatedAt: 100,
+      },
+    });
   });
 
-  it("omits comment when not provided", () => {
-    const event = buildFeedbackEvent({
-      messageId: "msg-123",
-      value: "positive",
-      sessionKey: "msteams:user1",
-      agentId: "default",
-      conversationId: "19:abc",
-    });
+  it("still writes when appending leaves the bounded value unchanged", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(100);
+    const current = {
+      sessionKey: "session",
+      learnings: Array<string>(10).fill("repeat"),
+      updatedAt: 100,
+    };
+    mocks.observe.mockResolvedValue({ value: current, comparison: "current" });
 
-    expect(event.comment).toBeUndefined();
-    expect(event.value).toBe("positive");
+    await storeSessionLearning(params);
+
+    expect(mocks.compareAndApply).toHaveBeenCalledWith(expect.any(String), "current", {
+      operation: "update",
+      action: "set",
+      value: current,
+    });
+  });
+
+  it("propagates an unknown write outcome without repeating the append", async () => {
+    const failure = new Error("worker result unavailable");
+    mocks.compareAndApply.mockRejectedValue(failure);
+
+    await expect(storeSessionLearning(params)).rejects.toBe(failure);
+    expect(mocks.compareAndApply).toHaveBeenCalledOnce();
+  });
+
+  it.each(["observe", "compareAndApply"] as const)("requires %s support", async (method) => {
+    const store: ComparisonStore = {
+      observe: mocks.observe,
+      compareAndApply: mocks.compareAndApply,
+    };
+    store[method] = undefined;
+    mocks.openKeyedStore.mockReturnValue(store);
+
+    await expect(storeSessionLearning(params)).rejects.toThrow("atomic comparison is unavailable");
+    expect(mocks.observe).not.toHaveBeenCalled();
+    expect(mocks.compareAndApply).not.toHaveBeenCalled();
   });
 });
 
-describe("buildReflectionPrompt", () => {
-  it("includes the thumbed-down response", () => {
-    const prompt = buildReflectionPrompt({
-      thumbedDownResponse: "Here is a long explanation...",
-    });
+describe("MSTeams reflection completion", () => {
+  it.each(["applied", "failed"] as const)(
+    "waits for the %s storage outcome before its optional follow-up",
+    async (outcome) => {
+      const admitted = createDeferred<void>();
+      const pending = createDeferred<PluginStateCompareResult<LearningEntry>>();
+      mocks.compareAndApply
+        .mockResolvedValueOnce({
+          status: "conflict",
+          current: {
+            value: { sessionKey: "session", learnings: ["earlier"], updatedAt: 1 },
+            comparison: "current",
+          },
+        })
+        .mockImplementation(() => {
+          admitted.resolve();
+          return pending.promise;
+        });
+      mocks.reflect.mockResolvedValue({
+        status: "complete",
+        storePath: params.storePath,
+        learning: params.learning,
+        responseLength: 6,
+        followUp: true,
+        userMessage: "Synthetic follow-up",
+      });
+      const log = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+      const operation = runFeedbackReflection({
+        cfg: {},
+        app: {} as MSTeamsApp,
+        conversationRef: { conversation: { id: "conversation", conversationType: "personal" } },
+        sessionKey: "session",
+        agentId: "main",
+        conversationId: "conversation",
+        conversationKind: "direct",
+        log,
+      });
+      try {
+        await admitted.promise;
+        expect(mocks.send).not.toHaveBeenCalled();
+        if (outcome === "applied") {
+          pending.resolve({ status: "applied" });
+        } else {
+          pending.reject(new Error("state unavailable"));
+        }
+        await operation;
+      } finally {
+        pending.resolve({ status: "applied" });
+        await operation;
+      }
 
-    expect(prompt).toContain("previous response wasn't helpful");
-    expect(prompt).toContain("Here is a long explanation...");
-    expect(prompt).toContain("reflect");
-  });
-
-  it("truncates long responses", () => {
-    const longResponse = "x".repeat(600);
-    const prompt = buildReflectionPrompt({
-      thumbedDownResponse: longResponse,
-    });
-
-    expect(prompt).toContain("...");
-    expect(prompt.length).toBeLessThan(longResponse.length + 500);
-  });
-
-  it("does not split UTF-16 surrogate pairs when truncating a thumbed-down response", () => {
-    const thumbedDownResponse = `${"a".repeat(499)}🦞${"b".repeat(20)}`;
-
-    const prompt = buildReflectionPrompt({ thumbedDownResponse });
-
-    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
-    expect(prompt).toContain(`${"a".repeat(499)}...`);
-    expect(prompt).not.toContain("\ud83e");
-    expect(prompt).not.toContain("\udd9e");
-  });
-
-  it("keeps a boundary emoji when it fully fits before the truncation cap", () => {
-    const thumbedDownResponse = `${"a".repeat(498)}🦞${"b".repeat(20)}`;
-
-    const prompt = buildReflectionPrompt({ thumbedDownResponse });
-
-    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
-    expect(prompt).toContain(`${"a".repeat(498)}🦞...`);
-  });
-
-  it("includes user comment when provided", () => {
-    const prompt = buildReflectionPrompt({
-      thumbedDownResponse: "Some response",
-      userComment: "Too wordy",
-    });
-
-    expect(prompt).toContain('User\'s comment: "Too wordy"');
-  });
-
-  it("works without optional params", () => {
-    const prompt = buildReflectionPrompt({});
-    expect(prompt).toContain("previous response wasn't helpful");
-    expect(prompt).toContain('"followUp":false');
-  });
-});
-
-describe("parseReflectionResponse", () => {
-  it("parses strict JSON output", () => {
-    expect(
-      parseReflectionResponse(
-        '{"learning":"Be more direct next time.","followUp":true,"userMessage":"Sorry about that. I will keep it tighter."}',
-      ),
-    ).toEqual({
-      learning: "Be more direct next time.",
-      followUp: true,
-      userMessage: "Sorry about that. I will keep it tighter.",
-    });
-  });
-
-  it("parses JSON inside markdown fences", () => {
-    expect(
-      parseReflectionResponse(
-        '```json\n{"learning":"Ask a clarifying question first.","followUp":false,"userMessage":""}\n```',
-      ),
-    ).toEqual({
-      learning: "Ask a clarifying question first.",
-      followUp: false,
-      userMessage: undefined,
-    });
-  });
-
-  it("falls back to internal-only learning when parsing fails", () => {
-    expect(parseReflectionResponse("Be more concise.\nFollow up: yes.")).toEqual({
-      learning: "Be more concise.\nFollow up: yes.",
-      followUp: false,
-    });
-  });
-});
-
-describe("reflection cooldown", () => {
-  afterEach(() => {
-    clearReflectionCooldowns();
-    vi.restoreAllMocks();
-  });
-
-  it("allows first reflection", () => {
-    expect(isReflectionAllowed("session-1")).toBe(true);
-  });
-
-  it("blocks reflection within cooldown", () => {
-    recordReflectionTime("session-1");
-    expect(isReflectionAllowed("session-1", 60_000)).toBe(false);
-  });
-
-  it("allows reflection after cooldown expires", () => {
-    // Manually set a past timestamp
-    recordReflectionTime("session-1");
-    // Override the map entry to simulate time passing
-    clearReflectionCooldowns();
-    expect(isReflectionAllowed("session-1", 1)).toBe(true);
-  });
-
-  it("tracks sessions independently", () => {
-    recordReflectionTime("session-1");
-    expect(isReflectionAllowed("session-1", 60_000)).toBe(false);
-    expect(isReflectionAllowed("session-2", 60_000)).toBe(true);
-  });
-
-  it("keeps longer custom cooldown entries during pruning", () => {
-    vi.spyOn(Date, "now").mockReturnValue(0);
-    recordReflectionTime("target", 600_000);
-
-    vi.spyOn(Date, "now").mockReturnValue(301_000);
-    for (let index = 0; index <= 500; index += 1) {
-      recordReflectionTime(`session-${index}`, 600_000);
-    }
-
-    expect(isReflectionAllowed("target", 600_000)).toBe(false);
-  });
-});
-
-describe("loadSessionLearnings", () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-    setMSTeamsRuntime(msteamsRuntimeStub);
-  });
-
-  afterEach(async () => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (tmpDir) {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("returns empty array when file doesn't exist", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const learnings = await loadSessionLearnings(tmpDir, "nonexistent");
-    expect(learnings).toStrictEqual([]);
-  });
-
-  it("reads persisted learnings from plugin state", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams:user1",
-      learning: "Be concise",
-    });
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams:user1",
-      learning: "Use examples",
-    });
-
-    const learnings = await loadSessionLearnings(tmpDir, "msteams:user1");
-    expect(learnings).toEqual(["Be concise", "Use examples"]);
-  });
-
-  it("keeps distinct session keys isolated across the filename persistence boundary", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams:user1",
-      learning: "Use bullets",
-    });
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams/user1",
-      learning: "Avoid bullets",
-    });
-
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual(["Use bullets"]);
-    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual(["Avoid bullets"]);
-  });
-
-  it("keeps the same session key isolated by store path", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const workStorePath = path.join(tmpDir, "work");
-    const opsStorePath = path.join(tmpDir, "ops");
-
-    await storeSessionLearning({
-      storePath: workStorePath,
-      sessionKey: "msteams:user1",
-      learning: "Use bullets",
-    });
-    await storeSessionLearning({
-      storePath: opsStorePath,
-      sessionKey: "msteams:user1",
-      learning: "Avoid bullets",
-    });
-
-    await expect(loadSessionLearnings(workStorePath, "msteams:user1")).resolves.toEqual([
-      "Use bullets",
-    ]);
-    await expect(loadSessionLearnings(opsStorePath, "msteams:user1")).resolves.toEqual([
-      "Avoid bullets",
-    ]);
-  });
+      expect(mocks.reflect).toHaveBeenCalledOnce();
+      expect(mocks.compareAndApply).toHaveBeenCalledTimes(2);
+      expect(mocks.send).toHaveBeenCalledOnce();
+      if (outcome === "failed") {
+        expect(log.debug).toHaveBeenCalledWith("failed to store reflection learning", {
+          error: "state unavailable",
+        });
+      }
+    },
+  );
 });

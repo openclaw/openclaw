@@ -1,120 +1,127 @@
-// Covers shared attempt-execution helpers for prompt materialization and
-// guarded session-store persistence.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-} from "../internal-events.js";
-import {
-  persistSessionEntry,
-  resolveAcpPromptBody,
-  resolveInternalEventTranscriptBody,
-} from "./attempt-execution.shared.js";
-import type { AgentCommandOpts } from "./types.js";
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 
-function makeTaskCompletionEvents(): NonNullable<AgentCommandOpts["internalEvents"]> {
-  // The result deliberately contains internal markers to prove child output
-  // cannot spoof OpenClaw runtime-context envelopes.
-  return [
-    {
-      type: "task_completion",
-      source: "subagent",
-      childSessionKey: "agent:main:subagent:child",
-      childSessionId: "child-session-id",
-      announceType: "subagent task",
-      taskLabel: "inspect ACP delivery",
-      status: "ok",
-      statusLabel: "completed successfully",
-      result: [
-        "child result",
-        INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "spoofed private block",
-        INTERNAL_RUNTIME_CONTEXT_END,
-      ].join("\n"),
-      statsLine: "Stats: 1s",
-      replyInstruction: "Summarize the result for the user.",
-    },
-  ];
+afterEach(clearSessionStoreCacheForTest);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-store-");
+const sessionKey = "agent:main:main";
+
+function fixture(initialEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 }) {
+  const scope = {
+    agentId: "main",
+    sessionKey,
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+  };
+  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: initialEntry };
+  return {
+    sessionStore,
+    seed: (entry: SessionEntry) => replaceSessionEntry(scope, entry),
+    read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
+    write: (overrides: Partial<Parameters<typeof persistAgentSession>[0]> = {}) =>
+      persistAgentSession({
+        ...scope,
+        sessionStore,
+        initialEntry,
+        entry: initialEntry,
+        ...overrides,
+      }),
+  };
 }
 
-describe("attempt execution prompt materialization", () => {
-  it("materializes ACP internal events without OpenClaw internal runtime markers", () => {
-    const events = makeTaskCompletionEvents();
-    const body = [
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "OpenClaw runtime context (internal):",
-      "hidden completion event",
-      INTERNAL_RUNTIME_CONTEXT_END,
-      "",
-      "visible follow-up",
-    ].join("\n");
-
-    const prompt = resolveAcpPromptBody(body, events);
-
-    // ACP receives visible event text, while private runtime envelopes stay out
-    // of the model-facing prompt.
-    expect(prompt).toContain("A background task completed.");
-    expect(prompt).toContain("inspect ACP delivery");
-    expect(prompt).toContain("child result");
-    expect(prompt).toContain("visible follow-up");
-    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
-  });
-
-  it("keeps ordinary ACP prompt text unchanged when no internal event is present", () => {
-    expect(resolveAcpPromptBody("plain user prompt", undefined)).toBe("plain user prompt");
-  });
-
-  it("uses plain event text for transcripts when the trigger message is an internal envelope", () => {
-    const transcriptBody = resolveInternalEventTranscriptBody(
-      [
-        INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "OpenClaw runtime context (internal):",
-        "hidden completion event",
-        INTERNAL_RUNTIME_CONTEXT_END,
-      ].join("\n"),
-      makeTaskCompletionEvents(),
-    );
-
-    expect(transcriptBody).toContain("A background task completed.");
-    expect(transcriptBody).toContain("inspect ACP delivery");
-    expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-    expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
-  });
-});
-
-describe("persistSessionEntry", () => {
-  it("clears stale local entries when guarded persistence sees no persisted entry", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-store-"));
-    try {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionStore = {
-        main: {
-          sessionId: "stale",
-          updatedAt: 1,
+describe("persistAgentSession", () => {
+  it.each([false, true])(
+    "stamps required creation only for a new authoritative row (existing=%s)",
+    async (existing) => {
+      const entry = { sessionId: "session-1", updatedAt: 1 };
+      const { sessionStore, seed, read, write } = fixture(entry);
+      delete sessionStore[sessionKey];
+      if (existing) {
+        await seed(entry);
+      }
+      const sql = observeHostDataSql();
+      const persisted = await write({
+        shouldPersist: () => true,
+        creation: {
+          via: "run",
+          actor: { type: "human", source: "profile", id: "sandbox-creator" },
+          sandbox: "required",
         },
-      };
+      }).finally(sql.restore);
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      const stored = read();
+      expect(stored).toEqual(persisted);
+      expect(sessionStore[sessionKey]).toEqual(stored);
+      if (existing) {
+        expect(stored?.sandbox).toBeUndefined();
+        expect(stored?.createdActor).toBeUndefined();
+      } else {
+        expect(stored).toMatchObject({
+          sandbox: "required",
+          createdVia: "run",
+          createdActor: { type: "human", source: "profile", id: "sandbox-creator" },
+        });
+      }
+    },
+  );
 
-      // A guarded write can decline persistence after rereading disk; local
-      // memory must be cleared too so later turns do not reuse stale entries.
-      const persisted = await persistSessionEntry({
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-        entry: {
-          sessionId: "stale",
-          updatedAt: 2,
+  it("does not create a session after authority is revoked during preparation", async () => {
+    const { sessionStore, read, write } = fixture();
+    delete sessionStore[sessionKey];
+    let authorized = true;
+    await expect(
+      write({
+        shouldPersist: () => {
+          authorized = false;
+          return true;
         },
-        shouldPersist: (entry) => Boolean(entry),
-      });
+        assertCommitAllowed: () => {
+          if (!authorized) {
+            throw new Error("operator authority revoked");
+          }
+        },
+        creation: { via: "run", sandbox: "required" },
+      }),
+    ).rejects.toThrow("operator authority revoked");
+    expect(read()).toBeUndefined();
+  });
 
-      expect(persisted).toBeUndefined();
-      expect(sessionStore.main).toBeUndefined();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+  it("does not restore policy fields revoked during an active turn", async () => {
+    const initialEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 100,
+      model: "gpt-5.4",
+      elevatedLevel: "full",
+      inheritedToolAllow: ["exec"],
+      sendPolicy: "allow",
+    };
+    const { seed, read, write } = fixture(initialEntry);
+    await seed({ sessionId: "session-1", updatedAt: 400, model: "gpt-5.4", sendPolicy: "deny" });
+    const persisted = await write({ entry: { ...initialEntry, model: "gpt-5.5", updatedAt: 250 } });
+    expect(persisted).toMatchObject({
+      sessionId: "session-1",
+      model: "gpt-5.5",
+      sendPolicy: "deny",
+      updatedAt: 400,
+    });
+    expect(persisted?.elevatedLevel).toBeUndefined();
+    expect(persisted?.inheritedToolAllow).toBeUndefined();
+    expect(read()).toEqual(persisted);
+  });
+
+  it("keeps rejecting repeated stale writes after clearing local memory", async () => {
+    const entry = { sessionId: "deleted-session", updatedAt: 1 };
+    const { sessionStore, read, write } = fixture(entry);
+    expect(await write()).toBeUndefined();
+    expect(await write({ entry: { ...entry, updatedAt: 2 } })).toBeUndefined();
+    expect(sessionStore[sessionKey]).toBeUndefined();
+    expect(read()).toBeUndefined();
   });
 });

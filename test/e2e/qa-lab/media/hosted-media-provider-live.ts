@@ -1,15 +1,18 @@
 // Hosted media provider live runner and QA Lab evidence producer.
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
-  type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mjs";
+} from "../../../../extensions/qa-lab/test-api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
+import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
+import {
+  createQaScriptBlockedStatusTracker,
+  createQaScriptEvidenceWriter,
+  type QaScriptEvidenceStatus,
+} from "../runtime/script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/media/hosted-media-provider-live.ts";
 const DEFAULT_PROVIDERS_ENV = "OPENCLAW_QA_HOSTED_MEDIA_PROVIDERS";
@@ -48,28 +51,34 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "deepinfra",
       "fal",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
     defaultProviders: [
       "alibaba",
       "byteplus",
       "deepinfra",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
   },
 };
@@ -119,25 +128,22 @@ type HostedMediaOptions = {
 type HostedMediaSuiteDefinition = {
   codeRefs: string[];
   docsRefs: string[];
-  primaryCoverageIds: string[];
-  secondaryCoverageIds?: string[];
   scenarioId: string;
   title: string;
   videoFullModes?: boolean;
 };
 
 type HostedMediaProofResult = {
-  artifacts: Array<{ kind: string; path: string }>;
+  artifacts?: Array<{ filePath: string; kind: string }>;
   details?: string;
   durationMs: number;
-  status: QaEvidenceStatus;
+  status: QaScriptEvidenceStatus;
 };
 
 const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   image: {
     scenarioId: "hosted-image-generation-providers-live",
     title: "Hosted image generation providers live",
-    primaryCoverageIds: ["hosted-providers.image-generation-providers"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/image-generation.md",
@@ -152,11 +158,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   video: {
     scenarioId: "hosted-video-generation-providers-live",
     title: "Hosted video generation providers live",
-    primaryCoverageIds: [
-      "hosted-providers.video-generation-providers",
-      "media.reference-image-video-and-audio-inputs",
-    ],
-    secondaryCoverageIds: ["media.video-generation-tool-invocation"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/video-generation.md",
@@ -176,10 +177,6 @@ function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
 }
 
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
   return _spawnPnpmRunner({
     pnpmArgs: params.pnpmArgs,
@@ -194,8 +191,8 @@ async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unk
 }
 
 async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
-  const { getProviderEnvVars } = await import("../../../../src/secrets/provider-env-vars.js");
-  return getProviderEnvVars(provider);
+  const { getProviderEnvVarsCore } = await import("../../../../src/secrets/provider-env-vars.js");
+  return getProviderEnvVarsCore(provider);
 }
 
 async function loadShellEnvFallbackForLiveMedia(params: {
@@ -412,7 +409,7 @@ async function selectProviders(params: {
   const candidates = explicit
     ? params.suite.providers
     : (params.suite.defaultProviders ?? params.suite.providers);
-  let providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
+  const providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
   if (!params.requireAuth) {
     return providers;
   }
@@ -479,14 +476,14 @@ export async function buildRunPlan(
   );
 }
 
-function printHelp(): void {
-  console.log(`Media live harness
+function formatHelp(): string {
+  return `Media live harness
 
 Usage:
   pnpm test:live:media
   pnpm test:live:media image
-  pnpm test:live:media image video --providers openai,google,minimax
-  pnpm test:live:media video --video-providers openai,runway --all-providers
+  pnpm test:live:media image video --providers google,minimax,xai
+  pnpm test:live:media video --video-providers runway,xai --all-providers
 
 QA evidence mode:
   node --import tsx ${SOURCE_PATH} --qa-evidence --suite image --artifact-base <dir>
@@ -497,7 +494,7 @@ Defaults:
   - auto-loads missing provider env vars from ~/.profile
   - narrows each suite to providers that currently have usable auth
   - skips the slow fal video smoke by default; pass --video-providers fal to run it
-  - forwards extra args to scripts/test-live.mjs
+  - forwards extra args to scripts/test-live.mts
 
 Flags:
   --providers <csv>         global provider filter
@@ -507,7 +504,11 @@ Flags:
   --all-providers           do not auto-filter by available auth
   --allow-empty             exit 0 when auth filtering leaves no runnable providers
   --quiet | --no-quiet      passed through to test:live
-`);
+`;
+}
+
+function printHelp(): void {
+  console.log(formatHelp());
 }
 
 export async function runSuite(params: {
@@ -667,20 +668,6 @@ export function parseHostedMediaOptions(argv: readonly string[]): HostedMediaOpt
   };
 }
 
-async function writeJson(filePath: string, value: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-async function appendText(filePath: string, text: string) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.appendFile(filePath, text, "utf8");
-}
-
-function relativeArtifactPath(options: HostedMediaOptions, filePath: string) {
-  return path.relative(options.artifactBase, filePath) || path.basename(filePath);
-}
-
 function suiteProviderFilter(options: HostedMediaOptions, env: NodeJS.ProcessEnv) {
   const suiteEnv = `OPENCLAW_QA_HOSTED_${options.suiteId.toUpperCase()}_PROVIDERS`;
   return env[suiteEnv]?.trim() || env[options.providersEnv]?.trim() || "";
@@ -707,30 +694,50 @@ export function buildHostedMediaCommand(params: {
   };
 }
 
-export function classifyHostedMediaFailureStatus(message: string): QaEvidenceStatus {
-  const blockedPatterns = [
-    /no runnable providers matched available auth/i,
-    /no runnable providers matched the explicit provider selection/i,
-    /no runnable providers matched explicit provider selection/i,
-    /no providers with usable auth/i,
-  ];
-  return blockedPatterns.some((pattern) => pattern.test(message)) ? "blocked" : "fail";
+const HOSTED_MEDIA_BLOCKED_PATTERNS = [
+  /no runnable providers matched available auth/i,
+  /no runnable providers matched the explicit provider selection/i,
+  /no runnable providers matched explicit provider selection/i,
+  /no providers with usable auth/i,
+];
+
+export function classifyHostedMediaFailureStatus(message: string): QaScriptEvidenceStatus {
+  const tracker = createQaScriptBlockedStatusTracker(HOSTED_MEDIA_BLOCKED_PATTERNS);
+  tracker.append(message);
+  return tracker.status();
 }
 
 function formatCommand(command: string, args: readonly string[]) {
   return [command, ...args].map((arg) => JSON.stringify(arg)).join(" ");
 }
 
-async function runHostedMediaProof(options: HostedMediaOptions): Promise<HostedMediaProofResult> {
+function createHostedMediaEvidenceWriter(options: HostedMediaOptions) {
+  const definition = EVIDENCE_SUITES[options.suiteId];
+  return createQaScriptEvidenceWriter({
+    artifactBase: options.artifactBase,
+    logFileName: "hosted-media-live.log",
+    primaryModel: "live-media/hosted-media-provider",
+    providerMode: "live-frontier",
+    repoRoot: options.repoRoot,
+    target: {
+      id: definition.scenarioId,
+      title: definition.title,
+      sourcePath: SOURCE_PATH,
+      docsRefs: definition.docsRefs,
+      codeRefs: definition.codeRefs,
+    },
+  });
+}
+
+async function runHostedMediaProof(
+  options: HostedMediaOptions,
+  writer: ReturnType<typeof createHostedMediaEvidenceWriter>,
+): Promise<HostedMediaProofResult> {
   const startedAt = Date.now();
-  await fs.mkdir(options.artifactBase, { recursive: true });
-  const logPath = path.join(options.artifactBase, "hosted-media-live.log");
-  const artifacts = [{ kind: "log", path: relativeArtifactPath(options, logPath) }];
   const command = buildHostedMediaCommand({ options });
 
-  await appendText(logPath, `$ ${formatCommand(command.command, command.args)}\n`);
-  await appendText(
-    logPath,
+  writer.appendLog(`$ ${formatCommand(command.command, command.args)}\n`);
+  writer.appendLog(
     `suite: ${options.suiteId}\nprovidersEnv: ${options.providersEnv}\nvideoFullModes: ${String(EVIDENCE_SUITES[options.suiteId].videoFullModes === true)}\n`,
   );
 
@@ -740,46 +747,36 @@ async function runHostedMediaProof(options: HostedMediaOptions): Promise<HostedM
       env: command.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const statusTracker = createQaScriptBlockedStatusTracker(HOSTED_MEDIA_BLOCKED_PATTERNS);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      writer.appendLog(chunk);
+      statusTracker.append(chunk);
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      writer.appendLog(chunk);
+      statusTracker.append(chunk);
     });
     child.on("error", reject);
     child.on("close", (status, signal) => {
-      const output = [
-        stdout ? `\n--- stdout ---\n${stdout}` : "",
-        stderr ? `\n--- stderr ---\n${stderr}` : "",
-      ].join("");
-      appendText(logPath, output)
-        .then(() => {
-          const durationMs = Math.max(1, Date.now() - startedAt);
-          if (status === 0 && !signal) {
-            resolve({
-              artifacts,
-              details: `${options.suiteId} hosted media live suite passed`,
-              durationMs,
-              status: "pass",
-            });
-            return;
-          }
-          const details = signal
-            ? `${options.suiteId} hosted media live suite terminated by ${signal}`
-            : `${options.suiteId} hosted media live suite exited with ${status ?? 1}`;
-          const combined = `${details}\n${stderr || stdout}`;
-          resolve({
-            artifacts,
-            details: combined,
-            durationMs,
-            status: classifyHostedMediaFailureStatus(combined),
-          });
-        })
-        .catch(reject);
+      const durationMs = Math.max(1, Date.now() - startedAt);
+      if (status === 0 && !signal) {
+        resolve({
+          details: `${options.suiteId} hosted media live suite passed`,
+          durationMs,
+          status: "pass",
+        });
+        return;
+      }
+      const details = signal
+        ? `${options.suiteId} hosted media live suite terminated by ${signal}`
+        : `${options.suiteId} hosted media live suite exited with ${status ?? 1}`;
+      resolve({
+        details,
+        durationMs,
+        status: statusTracker.status(),
+      });
     });
   });
 }
@@ -788,48 +785,15 @@ export function buildHostedMediaEvidence(params: {
   options: HostedMediaOptions;
   result: HostedMediaProofResult;
 }): QaEvidenceSummaryJson {
-  const definition = EVIDENCE_SUITES[params.options.suiteId];
-  return buildScriptEvidenceSummary({
-    artifactPaths: params.result.artifacts,
-    evidenceMode: "full",
-    env: process.env,
-    generatedAt: new Date().toISOString(),
-    primaryModel: "live-media/hosted-media-provider",
-    providerMode: "live-frontier",
-    repoRoot: params.options.repoRoot,
-    runner: "script",
-    targets: [
-      {
-        id: definition.scenarioId,
-        title: definition.title,
-        sourcePath: SOURCE_PATH,
-        primaryCoverageIds: definition.primaryCoverageIds,
-        secondaryCoverageIds: definition.secondaryCoverageIds,
-        docsRefs: definition.docsRefs,
-        codeRefs: definition.codeRefs,
-      },
-    ],
-    results: [
-      {
-        id: definition.scenarioId,
-        status: params.result.status,
-        durationMs: params.result.durationMs,
-        failureMessage: params.result.details,
-      },
-    ],
-  });
+  return createHostedMediaEvidenceWriter(params.options).build(params.result);
 }
 
-export async function runHostedMediaProviderLiveProducer(
+async function runHostedMediaProviderLiveProducer(
   options: HostedMediaOptions,
 ): Promise<QaEvidenceSummaryJson> {
-  const result = await runHostedMediaProof(options);
-  const evidence = buildHostedMediaEvidence({ options, result });
-  await writeJson(path.join(options.artifactBase, QA_EVIDENCE_FILENAME), evidence);
-  await writeJson(path.join(options.artifactBase, "latest-run.json"), {
-    qaEvidence: QA_EVIDENCE_FILENAME,
-  });
-  return evidence;
+  const writer = createHostedMediaEvidenceWriter(options);
+  const result = await runHostedMediaProof(options, writer);
+  return await writer.write(result);
 }
 
 async function main(argv: string[]) {

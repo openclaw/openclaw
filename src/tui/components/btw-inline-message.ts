@@ -1,9 +1,8 @@
-// BTW inline message component renders compact aside messages in chat.
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
-import { theme } from "../theme/theme.js";
-import { AssistantMessageComponent } from "./assistant-message.js";
+import { tuiTheme as theme } from "../theme/theme.js";
+import { sanitizeRenderableLine, sanitizeRenderableText } from "../tui-formatters.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
 
-// Inline overlay message for BTW follow-up answers inside the chat log.
 type BtwInlineMessageParams = {
   question: string;
   text: string;
@@ -17,15 +16,22 @@ export class BtwInlineMessage extends Container {
     this.setResult(params);
   }
 
-  /** Replaces the current BTW content without reallocating the host component. */
   setResult(params: BtwInlineMessageParams) {
+    const question = sanitizeRenderableLine(params.question);
+    let text = params.text;
+    if (params.isError) {
+      text = sanitizeRenderableText(text);
+      if (!text.trim()) {
+        text = "(no output)";
+      }
+    }
     this.clear();
     this.addChild(new Spacer(1));
-    this.addChild(new Text(theme.header(`BTW: ${params.question}`), 1, 0));
+    this.addChild(new Text(theme.header(`BTW: ${question}`), 1, 0));
     if (params.isError) {
-      this.addChild(new Text(theme.error(params.text), 1, 0));
+      this.addChild(new Text(theme.error(text), 1, 0));
     } else {
-      this.addChild(new AssistantMessageComponent(params.text));
+      this.addChild(new MarkdownMessageComponent("assistant", text));
     }
     this.addChild(new Text(theme.dim("Press Enter or Esc to dismiss"), 1, 0));
   }

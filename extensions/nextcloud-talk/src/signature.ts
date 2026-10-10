@@ -1,6 +1,5 @@
-// Nextcloud Talk plugin module implements signature behavior.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createHmac, randomBytes } from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { NextcloudTalkWebhookHeaders } from "./types.js";
 
 const SIGNATURE_HEADER = "x-nextcloud-talk-signature";
@@ -26,33 +25,14 @@ export function verifyNextcloudTalkSignature(params: {
     .update(random + body)
     .digest("hex");
 
-  const expectedBuf = Buffer.from(expected, "utf8");
-  const signatureBuf = Buffer.from(signature, "utf8");
-
-  // Pad to equal length before constant-time comparison to prevent
-  // leaking length information via early-return timing.
-  // Note: digest("hex") always produces lowercase ASCII (64 bytes for SHA-256),
-  // so expectedBuf is always 64 bytes — no variable-length concern on the expected side.
-  const maxLen = Math.max(expectedBuf.length, signatureBuf.length);
-  const paddedExpected = Buffer.alloc(maxLen);
-  const paddedSignature = Buffer.alloc(maxLen);
-  expectedBuf.copy(paddedExpected);
-  signatureBuf.copy(paddedSignature);
-
-  // Use crypto.timingSafeEqual instead of manual XOR loop to avoid
-  // potential JIT-optimisation timing leaks in the JavaScript engine.
-  const timingResult = timingSafeEqual(paddedExpected, paddedSignature);
-  return expectedBuf.length === signatureBuf.length && timingResult;
+  return safeEqualSecret(signature, expected);
 }
 
-/**
- * Extract webhook headers from an incoming request.
- */
 export function extractNextcloudTalkHeaders(
   headers: Record<string, string | string[] | undefined>,
 ): NextcloudTalkWebhookHeaders | null {
   const getHeader = (name: string): string | undefined => {
-    const value = headers[name] ?? headers[normalizeLowercaseStringOrEmpty(name)];
+    const value = headers[name];
     return Array.isArray(value) ? value[0] : value;
   };
 
@@ -67,9 +47,6 @@ export function extractNextcloudTalkHeaders(
   return { signature, random, backend };
 }
 
-/**
- * Generate signature headers for an outbound request to Nextcloud Talk.
- */
 export function generateNextcloudTalkSignature(params: { body: string; secret: string }): {
   random: string;
   signature: string;

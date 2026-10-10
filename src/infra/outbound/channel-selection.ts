@@ -1,174 +1,105 @@
-// Channel selection chooses a deliverable message channel from explicit input,
-// tool context fallback, or configured plugin accounts.
-import { listChannelPlugins } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type OfficialExternalPluginRepairHint,
   resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints,
 } from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
 import {
-  listDeliverableMessageChannels,
-  type DeliverableMessageChannel,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import {
+  getRuntimeVisibleChannelPlugin,
+  listRuntimeVisibleChannelPlugins,
+} from "./runtime-visible-channels.js";
 
-/** Deliverable message channel id that can be selected for message actions. */
-export type MessageChannelId = DeliverableMessageChannel;
-/** Source that explains how message channel selection chose its result. */
-export type MessageChannelSelectionSource =
-  | "explicit"
-  | "tool-context-fallback"
-  | "single-configured";
-
-const getMessageChannels = () => listDeliverableMessageChannels();
-
-function isKnownChannel(value: string): boolean {
-  return getMessageChannels().includes(value as MessageChannelId);
-}
-
-function resolveKnownChannel(value?: string | null): MessageChannelId | undefined {
-  const normalized = normalizeMessageChannel(value);
-  if (!normalized) {
-    return undefined;
-  }
-  if (!isDeliverableMessageChannel(normalized)) {
-    return undefined;
-  }
-  if (!isKnownChannel(normalized)) {
-    return undefined;
-  }
-  return normalized;
-}
-
-function resolveAvailableKnownChannel(params: {
-  cfg: OpenClawConfig;
-  value?: string | null;
-}): MessageChannelId | undefined {
-  const normalized = resolveKnownChannel(params.value);
-  if (!normalized) {
-    return undefined;
-  }
-  // Pass `allowBootstrap: true` so the in-agent message tool path can resolve
-  // outbound channels in processes where external channel adapters have not
-  // been eagerly loaded (e.g. `openclaw agent --local`). Already-loaded and
-  // bundled plugins still resolve through side-effect-free fast paths first.
-  // Without the bootstrap fallback, official external channels can surface as
-  // the recurring "Channel is unavailable" error on `--local`-routed
-  // dispatches that the CLI send-path could deliver to.
-  // Adjacent to #77254 (cron-announce / final-reply paths); this closes the
-  // remaining in-agent caller in the same family.
-  return resolveOutboundChannelPlugin({
-    channel: normalized,
-    cfg: params.cfg,
-    allowBootstrap: true,
-  })
-    ? normalized
-    : undefined;
-}
-
-/** Checks whether a channel has a non-disabled config entry. */
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return false;
-  }
-  const entry = (channels as Record<string, unknown>)[channelId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
-  }
-  return (entry as { enabled?: unknown }).enabled !== false;
+  const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
+  return entry !== undefined && entry.enabled !== false;
 }
 
 function listConfiguredOfficialExternalRepairHints(
   cfg: OpenClawConfig,
 ): OfficialExternalPluginRepairHint[] {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+  const channels = asOptionalRecord(cfg.channels);
+  if (!channels) {
     return [];
   }
-  return Object.keys(channels)
-    .filter((channelId) => isConfiguredChannel(cfg, channelId))
-    .map((channelId) =>
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: cfg,
-        channelId,
-      }),
-    )
-    .filter((hint): hint is OfficialExternalPluginRepairHint => Boolean(hint));
+  return resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    channelIds: Object.keys(channels).filter((channelId) => isConfiguredChannel(cfg, channelId)),
+  });
 }
 
 function formatMissingOfficialExternalChannelsMessage(
   hints: readonly OfficialExternalPluginRepairHint[],
 ): string {
-  if (hints.length === 1) {
-    const hint = hints[0];
-    if (!hint) {
-      return "";
-    }
-    return `Configured official external channel ${hint.label} is missing its plugin. ${hint.repairHint}`;
+  const [onlyHint] = hints;
+  if (hints.length === 1 && onlyHint) {
+    return `Configured official external channel ${onlyHint.label} is missing its plugin. ${onlyHint.repairHint}`;
   }
   const labels = hints.map((hint) => hint.label).join(", ");
   const installCommands = hints.map((hint) => hint.installCommand).join("; ");
   return `Configured official external channels ${labels} are missing their plugins. Run: openclaw doctor --fix, or install individually: ${installCommands}.`;
 }
 
-function formatNoConfiguredChannelsMessage(): string {
-  return [
-    "Channel is required (no configured channels detected).",
-    "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel.",
-    "Use openclaw channels list --all to see available channel ids.",
-  ].join(" ");
-}
+// Bound process-lifetime warning state; evicted plugin/account failures may log again.
+const loggedChannelSelectionErrors = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 1024,
+});
 
-function formatMultipleConfiguredChannelsMessage(configured: readonly string[]): string {
-  return [
-    `Channel is required when multiple channels are configured: ${configured.join(", ")}.`,
-    "Pass --channel <channel> to choose one.",
-  ].join(" ");
-}
-
-const loggedChannelSelectionErrors = new Set<string>();
-
-function logChannelSelectionError(params: {
-  pluginId: string;
-  accountId: string;
-  operation: "resolveAccount" | "isConfigured";
-  error: unknown;
-}) {
-  const message = formatErrorMessage(params.error);
-  const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
-  if (loggedChannelSelectionErrors.has(key)) {
+function logChannelSelectionError(
+  pluginId: string,
+  accountId: string,
+  operation: "inspectAccount" | "resolveAccount" | "isConfigured",
+  error: unknown,
+) {
+  const message = formatErrorMessage(error);
+  const key = `${pluginId}:${accountId}:${operation}:${message}`;
+  if (loggedChannelSelectionErrors.check(key)) {
     return;
   }
-  loggedChannelSelectionErrors.add(key);
   defaultRuntime.error?.(
-    `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
+    `[channel-selection] ${pluginId}(${accountId}) ${operation} failed: ${message}`,
   );
 }
 
-async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): Promise<boolean> {
-  const accountIds = plugin.config.listAccountIds(cfg);
-  if (accountIds.length === 0) {
-    return false;
-  }
+type AccountResolutionMode = "strict" | "read_only";
 
+async function isPluginConfigured(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  accountResolution: AccountResolutionMode,
+): Promise<boolean> {
+  const accountIds = plugin.config.listAccountIds(cfg);
   for (const accountId of accountIds) {
+    let operation: "inspectAccount" | "resolveAccount" = "inspectAccount";
     let account: unknown;
     try {
-      account = plugin.config.resolveAccount(cfg, accountId);
+      if (accountResolution === "read_only") {
+        const inspection = asOptionalRecord(await plugin.config.inspectAccount?.(cfg, accountId));
+        if (inspection) {
+          // Inspection is metadata, never input to runtime account hooks.
+          if (isAccountEnabled(inspection) && inspection.configured === true) {
+            return true;
+          }
+          continue;
+        }
+      }
+      operation = "resolveAccount";
+      account = await resolveChannelAccount({ plugin, cfg, accountId });
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation: "resolveAccount",
-        error,
-      });
+      logChannelSelectionError(plugin.id, accountId, operation, error);
       continue;
     }
     const enabled = plugin.config.isEnabled
@@ -177,109 +108,97 @@ async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): P
     if (!enabled) {
       continue;
     }
-    if (!plugin.config.isConfigured) {
-      return true;
-    }
-    let configured;
     try {
-      configured = await plugin.config.isConfigured(account, cfg);
+      if ((await plugin.config.isConfigured?.(account, cfg)) ?? true) {
+        return true;
+      }
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation: "isConfigured",
-        error,
-      });
-      continue;
-    }
-    if (configured) {
-      return true;
+      logChannelSelectionError(plugin.id, accountId, "isConfigured", error);
     }
   }
 
   return false;
 }
 
-/** Lists deliverable channels with at least one enabled, configured account. */
-export async function listConfiguredMessageChannels(
+async function listConfiguredMessageChannelPlugins(
   cfg: OpenClawConfig,
-): Promise<MessageChannelId[]> {
-  const channels: MessageChannelId[] = [];
-  for (const plugin of listChannelPlugins()) {
-    if (!isKnownChannel(plugin.id)) {
-      continue;
-    }
-    if (await isPluginConfigured(plugin, cfg)) {
-      channels.push(plugin.id);
+  accountResolution: AccountResolutionMode = "strict",
+): Promise<ChannelPlugin[]> {
+  const plugins: ChannelPlugin[] = [];
+  for (const plugin of listRuntimeVisibleChannelPlugins()) {
+    if (
+      resolveOutboundChannelPlugin({ channel: plugin.id, cfg }) &&
+      (await isPluginConfigured(plugin, cfg, accountResolution))
+    ) {
+      plugins.push(plugin);
     }
   }
-  return channels;
+  return plugins;
 }
 
-/** Resolves the message action channel from explicit input, context fallback, or config. */
+export async function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<string[]> {
+  return (await listConfiguredMessageChannelPlugins(cfg)).map((plugin) => plugin.id);
+}
+
 export async function resolveMessageChannelSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   fallbackChannel?: string | null;
+  agentId?: string;
+  // Strict callers select usable runtime accounts. Directory inspection opts in before it knows
+  // which account-scoped SecretRefs to redeem.
+  accountResolution?: AccountResolutionMode;
 }): Promise<{
-  channel: MessageChannelId;
-  configured: MessageChannelId[];
-  source: MessageChannelSelectionSource;
+  channel: string;
+  plugin: ChannelPlugin;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  if (normalized) {
-    const availableExplicit = resolveAvailableKnownChannel({
-      cfg: params.cfg,
-      value: normalized,
-    });
-    if (!availableExplicit) {
-      const fallback = resolveAvailableKnownChannel({
-        cfg: params.cfg,
-        value: params.fallbackChannel,
-      });
-      if (fallback) {
-        return {
-          channel: fallback,
-          configured: [],
-          source: "tool-context-fallback",
-        };
-      }
-      if (!isKnownChannel(normalized)) {
-        throw new Error(`Unknown channel: ${normalized}`);
-      }
-      const repairHint = isConfiguredChannel(params.cfg, normalized)
-        ? resolveMissingOfficialExternalChannelPluginRepairHint({
-            config: params.cfg,
-            channelId: normalized,
-          })
-        : null;
-      if (repairHint?.channelId === normalized) {
-        throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
-      }
-      throw new Error(`Channel is unavailable: ${normalized}`);
+  for (const field of ["channel", "fallbackChannel"] as const) {
+    const cfg = params.cfg;
+    const channel = field === "channel" ? normalized : normalizeMessageChannel(params[field]);
+    const agentId = params.agentId;
+    if (!channel) {
+      continue;
     }
-    return {
-      channel: availableExplicit,
-      configured: [],
-      source: "explicit",
-    };
+    // Explicit activation uses the scoped resolver, including external setup shells.
+    const selectedPlugin = resolveOutboundChannelPlugin({
+      channel,
+      cfg,
+      agentId,
+      allowBootstrap: true,
+    });
+    if (selectedPlugin) {
+      return { channel: selectedPlugin.id, plugin: selectedPlugin };
+    }
   }
 
-  const fallback = resolveAvailableKnownChannel({
-    cfg: params.cfg,
-    value: params.fallbackChannel,
-  });
-  if (fallback) {
-    return {
-      channel: fallback,
-      configured: [],
-      source: "tool-context-fallback",
-    };
+  if (normalized) {
+    if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
+      throw new Error(formatUnknownChannelMessage({ channel: normalized }));
+    }
+    const repairHint = isConfiguredChannel(params.cfg, normalized)
+      ? resolveMissingOfficialExternalChannelPluginRepairHint({
+          config: params.cfg,
+          channelId: normalized,
+        })
+      : null;
+    if (repairHint?.channelId === normalized) {
+      throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
+    }
+    throw new Error(`Channel is unavailable: ${normalized}`);
   }
 
-  const configured = await listConfiguredMessageChannels(params.cfg);
-  if (configured.length === 1) {
-    return { channel: configured[0], configured, source: "single-configured" };
+  const configuredPlugins = await listConfiguredMessageChannelPlugins(
+    params.cfg,
+    params.accountResolution,
+  );
+  const configured = configuredPlugins.map((plugin) => plugin.id);
+  const [plugin] = configuredPlugins;
+  if (configuredPlugins.length === 1 && plugin) {
+    return {
+      channel: plugin.id,
+      plugin,
+    };
   }
   if (configured.length === 0) {
     const repairHints = listConfiguredOfficialExternalRepairHints(params.cfg);
@@ -288,13 +207,13 @@ export async function resolveMessageChannelSelection(params: {
         `Channel is required (no available channels detected). ${formatMissingOfficialExternalChannelsMessage(repairHints)}`,
       );
     }
-    throw new Error(formatNoConfiguredChannelsMessage());
+    throw new Error(
+      "Channel is required (no configured channels detected). " +
+        "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel. " +
+        "Use openclaw channels list --all to see available channel ids.",
+    );
   }
-  throw new Error(formatMultipleConfiguredChannelsMessage(configured));
+  throw new Error(
+    `Channel is required when multiple channels are configured: ${configured.join(", ")}. Pass --channel <channel> to choose one.`,
+  );
 }
-
-export const testing = {
-  resetLoggedChannelSelectionErrors() {
-    loggedChannelSelectionErrors.clear();
-  },
-};

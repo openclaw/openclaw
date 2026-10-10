@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 REMOTE_URL="${OPENCLAW_REF_REMOTE:-https://github.com/openclaw/openclaw.git}"
@@ -64,9 +68,12 @@ write_output() {
   fi
 }
 
+lower_sha() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 resolve_unique_remote_ref() {
   local refspec
-  local -a matches=()
   for refspec in "$@"; do
     [[ -n "$refspec" ]] || continue
     local raw=""
@@ -88,32 +95,38 @@ resolve_unique_remote_ref() {
       return 3
     fi
     rm -f "$stderr_file"
-    mapfile -t matches < <(printf '%s\n' "$raw" | awk 'NF {print $1}' | awk '!seen[$0]++')
-    if [[ "${#matches[@]}" -eq 0 ]]; then
+    local match=""
+    local match_count=0
+    local line=""
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      match_count=$((match_count + 1))
+      if [[ "$match_count" -eq 1 ]]; then
+        match="$line"
+      fi
+    done < <(printf '%s\n' "$raw" | awk 'NF {print $1}' | awk '!seen[$0]++')
+    if [[ "$match_count" -eq 0 ]]; then
       continue
     fi
-    if [[ "${#matches[@]}" -ne 1 ]]; then
+    if [[ "$match_count" -ne 1 ]]; then
       return 2
     fi
-    printf '%s\n' "${matches[0]}"
+    printf '%s\n' "$match"
     return 0
   done
   return 1
 }
 
-read_remote_matches() {
-  local -n output_array="$1"
-  shift
+read_remote_match() {
   local output=""
   local status=0
-  output_array=()
   set +e
   output="$(resolve_unique_remote_ref "$@")"
   status="$?"
   set -e
   case "$status" in
     0)
-      mapfile -t output_array <<< "$output"
+      printf '%s\n' "$output"
       ;;
     1)
       ;;
@@ -139,45 +152,40 @@ if [[ -n "$EXPECTED_SHA" ]] && [[ ! "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; the
 fi
 
 if [[ "$REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
-  if [[ -n "$EXPECTED_SHA" ]] && [[ "${REF,,}" != "${EXPECTED_SHA,,}" ]]; then
+  if [[ -n "$EXPECTED_SHA" ]] && [[ "$(lower_sha "$REF")" != "$(lower_sha "$EXPECTED_SHA")" ]]; then
     echo "Ref SHA ${REF} does not match expected SHA ${EXPECTED_SHA}." >&2
     exit 1
   fi
-  write_output sha "${REF,,}"
+  write_output sha "$(lower_sha "$REF")"
   write_output ref_kind sha
   write_output fast false
   write_output fallback true
   exit 0
 fi
 
-declare -a matches=()
-if [[ "$REF" == refs/heads/* ]]; then
-  read_remote_matches matches "$REF"
-elif [[ "$REF" == refs/tags/* ]]; then
-  read_remote_matches matches "${REF}^{}" "$REF"
+match=""
+if [[ "$REF" == refs/tags/* ]]; then
+  match="$(read_remote_match "${REF}^{}" "$REF")"
 elif [[ "$REF" == refs/* ]]; then
-  read_remote_matches matches "$REF"
+  match="$(read_remote_match "$REF")"
 else
-  read_remote_matches branch_matches "refs/heads/${REF}"
-  read_remote_matches tag_matches "refs/tags/${REF}^{}" "refs/tags/${REF}"
-  match_count=$(( ${#branch_matches[@]} + ${#tag_matches[@]} ))
-  if [[ "$match_count" -eq 1 ]]; then
-    if [[ "${#branch_matches[@]}" -eq 1 ]]; then
-      matches=("${branch_matches[0]}")
-      ref_kind=branch
-    else
-      matches=("${tag_matches[0]}")
-      ref_kind=tag
-    fi
-  elif [[ "$match_count" -gt 1 ]]; then
+  branch_match="$(read_remote_match "refs/heads/${REF}")"
+  tag_match="$(read_remote_match "refs/tags/${REF}^{}" "refs/tags/${REF}")"
+  if [[ -n "$branch_match" && -n "$tag_match" ]]; then
     echo "Ref resolved ambiguously as both branch and tag: ${REF}" >&2
     exit 1
+  elif [[ -n "$branch_match" ]]; then
+    match="$branch_match"
+    ref_kind=branch
+  elif [[ -n "$tag_match" ]]; then
+    match="$tag_match"
+    ref_kind=tag
   fi
 fi
 
-if [[ "${#matches[@]}" -eq 1 ]]; then
-  resolved="${matches[0],,}"
-  if [[ -n "$EXPECTED_SHA" ]] && [[ "$resolved" != "${EXPECTED_SHA,,}" ]]; then
+if [[ -n "$match" ]]; then
+  resolved="$(lower_sha "$match")"
+  if [[ -n "$EXPECTED_SHA" ]] && [[ "$resolved" != "$(lower_sha "$EXPECTED_SHA")" ]]; then
     echo "Ref ${REF} resolved to ${resolved}, expected ${EXPECTED_SHA}." >&2
     exit 1
   fi

@@ -1,10 +1,8 @@
 // Discord plugin module implements component runtime behavior.
-import {
-  parsePluginBindingApprovalCustomId,
-  resolvePinnedMainDmOwnerFromAllowlist,
-} from "openclaw/plugin-sdk/conversation-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { vi, type Mock } from "vitest";
+import { setDiscordRuntime } from "../runtime.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -25,20 +23,18 @@ type DiscordComponentRuntimeMocks = {
   upsertPairingRequestMock: AsyncUnknownMock;
 };
 
-const runtimeMocks = vi.hoisted(
-  (): DiscordComponentRuntimeMocks => ({
-    buildPluginBindingResolvedTextMock: vi.fn(),
-    dispatchPluginInteractiveHandlerMock: vi.fn(),
-    dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
-    enqueueSystemEventMock: vi.fn(),
-    readAllowFromStoreMock: vi.fn(),
-    readSessionUpdatedAtMock: vi.fn(),
-    recordInboundSessionMock: vi.fn(),
-    resolveStorePathMock: vi.fn(),
-    resolvePluginConversationBindingApprovalMock: vi.fn(),
-    upsertPairingRequestMock: vi.fn(),
-  }),
-);
+const runtimeMocks = vi.hoisted((): DiscordComponentRuntimeMocks => ({
+  buildPluginBindingResolvedTextMock: vi.fn(),
+  dispatchPluginInteractiveHandlerMock: vi.fn(),
+  dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
+  enqueueSystemEventMock: vi.fn(),
+  readAllowFromStoreMock: vi.fn(),
+  readSessionUpdatedAtMock: vi.fn(),
+  recordInboundSessionMock: vi.fn(),
+  resolveStorePathMock: vi.fn(),
+  resolvePluginConversationBindingApprovalMock: vi.fn(),
+  upsertPairingRequestMock: vi.fn(),
+}));
 
 export const readAllowFromStoreMock: AsyncUnknownMock = runtimeMocks.readAllowFromStoreMock;
 export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =
@@ -54,6 +50,31 @@ const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
 const buildPluginBindingResolvedTextMock: UnknownMock =
   runtimeMocks.buildPluginBindingResolvedTextMock;
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: (params: RunParams) => {
+      const runtime = createPluginRuntimeMock({
+        channel: {
+          session: {
+            resolveStorePath: (...args) => resolveStorePathMock(...args) as string,
+            recordInboundSession: async (...args) => {
+              await recordInboundSessionMock(...args);
+            },
+          },
+          reply: {
+            dispatchReplyWithBufferedBlockDispatcher: (...args) => dispatchReplyMock(...args),
+          },
+        },
+      });
+      return runtime.channel.inbound.run(params);
+    },
+  };
+});
 async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   provider: string;
   accountId: string;
@@ -70,18 +91,23 @@ async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   return await readAllowFromStoreMock(params.provider, params.accountId);
 }
 
-vi.mock("../monitor/agent-components-helpers.runtime.js", () => {
-  return {
-    readChannelIngressStoreAllowFromForDmPolicy,
-    resolvePinnedMainDmOwnerFromAllowlist,
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>()),
+  readChannelIngressStoreAllowFromForDmPolicy,
+}));
 
-vi.mock("../monitor/agent-components.runtime.js", () => {
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  buildPluginBindingResolvedText: (...args: unknown[]) =>
+    buildPluginBindingResolvedTextMock(...args),
+  resolvePluginConversationBindingApproval: (...args: unknown[]) =>
+    resolvePluginConversationBindingApprovalMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   return {
-    buildPluginBindingResolvedText: (...args: unknown[]) =>
-      buildPluginBindingResolvedTextMock(...args),
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
     createReplyReferencePlanner: vi.fn(
       (params: {
         existingId?: string;
@@ -113,33 +139,26 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
         };
       },
     ),
-    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
-    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyMock,
     finalizeInboundContext: vi.fn((ctx) => ctx),
-    parsePluginBindingApprovalCustomId,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
     resolveChunkMode: vi.fn(() => "sentences"),
-    resolvePluginConversationBindingApproval: (...args: unknown[]) =>
-      resolvePluginConversationBindingApprovalMock(...args),
     resolveTextChunkLimit: vi.fn(() => 2000),
   };
 });
 
-vi.mock("../interactive-dispatch.js", () => {
-  return {
-    dispatchDiscordPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
+}));
 
-vi.mock("../monitor/agent-components.deps.runtime.js", () => {
-  return {
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
-    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  readSessionUpdatedAtAsync: async (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+  resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
+}));
 
 vi.mock("../interactive-dispatch.js", async () => {
   const actual = await vi.importActual<typeof import("../interactive-dispatch.js")>(
@@ -153,6 +172,7 @@ vi.mock("../interactive-dispatch.js", async () => {
 });
 
 export function resetDiscordComponentRuntimeMocks() {
+  setDiscordRuntime(createPluginRuntimeMock());
   dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
     matched: false,
     handled: false,

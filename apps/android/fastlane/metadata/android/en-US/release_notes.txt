@@ -1,5 +1,7 @@
-Improves Android gateway setup with localized onboarding, QR pairing fixes, and support for local mDNS gateway hosts.
+View your connected machine's desktop from your phone, and follow live subagent progress in chat.
 
-Adds clearer recovery guidance for TLS fingerprint timeouts, mobile protocol mismatches, and gateway auth states.
+Organize conversations with session groups, nested threads, and colors. Switch agents more easily and receive reply notifications.
 
-Refreshes native Android localization coverage, including Swedish app naming and localized gateway trust flows.
+Keeps queued messages and offline history intact across reconnects, recovers truncated replies, and preserves shared attachments.
+
+Improves Talk playback, photo orientation, notification consent, and connections through Gateway proxy paths.

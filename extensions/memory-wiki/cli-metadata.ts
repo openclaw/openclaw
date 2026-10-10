@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements cli metadata behavior.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 export default definePluginEntry({
@@ -8,12 +7,20 @@ export default definePluginEntry({
   register(api) {
     api.registerCli(
       async ({ program, config: appConfig }) => {
-        const [{ registerWikiCli }, { resolveMemoryWikiConfig }] = await Promise.all([
-          import("./src/cli.js"),
-          import("./src/config.js"),
-        ]);
+        const [{ registerWikiCli }, { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig }] =
+          await Promise.all([import("./src/cli.js"), import("./src/config.js")]);
         const pluginConfig = appConfig.plugins?.entries?.["memory-wiki"]?.config;
-        registerWikiCli(program, resolveMemoryWikiConfig(pluginConfig), appConfig);
+        const config = resolveMemoryWikiConfig(pluginConfig);
+        registerWikiCli(program, {
+          config,
+          getAppConfig: () => appConfig,
+          resolveConfig: (agentId, currentAppConfig) =>
+            resolveMemoryWikiAgentConfig({
+              config,
+              appConfig: currentAppConfig ?? appConfig,
+              ...(agentId ? { agentId } : {}),
+            }),
+        });
       },
       {
         descriptors: [

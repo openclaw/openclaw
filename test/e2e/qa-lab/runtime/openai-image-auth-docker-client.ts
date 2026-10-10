@@ -168,7 +168,7 @@ function createCodexOAuthStore() {
   } as const;
 }
 
-export async function main() {
+async function main() {
   assert(
     process.env.OPENAI_API_KEY === DIRECT_TOKEN,
     "Docker lane must expose the direct OpenAI API key",
@@ -176,9 +176,21 @@ export async function main() {
   const records: RequestRecord[] = [];
   const mock = await startMockServer(records);
   try {
-    const { buildOpenAIImageGenerationProvider } =
-      await import("../../../../dist/extensions/openai/image-generation-provider.js");
-    const provider = buildOpenAIImageGenerationProvider();
+    const providerModulePath =
+      "../../../../dist/extensions/openai/image-generation-provider.js" as string;
+    const { buildOpenAIImageGenerationProvider } = (await import(
+      providerModulePath
+    )) as typeof import("../../../../extensions/openai/image-generation-provider.js");
+    const authModulePath = "../../../../dist/plugin-sdk/provider-auth.js" as string;
+    const { ensureAuthProfileStore, listProfilesForProvider, isProviderApiKeyConfigured } =
+      (await import(
+        authModulePath
+      )) as typeof import("../../../../src/plugin-sdk/provider-auth.js");
+    const provider = buildOpenAIImageGenerationProvider({
+      ensureAuthProfileStore,
+      listProfilesForProvider,
+      isProviderApiKeyConfigured,
+    });
 
     const directResult = await provider.generateImage({
       provider: "openai",

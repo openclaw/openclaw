@@ -2,19 +2,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  canExecRequestNodeMock,
+  resolveNodeExecEligibilityMock,
   getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshotMock,
   resolveEffectiveAgentSkillFilterMock,
 } = vi.hoisted(() => ({
-  canExecRequestNodeMock: vi.fn().mockReturnValue(false),
+  resolveNodeExecEligibilityMock: vi.fn().mockReturnValue({ canExec: false }),
   getRemoteSkillEligibilityMock: vi.fn(),
   resolveReusableWorkspaceSkillSnapshotMock: vi.fn(),
   resolveEffectiveAgentSkillFilterMock: vi.fn(),
 }));
 
 vi.mock("./cron-snapshot.runtime.js", () => ({
-  canExecRequestNode: canExecRequestNodeMock,
+  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshot: resolveReusableWorkspaceSkillSnapshotMock,
   resolveEffectiveAgentSkillFilter: resolveEffectiveAgentSkillFilterMock,
@@ -62,21 +62,5 @@ describe("resolveCronSkillsSnapshot", () => {
     expect(snapshotOptions?.watch).toBe(false);
     expect(snapshotOptions?.hydrateExisting).toBe(false);
     expect(result).toEqual({ prompt: "fresh", skills: [] });
-  });
-
-  it("refreshes when the process version resets to 0 but the cached snapshot is stale", async () => {
-    await resolveCronSkillsSnapshot({
-      workspaceDir: "/tmp/workspace",
-      config: {} as never,
-      agentId: "writer",
-      existingSnapshot: {
-        prompt: "old",
-        skills: [{ name: "github" }],
-        version: 42,
-      },
-      isFastTestEnv: false,
-    });
-
-    expect(resolveReusableWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
   });
 });

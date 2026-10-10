@@ -23,15 +23,6 @@ const {
   };
   const lowLevelLoaderMock = vi.fn(
     ({ dirName, artifactBasename }: { dirName: string; artifactBasename: string }) => {
-      if (dirName === "brave" && artifactBasename === "web-search-contract-api.js") {
-        return {
-          createBraveWebSearchProvider: () => ({
-            ...providerBase,
-            id: "brave",
-            createTool: () => null,
-          }),
-        };
-      }
       if (dirName === "mockplugin" && artifactBasename === "web-search-contract-api.js") {
         return {
           createFuzzpluginWebSearchProvider: () => {
@@ -57,6 +48,19 @@ const {
             ...providerBase,
             id: "firecrawl",
             createTool: () => null,
+          }),
+        };
+      }
+      if (dirName === "firecrawl" && artifactBasename === "web-fetch-provider.js") {
+        return {
+          createFirecrawlWebFetchProvider: () => ({
+            ...providerBase,
+            id: "firecrawl",
+            createTool: () => ({
+              description: "runtime firecrawl",
+              parameters: {},
+              execute: async () => ({}),
+            }),
           }),
         };
       }
@@ -98,7 +102,7 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./manifest-registry.js")>();
   return {
     ...actual,
-    loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+    loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
   };
 });
 
@@ -112,6 +116,7 @@ vi.mock("./public-surface-loader.js", async (importOriginal) => {
   };
 });
 
+import { resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.explicit.js";
 import {
   resolveBundledWebFetchProvidersFromPublicArtifacts,
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -131,22 +136,6 @@ describe("web provider public artifacts explicit fast path", () => {
     loadPluginManifestRegistryMock.mockClear();
     loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
-  });
-
-  it("resolves bundled web search providers by explicit plugin id without manifest scans", () => {
-    const provider = expectSingleProvider(
-      resolveBundledWebSearchProvidersFromPublicArtifacts({
-        onlyPluginIds: ["brave"],
-      }),
-    );
-
-    expect(provider.pluginId).toBe("brave");
-    expect(provider.createTool({ config: {} as never })).toBeNull();
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-      dirName: "brave",
-      artifactBasename: "web-search-contract-api.js",
-    });
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 
   it("skips throwing bundled web provider factories while preserving healthy siblings", () => {
@@ -194,5 +183,24 @@ describe("web provider public artifacts explicit fast path", () => {
       artifactBasename: "web-fetch-contract-api.js",
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("loads executable web fetch runtime artifacts instead of contract-only facades", () => {
+    const provider = expectSingleProvider(
+      resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts({
+        onlyPluginIds: ["firecrawl"],
+      }),
+    );
+
+    expect(provider.pluginId).toBe("firecrawl");
+    expect(provider.createTool({ config: {} as never })).not.toBeNull();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "firecrawl",
+      artifactBasename: "web-fetch-provider.js",
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "firecrawl",
+      artifactBasename: "web-fetch-contract-api.js",
+    });
   });
 });

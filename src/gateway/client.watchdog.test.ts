@@ -37,7 +37,6 @@ describe("GatewayClient OpenClaw wrapper watchdog integration", () => {
 
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:9",
       loopbackMode: "gateway-only",
     });
@@ -54,6 +53,7 @@ describe("GatewayClient OpenClaw wrapper watchdog integration", () => {
     });
     const client = new GatewayClient({
       url: `ws://[::1]:${bind.port}`,
+      deviceIdentity: null,
       connectChallengeTimeoutMs: 1000,
       onConnectError,
     });

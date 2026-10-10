@@ -1,18 +1,22 @@
-// ClawHub verdict helpers normalize skill security verdicts from registry metadata.
-import {
-  fetchClawHubSkillSecurityVerdicts,
-  resolveClawHubBaseUrl,
-  type ClawHubSkillSecurityVerdictItem,
-} from "../../infra/clawhub.js";
+import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
+import { fetchExactClawHubSkillSecurityVerdicts } from "../../infra/clawhub-skill-security.js";
+import type { ClawHubSkillSecurityVerdictItem } from "../../infra/clawhub-skills.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
 
-/** ClawHub verdict item shape projected into local security scan verdicts. */
+type ClawHubVerdictTarget = {
+  registry: string;
+  slug: string;
+  ownerHandle?: string;
+  version: string;
+};
+
 type OpenClawSkillSecurityVerdictItem = Omit<
   ClawHubSkillSecurityVerdictItem,
   "decision" | "error" | "security"
 > & {
   registry: string;
   decision: string;
+  requestedOwnerHandle?: string;
   securityStatus?: string | null;
   securityPassed?: boolean | null;
   error?: {
@@ -21,68 +25,38 @@ type OpenClawSkillSecurityVerdictItem = Omit<
   };
 };
 
-function readSecurityStatus(security: unknown): string | null | undefined {
-  if (!security || typeof security !== "object" || !("status" in security)) {
-    return undefined;
-  }
-  const status = (security as { status?: unknown }).status;
-  return typeof status === "string" ? status : undefined;
-}
-
-function readSecurityPassed(security: unknown): boolean | null | undefined {
-  if (!security || typeof security !== "object" || !("passed" in security)) {
-    return undefined;
-  }
-  const passed = (security as { passed?: unknown }).passed;
-  return typeof passed === "boolean" ? passed : undefined;
-}
-
 function projectClawHubVerdictItem(
   item: ClawHubSkillSecurityVerdictItem,
-  registry: string,
+  target: ClawHubVerdictTarget,
 ): OpenClawSkillSecurityVerdictItem {
   const projected: OpenClawSkillSecurityVerdictItem = {
-    registry,
+    registry: target.registry,
     ok: item.ok,
     decision: item.decision,
     reasons: item.reasons,
-    requestedSlug: item.requestedSlug,
-    requestedVersion: item.requestedVersion,
+    requestedSlug: target.slug,
+    requestedVersion: target.version,
+    ...(target.ownerHandle ? { requestedOwnerHandle: target.ownerHandle } : {}),
+    ...(item.slug !== undefined ? { slug: item.slug } : {}),
+    ...(item.version !== undefined ? { version: item.version } : {}),
+    ...(item.displayName !== undefined ? { displayName: item.displayName } : {}),
+    ...(item.publisherHandle !== undefined ? { publisherHandle: item.publisherHandle } : {}),
+    ...(item.publisherDisplayName !== undefined
+      ? { publisherDisplayName: item.publisherDisplayName }
+      : {}),
+    ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
+    ...(item.checkedAt !== undefined ? { checkedAt: item.checkedAt } : {}),
+    ...(item.skillUrl !== undefined ? { skillUrl: item.skillUrl } : {}),
+    ...(item.securityAuditUrl !== undefined ? { securityAuditUrl: item.securityAuditUrl } : {}),
   };
-  if (item.slug !== undefined) {
-    projected.slug = item.slug;
-  }
-  if (item.version !== undefined) {
-    projected.version = item.version;
-  }
-  if (item.displayName !== undefined) {
-    projected.displayName = item.displayName;
-  }
-  if (item.publisherHandle !== undefined) {
-    projected.publisherHandle = item.publisherHandle;
-  }
-  if (item.publisherDisplayName !== undefined) {
-    projected.publisherDisplayName = item.publisherDisplayName;
-  }
-  if (item.createdAt !== undefined) {
-    projected.createdAt = item.createdAt;
-  }
-  if (item.checkedAt !== undefined) {
-    projected.checkedAt = item.checkedAt;
-  }
-  if (item.skillUrl !== undefined) {
-    projected.skillUrl = item.skillUrl;
-  }
-  if (item.securityAuditUrl !== undefined) {
-    projected.securityAuditUrl = item.securityAuditUrl;
-  }
-  const securityStatus = readSecurityStatus(item.security);
-  if (securityStatus !== undefined) {
-    projected.securityStatus = securityStatus;
-  }
-  const securityPassed = readSecurityPassed(item.security);
-  if (securityPassed !== undefined) {
-    projected.securityPassed = securityPassed;
+  const security = item.security;
+  if (security && typeof security === "object") {
+    if ("status" in security && typeof security.status === "string") {
+      projected.securityStatus = security.status;
+    }
+    if ("passed" in security && typeof security.passed === "boolean") {
+      projected.securityPassed = security.passed;
+    }
   }
   if (item.error) {
     const error: OpenClawSkillSecurityVerdictItem["error"] = {};
@@ -100,13 +74,8 @@ function projectClawHubVerdictItem(
 }
 
 function normalizeAutoVerdictRegistryBase(registry: string): string | null {
-  try {
-    const url = new URL(registry);
-    const normalizedPath = url.pathname.replace(/\/+$/, "");
-    return `${url.origin}${normalizedPath}`;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(registry);
+  return url ? `${url.origin}${url.pathname.replace(/\/+$/, "")}` : null;
 }
 
 function canAutoFetchVerdictRegistry(registry: string): boolean {
@@ -117,8 +86,8 @@ function canAutoFetchVerdictRegistry(registry: string): boolean {
 
 export function collectClawHubVerdictTargets(
   report: ReturnType<typeof buildWorkspaceSkillStatus>,
-): Array<{ registry: string; slug: string; version: string }> {
-  const targets = new Map<string, { registry: string; slug: string; version: string }>();
+): ClawHubVerdictTarget[] {
+  const targets = new Map<string, ClawHubVerdictTarget>();
   for (const skill of report.skills) {
     const link = skill.clawhub;
     if (!link || link.status !== "linked" || !link.valid) {
@@ -127,10 +96,11 @@ export function collectClawHubVerdictTargets(
     if (!canAutoFetchVerdictRegistry(link.registry)) {
       continue;
     }
-    const key = `${link.registry}\0${link.slug}\0${link.installedVersion}`;
+    const key = `${link.registry}\0${link.ownerHandle ?? ""}\0${link.slug}\0${link.installedVersion}`;
     targets.set(key, {
       registry: link.registry,
       slug: link.slug,
+      ...(link.ownerHandle ? { ownerHandle: link.ownerHandle } : {}),
       version: link.installedVersion,
     });
   }
@@ -138,24 +108,28 @@ export function collectClawHubVerdictTargets(
 }
 
 export async function fetchOpenClawSkillSecurityVerdicts(
-  targets: Array<{ registry: string; slug: string; version: string }>,
+  targets: ClawHubVerdictTarget[],
 ): Promise<OpenClawSkillSecurityVerdictItem[]> {
-  const byRegistry = new Map<string, Array<{ slug: string; version: string }>>();
+  const byRegistry = new Map<string, ClawHubVerdictTarget[]>();
   for (const target of targets) {
     const registryTargets = byRegistry.get(target.registry) ?? [];
-    registryTargets.push({ slug: target.slug, version: target.version });
+    registryTargets.push(target);
     byRegistry.set(target.registry, registryTargets);
   }
 
   const items: OpenClawSkillSecurityVerdictItem[] = [];
   for (const [registry, registryTargets] of byRegistry) {
-    const response = await fetchClawHubSkillSecurityVerdicts({
+    const verdicts = await fetchExactClawHubSkillSecurityVerdicts({
       baseUrl: registry,
-      items: registryTargets,
+      items: registryTargets.map(({ slug, ownerHandle, version }) => ({
+        slug,
+        ...(ownerHandle ? { ownerHandle } : {}),
+        version,
+      })),
       skipAuth: true,
     });
-    for (const item of response.items) {
-      items.push(projectClawHubVerdictItem(item, registry));
+    for (const [index, item] of verdicts.entries()) {
+      items.push(projectClawHubVerdictItem(item, registryTargets[index]!));
     }
   }
   return items;

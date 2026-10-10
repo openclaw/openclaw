@@ -1,0 +1,338 @@
+import { spawn as startOpenClawCliProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createQaPosixCommandSettlement } from "../../../posix-command-settlement.js";
+import {
+  killMatrixQaCliChild,
+  resolveMatrixQaOpenClawCliEntryPath,
+} from "./scenario-runtime-cli-process.js";
+
+export type MatrixQaCliRunResult = {
+  args: string[];
+  exitCode: number;
+  stderr: string;
+  stdout: string;
+};
+
+export type MatrixQaCliSession = {
+  args: string[];
+  endStdin: () => void;
+  output: () => { stderr: string; stdout: string };
+  wait: () => Promise<MatrixQaCliRunResult>;
+  waitForOutput: (
+    predicate: (output: { stderr: string; stdout: string; text: string }) => boolean,
+    label: string,
+    timeoutMs: number,
+  ) => Promise<{ stderr: string; stdout: string; text: string }>;
+  writeStdin: (text: string) => Promise<void>;
+  kill: () => void;
+};
+
+const MATRIX_QA_CLI_SECRET_ARG_FLAGS = new Set(["--access-token", "--password", "--recovery-key"]);
+const MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS = 250;
+const MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS = 100;
+
+function isMatrixQaCliSecretPositionalArg(args: string[], index: number): boolean {
+  return args[0] === "matrix" && args[1] === "verify" && args[2] === "device" && index === 3;
+}
+
+function redactMatrixQaCliArgs(args: string[]): string[] {
+  return args.map((arg, index) => {
+    const equalsIndex = arg.indexOf("=");
+    const flag = equalsIndex >= 0 ? arg.slice(0, equalsIndex) : arg;
+    if (MATRIX_QA_CLI_SECRET_ARG_FLAGS.has(flag) && arg.includes("=")) {
+      return `${flag}=[REDACTED]`;
+    }
+    const previous = args[index - 1];
+    if (previous && MATRIX_QA_CLI_SECRET_ARG_FLAGS.has(previous)) {
+      return "[REDACTED]";
+    }
+    if (isMatrixQaCliSecretPositionalArg(args, index)) {
+      return "[REDACTED]";
+    }
+    return arg;
+  });
+}
+
+export function redactMatrixQaCliOutput(text: string): string {
+  return redactSensitiveText(text);
+}
+
+export function formatMatrixQaCliCommand(args: string[]) {
+  return `openclaw ${redactMatrixQaCliArgs(args).join(" ")}`;
+}
+
+function formatMatrixQaCliFailure(result: MatrixQaCliRunResult, reason: string) {
+  return [
+    `${formatMatrixQaCliCommand(result.args)} ${reason}`,
+    result.stderr.trim() ? `stderr:\n${redactMatrixQaCliOutput(result.stderr.trim())}` : null,
+    result.stdout.trim() ? `stdout:\n${redactMatrixQaCliOutput(result.stdout.trim())}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function startMatrixQaOpenClawCli(params: {
+  allowNonZero?: boolean;
+  args: string[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  stdin?: string;
+  timeoutMs: number;
+}): MatrixQaCliSession {
+  const cwd = params.cwd ?? process.cwd();
+  const distEntryPath = resolveMatrixQaOpenClawCliEntryPath(cwd);
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  let closed = false;
+  const completion = createDeferred<{ result: MatrixQaCliRunResult; error?: Error }>();
+
+  const child = startOpenClawCliProcess(process.execPath, [distEntryPath, ...params.args], {
+    cwd,
+    detached: process.platform !== "win32",
+    env: params.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const readOutput = () => ({
+    stderr: Buffer.concat(stderr).toString("utf8"),
+    stdout: Buffer.concat(stdout).toString("utf8"),
+  });
+  const finish = (result: MatrixQaCliRunResult, error?: Error) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    completion.resolve({ result, error });
+  };
+  const isWindows = process.platform === "win32";
+  const settlement = createQaPosixCommandSettlement({
+    child,
+    settlementFailureMessage: `${formatMatrixQaCliCommand(params.args)} settlement failed`,
+    forceKillAfterMs: MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS,
+    initialSignal: "SIGTERM",
+    ...(isWindows
+      ? {
+          windowsCleanup: {
+            closeCompletesCleanup: true,
+            signal: (signal: NodeJS.Signals) => {
+              try {
+                killMatrixQaCliChild(child, signal);
+                return undefined;
+              } catch (error) {
+                return error instanceof Error ? error : new Error(String(error));
+              }
+            },
+          },
+        }
+      : {}),
+    executionTimeoutMs: params.timeoutMs,
+    onSettled: (outcome) => {
+      const primary = outcome.primary;
+      const result = {
+        args: params.args,
+        exitCode: primary.type === "exit" ? (primary.exitCode ?? 1) : 1,
+        ...readOutput(),
+      };
+      const primaryError =
+        primary.type === "spawn-error"
+          ? primary.error
+          : primary.type === "stream-error"
+            ? new Error(`${primary.stream} stream error: ${formatErrorMessage(primary.error)}`, {
+                cause: primary.error,
+              })
+            : primary.type === "timeout"
+              ? new Error(formatMatrixQaCliFailure(result, `timed out after ${params.timeoutMs}ms`))
+              : result.exitCode !== 0 && params.allowNonZero !== true
+                ? new Error(formatMatrixQaCliFailure(result, `exited ${result.exitCode}`))
+                : undefined;
+      finish(
+        result,
+        outcome.settlementFailure
+          ? primaryError
+            ? new AggregateError([primaryError, outcome.settlementFailure], primaryError.message, {
+                cause: primaryError,
+              })
+            : outcome.settlementFailure
+          : primaryError,
+      );
+    },
+    onStderrData: (chunk) => stderr.push(Buffer.from(chunk)),
+    onStdoutData: (chunk) => stdout.push(Buffer.from(chunk)),
+    processGroupId: isWindows ? undefined : child.pid,
+    verifyAfterMs: MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS,
+  });
+  if (params.stdin !== undefined) {
+    child.stdin.end(params.stdin);
+  }
+
+  return {
+    args: params.args,
+    endStdin: () => {
+      if (!child.stdin.destroyed) {
+        child.stdin.end();
+      }
+    },
+    output: readOutput,
+    wait: async () =>
+      await completion.promise
+        .then(({ result, error }) => {
+          if (error) {
+            throw error;
+          }
+          return result;
+        })
+        .catch((error: unknown) => {
+          throw new Error(
+            `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
+            { cause: error },
+          );
+        }),
+    waitForOutput: async (predicate, label, timeoutMs) => {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        const output = readOutput();
+        const text = `${output.stdout}\n${output.stderr}`;
+        if (predicate({ ...output, text })) {
+          return { ...output, text };
+        }
+        if (closed) {
+          break;
+        }
+        await sleep(Math.min(100, Math.max(25, timeoutMs - (Date.now() - startedAt))));
+      }
+      const output = readOutput();
+      throw new Error(
+        `${formatMatrixQaCliCommand(params.args)} did not print ${label} before timeout\nstdout:\n${redactMatrixQaCliOutput(output.stdout.trim())}\nstderr:\n${redactMatrixQaCliOutput(output.stderr.trim())}`,
+      );
+    },
+    writeStdin: async (text) => {
+      if (!child.stdin.write(text)) {
+        await new Promise<void>((resolve) => {
+          child.stdin.once("drain", resolve);
+        });
+      }
+    },
+    kill: () => {
+      if (!closed) {
+        settlement.requestCleanup();
+      }
+    },
+  };
+}
+
+export async function runMatrixQaOpenClawCli(
+  params: Parameters<typeof startMatrixQaOpenClawCli>[0],
+): Promise<MatrixQaCliRunResult> {
+  return await startMatrixQaOpenClawCli(params).wait();
+}
+
+export async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  const mode = (await stat(pathToCheck)).mode & 0o777;
+  if ((mode & 0o077) !== 0) {
+    throw new Error(`${label} permissions are too broad: ${mode.toString(8)}`);
+  }
+}
+
+export async function createMatrixQaOpenClawCliRuntime(params: {
+  artifactLabel: string;
+  initialConfig: Record<string, unknown>;
+  outputDir: string;
+  runtimeEnv: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv);
+  kind?: "e2ee-setup";
+}) {
+  const isE2eeSetup = params.kind === "e2ee-setup";
+  const rootDir = await mkdtemp(
+    path.join(
+      resolvePreferredOpenClawTmpDir(),
+      isE2eeSetup ? "openclaw-matrix-e2ee-setup-qa-" : "openclaw-matrix-cli-qa-",
+    ),
+  );
+  try {
+    const artifactDir = path.join(
+      params.outputDir,
+      isE2eeSetup ? params.artifactLabel : params.artifactLabel.replace(/[^A-Za-z0-9_-]/g, "-"),
+      randomUUID().replaceAll("-", "").slice(0, 12),
+    );
+    const stateDir = path.join(rootDir, "state");
+    const configPath = path.join(rootDir, "config.json");
+    for (const [directory, label] of [
+      [rootDir, "temp"],
+      [artifactDir, "artifact"],
+      [stateDir, "state"],
+    ] as const) {
+      if (label !== "temp") {
+        await mkdir(directory, { mode: 0o700, recursive: true });
+      }
+      const permission = chmod(directory, 0o700);
+      if (isE2eeSetup) {
+        await permission;
+      } else {
+        await permission.catch(() => undefined);
+      }
+      await assertMatrixQaPrivatePathMode(directory, `Matrix QA CLI ${label} directory`);
+    }
+    await writeFile(configPath, `${JSON.stringify(params.initialConfig, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
+    const env = {
+      ...(typeof params.runtimeEnv === "function" ? params.runtimeEnv() : params.runtimeEnv),
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_NO_AUTO_UPDATE: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    return {
+      artifactDir,
+      configPath,
+      dispose: async () => {
+        await rm(rootDir, { force: true, recursive: true });
+      },
+      run: async (
+        args: string[],
+        opts: { allowNonZero?: boolean; stdin?: string; timeoutMs: number },
+      ): Promise<MatrixQaCliRunResult> =>
+        await runMatrixQaOpenClawCli({
+          allowNonZero: opts.allowNonZero,
+          args,
+          env,
+          stdin: opts.stdin,
+          timeoutMs: opts.timeoutMs,
+        }),
+      start: (args: string[], opts: { allowNonZero?: boolean; timeoutMs: number }) =>
+        startMatrixQaOpenClawCli({
+          allowNonZero: opts.allowNonZero,
+          args,
+          env,
+          timeoutMs: opts.timeoutMs,
+        }),
+      stateDir,
+    };
+  } catch (error) {
+    const cleanupFailure = await rm(rootDir, { force: true, recursive: true }).then(
+      () => undefined,
+      (cleanupError: unknown) => ({ error: cleanupError }),
+    );
+    if (cleanupFailure) {
+      throw new AggregateError(
+        [error, cleanupFailure.error],
+        "Matrix QA CLI setup and cleanup failed",
+        {
+          cause: error,
+        },
+      );
+    }
+    throw error;
+  }
+}

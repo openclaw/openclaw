@@ -1,6 +1,6 @@
 // Slack tests cover message tools plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
 import { listSlackMessageActions } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
@@ -24,7 +24,103 @@ function requireSchemaProperty(
   };
 }
 
+const configuredSlack: OpenClawConfig = { channels: { slack: { botToken: "xoxb-test" } } };
+
 describe("Slack message tools", () => {
+  it("forwards trusted current-conversation, requester-account, and action authority context", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const assertDirectAdapterHandoff = vi.fn();
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+    const toolContext = {
+      currentChannelProvider: "slack" as const,
+      currentChannelId: "C_CURRENT",
+    };
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { channelId: "C_CURRENT" },
+      requesterAccountId: "work",
+      requesterSenderId: "U123",
+      assertDirectAdapterHandoff,
+      toolContext,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        channelId: "C_CURRENT",
+      }),
+      expect.any(Object),
+      expect.objectContaining({
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        requesterAccountId: "work",
+        requesterSenderId: "U123",
+        assertDirectAdapterHandoff,
+      }),
+    );
+  });
+
+  it("preserves a workspace-qualified channel for reactions", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "react",
+      cfg: {} as OpenClawConfig,
+      params: {
+        channelId: "team:T123:channel:C123",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "react",
+        channelId: "team:T123:channel:C123",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("preserves a workspace-qualified channel for implicit upload destinations", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "upload-file",
+      cfg: {} as OpenClawConfig,
+      params: {
+        channelId: "team:T123:channel:C123",
+        filePath: "/tmp/report.png",
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "team:T123:channel:C123",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
   it("classifies provider-native mutation actions", () => {
     const actions = createSlackActions("slack");
     for (const action of ["sendMessage", "editMessage", "deleteMessage", "pinMessage"]) {
@@ -35,22 +131,82 @@ describe("Slack message tools", () => {
     }
   });
 
-  it("describes configured Slack message actions without loading channel runtime", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
+  it("forwards complete trusted context for current-requester member info", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "member-info",
+      cfg: {} as OpenClawConfig,
+      params: {},
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+      conversationReadOrigin: "delegated",
+      toolContext: { currentChannelProvider: "slack", currentChannelId: "C_CURRENT" },
     });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+      expect.objectContaining({
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      }),
+    );
+  });
+
+  it("does not accept Slack read authority from generic tool context", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { channelId: "C_CURRENT" },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        conversationReadOrigin: "direct-operator",
+        requesterAccountId: "default",
+        requesterSenderId: "U999",
+        assertDirectAdapterHandoff: vi.fn(),
+      } as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "readMessages", channelId: "C_CURRENT" }),
+      expect.any(Object),
+      expect.objectContaining({
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        conversationReadOrigin: undefined,
+        requesterAccountId: undefined,
+        requesterSenderId: undefined,
+        assertDirectAdapterHandoff: undefined,
+      }),
+    );
+  });
+
+  it("describes configured Slack message actions without loading channel runtime", () => {
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     expect(Object.keys(discovery).toSorted()).toEqual(["actions", "capabilities", "schema"]);
     expect(discovery.actions).toEqual([
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -64,6 +220,22 @@ describe("Slack message tools", () => {
     ]);
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
+    const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    expect(schemas.find((entry) => entry.actions?.includes("conversation-open"))).toMatchObject({
+      actions: ["conversation-open"],
+      visibility: "all-configured",
+    });
+    for (const propertyName of ["forceDocument", "asDocument"]) {
+      const entries = schemas.filter((entry) => propertyName in entry.properties);
+      expect(entries.map((entry) => entry.actions)).toEqual([["send"], ["upload-file"]]);
+      for (const entry of entries) {
+        const description = (entry.properties[propertyName] as { description?: string })
+          .description;
+        expect(description).toMatch(/preserve original image bytes/i);
+        expect(description).toMatch(/without image optimization/i);
+        expect(description).toMatch(/not.*Slack document/i);
+      }
+    }
   });
 
   it("honors account-scoped action gates", () => {
@@ -89,14 +261,13 @@ describe("Slack message tools", () => {
     ).not.toContain("upload-file");
   });
 
-  it("includes file actions when message actions are enabled", () => {
+  it("exposes message actions for a configured user-identity account", () => {
     const cfg = {
       channels: {
         slack: {
-          botToken: "xoxb-test",
-          actions: {
-            messages: true,
-          },
+          postAs: "user",
+          userToken: "test-user-token",
+          appToken: "test-app-token",
         },
       },
     } as OpenClawConfig;
@@ -105,6 +276,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -161,6 +333,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -170,15 +343,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes Slack file ids separately from message ids", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "fileId");
 
@@ -190,15 +355,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes current Slack message id actions without stale aliases", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "messageId");
     const alias = schema.properties.message_id as { description?: string };
@@ -206,20 +363,61 @@ describe("Slack message tools", () => {
     expect(schema.actions).toEqual(["react", "reactions", "edit", "delete", "pin", "unpin"]);
     expect(schema.actions).not.toContain("unsend");
     expect(property.description).toContain("1777423717.666499");
+    expect(property.description).toMatch(/React defaults to the current inbound message/i);
     expect(property.description).toMatch(/Not used by download-file/i);
     expect(alias.description).toMatch(/Alias for messageId/i);
   });
 
-  it("describes Slack reply broadcasts as send-only thread hints", () => {
+  it.each([true, false])(
+    "describes Slack custom emoji and advertises discovery only when enabled (%s)",
+    (emojiList) => {
+      const discovery = describeSlackMessageTool({
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-test",
+              actions: { emojiList },
+            },
+          },
+        },
+      });
+
+      const { schema, property } = requireSchemaProperty(discovery, "emoji");
+
+      expect(schema.actions).toEqual(["react", "reactions"]);
+      expect(property.description).toContain("white_check_mark");
+      expect(property.description).toContain("✅");
+      expect(property.description).toContain("workspace custom emoji");
+      expect(property.description?.includes('action:"emoji-list"')).toBe(emojiList);
+      expect(discovery.actions?.includes("emoji-list")).toBe(emojiList);
+    },
+  );
+
+  it("omits the react emoji schema when reactions are disabled", () => {
     const discovery = describeSlackMessageTool({
       cfg: {
         channels: {
           slack: {
             botToken: "xoxb-test",
+            actions: {
+              reactions: false,
+            },
           },
         },
-      },
+      } as OpenClawConfig,
     });
+
+    const schemas = Array.isArray(discovery.schema)
+      ? discovery.schema
+      : discovery.schema
+        ? [discovery.schema]
+        : [];
+    const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
+    expect(propertyNames).not.toContain("emoji");
+  });
+
+  it("describes Slack reply broadcasts as send-only thread hints", () => {
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "replyBroadcast");
 
@@ -230,15 +428,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes Slack top-level sends as a same-channel thread opt-out", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "topLevel");
 

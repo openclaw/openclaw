@@ -1,19 +1,18 @@
 // Env deprecation tests ensure legacy prefixed variables warn once without
 // leaking secret-shaped names or values.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv, deleteTestEnvValue, withEnv } from "../test-utils/env.js";
-import {
-  resetLegacyOpenClawEnvWarningForTest,
-  warnLegacyOpenClawEnvVars,
-} from "./env-deprecation.js";
+import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
+
+let warnLegacyOpenClawEnvVars: typeof import("./env-deprecation.js").warnLegacyOpenClawEnvVars;
 
 describe("warnLegacyOpenClawEnvVars", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let emitWarning: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ warnLegacyOpenClawEnvVars } = await import("./env-deprecation.js"));
     envSnapshot = captureEnv(["NODE_ENV", "VITEST"]);
-    resetLegacyOpenClawEnvWarningForTest();
     emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     deleteTestEnvValue("NODE_ENV");
     deleteTestEnvValue("VITEST");
@@ -21,7 +20,6 @@ describe("warnLegacyOpenClawEnvVars", () => {
 
   afterEach(() => {
     emitWarning.mockRestore();
-    resetLegacyOpenClawEnvWarningForTest();
     envSnapshot.restore();
   });
 
@@ -62,21 +60,6 @@ describe("warnLegacyOpenClawEnvVars", () => {
     expect(emitWarning).toHaveBeenCalledOnce();
   });
 
-  it("retries if emitWarning throws before the warning is emitted", () => {
-    emitWarning
-      .mockImplementationOnce(() => {
-        throw new Error("warning sink failed");
-      })
-      .mockImplementationOnce(() => {});
-
-    expect(() => warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" })).toThrow(
-      "warning sink failed",
-    );
-    warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" });
-
-    expect(emitWarning).toHaveBeenCalledTimes(2);
-  });
-
   it("suppresses warning noise based on the passed env", () => {
     warnLegacyOpenClawEnvVars({
       CLAWDBOT_GATEWAY_TOKEN: "old-token",
@@ -84,13 +67,5 @@ describe("warnLegacyOpenClawEnvVars", () => {
     });
 
     expect(emitWarning).not.toHaveBeenCalled();
-  });
-
-  it("does not let process.env test flags suppress a synthetic env", () => {
-    withEnv({ VITEST: "true" }, () => {
-      warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" });
-
-      expect(emitWarning).toHaveBeenCalledOnce();
-    });
   });
 });

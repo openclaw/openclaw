@@ -1,12 +1,77 @@
 {
   "id": "workboard",
+  "uiCapabilities": [
+    "page",
+    "navigation",
+    "accessory",
+    "widget"
+  ],
+  "categories": [
+    "productivity"
+  ],
+  "cliCommands": [
+    {
+      "name": "workboard",
+      "description": "Manage Workboard cards and worker dispatch",
+      "hasSubcommands": true
+    }
+  ],
+  "doctorContract": {
+    "stateMigrations": [
+      {
+        "id": "workboard-28-kv-to-sqlite"
+      }
+    ]
+  },
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,
-    "onCommands": ["workboard"]
+    "onCommands": [
+      "workboard"
+    ]
+  },
+  "dashboard": {
+    "dataBindings": [
+      {
+        "id": "cards.list",
+        "method": "workboard.cards.list",
+        "description": "List Workboard cards and statuses."
+      },
+      {
+        "id": "stats",
+        "method": "workboard.cards.stats",
+        "description": "Read Workboard card statistics."
+      },
+      {
+        "id": "boards.list",
+        "method": "workboard.boards.list",
+        "description": "List Workboard boards."
+      }
+    ],
+    "actionVerbs": [
+      {
+        "id": "dispatch",
+        "method": "workboard.cards.dispatch",
+        "description": "Dispatch ready Workboard cards.",
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "boardId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    ]
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
+  "catalog": {
+    "featured": true,
+    "order": 10
+  },
   "contracts": {
     "tools": [
       "workboard_list",
@@ -24,6 +89,9 @@
       "workboard_board_create",
       "workboard_board_archive",
       "workboard_board_delete",
+      "workboard_sessions_board_read",
+      "workboard_sessions_board_update",
+      "workboard_sessions_board_move",
       "workboard_stats",
       "workboard_runs",
       "workboard_specify",
@@ -42,14 +110,13 @@
       "workboard_proof",
       "workboard_worker_log",
       "workboard_protocol_violation",
-      "workboard_unblock"
+      "workboard_unblock",
+      "workboard_move"
     ]
   },
   "commandAliases": [
     {
-      "name": "workboard",
-      "kind": "runtime-slash",
-      "cliCommand": "workboard"
+      "name": "workboard"
     }
   ],
   "toolMetadata": {
@@ -154,11 +221,20 @@
     },
     "workboard_unblock": {
       "optional": true
+    },
+    "workboard_move": {
+      "optional": true
     }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/eea70db01259b142b298c182e17c7d9e05a471d05f73af7e7d467fc2b36505e3/index.js",
+    "styles": [
+      "dist/control-ui/eea70db01259b142b298c182e17c7d9e05a471d05f73af7e7d467fc2b36505e3/index.css"
+    ]
   }
 }

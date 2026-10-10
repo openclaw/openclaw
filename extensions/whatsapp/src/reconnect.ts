@@ -1,6 +1,4 @@
-// Whatsapp plugin module implements reconnect behavior.
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   computeBackoff,
   sleepWithAbort,
@@ -12,7 +10,7 @@ export type ReconnectPolicy = BackoffPolicy & {
   maxAttempts: number;
 };
 
-export const DEFAULT_HEARTBEAT_SECONDS = 60;
+const DEFAULT_HEARTBEAT_SECONDS = 60;
 export const DEFAULT_RECONNECT_POLICY: ReconnectPolicy = {
   initialMs: 2_000,
   maxMs: 30_000,
@@ -21,25 +19,18 @@ export const DEFAULT_RECONNECT_POLICY: ReconnectPolicy = {
   maxAttempts: 12,
 };
 
-export function resolveHeartbeatSeconds(cfg: OpenClawConfig, overrideSeconds?: number): number {
-  const candidate = overrideSeconds ?? cfg.web?.heartbeatSeconds;
-  if (typeof candidate === "number" && candidate > 0) {
-    return candidate;
+export function resolveHeartbeatSeconds(overrideSeconds?: number): number {
+  if (typeof overrideSeconds === "number" && overrideSeconds > 0) {
+    return overrideSeconds;
   }
   return DEFAULT_HEARTBEAT_SECONDS;
 }
 
-export function resolveReconnectPolicy(
-  cfg: OpenClawConfig,
-  overrides?: Partial<ReconnectPolicy>,
-): ReconnectPolicy {
-  const reconnectOverrides = cfg.web?.reconnect ?? {};
-  const overrideConfig = overrides ?? {};
-  const merged = {
+export function resolveReconnectPolicy(overrides?: Partial<ReconnectPolicy>): ReconnectPolicy {
+  const merged: ReconnectPolicy = {
     ...DEFAULT_RECONNECT_POLICY,
-    ...reconnectOverrides,
-    ...overrideConfig,
-  } as ReconnectPolicy;
+    ...overrides,
+  };
 
   merged.initialMs = Math.max(250, merged.initialMs);
   merged.maxMs = Math.max(merged.initialMs, merged.maxMs);

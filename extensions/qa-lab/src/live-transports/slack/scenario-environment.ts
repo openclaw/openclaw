@@ -1,0 +1,138 @@
+import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import {
+  patchLiveQaGatewayConfig,
+  readLiveQaGatewayConfig,
+} from "../shared/live-gateway-config.runtime.js";
+import { buildSlackQaConfig } from "./slack-live.config.js";
+import type {
+  SlackAuthIdentity,
+  SlackObservedMessage,
+  SlackQaScenarioImplementation,
+  SlackQaScenarioContext,
+  SlackQaScenarioMetadata,
+  SlackQaScenarioRun,
+  SlackQaWebClient as WebClient,
+} from "./slack-live.contracts.js";
+import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
+import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
+
+type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
+type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
+
+export type SlackQaScenarioEnvironment = {
+  channelId: string;
+  configureScenario: (implementation: SlackQaScenarioImplementation) => Promise<{
+    cfg: OpenClawConfig;
+    primaryModel: string;
+    run: SlackQaScenarioRun;
+  }>;
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  getMessageWriteCursor: () => Promise<number>;
+  observedMessages: SlackObservedMessage[];
+  readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
+  scenario: SlackQaScenarioMetadata;
+  stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
+  sutAccountId: string;
+  sutIdentity: SlackAuthIdentity;
+  sutWriteClient: WebClient;
+};
+
+export function createSlackQaScenarioEnvironment(params: {
+  accountId: string;
+  channelId: string;
+  driverBotUserId: string;
+  driverClient: WebClient;
+  getMessageWriteCursor: () => Promise<number>;
+  readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
+  sutAppToken: string;
+  sutBotToken: string;
+  sutIdentity: SlackAuthIdentity;
+  sutReadClient: WebClient;
+  sutWriteClient: WebClient;
+}) {
+  const observedMessages: SlackObservedMessage[] = [];
+
+  const prepareFlow = async (
+    input: FlowPreparationInput,
+  ): Promise<{ slackScenarioContext: SlackQaScenarioEnvironment }> => {
+    const context = {
+      channelId: params.channelId,
+      driverClient: params.driverClient,
+      gateway: input.gateway as never,
+      sutIdentity: params.sutIdentity,
+      sutReadClient: params.sutReadClient,
+    } satisfies Omit<SlackQaScenarioContext, "sentTs">;
+    return {
+      slackScenarioContext: {
+        channelId: params.channelId,
+        configureScenario: async (implementation: SlackQaScenarioImplementation) => {
+          if (!input.primaryModel) {
+            throw new Error("Slack QA module flow requires a primary model");
+          }
+          const primaryModel = input.primaryModel;
+          const run = implementation.buildRun(params.sutIdentity.userId);
+          if (run.kind === "codex-approval") {
+            assertSlackCodexApprovalModelSupported(primaryModel);
+          }
+          const snapshot = await readLiveQaGatewayConfig(input.gateway);
+          const cfg = buildSlackQaConfig(snapshot.config as OpenClawConfig, {
+            channelId: params.channelId,
+            driverBotUserId: params.driverBotUserId,
+            overrides: implementation.configOverrides,
+            primaryModel,
+            sutAccountId: params.accountId,
+            sutAppToken: params.sutAppToken,
+            sutBotToken: params.sutBotToken,
+          });
+          await patchLiveQaGatewayConfig({
+            gateway: input.gateway,
+            patch: cfg as Record<string, unknown>,
+            replacePaths: [
+              "agents",
+              "approvals",
+              "channels.slack",
+              `channels.slack.accounts.${params.accountId}.allowFrom`,
+              `channels.slack.accounts.${params.accountId}.channels.${params.channelId}.users`,
+              "messages",
+              "plugins",
+              "tools",
+            ],
+            timeoutMs: input.timeoutMs,
+            waitForConfigRestartSettle: input.waitForConfigRestartSettle,
+          });
+          const readinessMode =
+            run.kind === "approval" || run.kind === "codex-approval" ? "started" : "connected";
+          await waitForSlackChannelStable(input.gateway as never, params.accountId, readinessMode);
+          return { cfg, primaryModel, run };
+        },
+        context,
+        getMessageWriteCursor: params.getMessageWriteCursor,
+        observedMessages,
+        readMessageWrites: params.readMessageWrites,
+        scenario: {
+          id: input.scenarioId,
+          timeoutMs: input.timeoutMs,
+          title: input.scenarioTitle,
+        },
+        stopGateway: async (preserveDebugArtifacts: boolean) => {
+          if (!input.gateway.stop) {
+            throw new Error("Slack QA scenario requires gateway stop support");
+          }
+          await input.gateway.stop(
+            preserveDebugArtifacts
+              ? { preserveToDir: path.join(input.outputDir, "gateway-debug") }
+              : undefined,
+          );
+        },
+        sutAccountId: params.accountId,
+        sutIdentity: params.sutIdentity,
+        sutWriteClient: params.sutWriteClient,
+      } satisfies SlackQaScenarioEnvironment,
+    };
+  };
+
+  return { prepareFlow };
+}

@@ -1,11 +1,11 @@
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 // Msteams tests cover graph thread plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _teamGroupIdCacheForTest,
+  buildThreadContext,
   fetchChannelMessage,
+  fetchChatMessageText,
   fetchThreadReplies,
-  formatThreadContext,
-  resolveTeamGroupId,
   stripHtmlFromTeamsMessage,
 } from "./graph-thread.js";
 import { fetchGraphJson } from "./graph.js";
@@ -14,27 +14,11 @@ vi.mock("./graph.js", () => ({
   fetchGraphJson: vi.fn(),
 }));
 
-const firstGraphPath = () => {
-  const [call] = vi.mocked(fetchGraphJson).mock.calls;
-  if (!call) {
-    throw new Error("expected Graph fetch call");
-  }
-  return call[0].path;
-};
-
 describe("stripHtmlFromTeamsMessage", () => {
-  it("preserves @mention display names from <at> tags", () => {
-    expect(stripHtmlFromTeamsMessage("<at>Alice</at> hello")).toBe("@Alice hello");
-  });
-
-  it("strips other HTML tags", () => {
-    expect(stripHtmlFromTeamsMessage("<p>Hello <b>world</b></p>")).toBe("Hello world");
-  });
-
-  it("decodes common HTML entities", () => {
-    expect(stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z")).toBe(
-      "& <b> \"x\" 'y' z",
-    );
+  it("decodes HTML5 entities", () => {
+    expect(
+      stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z &copy;"),
+    ).toBe("& <b> \"x\" 'y' z ©");
   });
 
   it("does not double-decode escaped entities (decodes &amp; last)", () => {
@@ -46,81 +30,10 @@ describe("stripHtmlFromTeamsMessage", () => {
     );
   });
 
-  it("normalizes multiple whitespace to single space", () => {
-    expect(stripHtmlFromTeamsMessage("hello   world")).toBe("hello world");
-  });
-
   it("handles <at> tags with attributes", () => {
     expect(stripHtmlFromTeamsMessage('<at id="123">Bob</at> please review')).toBe(
       "@Bob please review",
     );
-  });
-
-  it("returns empty string for empty input", () => {
-    expect(stripHtmlFromTeamsMessage("")).toBe("");
-  });
-});
-
-describe("resolveTeamGroupId", () => {
-  beforeEach(() => {
-    vi.mocked(fetchGraphJson).mockReset();
-    _teamGroupIdCacheForTest.clear();
-  });
-
-  it("fetches team id from Graph and caches it", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ id: "group-guid-1" } as never);
-
-    const result = await resolveTeamGroupId("tok", "team-123");
-    expect(result).toBe("group-guid-1");
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/team-123?$select=id",
-    });
-  });
-
-  it("returns cached value without calling Graph again", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ id: "group-guid-2" } as never);
-
-    await resolveTeamGroupId("tok", "team-456");
-    await resolveTeamGroupId("tok", "team-456");
-
-    expect(fetchGraphJson).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not cache team ids when the expiry would exceed a valid Date", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    try {
-      vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-boundary" } as never);
-
-      await resolveTeamGroupId("tok", "team-boundary");
-      await resolveTeamGroupId("tok", "team-boundary");
-
-      expect(fetchGraphJson).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("evicts cached team ids when the current clock is invalid", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-invalid-clock" } as never);
-
-    await resolveTeamGroupId("tok", "team-invalid-clock");
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      await resolveTeamGroupId("tok", "team-invalid-clock");
-    } finally {
-      dateNow.mockRestore();
-    }
-
-    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back to conversationTeamId when Graph returns no id", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
-
-    const result = await resolveTeamGroupId("tok", "team-fallback");
-    expect(result).toBe("team-fallback");
   });
 });
 
@@ -129,34 +42,85 @@ describe("fetchChannelMessage", () => {
     vi.mocked(fetchGraphJson).mockReset();
   });
 
-  it("fetches the parent message with correct path", async () => {
-    const mockMsg = { id: "msg-1", body: { content: "hello", contentType: "text" } };
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce(mockMsg as never);
-
-    const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
-
-    expect(result).toEqual(mockMsg);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/group-1/channels/channel-1/messages/msg-1?$select=id,from,body,createdDateTime",
-    });
-  });
-
   it("returns undefined on fetch error", async () => {
-    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden") as never);
+    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden"));
 
     const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
     expect(result).toBeUndefined();
   });
 
   it("URL-encodes group, channel, and message IDs", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
 
     await fetchChannelMessage("tok", "g/1", "c/2", "m/3");
 
     expect(fetchGraphJson).toHaveBeenCalledWith({
       token: "tok",
-      path: "/teams/g%2F1/channels/c%2F2/messages/m%2F3?$select=id,from,body,createdDateTime",
+      path: "/teams/g%2F1/channels/c%2F2/messages/m%2F3",
+    });
+  });
+});
+
+describe("fetchChatMessageText", () => {
+  beforeEach(() => {
+    vi.mocked(fetchGraphJson).mockReset();
+  });
+
+  it("fetches the chat message and strips HTML body to plain text", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      id: "1783379480258",
+      body: {
+        content: "<p>San Francisco right now: <at>Bot</at> full text</p>",
+        contentType: "html",
+      },
+    });
+
+    const result = await fetchChatMessageText("tok", "19:chat@thread.v2", "1783379480258");
+
+    expect(result).toBe("San Francisco right now: @Bot full text");
+    expect(fetchGraphJson).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/chats/19%3Achat%40thread.v2/messages/1783379480258",
+    });
+  });
+
+  it("returns trimmed plain text when body is not HTML", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      body: { content: "  plain body  ", contentType: "text" },
+    });
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBe("plain body");
+  });
+
+  it("returns undefined on fetch error", async () => {
+    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("not found"));
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when the message has no body", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBeUndefined();
+  });
+
+  it("forwards a shared deadline to the Graph request", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
+    const deadline = {
+      label: "MS Teams inbound preprocessing",
+      timeoutMs: 10_000,
+      deadlineAtMs: Date.now() + 10_000,
+    };
+
+    await fetchChatMessageText("tok", "19:chat", "m-1", deadline);
+
+    expect(fetchGraphJson).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/chats/19%3Achat/messages/m-1",
+      deadline,
     });
   });
 });
@@ -166,46 +130,25 @@ describe("fetchThreadReplies", () => {
     vi.mocked(fetchGraphJson).mockReset();
   });
 
-  it("fetches replies with correct path and default limit", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
-      value: [{ id: "reply-1" }, { id: "reply-2" }],
-    } as never);
+  it("requests the provider's maximum page of 50 replies", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] });
 
-    const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1");
+    await fetchThreadReplies("tok", "g", "c", "m");
 
-    expect(result).toHaveLength(2);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/group-1/channels/channel-1/messages/msg-1/replies?$top=50&$select=id,from,body,createdDateTime",
-    });
-  });
-
-  it("clamps limit to 50 maximum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
-
-    await fetchThreadReplies("tok", "g", "c", "m", 200);
-
-    expect(firstGraphPath()).toContain("$top=50");
-  });
-
-  it("clamps limit to 1 minimum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
-
-    await fetchThreadReplies("tok", "g", "c", "m", 0);
-
-    expect(firstGraphPath()).toContain("$top=1");
+    const [request] = expectDefined(vi.mocked(fetchGraphJson).mock.calls[0], "Graph fetch call");
+    expect(request.path).toBe("/teams/g/channels/c/messages/m/replies?$top=50");
   });
 
   it("returns empty array when value is missing", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
     expect(result).toStrictEqual([]);
   });
 });
 
-describe("formatThreadContext", () => {
-  it("formats messages as sender: content lines", () => {
+describe("buildThreadContext", () => {
+  it("preserves message identity, sender and body in thread order", () => {
     const messages = [
       {
         id: "m1",
@@ -218,7 +161,10 @@ describe("formatThreadContext", () => {
         body: { content: "World!", contentType: "text" },
       },
     ];
-    expect(formatThreadContext(messages)).toBe("Alice: Hello!\nBob: World!");
+    expect(buildThreadContext(messages)).toEqual([
+      { message_id: "m1", sender: "Alice", body: "Hello!" },
+      { message_id: "m2", sender: "Bob", body: "World!" },
+    ]);
   });
 
   it("skips the current message by id", () => {
@@ -234,7 +180,9 @@ describe("formatThreadContext", () => {
         body: { content: "Current", contentType: "text" },
       },
     ];
-    expect(formatThreadContext(messages, "m2")).toBe("Alice: Hello!");
+    expect(buildThreadContext(messages, "m2")).toEqual([
+      { message_id: "m1", sender: "Alice", body: "Hello!" },
+    ]);
   });
 
   it("strips HTML from html contentType messages", () => {
@@ -245,7 +193,9 @@ describe("formatThreadContext", () => {
         body: { content: "<p>Hello <b>world</b></p>", contentType: "html" },
       },
     ];
-    expect(formatThreadContext(messages)).toBe("Carol: Hello world");
+    expect(buildThreadContext(messages)).toEqual([
+      { message_id: "m1", sender: "Carol", body: "Hello world" },
+    ]);
   });
 
   it("uses application displayName when user is absent", () => {
@@ -256,7 +206,9 @@ describe("formatThreadContext", () => {
         body: { content: "automated msg", contentType: "text" },
       },
     ];
-    expect(formatThreadContext(messages)).toBe("BotApp: automated msg");
+    expect(buildThreadContext(messages)).toEqual([
+      { message_id: "m1", sender: "BotApp", body: "automated msg" },
+    ]);
   });
 
   it("skips messages with empty content", () => {
@@ -272,7 +224,9 @@ describe("formatThreadContext", () => {
         body: { content: "actual content", contentType: "text" },
       },
     ];
-    expect(formatThreadContext(messages)).toBe("Bob: actual content");
+    expect(buildThreadContext(messages)).toEqual([
+      { message_id: "m2", sender: "Bob", body: "actual content" },
+    ]);
   });
 
   it("falls back to 'unknown' sender when from is missing", () => {
@@ -282,10 +236,8 @@ describe("formatThreadContext", () => {
         body: { content: "orphan msg", contentType: "text" },
       },
     ];
-    expect(formatThreadContext(messages)).toBe("unknown: orphan msg");
-  });
-
-  it("returns empty string for empty messages array", () => {
-    expect(formatThreadContext([])).toBe("");
+    expect(buildThreadContext(messages)).toEqual([
+      { message_id: "m1", sender: "unknown", body: "orphan msg" },
+    ]);
   });
 });
