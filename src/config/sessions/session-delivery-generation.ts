@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasPendingSqliteNativeExecution } from "../../infra/sqlite-native-observer.js";
 import {
   readSqliteNativeMutationRevision,
   registerSqliteSchemaMutationListener,
@@ -482,6 +483,10 @@ async function prepareSessionGenerationLease(
               if (!native) {
                 return;
               }
+              // Native callbacks and unfinished cursors cannot certify a committed write set.
+              if (hasPendingSqliteNativeExecution(native.db)) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
               const revision = readSqliteNativeMutationRevision(native.db);
               if (revision === undefined) {
                 throw new SessionDeliveryGenerationUnavailableError();
@@ -490,7 +495,7 @@ async function prepareSessionGenerationLease(
                 return;
               }
               const committed = !native.db.isTransaction;
-              // Raw same-handle commits do not advance data_version or publish entry facts.
+              // Raw same-handle commits do not publish complete entry facts.
               // Keep their final native guard until managed raw settlement is complete.
               try {
                 const observed = checkEntry(

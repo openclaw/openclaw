@@ -1,9 +1,12 @@
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
-import { withSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  withSessionEntriesFromStoreInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+import type { ProviderModelRouteSource } from "../../../plugin-sdk/provider-model-types.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -31,6 +34,10 @@ import { selectAgentHarness } from "../../harness/selection.js";
 import { readSessionRuntimeOwnershipAsync } from "../../harness/session-runtime-ownership.js";
 import { assertPluginHarnessConversationToolPolicySupport } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
+import {
+  createModelCatalogSnapshotView,
+  listModelCatalogObservedRoutes,
+} from "../../model-catalog-view.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
@@ -39,6 +46,7 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../../prepared-model-runtime-generation-scope.js";
+import { readAdmittedPublishedModelCatalog } from "../../prepared-model-runtime.capture.js";
 import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { capturePreparedModelRuntimeLifetime } from "../../prepared-model-runtime.lifecycle.js";
@@ -140,7 +148,16 @@ async function prepareNativeSessionRuntime(
         });
       };
       if (isIncognitoSessionKey(admission.sessionKey)) {
-        return await consume(loadSessionEntryReadOnly(admission), () => {});
+        return await withSessionEntryReadOnlyInWorker(
+          admission,
+          assertCallerCurrent,
+          async (read, owner) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return consume(read.value, owner.assertCurrent);
+          },
+        );
       }
       const reader = getReplyOperationSessionReader(runParams.replyOperation);
       if (reader) {
@@ -376,6 +393,10 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const hasSelectedNativeModel = () =>
     catalog?.entries.some(ownsSelectedNativeModel) === true ||
     catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
+  const generation = getPreparedModelRuntimePluginGeneration();
+  const borrowedSnapshot = generation
+    ? getPreparedModelRuntimeBorrowedSnapshot(generation)
+    : undefined;
   if (
     !nativeSessionRuntime &&
     pluginHarnessOwnsTransport &&
@@ -384,10 +405,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
     !hasSelectedNativeModel()
   ) {
     const assertRuntimeCurrent = capturePreparedModelRuntimeLifetime();
-    const generation = getPreparedModelRuntimePluginGeneration();
-    const borrowedSnapshot = generation
-      ? getPreparedModelRuntimeBorrowedSnapshot(generation)
-      : undefined;
     // Run projections add prompt-project facts while keeping the owner's native operation.
     const isCurrent =
       generation &&
@@ -413,11 +430,25 @@ export async function resolveEmbeddedRunModelSetup(params: {
     nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
   const modelConfigProvider = provider;
   let modelResolution;
+  let observedRoutes: ProviderModelRouteSource[] | undefined;
   if (nativeModelOwned) {
     modelResolution = {
       model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
       ...createEmptyAgentDiscoveryStores(),
     };
+    // Run projections drop capture identity; the owner keeps the catalog the picker read.
+    const routeCatalog =
+      (borrowedSnapshot &&
+      borrowedSnapshot.modelCatalog === params.preparedModelRuntime?.modelCatalog
+        ? readAdmittedPublishedModelCatalog(borrowedSnapshot)
+        : undefined) ?? catalog;
+    const routeVariants =
+      routeCatalog &&
+      createModelCatalogSnapshotView(runParams.config ?? {}, routeCatalog).variantsOf({
+        provider,
+        id: modelId,
+      });
+    observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
     const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
       provider,
@@ -478,6 +509,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     pluginHarnessOwnsTransport,
     pinnedHarnessId,
     nativeModelOwned,
+    observedRoutes,
     nativeSessionRuntime,
     modelConfigProvider,
     model,

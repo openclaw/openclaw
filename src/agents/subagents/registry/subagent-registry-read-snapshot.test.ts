@@ -474,7 +474,12 @@ it("returns revoked maintenance facts without rereading during publication churn
     try {
       const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
       try {
-        expect(() => prepared.capture()).toThrow("maintenance facts changed");
+        expect(() => prepared.capture()).toThrow(
+          expect.objectContaining({
+            name: "SqliteSessionMutationConflictError",
+            operationLabel: "session maintenance",
+          }),
+        );
         expect(reads).toHaveBeenCalledTimes(1);
       } finally {
         prepared.dispose();
@@ -505,7 +510,12 @@ it.each(["named", "full"] as const)(
 
         const completed = { ...payloadOnly, cleanupCompletedAt: Date.now() };
         persistRegistryFixture(new Map([[entry.runId, completed]]), changedRunIds);
-        expect(() => prepared.capture()).toThrow("maintenance facts changed");
+        expect(() => prepared.capture()).toThrow(
+          expect.objectContaining({
+            name: "SqliteSessionMutationConflictError",
+            operationLabel: "session maintenance",
+          }),
+        );
       } finally {
         prepared.dispose();
       }

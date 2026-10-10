@@ -6,6 +6,7 @@
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
+  ProviderModelRouteSource,
   ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
@@ -56,6 +57,8 @@ type PrepareAgentRuntimeAuthPlanParams = {
   modelId: string;
   modelApi?: string | null;
   modelBaseUrl?: unknown;
+  /** Physical catalog rows for the logical model; replaces the single api/baseUrl observation. */
+  observedRoutes?: readonly ProviderModelRouteSource[];
   requestTransportOverrides?: ProviderRouteOverridePresence;
   config?: OpenClawConfig;
   agentId?: string;
@@ -524,6 +527,7 @@ export function prepareAgentRuntimeAuth(
     modelId: params.modelId,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
+    observedRoutes: params.observedRoutes,
     config: params.config,
     agentId: params.agentId,
     primaryModel:

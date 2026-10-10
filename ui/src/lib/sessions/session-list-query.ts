@@ -190,6 +190,7 @@ export function canApplySessionListSnapshot(
       existing.parentSessionKey !== next.parentSessionKey ||
       (countsOnly &&
         (existing.hasActiveRun !== next.hasActiveRun ||
+          existing.hasActiveSubagentRun !== next.hasActiveSubagentRun ||
           existing.status !== next.status ||
           existing.visibility !== next.visibility ||
           existing.sharingRole !== next.sharingRole ||
