@@ -422,10 +422,10 @@ async function prepareOwnedModelsListResult({
         entries.set(runtimeKey, preparedEntry);
         prepared.set(entry, entries);
       }
-      // Legacy views require a boolean; inventory consumers preserve unknown state.
-      const projectedAvailability = preserveUnknownAvailability
-        ? evaluation.availability
-        : (evaluation.availability ?? false);
+      const projectedAvailability =
+        preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
+          ? evaluation.availability
+          : (evaluation.availability ?? false);
       const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
       const supportsFastMode = speedPolicy.supportsFastMode;
       const serviceTiers = projectModelServiceTiers({
