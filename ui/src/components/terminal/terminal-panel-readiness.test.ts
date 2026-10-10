@@ -37,8 +37,9 @@ const createTerminal = vi.fn(async () => createTerminalController());
 const TERMINAL_PANEL_ELEMENT_NAME = `test-terminal-panel-readiness-${crypto.randomUUID()}`;
 defineTerminalPanelElement(TERMINAL_PANEL_ELEMENT_NAME, (element) => {
   const controller = new TerminalPanelController(element);
-  controller.createTerminalController =
-    createTerminal as unknown as typeof createIsolatedGhosttyTerminal;
+  Object.assign(element, {
+    createTerminalController: createTerminal as unknown as typeof createIsolatedGhosttyTerminal,
+  });
   return controller;
 });
 

@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
@@ -49,7 +50,7 @@ export type TerminalPanelViewState = {
   onHide: () => void;
 };
 
-function SessionPickerTrigger(props: { state: TerminalSessionPickerState }) {
+function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId: string }) {
   return (
     <button
       ref={props.state.triggerRef}
@@ -59,7 +60,7 @@ function SessionPickerTrigger(props: { state: TerminalSessionPickerState }) {
       aria-label={t("terminal.sessions")}
       aria-expanded={props.state.open ? "true" : "false"}
       aria-haspopup="dialog"
-      aria-controls={props.state.hosted ? undefined : "terminal-session-picker-dialog"}
+      aria-controls={props.state.hosted ? undefined : props.dialogId}
       onClick={() => props.state.onToggle()}
       onFocusOut={(event) => props.state.onFocusOut(event)}
     >
@@ -82,11 +83,11 @@ function Loading(props: { compact?: boolean; overlay?: boolean; label: string })
   );
 }
 
-function SessionMenu(props: { state: TerminalSessionPickerState }) {
+function SessionMenu(props: { state: TerminalSessionPickerState; dialogId: string }) {
   return (
     <Show when={props.state.open}>
       <div
-        id="terminal-session-picker-dialog"
+        id={props.dialogId}
         class={["tp-session-menu", { "tp-session-menu--hosted": props.state.hosted }]}
         onFocusOut={(event) => props.state.onFocusOut(event)}
         role="dialog"
@@ -167,7 +168,7 @@ function ActionButton(props: {
   );
 }
 
-function Actions(props: { state: TerminalPanelViewState }) {
+function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
   const destinations = () =>
     [
       {
@@ -191,8 +192,8 @@ function Actions(props: { state: TerminalPanelViewState }) {
       </Show>
       <Show when={!props.state.fullscreen}>
         <div class="tp-session-picker">
-          <SessionPickerTrigger state={props.state.picker} />
-          <SessionMenu state={props.state.picker} />
+          <SessionPickerTrigger state={props.state.picker} dialogId={props.dialogId} />
+          <SessionMenu state={props.state.picker} dialogId={props.dialogId} />
         </div>
         <Show
           when={!props.state.embedded}
@@ -321,6 +322,9 @@ function UploadLayer(props: { state: TerminalPanelViewState }) {
 }
 
 export function TerminalPanelView(props: { view: () => TerminalPanelViewState }) {
+  const idPrefix = `terminal-${generateUUID()}`;
+  const viewportId = `${idPrefix}-panel`;
+  const dialogId = `${idPrefix}-session-picker-dialog`;
   const tabs = createMemo(() =>
     terminalPanelHostedTabs(props.view().tabs).map(({ icon: _icon, ...tab }) =>
       Object.assign(tab, {
@@ -338,7 +342,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             <path d="M3 4l3 3-3 3M8 11h5" />
           </svg>
         ),
-        domId: `terminal-tab-${tab.id}`,
+        domId: `${idPrefix}-tab-${tab.id}`,
         closeLabel: `${t("terminal.closeSession")}: ${tab.label}`,
       }),
     ),
@@ -357,19 +361,22 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             label={t("terminal.resize")}
           />
         </Show>
-        <Show when={!props.view().hosted} fallback={<SessionMenu state={props.view().picker} />}>
+        <Show
+          when={!props.view().hosted}
+          fallback={<SessionMenu state={props.view().picker} dialogId={dialogId} />}
+        >
           <header class="rail-header tp-header">
             <PanelTabStrip
               tabs={tabs()}
               activeId={props.view().activeId}
-              ariaControls="terminal-tab-panel"
+              ariaControls={viewportId}
               onSelect={props.view().onSelect}
               onClose={props.view().onClose}
               onNew={props.view().onNew}
               newLabel={t("terminal.newSession")}
               newDisabled={props.view().booting}
             />
-            <Actions state={props.view()} />
+            <Actions state={props.view()} dialogId={dialogId} />
           </header>
         </Show>
         <Show when={props.view().error}>
@@ -385,13 +392,13 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
           )}
         </Show>
         <wa-tab-panel
-          id="terminal-tab-panel"
+          id={viewportId}
           class="tp-viewport"
           name={props.view().activeId ?? "terminal"}
           active
           aria-labelledby={
             props.view().activeId && !props.view().hosted
-              ? `terminal-tab-${props.view().activeId}`
+              ? `${idPrefix}-tab-${props.view().activeId}`
               : undefined
           }
           aria-label={props.view().hosted ? t("terminal.title") : undefined}

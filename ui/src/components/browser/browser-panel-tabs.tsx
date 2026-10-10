@@ -6,6 +6,7 @@ import type { BrowserPanelTab } from "./browser-client.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 
 export function BrowserPanelTabs(props: {
+  panelId: string;
   tabs: BrowserPanelTab[];
   activeTargetId: string | null;
   onSelect: (targetId: string) => void;
@@ -17,7 +18,7 @@ export function BrowserPanelTabs(props: {
   const tabs = createMemo(() =>
     browserPanelHostedTabs(sourceTabs()).map((tab, index) => ({
       id: tab.id,
-      domId: `browser-tab-${tab.id}`,
+      domId: `${props.panelId}-tab-${tab.id}`,
       label: tab.label,
       title: `${t(sourceTabs()[index]?.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
       icon: tab.favicon ? (
@@ -32,7 +33,7 @@ export function BrowserPanelTabs(props: {
     <PanelTabStrip
       tabs={tabs()}
       activeId={props.activeTargetId}
-      ariaControls="browser-tab-panel"
+      ariaControls={props.panelId}
       onSelect={props.onSelect}
       onClose={props.onClose}
       onNew={props.onNew}

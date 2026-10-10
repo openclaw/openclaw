@@ -71,9 +71,13 @@ describe("Browser panel hosted tabs", () => {
       expect(Boolean(panel.renderRoot?.querySelector(".bp-header"))).toBe(ownsStrip);
       expect(Boolean(panel.renderRoot?.querySelector("wa-tab-group"))).toBe(ownsStrip);
       expect(panel.renderRoot?.querySelector(".bp-toolbar")).not.toBeNull();
-      expect(panel.renderRoot?.querySelector(".bp-viewport")?.getAttribute("aria-labelledby")).toBe(
-        ownsStrip ? "browser-tab-remote:a" : null,
-      );
+      const viewport = panel.renderRoot.querySelector<HTMLElement>(".bp-viewport")!;
+      const activeTab = panel.renderRoot.querySelector<HTMLElement>('[panel="remote:a"]');
+      expect(viewport.getAttribute("aria-labelledby")).toBe(ownsStrip ? activeTab?.id : null);
+      if (ownsStrip) {
+        expect(activeTab).not.toBeNull();
+        expect(activeTab?.getAttribute("aria-controls")).toBe(viewport.id);
+      }
       if (embedded) {
         expect(panel.renderRoot?.querySelector(".bp-header [data-new-tab-action]")).toBeNull();
         expect(panel.renderRoot?.querySelector(".bp-toolbar [data-new-tab-action]")).not.toBeNull();
@@ -81,7 +85,7 @@ describe("Browser panel hosted tabs", () => {
     },
   );
 
-  it("projects controller tabs with the same labels as the panel's own strip", async () => {
+  it("projects controller tabs and keeps simultaneous panels' DOM associations separate", async () => {
     const { panel } = await mount(true, false);
     expect(readPanelHostedTabs(panel)).toBe(panel);
     expect(panel.hostedTabs).toEqual([
@@ -101,11 +105,21 @@ describe("Browser panel hosted tabs", () => {
         (label) => label.textContent,
       ),
     ).toEqual(["Example", "second.test", "New tab"]);
-    const nativeIcon = panel.renderRoot!.querySelector(
-      "#browser-tab-native\\:b .tabstrip-tab__icon",
-    );
+    const nativeIcon = panel.renderRoot.querySelector('[panel="native:b"] .tabstrip-tab__icon');
     expect(nativeIcon?.querySelector("img")?.getAttribute("src")).toBe(favicon);
     expect(nativeIcon?.querySelector("svg")).toBeNull();
+
+    const second = await mount(true, false);
+    for (const browser of [panel, second.panel]) {
+      const viewport = browser.renderRoot.querySelector<HTMLElement>(".bp-viewport")!;
+      expect(document.getElementById(viewport.id)).toBe(viewport);
+      for (const tab of browser.renderRoot.querySelectorAll<HTMLElement>("wa-tab")) {
+        expect(document.getElementById(tab.id)).toBe(tab);
+        expect(tab.getAttribute("aria-controls")).toBe(viewport.id);
+      }
+      const activeTab = browser.renderRoot.querySelector<HTMLElement>('[panel="remote:a"]')!;
+      expect(viewport.getAttribute("aria-labelledby")).toBe(activeTab.id);
+    }
   });
 
   it("publishes favicon-only native pushes to hosted tabs and the dock strip", async () => {

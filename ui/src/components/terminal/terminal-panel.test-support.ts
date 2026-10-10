@@ -50,7 +50,9 @@ export function defineTestTerminalPanelElement(
 
   defineTerminalPanelElement(tagName, (element) => {
     const controller = new TerminalPanelController(element);
-    controller.createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
+    Object.assign(element, {
+      createTerminalController: createGhosttyTerminalMock as unknown as TerminalFactory,
+    });
     controllers.set(element, controller);
     return controller;
   });

@@ -56,7 +56,9 @@ const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-upload-${crypt
 
 defineTerminalPanelElement(TERMINAL_PANEL_ELEMENT_NAME, (element) => {
   const controller = new TerminalPanelController(element);
-  controller.createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
+  Object.assign(element, {
+    createTerminalController: createGhosttyTerminalMock as unknown as TerminalFactory,
+  });
   return controller;
 });
 

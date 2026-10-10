@@ -2,6 +2,7 @@ import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
@@ -411,6 +412,7 @@ export function BrowserPanelChrome(
     tabsInHeader: boolean;
   },
 ) {
+  const panelId = `browser-tab-panel-${generateUUID()}`;
   const rendersTabStrip = createMemo(
     () =>
       !props.controller.host.fixedTab &&
@@ -432,6 +434,7 @@ export function BrowserPanelChrome(
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
           <BrowserPanelTabs
+            panelId={panelId}
             tabs={props.controller.tabs}
             activeTargetId={props.controller.activeTargetId}
             onSelect={(id) => void props.controller.selectTab(id)}
@@ -461,13 +464,13 @@ export function BrowserPanelChrome(
         </div>
       ) : null}
       <wa-tab-panel
-        id="browser-tab-panel"
+        id={panelId}
         class="bp-viewport"
         name={props.controller.activeTargetId ?? "browser"}
         active
         aria-labelledby={
           rendersTabStrip() && props.controller.activeTargetId
-            ? `browser-tab-${props.controller.activeTargetId}`
+            ? `${panelId}-tab-${props.controller.activeTargetId}`
             : undefined
         }
         tabindex="0"

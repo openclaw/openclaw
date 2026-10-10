@@ -17,12 +17,15 @@ import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
-function createPanel(client: TerminalGatewayClient) {
+function createPanel(client: TerminalGatewayClient, embedded = false) {
   const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
   panel.client = client;
   panel.available = true;
+  panel.embedded = embedded;
   document.body.append(panel);
-  panel.toggle();
+  if (!embedded) {
+    panel.toggle();
+  }
   return panel;
 }
 
@@ -138,13 +141,15 @@ describe("OpenClawTerminalPanel accessibility", () => {
       '[aria-label="Terminal sessions"]',
     );
     expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
-    expect(trigger?.getAttribute("aria-controls")).toBe("terminal-session-picker-dialog");
+    expect(trigger?.getAttribute("aria-controls")).toBeTruthy();
 
     trigger?.click();
     await waitForFast(() =>
       expect(document.activeElement).toBe(panel.renderRoot.querySelector(".tp-session-refresh")),
     );
-    expect(panel.renderRoot.querySelector(".tp-session-menu")?.getAttribute("role")).toBe("dialog");
+    const menu = panel.renderRoot.querySelector(".tp-session-menu")!;
+    expect(menu.getAttribute("role")).toBe("dialog");
+    expect(document.getElementById(trigger!.getAttribute("aria-controls")!)).toBe(menu);
 
     panel.renderRoot
       .querySelector(".tp-session-refresh")
@@ -160,6 +165,36 @@ describe("OpenClawTerminalPanel accessibility", () => {
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
     await panel.updateComplete;
     expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
+  });
+
+  it("keeps tab and session-picker references inside each split terminal", async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      const panel = createPanel(createPickerClient(), true);
+      await waitForFast(() =>
+        expect(
+          panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]'),
+        ).not.toBeNull(),
+      );
+      const viewport = panel.renderRoot.querySelector(".tp-viewport")!;
+      const selectedTab = panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]')!;
+      expect(document.getElementById(selectedTab.getAttribute("aria-controls")!)).toBe(viewport);
+      expect(document.getElementById(viewport.getAttribute("aria-labelledby")!)).toBe(selectedTab);
+
+      const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
+        '[aria-label="Terminal sessions"]',
+      )!;
+      trigger.click();
+      await waitForFast(() =>
+        expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull(),
+      );
+      const menu = panel.renderRoot.querySelector(".tp-session-menu")!;
+      expect(document.getElementById(trigger.getAttribute("aria-controls")!)).toBe(menu);
+      ids.push(viewport.id, selectedTab.id, menu.id);
+      menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await panel.updateComplete;
+    }
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("keeps trigger focus inside the picker and dismisses after focus leaves", async () => {

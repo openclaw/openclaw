@@ -376,7 +376,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   <Show when={tab().labelTooltip} fallback={content()}>
                     <openclaw-tooltip
                       class="tabstrip-tab__label-tooltip"
-                      prop:content={tab().labelTooltip}
+                      prop:content={tab().labelTooltip ?? ""}
                     >
                       <span class="tabstrip-tab__tooltip-trigger">{content()}</span>
                     </openclaw-tooltip>

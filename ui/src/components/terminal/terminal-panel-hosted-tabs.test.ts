@@ -98,9 +98,16 @@ describe("Terminal panel hosted tabs", () => {
       expect(Boolean(panel.renderRoot.querySelector(".tp-actions"))).toBe(ownsStrip);
       expect(panel.renderRoot.querySelector(".tp-viewport")).not.toBeNull();
       expect(panel.renderRoot.querySelector(".tp-file-input")).not.toBeNull();
-      expect(panel.renderRoot.querySelector(".tp-viewport")?.getAttribute("aria-labelledby")).toBe(
-        ownsStrip ? `terminal-tab-${panel.activeHostedTabId}` : null,
-      );
+      const viewport = panel.renderRoot.querySelector(".tp-viewport")!;
+      const selectedTab = panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]');
+      expect(viewport.getAttribute("aria-labelledby")).toBe(ownsStrip ? selectedTab?.id : null);
+      if (ownsStrip) {
+        expect(selectedTab).not.toBeNull();
+        expect(selectedTab?.getAttribute("aria-controls")).toBe(viewport.id);
+        expect(document.getElementById(viewport.getAttribute("aria-labelledby")!)).toBe(
+          selectedTab,
+        );
+      }
       expect(panel.hostedActions === nothing).toBe(ownsStrip);
       expect(readPanelHostedTabs(panel)).toBe(panel);
     },

@@ -19,8 +19,7 @@ declare module "@solidjs/web" {
       "openclaw-browser-panel": PanelAttributes<BrowserPanelInputs> & { embedded?: boolean };
       "openclaw-desktop-panel": PanelAttributes<DesktopPanelInputs> & { embedded?: boolean };
       "openclaw-tooltip": ElementAttributes & {
-        "prop:content"?: string | null;
-        "open-on-click"?: boolean;
+        "prop:content": string;
       };
       "openclaw-panel-empty-state": ElementAttributes & {
         "prop:heading"?: string;
@@ -46,7 +45,7 @@ declare module "@solidjs/web" {
         name?: string;
         active?: boolean;
       };
-      "resizable-divider": ElementAttributes & {
+      "resizable-divider": Omit<ElementAttributes, "onResize"> & {
         "prop:orientation": "horizontal" | "vertical";
         "prop:label": string;
         "prop:splitRatio": number;
