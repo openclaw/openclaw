@@ -28,7 +28,7 @@ export function createSolidControlUiBuildPlugin(rootDir: string): Plugin {
           build.initialOptions.jsxImportSource;
         // Other JSX runtimes retain esbuild's existing compiler and semantics.
         if (importSource !== "@solidjs/web") {
-          return;
+          return undefined;
         }
         if (!compiler) {
           try {
