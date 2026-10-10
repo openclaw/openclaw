@@ -10,7 +10,7 @@ export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 export const SIDEBAR_SNAPSHOT_STORE_NAME = "sidebarSnapshots";
-const CHAT_SNAPSHOT_DB_VERSION = 5;
+const CHAT_SNAPSHOT_DB_VERSION = 6;
 
 export function isPersistableChatSnapshotKey(key: string): boolean {
   return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
@@ -46,7 +46,17 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
         database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
         database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
       }
-      database.createObjectStore(SIDEBAR_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
+      if (event.oldVersion < 5) {
+        database.createObjectStore(SIDEBAR_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
+      } else {
+        request.transaction?.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME).clear();
+      }
+      // The unified projection replaces this disposable cache; retirement never gates startup.
+      try {
+        factory
+          .deleteDatabase("openclaw-session-roster")
+          .addEventListener("error", (error) => error.preventDefault());
+      } catch {}
     });
     request.addEventListener("success", () => resolve(request.result));
     request.addEventListener("error", () =>

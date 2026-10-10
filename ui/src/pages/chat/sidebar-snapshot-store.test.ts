@@ -52,6 +52,17 @@ describe("persistent sidebar projections", () => {
     vi.unstubAllGlobals();
   });
 
+  it("retires the legacy roster database when admitting the unified cache", async () => {
+    const legacy = await requestResult(indexedDB.open("openclaw-session-roster", 1));
+    legacy.close();
+    const store = createStore();
+    await store.writeSidebar(key(scope), model, validate);
+    expect((await indexedDB.databases()).map((database) => database.name)).not.toContain(
+      "openclaw-session-roster",
+    );
+    expect(await store.readSidebar(key(scope), validate)).toEqual(model);
+  });
+
   it("restores the settled row order before a connection and isolates gateway, account and profile", async () => {
     const writer = createStore();
     const captured = { rows: [...model.rows] };

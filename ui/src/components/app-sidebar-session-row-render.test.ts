@@ -18,6 +18,8 @@ import {
 import "./app-sidebar.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
+  routingDefaults: { mainKey: "main", scope: "per-sender" },
+  roster: null,
   mode: "chip",
   entries: [],
   sessions: [],

@@ -1,15 +1,19 @@
 /* @vitest-environment jsdom */
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import type { BootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
-import type { SessionRosterRecord } from "../lib/sessions/session-roster-cache.ts";
+import * as snapshotPrewarm from "../pages/chat/session-snapshot-prewarm.ts";
 import { createContext, createGatewayHarness, TWO_AGENTS } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import type { SessionDataControllerHost } from "./session-data-controller-catalog.ts";
 import { SessionDataController } from "./session-data-controller.ts";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("sidebar live roster publication", () => {
   it.each([
@@ -76,7 +80,11 @@ describe("sidebar live roster publication", () => {
       });
       const gateway = createGatewayHarness(createTestGatewayClient(request));
       gateway.publish({ phase: "connecting", hello: null });
-      const cachedRoster = createDeferred<SessionRosterRecord | null>();
+      const cachedRoster = createDeferred<BootRoster | null>();
+      vi.spyOn(snapshotPrewarm, "readSidebarBootSnapshot").mockImplementation(async () => {
+        const roster = await cachedRoster.promise;
+        return roster ? sidebarBootSnapshot(roster) : null;
+      });
       const sessions = createSessionCapability(
         gateway.gateway,
         { state: { selectedId: "main" }, subscribe: () => () => undefined },
@@ -85,6 +93,7 @@ describe("sidebar live roster publication", () => {
             version: 2,
             authMethod: "token",
             credential: "9d17676d",
+            recoveryScope: "synthetic-account",
             scope: gatewayCredentialScope(gateway.gateway.connection.gatewayUrl),
             savedAt: Date.now(),
             profileId: null,
@@ -92,7 +101,6 @@ describe("sidebar live roster publication", () => {
             groups: [],
             sectionOrder: [],
           },
-          rosterCache: { read: () => cachedRoster.promise, write: () => undefined },
         },
       );
       const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
@@ -124,12 +132,7 @@ describe("sidebar live roster publication", () => {
           controller.hostConnected();
         }
         cachedRoster.resolve({
-          version: 1,
-          scope: gatewayCredentialScope(gateway.gateway.connection.gatewayUrl),
-          savedAt: Date.now(),
-          profileId: null,
           agentId: "main",
-          query: {},
           result: cached,
           groups: [],
           groupSettings: [],

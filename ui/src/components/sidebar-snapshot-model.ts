@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -43,6 +44,8 @@ const sectionId = z.custom<SidebarSessionSection<unknown>["id"]>(
     /^(agent:|category:|person:|project:|catalog:|pinned$|ungrouped$|groups$|work$)/.test(value),
 );
 export const sidebarSnapshotSchema = z.object({
+  routingDefaults: z.object({ mainKey: z.string(), scope: z.enum(["per-sender", "global"]) }),
+  roster: bootRosterSchema.nullable(),
   mode: z.enum(["chip", "roster"]),
   entries: text
     .refine(

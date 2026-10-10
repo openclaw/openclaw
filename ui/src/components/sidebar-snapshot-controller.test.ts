@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { createSessionCapability } from "../lib/sessions/index.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { subscribeSnapshotInvalidation } from "../pages/chat/session-snapshot-invalidation-events.ts";
 import {
   clearStoredChatSnapshots,
@@ -26,6 +28,8 @@ const scope = {
 };
 const sessionKey = `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000agent:main:cedar`;
 const model: SidebarSnapshotModel = {
+  routingDefaults: { mainKey: "main", scope: "per-sender" },
+  roster: null,
   mode: "roster",
   entries: ["online", "sessions"],
   sessions: [],
@@ -168,6 +172,83 @@ describe("sidebar snapshot lifecycle", () => {
     await test.restored;
     return { ...test, store };
   }
+
+  it("shares one boot read with route rows and retires both displays on invalidation", async () => {
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    const roster = {
+      agentId: "main",
+      result: sessionsResult(
+        [{ key: "agent:main:cedar", kind: "direct", displayName: "Cedar" }],
+        1,
+      ),
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    };
+    const saved = { ...model, roster };
+    await store.writeSidebar(sidebarSnapshotScopeKey(scope), saved, parseSidebarSnapshot);
+    const read = vi.spyOn(SessionSnapshotStore.prototype, "readSidebar");
+    const test = fixture();
+    const sessions = createSessionCapability(
+      test.gateway,
+      {
+        state: { selectedId: "main" },
+        subscribe: () => () => {},
+      },
+      {
+        bootRecord: {
+          version: 2,
+          authMethod: "trusted-proxy",
+          credential: "",
+          savedAt: Date.now(),
+          scope: scope.gatewayScope,
+          recoveryScope: scope.recoveryScope,
+          profileId: scope.profileId,
+          agents: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main" }],
+          },
+          groups: [],
+          sectionOrder: [],
+        },
+      },
+    );
+    disposers.push(
+      () => sessions.dispose(),
+      () => test.controller.hostDisconnected(),
+    );
+    test.controller.hostConnected();
+    await Promise.all([test.restored, sessions.whenCachedRosterSettled()]);
+    expect(sessions.state.result?.sessions).toEqual(roster.result.sessions);
+    expect(sessions.state.resultCached).toBe(true);
+    expect(test.host.sidebarSnapshot).toEqual(saved);
+    expect(read).toHaveBeenCalledOnce();
+    await deleteStoredChatSnapshot(sessionKey);
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(sessions.state.result).toBeNull();
+  });
+
+  it("releases a stalled boot read when the live sidebar settles", async () => {
+    const stalled = createDeferred<SidebarSnapshotModel | null>();
+    vi.spyOn(SessionSnapshotStore.prototype, "readSidebar").mockReturnValue(stalled.promise);
+    const test = fixture();
+    disposers.push(
+      admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
+      () => test.controller.hostDisconnected(),
+    );
+    test.controller.hostConnected();
+    expect(test.controller.pending).toBe(true);
+    test.settle();
+    test.publish();
+    expect(test.controller.pending).toBe(false);
+    stalled.resolve(model);
+    await vi.dynamicImportSettled();
+    expect(test.host.sidebarSnapshot).toBeNull();
+  });
 
   it("restores before hello and saves only after rendering the settled live projection", async () => {
     const test = await warmFixture();

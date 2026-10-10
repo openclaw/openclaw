@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import {
   parseSidebarSnapshot,
   restoreSnapshotSession,
@@ -8,6 +10,8 @@ import {
 } from "./sidebar-snapshot-model.ts";
 
 const model: SidebarSnapshotModel = {
+  routingDefaults: { mainKey: "main", scope: "per-sender" },
+  roster: null,
   mode: "roster",
   entries: [],
   sessions: [],
@@ -28,6 +32,50 @@ const model: SidebarSnapshotModel = {
 };
 
 describe("sidebar display snapshot admission", () => {
+  it("keeps primary routing and header facts in the display snapshot without private or live authority", () => {
+    const stable = {
+      key: "agent:main:dashboard:cedar",
+      kind: "direct" as const,
+      displayName: "Cedar",
+      boardFace: "dashboard" as const,
+      boardPresentation: "expanded" as const,
+      workspaceDir: "/synthetic/workspace",
+    };
+    const liveRow = {
+      ...stable,
+      sharingRole: "owner" as const,
+      hasActiveRun: true,
+      activeModel: "stale-model",
+    };
+    Reflect.set(liveRow, "incognito", false);
+    const roster = captureBootRoster({
+      result: sessionsResult(
+        [
+          liveRow,
+          { key: "agent:main:private", kind: "direct", incognito: true, label: "Private title" },
+        ],
+        1,
+      ),
+      agentId: "main",
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+      loading: false,
+      error: null,
+    });
+    const saved = parseSidebarSnapshot({ ...model, roster });
+    expect(saved?.roster?.result.sessions).toEqual([stable]);
+    expect(JSON.stringify(saved)).not.toMatch(
+      /Private title|sharingRole|hasActiveRun|activeModel/u,
+    );
+    expect(
+      parseSidebarSnapshot({
+        ...saved,
+        roster: { ...roster, result: sessionsResult([{ ...stable, incognito: true }], 1) },
+      }),
+    ).toBeNull();
+  });
+
   it("keeps display data without persisting authority, executable plugins, or watched sessions", () => {
     const admitted = parseSidebarSnapshot({
       ...model,

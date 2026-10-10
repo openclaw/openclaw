@@ -31,6 +31,11 @@ export function captureSidebarSnapshotModel(
   rows: SidebarRecentSession[],
   sections: SidebarVisibleSections["sections"],
 ): SidebarSnapshotModel | null {
+  const bootRoster = context.sessions.captureBootRoster();
+  const agents = context.agents.state.agentsList;
+  if (!bootRoster || !agents) {
+    return null;
+  }
   const zone = host.reconciledSidebarZone(rows);
   const roster = rosterActivityStore(context).snapshot;
   if (
@@ -61,6 +66,11 @@ export function captureSidebarSnapshotModel(
   const sessions = snapshotSessions(rows, presentation);
   const sessionKeys = new Set(sessions.map((row) => row.key));
   return parseSidebarSnapshot({
+    routingDefaults: {
+      mainKey: agents.mainKey,
+      scope: agents.scope,
+    },
+    roster: bootRoster,
     mode: host.sidebarAgentsMode,
     entries: zone.entries
       .filter((entry) => entry.type !== "session" || sessionKeys.has(entry.key))

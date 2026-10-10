@@ -81,21 +81,19 @@ export class SidebarSnapshotController implements ReactiveController {
           this.scope = boot.scope;
           this.pending = true;
           const current = this.captureScope();
-          void this.store
-            .readSidebar(sidebarSnapshotScopeKey(boot.scope), parseSidebarSnapshot)
-            .then((model) => {
-              this.hostUpdate();
-              if (!current()) {
-                return;
-              }
-              this.pending = false;
-              if (model && !this.host.sidebarSnapshotSettled()) {
-                this.host.restoreSidebarSnapshot(model);
-                this.serialized = JSON.stringify(model);
-                this.saved = true;
-              }
-              this.host.requestUpdate();
-            });
+          void boot.snapshot.then((model) => {
+            this.hostUpdate();
+            if (!current()) {
+              return;
+            }
+            this.pending = false;
+            if (model && !this.host.sidebarSnapshotSettled()) {
+              this.host.restoreSidebarSnapshot(model);
+              this.serialized = JSON.stringify(model);
+              this.saved = true;
+            }
+            this.host.requestUpdate();
+          });
         }
         this.stopGateway = gateway.subscribe(() => {
           this.hostUpdate();
@@ -112,6 +110,10 @@ export class SidebarSnapshotController implements ReactiveController {
       this.replaceScope(null);
     }
     const snapshot = gateway.snapshot;
+    if (this.pending && this.host.sidebarSnapshotSettled()) {
+      this.generation += 1;
+      this.pending = false;
+    }
     if (snapshot.client?.offlineRecoveryRetired || snapshot.hello === this.retiredHello) {
       if (this.scope) {
         this.replaceScope(null);
