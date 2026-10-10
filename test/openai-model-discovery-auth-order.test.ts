@@ -17,7 +17,7 @@ import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profi
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
 import { resolveImplicitProviders } from "../src/agents/models-config.providers.implicit.js";
-import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.full-catalog.js";
+import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.catalog-publication.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";

@@ -513,7 +513,7 @@ describe("synthetic configured context publication", () => {
       expect(selected).toMatchObject({
         contextWindow: 1_000_000,
         contextTokens: 872_000,
-        reasoning: configuredReasoning === false ? false : true,
+        reasoning: configuredReasoning !== false,
         input: ["text", "image"],
         params: { temperature: 0.25 },
         compat: { supportsDeveloperRole: false },

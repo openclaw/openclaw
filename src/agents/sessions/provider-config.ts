@@ -13,7 +13,7 @@ import type {
 import type { ProviderAuthMode } from "./model-registry-schema.js";
 
 /** Shared fields accepted by extension and registry provider registration. */
-export interface ProviderConfigBase {
+interface ProviderConfigBase {
   /** Display name for the provider in UI. */
   name?: string;
   /** Base URL for the API endpoint. Required when defining models. */
@@ -32,7 +32,7 @@ export interface ProviderConfigBase {
   authHeader?: boolean;
 }
 
-export interface ProviderModelConfig
+interface ProviderModelConfig
   extends
     Pick<
       Model,
