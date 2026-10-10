@@ -195,7 +195,9 @@ export async function reserveMemoryEntryOrigins(params: {
       try {
         identity = readMemoryShadowIdentity(options.path);
       } catch (error) {
-        if (isFileMissingError(error)) continue;
+        if (isFileMissingError(error)) {
+          continue;
+        }
         throw error;
       }
       const assertCurrent = () => assertMemoryShadowIdentity(options.path, identity);
@@ -214,8 +216,8 @@ export async function reserveMemoryEntryOrigins(params: {
           },
           assertCurrent,
         )) ?? [];
-      for (const params of added) {
-        reservations.push({ params, options, assertCurrent });
+      for (const deletion of added) {
+        reservations.push({ params: deletion, options, assertCurrent });
       }
     }
   } catch (error) {

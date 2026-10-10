@@ -73,7 +73,9 @@ export function bindSqliteWorkerBackend(
         return transact(() => recordMemoryEntryOriginsInDatabase(db, command.input));
       }
       if (command.type === "reserve") {
-        if (!tableExists(db, "memory_entry_origins")) return [];
+        if (!tableExists(db, "memory_entry_origins")) {
+          return [];
+        }
         return transact(() => {
           const { agentId, operations } = command.input;
           const origins = readMemoryEntryOriginsInDatabase(db, {
@@ -103,7 +105,9 @@ export function bindSqliteWorkerBackend(
         });
       }
       if (command.type === "prune") {
-        if (!tableExists(db, "memory_entry_origins")) return 0;
+        if (!tableExists(db, "memory_entry_origins")) {
+          return 0;
+        }
         return transact(() => {
           const indexed = new Set(
             executeSqliteQuerySync(
