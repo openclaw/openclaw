@@ -17,8 +17,8 @@ type CommitTask = {
   generation: number;
   phase: "commit" | "layout";
   started: boolean;
-  run(): void;
-  cancel(): void;
+  run(this: void): void;
+  cancel(this: void): void;
 };
 
 /** Create inside the pane's Solid owner. Domain state and frame coalescing stay with their owners. */
