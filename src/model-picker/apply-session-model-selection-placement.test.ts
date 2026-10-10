@@ -53,7 +53,7 @@ vi.mock("../config/config.js", factories.config);
 vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
-// mock-isolation: Synthetic placement capabilities exercise commit-time authority without opening managed worker environments.
+// mock-isolation: The placement runtime is a hand-built fixture so capability resolution is observed without loading the worker runtime.
 vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
   ...factories.placementRuntime(),
   resolveWorkerPlacementSessionRuntimeCapabilitiesAsync: async (
