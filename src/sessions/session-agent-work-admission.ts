@@ -16,8 +16,11 @@ export type AgentWorkAdmissionIdentity = { agentId: string; statePath: string };
 export type SessionWorkAdmissionClosure = {
   identities: readonly string[];
   agent?: AgentWorkAdmissionIdentity;
+  deletionOperationId?: string;
   reason: Error;
 };
+
+export class AgentDeletionPendingError extends Error {}
 
 export const sessionWorkAdmissionClosures = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionWorkAdmissionClosures"),
@@ -33,6 +36,34 @@ export function agentWorkAdmissionIdentity(
       target.statePath ?? resolveOpenClawStateSqlitePath(target.env ?? process.env),
     ).canonicalPath,
   };
+}
+
+/** Journal publication, not an individual attempt, owns the pending-deletion fence. */
+export function publishAgentDeletionWorkAdmission(
+  target: AgentWorkAdmissionTarget,
+  operationId: string,
+  pending: boolean,
+): void {
+  const agent = agentWorkAdmissionIdentity(target);
+  for (const owner of sessionWorkAdmissionClosures) {
+    if (
+      owner.deletionOperationId &&
+      matchesAgentWorkAdmission(owner.agent, agent) &&
+      (pending || owner.deletionOperationId === operationId)
+    ) {
+      sessionWorkAdmissionClosures.delete(owner);
+    }
+  }
+  if (pending) {
+    sessionWorkAdmissionClosures.add({
+      agent,
+      identities: [],
+      deletionOperationId: operationId,
+      reason: new AgentDeletionPendingError(
+        `Agent ${agent.agentId} deletion cleanup is still pending; resolve the cleanup failure, then retry agents.delete.`,
+      ),
+    });
+  }
 }
 
 /** Deletion's existing ingress fence also owns admission of new session writes. */
@@ -115,9 +146,6 @@ export function createAgentWorkAdmissionQueries<T extends AgentSessionWorkAdmiss
           owner.identities.some((identity) => admission.identities.has(identity))),
     );
     if (closed) {
-      if (!admission.interrupted) {
-        admission.interrupt?.(closed.reason);
-      }
       throw closed.reason;
     }
   }

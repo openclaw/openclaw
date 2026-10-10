@@ -1,17 +1,23 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -38,6 +44,54 @@ import { deleteGatewayAgent } from "./agents-delete.js";
 import { prepareSessionLifecycleDrain } from "./sessions-lifecycle-drain.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("keeps session writes fenced after a draining deletion fails", async () => {
+  await withOpenClawTestState({ label: "deletion-pending-write" }, async (state) => {
+    await state.writeConfig({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          keeper: { workspace: state.workspaceDir },
+          doomed: { workspace: state.path("doomed") },
+        },
+      },
+    });
+    const scope = { agentId: "doomed", env: state.env, sessionKey: "agent:doomed:pending" };
+    await expect(
+      replaceSessionEntry(scope, { sessionId: "pending", updatedAt: 1 }),
+    ).resolves.toMatchObject({ sessionId: "pending" });
+    const inventory = vi
+      .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
+      .mockRejectedValueOnce(new Error("inventory failed"));
+    await expect(
+      deleteGatewayAgent("doomed", false, createDirectChatContext({ getRuntimeConfig })),
+    ).rejects.toThrow("inventory failed");
+    inventory.mockRestore();
+    expect(await readAgentDeletionJournalAsync("doomed")).toMatchObject({
+      phase: "draining",
+      cleanupCompleted: false,
+    });
+    const update = vi.fn(() => ({ label: "must not be written" }));
+    await expect(patchSessionEntryCore(scope, update, { skipMaintenance: true })).rejects.toThrow(
+      "deletion cleanup is still pending",
+    );
+    expect(update).not.toHaveBeenCalled();
+    await withAgentDeletion("doomed", async (begin) => {
+      const deletion = await begin({
+        agentId: "doomed",
+        agentDir: state.agentDir("doomed"),
+        workspaceDir: state.path("doomed"),
+        sessionsDir: state.sessionsDir("doomed"),
+        phase: "draining",
+      });
+      await deletion.rollback();
+    });
+    expect(await readAgentDeletionJournalAsync("doomed")).toBeUndefined();
+    await expect(
+      patchSessionEntryCore(scope, () => ({ label: "resumed" }), { skipMaintenance: true }),
+    ).resolves.toMatchObject({ label: "resumed" });
+  });
+});
 
 it("preserves another agent's replacement run and admissions in a shared store during inventory", async () => {
   await withOpenClawTestState({ label: "deletion-run-identity" }, async (state) => {

@@ -23,6 +23,7 @@ import {
 } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
 import type {
   NativeBindingTestApi,
   NativeBindingClientTestApi,
@@ -378,6 +379,29 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               registry.plugins.push(plugin);
               registry.agentHarnesses.push(registration);
               try {
+                const inventory = vi
+                  .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
+                  .mockRejectedValueOnce(new Error("synthetic inventory failure"));
+                await expect(
+                  client.request("agents.delete", { agentId, deleteFiles: true }),
+                ).rejects.toThrow("synthetic inventory failure");
+                inventory.mockRestore();
+                expect(readAgentDeletionJournal(agentId)).toMatchObject({
+                  phase: "draining",
+                  cleanupCompleted: false,
+                });
+                for (const [method, params] of [
+                  ["sessions.patch", { key: sessionKey, label: "refused" }],
+                  ["sessions.create", { agentId, key: `agent:${agentId}:refused` }],
+                  [
+                    "chat.send",
+                    { sessionKey, message: "refused", idempotencyKey: "pending-deletion" },
+                  ],
+                ] as const) {
+                  await expect(client.request(method, params)).rejects.toThrow(
+                    "deletion cleanup is still pending",
+                  );
+                }
                 const aborted = createDeferred();
                 const handle = createEmbeddedRunHandle({
                   runId: "deletion-active-run",
@@ -434,6 +458,9 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 expect(nativeClient.subscribed()).toBe(false);
                 expect(isEmbeddedAgentRunInProgress(sessionId)).toBe(false);
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
+                await expect(
+                  client.request("sessions.create", { agentId, key: `agent:${agentId}:gone` }),
+                ).rejects.toThrow();
                 for (const pathname of [
                   workspace,
                   state.agentDir(agentId),
@@ -632,6 +659,25 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           }
           resetConfigRuntimeState();
           startCronReceiptAuthorityHost();
+          if (scenario === "restart-draining") {
+            await resumeAgentDeletions(context, AbortSignal.abort());
+            const scope = { agentId, env: state.env, sessionKey };
+            await expect(
+              patchSessionEntryCore(scope, () => ({ label: "refused before recovery" })),
+            ).rejects.toThrow("deletion cleanup is still pending");
+            const inventory = vi
+              .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
+              .mockRejectedValueOnce(new Error("synthetic recovery failure"));
+            await resumeAgentDeletions(context);
+            inventory.mockRestore();
+            expect(context.logGateway.warn).toHaveBeenCalledWith(
+              expect.stringContaining("synthetic recovery failure"),
+            );
+            vi.mocked(context.logGateway.warn).mockClear();
+            await expect(
+              patchSessionEntryCore(scope, () => ({ label: "refused after recovery failure" })),
+            ).rejects.toThrow("deletion cleanup is still pending");
+          }
           await resumeAgentDeletions(context);
           expect(context.logGateway.warn).not.toHaveBeenCalled();
           expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);

@@ -1,3 +1,4 @@
+import { publishAgentDeletionWorkAdmission } from "../sessions/session-agent-work-admission.js";
 import { listPendingAgentDeletionJournalsAsync } from "../state/agent-deletion-journal.js";
 import { deleteGatewayAgent } from "./server-methods/agents-delete.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -8,6 +9,9 @@ export async function resumeAgentDeletions(
   signal?: AbortSignal,
 ): Promise<void> {
   const { entries, manualClawAgentIds } = await listPendingAgentDeletionJournalsAsync();
+  for (const journal of entries) {
+    publishAgentDeletionWorkAdmission({ agentId: journal.agentId }, journal.operationId, true);
+  }
   for (const agentId of manualClawAgentIds) {
     context.logGateway.warn(
       `Claw ${agentId} removal remains pending; retry its Claw removal plan.`,

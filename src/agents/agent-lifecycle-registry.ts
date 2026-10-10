@@ -16,6 +16,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { publishAgentDeletionWorkAdmission } from "../sessions/session-agent-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   captureAgentDatabasePreparationDeletionForIdentity,
@@ -275,6 +276,18 @@ export function withAgentDeletion<T>(
             const preserveDeleteFiles = beginOptions.preserveDeleteFiles;
             const operationId = crypto.randomUUID();
             currentOperationId = operationId;
+            const publishIngress = (pending: boolean) => {
+              (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+              publishAgentDeletionWorkAdmission(
+                { agentId: id, statePath, env: context.environment },
+                operationId,
+                pending,
+              );
+            };
+            const completeOperation = () => {
+              closed = true;
+              publishIngress(false);
+            };
             const predicate: AgentDeletionWorkerPredicate = {
               agentId: id,
               operationId,
@@ -319,6 +332,7 @@ export function withAgentDeletion<T>(
                     {
                       mutation,
                       onCommitted: () => {
+                        publishIngress(true);
                         invalidatePreparation();
                         cancelCronRuns();
                       },
@@ -326,6 +340,7 @@ export function withAgentDeletion<T>(
                   ),
                 );
             if (remoteOwner) {
+              publishIngress(true);
               invalidatePreparation();
               cancelCronRuns();
               sessionChanges.emit({ all: true, scope: "stores" });
@@ -419,8 +434,8 @@ export function withAgentDeletion<T>(
               previousEntry,
               assertCurrentAsync,
               assertCurrentFinal,
-              retire: async () => {
-                await authority.runWithWorker(
+              retire: () =>
+                authority.runWithWorker(
                   (scope, guard) =>
                     scope.execute({ type: "agentDeletion.retire", input: { guard } }),
                   {
@@ -428,8 +443,7 @@ export function withAgentDeletion<T>(
                       journal.phase = "retiring";
                     },
                   },
-                );
-              },
+                ),
               runDatabaseCleanup: createAgentDeletionDatabaseCleanup({
                 statePath,
                 workerAuthority: authority,
@@ -494,20 +508,15 @@ export function withAgentDeletion<T>(
                   kind: "cleanup",
                   paths: structuredClone([...paths]),
                 }),
-              finish: async (finishOptions) => {
-                await authority.runWithWorker(
+              finish: (finishOptions) =>
+                authority.runWithWorker(
                   (scope, guard) =>
                     scope.execute({
                       type: "agentDeletion.finish",
                       input: { guard, ...finishOptions },
                     }),
-                  {
-                    onCommitted: () => {
-                      closed = true;
-                    },
-                  },
-                );
-              },
+                  { onCommitted: completeOperation },
+                ),
               releaseClawRows: async (input) => {
                 const completed = await authority.runWithWorker(
                   (scope, guard) =>
@@ -518,7 +527,7 @@ export function withAgentDeletion<T>(
                   {
                     onCommitted: () => {
                       if (input.complete) {
-                        closed = true;
+                        completeOperation();
                       }
                     },
                   },
@@ -551,7 +560,7 @@ export function withAgentDeletion<T>(
               rollback: async () => {
                 if (remoteOwner) {
                   await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
-                  closed = true;
+                  completeOperation();
                   sessionChanges.emit({ all: true, scope: "stores" });
                   return;
                 }
@@ -569,9 +578,7 @@ export function withAgentDeletion<T>(
                         }),
                       {
                         mutation,
-                        onCommitted: () => {
-                          closed = true;
-                        },
+                        onCommitted: completeOperation,
                       },
                     ),
                   { settlement: true },
