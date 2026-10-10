@@ -17,7 +17,6 @@ import {
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
@@ -73,7 +72,7 @@ export function dispatchSqliteWorkerJob(
     );
     let admissionCursor = databaseAdmissionCursors.get(slot);
     if (!admissionCursor) {
-      admissionCursor = createSqliteDatabaseAdmissionCursor();
+      admissionCursor = new Map<string, string>();
       databaseAdmissionCursors.set(slot, admissionCursor);
     }
     job.request.databaseAdmissions = captureSqliteDatabaseAdmissions(admissionCursor);

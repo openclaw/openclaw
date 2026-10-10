@@ -1,5 +1,11 @@
-import { threadId } from "node:worker_threads";
+import {
+  MessageChannel,
+  type MessagePort,
+  receiveMessageOnPort,
+  threadId,
+} from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { readWorkerAncestors } from "./worker-ancestry.js";
 
 export type AdmissionFact = {
@@ -24,6 +30,76 @@ export type Admission = {
   facts: Map<string, AdmissionFact>;
 };
 export type SqliteDatabaseAdmissions = Admission[];
+
+/** Exchange serialized records; the operation owner retains creation and transaction authority. */
+export function exchangeSqliteDatabaseAdmissionRecords(
+  port: MessagePort,
+  admissions: SqliteDatabaseAdmissions,
+  location?: string,
+  create?: boolean | "admitted",
+): SqliteDatabaseAdmissions {
+  const requested = 0;
+  const granted = 1;
+  const { port1, port2 } = new MessageChannel();
+  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  try {
+    port.postMessage(
+      {
+        kind: "sqlite-database-admissions",
+        admissions,
+        location,
+        create,
+        port: port2,
+        decision: decision.buffer,
+      },
+      [port2],
+    );
+    while (Atomics.load(decision, 0) === requested) {
+      Atomics.wait(decision, 0, requested);
+    }
+    if (Atomics.load(decision, 0) !== granted) {
+      throw new SqliteWorkerError("SQLite admission facts exchange failed", "unavailable");
+    }
+    // The host posts the registry before publishing the shared completion flag.
+    const reply = readSqliteDatabaseAdmissions(receiveMessageOnPort(port1)?.message);
+    if (!reply) {
+      throw new SqliteWorkerError("SQLite admission facts reply is unavailable", "unavailable");
+    }
+    return reply;
+  } finally {
+    port1.close();
+    port2.close();
+  }
+}
+
+export function captureSqliteDatabaseAdmissionRecords(
+  records: Iterable<Admission>,
+  cursor: Map<string, string> | undefined,
+  forgetRetired: (record: Admission) => void,
+): SqliteDatabaseAdmissions {
+  const result: SqliteDatabaseAdmissions = [];
+  for (const record of records) {
+    if (isSqliteDatabaseAdmissionRetired(record)) {
+      forgetRetired(record);
+      continue;
+    }
+    const facts = new Map(
+      [...record.facts].filter(([, fact]) => isSqliteDatabaseAdmissionFactCurrent(record, fact)),
+    );
+    if (cursor) {
+      const cell = new Int32Array(record.generation);
+      // A reused inode starts a new custody generation even when its counters match.
+      const revision = `${record.generationId}:${Atomics.load(cell, 0)}:${Atomics.load(cell, 1)}:${Atomics.load(cell, 4)}:${[...record.writers.keys()].join(",")}:${[...facts.values()].map((fact) => fact.publication).join(",")}`;
+      if (cursor.get(record.identity) === revision) {
+        continue;
+      }
+      cursor.set(record.identity, revision);
+    }
+    result.push({ ...record, facts });
+  }
+  return result;
+}
+
 function readAdmissionFact(value: unknown): AdmissionFact | undefined {
   if (
     !isRecord(value) ||

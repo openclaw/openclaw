@@ -11,9 +11,9 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { exchangeSqliteDatabaseAdmissionRecords } from "./sqlite-database-admission-record.js";
 import {
   captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   prepareSqliteDatabaseAdmission,
   readSqliteDatabaseAdmissions,
@@ -150,7 +150,7 @@ function createOperationAdmission(
   }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
-  const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+  const databaseAdmissionCursor = new Map<string, string>();
   const cleanupFailures: unknown[] = [];
   let closed = false;
   let started = false;
@@ -289,7 +289,7 @@ function createOperationAdmission(
           }
           // A descendant publication must reach the descriptor owner before its sibling opens.
           installSqliteDatabaseAdmissions(
-            exchangeDatabaseAdmissions(
+            exchangeSqliteDatabaseAdmissionRecords(
               upstream.port,
               admissions,
               location,
@@ -308,7 +308,13 @@ function createOperationAdmission(
             }
           }
         }
-        message.port.postMessage(captureSqliteDatabaseAdmissions(databaseAdmissionCursor), []);
+        message.port.postMessage(
+          captureSqliteDatabaseAdmissions(
+            databaseAdmissionCursor,
+            message.location === undefined ? undefined : { location: message.location, admissions },
+          ),
+          [],
+        );
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
         recordFailure(error, "protocol");
@@ -603,46 +609,7 @@ export function exchangeSqliteDatabaseAdmissions(
   location?: string,
   create?: boolean,
 ): SqliteDatabaseAdmissions {
-  return exchangeDatabaseAdmissions(port, admissions, location, create);
-}
-
-// Only a broker's live captured authority can originate an admitted creation relay.
-function exchangeDatabaseAdmissions(
-  port: MessagePort,
-  admissions: SqliteDatabaseAdmissions,
-  location?: string,
-  create?: boolean | "admitted",
-): SqliteDatabaseAdmissions {
-  const { port1, port2 } = new MessageChannel();
-  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  try {
-    port.postMessage(
-      {
-        kind: "sqlite-database-admissions",
-        admissions,
-        location,
-        create,
-        port: port2,
-        decision: decision.buffer,
-      },
-      [port2],
-    );
-    while (Atomics.load(decision, 0) === REQUESTED) {
-      Atomics.wait(decision, 0, REQUESTED);
-    }
-    if (Atomics.load(decision, 0) !== GRANTED) {
-      throw new SqliteWorkerError("SQLite admission facts exchange failed", "unavailable");
-    }
-    // The host posts the registry before publishing the shared completion flag.
-    const reply = readSqliteDatabaseAdmissions(receiveMessageOnPort(port1)?.message);
-    if (!reply) {
-      throw new SqliteWorkerError("SQLite admission facts reply is unavailable", "unavailable");
-    }
-    return reply;
-  } finally {
-    port1.close();
-    port2.close();
-  }
+  return exchangeSqliteDatabaseAdmissionRecords(port, admissions, location, create);
 }
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */

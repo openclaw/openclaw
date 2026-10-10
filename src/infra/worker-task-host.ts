@@ -7,7 +7,6 @@ import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
   trackSqliteDatabaseAdmissionWorker,
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
@@ -113,7 +112,7 @@ export function createWorkerTaskHost(
               }
             }),
           ),
-          cursor: createSqliteDatabaseAdmissionCursor(),
+          cursor: new Map<string, string>(),
           sent: false,
           retiring: false,
         };

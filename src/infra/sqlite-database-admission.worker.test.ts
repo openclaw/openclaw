@@ -1,17 +1,20 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, renameSync } from "node:fs";
+import { existsSync, linkSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
-import { afterEach, expect, it } from "vitest";
+import { MessagePort, Worker } from "node:worker_threads";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
-import { hasPendingSqliteDatabaseSchemaMutation } from "./sqlite-database-admission.js";
+import {
+  hasPendingSqliteDatabaseSchemaMutation,
+  readSqliteDatabaseAdmissions,
+} from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -172,6 +175,114 @@ function createDatabase(location: string, value: number): void {
     database.close();
   }
 }
+
+it("keeps per-operation admission replies scoped to the requested database", async () => {
+  const root = tempDirs.make("sqlite-admission-fleet-");
+  const location = path.join(root, "target.sqlite");
+  createDatabase(location, 42);
+  const broker = new SqliteWorkerBroker();
+  try {
+    const store = await broker.open<AdmissionOperations>({
+      moduleUrl,
+      databasePath: path.join(root, "control.sqlite"),
+      input: undefined,
+    });
+    const unrelated = Array.from({ length: 3 }, (_, index) =>
+      path.join(root, `unrelated-${index}.sqlite`),
+    );
+    for (const filename of unrelated) {
+      createDatabase(filename, 0);
+      const database = openNodeSqliteDatabase(filename);
+      try {
+        admitSqliteSchema(database);
+      } finally {
+        database.close();
+      }
+    }
+    const replies: string[][] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- call restores the sending port below.
+    const postMessage = MessagePort.prototype.postMessage;
+    const post = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+      this: MessagePort,
+      message: unknown,
+      transferList,
+    ) {
+      const admissions = readSqliteDatabaseAdmissions(message);
+      if (admissions) {
+        replies.push(admissions.map((record) => record.location));
+      }
+      return postMessage.call(this, message, transferList);
+    });
+    try {
+      const result = await broker.runOperation(
+        store!,
+        (scope) =>
+          scope.execute({ type: "read", input: { path: location, awaitPublication: true } }),
+        undefined,
+        undefined,
+        () => ({
+          nativeLocations: [location],
+          admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+            const database = openNodeSqliteDatabase(location);
+            try {
+              admitSqliteSchema(database);
+            } finally {
+              database.close();
+            }
+            grant();
+          }),
+        }),
+      );
+      expect(result.values).toEqual([42]);
+      expect(result.sql).toEqual([]);
+      expect(replies.flat()).toContain(location);
+      expect(replies.flat().filter((filename) => unrelated.includes(filename))).toEqual([]);
+    } finally {
+      post.mockRestore();
+    }
+  } finally {
+    await broker.close();
+  }
+});
+
+it("publishes through a retained physical database after its original pathname is replaced", async () => {
+  const root = tempDirs.make("sqlite-retained-admission-");
+  const location = path.join(root, "original.sqlite");
+  const retainedPath = path.join(root, "retained.sqlite");
+  const replacementPath = path.join(root, "replacement.sqlite");
+  createDatabase(location, 42);
+  const reader = openNodeSqliteDatabase(location);
+  admitSqliteSchema(reader);
+  linkSync(location, retainedPath);
+  const broker = new SqliteWorkerBroker();
+  try {
+    // The worker's own filename stays valid; only the shared admission's first pathname changes.
+    const store = await broker.open<AdmissionOperations>({
+      moduleUrl,
+      databasePath: retainedPath,
+      input: undefined,
+    });
+    createDatabase(replacementPath, 99);
+    renameSync(replacementPath, location);
+    await store!.execute({ type: "mutate", input: undefined });
+    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
+    expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(true);
+    expect(reader.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+    const replacement = openNodeSqliteDatabase(location, { readOnly: true });
+    try {
+      admitSqliteSchema(replacement);
+      expect(getAdmittedSqliteSchemaFacts(replacement)?.tables.has("worker_publication")).toBe(
+        false,
+      );
+      expect(replacement.prepare("SELECT value FROM proof").get()).toEqual({ value: 99 });
+    } finally {
+      replacement.close();
+    }
+  } finally {
+    await broker.close();
+    reader.close();
+  }
+});
 
 it("retires joined descendant writer custody while preserving an independent sibling", async ({
   signal,

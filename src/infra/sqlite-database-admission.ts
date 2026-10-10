@@ -8,6 +8,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
+  captureSqliteDatabaseAdmissionRecords,
   readSqliteDatabaseAdmissions,
   registerWriterCustody,
   isSqliteDatabaseAdmissionRetired as isRetired,
@@ -56,7 +57,6 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   ddlRevisions: new WeakMap<DatabaseSync, number>(),
   schemaDirty: new WeakSet<DatabaseSync>(),
   misses: new WeakMap<Admission, Map<string, number>>(),
-  sent: new Map<string, string>(),
   exchange: new AsyncLocalStorage<Exchange>(),
   exchanging: false,
   publication: 0,
@@ -67,18 +67,24 @@ function identity(file: fs.BigIntStats): string {
 }
 
 function rememberEnvironment(): void {
-  setEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY, captureSqliteDatabaseAdmissions());
+  // Worker construction clones these records; their Maps retain later facts and custody.
+  setEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY, [...state.admissions.values()]);
 }
 
-function exchange(location?: string, create?: boolean): void {
+function exchange(target: string | Admission, create?: boolean): void {
   const current = state.exchange.getStore();
   if (!current || state.exchanging) {
     return;
   }
   state.exchanging = true;
   try {
+    const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
     installSqliteDatabaseAdmissions(
-      current(captureSqliteDatabaseAdmissions(state.sent), location, create),
+      current(
+        captureSqliteDatabaseAdmissions(undefined, scope),
+        typeof target === "string" ? target : target.location,
+        create,
+      ),
     );
   } finally {
     state.exchanging = false;
@@ -303,7 +309,7 @@ export function getSqliteDatabaseAdmission<T>(
     const misses = state.misses.get(record) ?? new Map<string, number>();
     state.misses.set(record, misses);
     if (misses.get(key.name) !== revision) {
-      exchange(record.location);
+      exchange(record);
       fact = record.facts.get(key.name);
       misses.set(key.name, Atomics.load(new Int32Array(record.generation), 2));
     }
@@ -368,8 +374,7 @@ function publishFact<T>(
     current,
   });
   Atomics.add(new Int32Array(record.generation), 2, 1);
-  rememberEnvironment();
-  exchange();
+  exchange(record);
 }
 
 function hasNativeAdmissionOperation(record: Admission): boolean {
@@ -381,7 +386,7 @@ function activeSchemaWriters(record: Admission): number | undefined {
     [...record.writers.values()].filter(({ cell }) => Atomics.load(new Int32Array(cell), 1) === 1)
       .length;
   if (known() < Atomics.load(new Int32Array(record.generation), 4)) {
-    exchange(record.location);
+    exchange(record);
     if (known() < Atomics.load(new Int32Array(record.generation), 4)) {
       return undefined;
     }
@@ -423,8 +428,7 @@ export function beginSqliteDatabaseSchemaMutation(database: DatabaseSync): void 
     if (Atomics.load(new Int32Array(cell), 1) === 0) {
       registerWriterCustody(record);
       // Publish custody before native work starts, so an exit can retire this cell.
-      rememberEnvironment();
-      exchange();
+      exchange(record);
       if (Atomics.load(new Int32Array(cell), 1) === 0) {
         throw new Error("SQLite schema mutation requires host custody");
       }
@@ -680,35 +684,33 @@ export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boole
   return Boolean(record && fact && valid(record, fact));
 }
 
-export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCursor {
-  return new Map();
-}
-
 export function captureSqliteDatabaseAdmissions(
   cursor?: SqliteDatabaseAdmissionCursor,
+  scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
 ): SqliteDatabaseAdmissions {
-  const result: SqliteDatabaseAdmissions = [];
-  for (const record of state.admissions.values()) {
-    if (isRetired(record)) {
-      state.admissions.delete(record.identity);
-      continue;
-    }
-    const facts = new Map([...record.facts].filter(([, fact]) => valid(record, fact)));
-    if (cursor) {
-      const cell = new Int32Array(record.generation);
-      // A reused inode starts a new custody generation even when its counters match.
-      const revision = `${record.generationId}:${Atomics.load(cell, 0)}:${Atomics.load(cell, 1)}:${Atomics.load(cell, 4)}:${[...record.writers.keys()].join(",")}:${[...facts.values()].map((fact) => fact.publication).join(",")}`;
-      if (cursor.get(record.identity) === revision) {
-        continue;
+  let records: Iterable<Admission> = state.admissions.values();
+  if (scope) {
+    const identities = new Set(scope.admissions?.map((record) => record.identity));
+    if (scope.location !== undefined) {
+      const observed = prepareSqliteDatabaseAdmission(scope.location);
+      if (observed) {
+        identities.add(observed);
       }
-      cursor.set(record.identity, revision);
     }
-    result.push({ ...record, facts });
+    records = [...identities].flatMap((key) => state.admissions.get(key) ?? []);
+  }
+  const previousSize = state.admissions.size;
+  const result = captureSqliteDatabaseAdmissionRecords(records, cursor, (record) =>
+    state.admissions.delete(record.identity),
+  );
+  if (state.admissions.size !== previousSize) {
+    rememberEnvironment();
   }
   return result;
 }
 
 export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmissions): void {
+  let topologyChanged = false;
   for (const incoming of admissions) {
     if (incoming.descriptorOwner !== 0 || isRetired(incoming)) {
       continue;
@@ -721,6 +723,7 @@ export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmiss
     if (!record) {
       state.admissions.set(incoming.identity, incoming);
       record = incoming;
+      topologyChanged = true;
     } else if (record.generationId !== incoming.generationId) {
       // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
       continue;
@@ -737,7 +740,9 @@ export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmiss
     }
     registerWriterCustody(record);
   }
-  rememberEnvironment();
+  if (topologyChanged) {
+    rememberEnvironment();
+  }
 }
 
 export function withSqliteDatabaseAdmissionExchange<T>(

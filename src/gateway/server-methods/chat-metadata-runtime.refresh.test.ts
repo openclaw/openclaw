@@ -54,7 +54,9 @@ describe("gateway chat metadata refresh", () => {
         pendingAgents: ["second"],
         stage: "workspace plugins; agent second",
       });
+      harness.getPreparedOwner.mockClear();
       await harness.runtime.refresh();
+      expect(harness.getPreparedOwner).toHaveBeenCalledTimes(2);
       await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
         models: [expect.objectContaining({ id: "main-model" })],
       });
