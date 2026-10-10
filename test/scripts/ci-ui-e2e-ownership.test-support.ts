@@ -209,7 +209,7 @@ export function assertControlUiE2eOwnership(
   expect(localSelected[1]).toEqual([
     "ui/src/e2e/board-fixture.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
-    "ui/src/e2e/control-ui-retained-assets.e2e.test.ts",
+    "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);

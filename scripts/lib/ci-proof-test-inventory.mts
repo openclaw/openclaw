@@ -2447,7 +2447,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/config-reload.activation.integration.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
-  "src/gateway/control-ui-asset-retention.publication.test.ts",
   "src/gateway/control-ui-github-api.identity.test.ts",
   "src/gateway/control-ui-github-api.test.ts",
   "src/gateway/control-ui-session-pr-access.test.ts",

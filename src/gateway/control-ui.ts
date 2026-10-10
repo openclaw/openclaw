@@ -47,7 +47,6 @@ import {
   verifyAssistantMediaTicket,
   type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
-import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -850,10 +849,7 @@ export async function handleControlUiHttpRequest(
   const isBundledRoot = rootState.kind === "bundled";
   // Bundled sidecars are implementation artifacts selected through
   // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
-  if (
-    isBundledRoot &&
-    isControlUiPrecompressedAssetExtension(path.extname(fileRel).toLowerCase())
-  ) {
+  if (isBundledRoot && [".br", ".gz"].includes(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
   }
