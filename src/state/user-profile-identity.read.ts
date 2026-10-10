@@ -39,7 +39,6 @@ import type {
   UserProfileEmailBinding,
   UserProfileIdentity,
   UserProfileAuthority,
-  UserProfileRoleAuthority,
 } from "./user-profiles.types.js";
 
 export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
@@ -169,27 +168,6 @@ export function readUserProfileSnapshotSync(
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );
-}
-
-export function readUserProfileRoleAuthorityCommand(
-  db: DatabaseSync,
-  command: Extract<OpenClawStateReadCommand, { type: "userProfiles.roleAuthority.resolve" }>,
-) {
-  const profile: UserProfileRoleAuthority | undefined = runSqliteDeferredTransactionSync(db, () => {
-    const current = tableExists(db, "user_profiles")
-      ? selectResolvedUserProfileMetadataById(db, command.profileId)
-      : undefined;
-    if (!current) {
-      return undefined;
-    }
-    return {
-      profileId: current.id,
-      role: current.role ?? null,
-      githubLogin:
-        selectUserProfileGitHubIdentities(db, [current.id]).get(current.id)?.login ?? null,
-    };
-  });
-  return { type: command.type, profile };
 }
 
 /** Resolve current authority and display together on the caller's admitted connection. */
