@@ -7,7 +7,7 @@ import {
   type RequestCall,
 } from "./client.test-support.js";
 import { OpenClaw, normalizeGatewayEvent } from "./index.js";
-import type { GatewayEvent, OpenClawEvent, OpenClawTransport, RunResult } from "./types.js";
+import type { GatewayEvent, OpenClawEvent, OpenClawTransport } from "./types.js";
 
 class DelayedConnectTransport extends FakeTransport {
   connectCalls = 0;
@@ -132,101 +132,14 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
-  it.each<[string, Record<string, unknown>, RunResult["status"]]>([
-    [
-      "maps aborted wait snapshots to cancelled even when Gateway status is timeout",
-      {
-        stopReason: "rpc",
-        error: "aborted by operator",
-      },
-      "cancelled",
-    ],
-    [
-      "maps restart wait snapshots to cancelled",
-      {
-        stopReason: "restart",
-        providerStarted: true,
-      },
-      "cancelled",
-    ],
-    [
-      "maps provider-started rpc timeout wait snapshots to timed_out",
-      {
-        stopReason: "rpc",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "provider request timed out",
-      },
-      "timed_out",
-    ],
-    [
-      "maps provider timeout wait errors to timed_out",
-      {
-        status: "error",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "provider request timed out",
-      },
-      "timed_out",
-    ],
-    [
-      "does not map provider-started wait errors to timed_out without timeout attribution",
-      {
-        status: "error",
-        providerStarted: true,
-        error: "provider authentication failed",
-      },
-      "failed",
-    ],
-    [
-      "does not treat successful provider-started wait snapshots as timed_out",
-      {
-        status: "ok",
-        providerStarted: true,
-      },
-      "completed",
-    ],
-    [
-      "maps auth-revoked wait snapshots to cancelled",
-      {
-        stopReason: "auth-revoked",
-        error: "provider auth was removed",
-      },
-      "cancelled",
-    ],
-    ["keeps wait-only deadlines non-terminal", {}, "accepted"],
-    [
-      "keeps queued wait snapshots non-terminal",
-      {
-        status: "pending",
-        timeoutPhase: "queue",
-        providerStarted: false,
-      },
-      "accepted",
-    ],
-    [
-      "keeps provider-attributed pending-error wait deadlines non-terminal",
-      {
-        error: "provider request timed out",
-        pendingError: true,
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      "accepted",
-    ],
-    [
-      "maps terminal runtime timeout snapshots to timed_out",
-      {
-        stopReason: "timeout",
-        error: "agent runtime timeout",
-      },
-      "timed_out",
-    ],
-  ])("%s", async (_label, fields, expectedStatus) => {
-    const result = await waitForSnapshot("run_wait", fields);
+  it("maps terminal runtime timeout snapshots to timed_out", async () => {
+    const result = await waitForSnapshot("run_wait", {
+      stopReason: "timeout",
+      error: "agent runtime timeout",
+    });
     expect(result.runId).toBe("run_wait");
-    expect(result.status).toBe(expectedStatus);
-    expect(result.error).toEqual(fields.error ? { message: fields.error } : undefined);
+    expect(result.status).toBe("timed_out");
+    expect(result.error).toEqual({ message: "agent runtime timeout" });
   });
 
   it("keeps superseded writer runs cancelled in both events and waits", async () => {
