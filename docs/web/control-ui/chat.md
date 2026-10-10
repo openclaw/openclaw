@@ -31,7 +31,7 @@ ends with their count, such as **3 subagents running**, and counts down as they
 finish. Selecting the count opens the **Subagents** panel on its list. Child
 sessions that are not subagents are not part of that count.
 
-Under the working or waiting line, each unfinished subagent has its own row
+Under the reply, each unfinished subagent has its own row
 showing its name and current activity headline. Rows stay in launch order as
 activity changes and disappear when the subagent finishes. Until a current-run
 headline is available, the row shows **Running**, **Queued**, or **Waiting on
@@ -41,13 +41,11 @@ list it. The rows reuse the chat's loaded subagent list; they do not load each
 child's transcript.
 
 When a turn hands off with `sessions_yield` and its subagents are still active,
-the working indicator stays under that reply and reads **Waiting on 3
-subagents**, counting down as they finish. Selecting that count opens the
-**Subagents** panel on its list. When one is left the line shows that
-subagent's name, which opens it in the panel. Elapsed time counts from the
-handoff.
-If the turn ended without a handoff while subagents are still active, the same
-line follows the finished reply without elapsed time. Child sessions that are
+their live rows stay under that reply without a separate **Waiting on…** line
+or wait timer. The same applies when a turn ends without a handoff. Until the
+subagent list is available, **Waiting on subagents** remains as a fallback;
+its elapsed time counts from the handoff when known. The parent's own working
+indicator remains visible while the parent is actively working. Child sessions that are
 not subagents are counted without names once no subagent is left, as **Waiting
 on 2 sessions**. Once everything it waited on has finished, the line goes away
 until the agent resumes. Tool rows you opened stay open through the handoff. A
