@@ -109,11 +109,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     const errors: unknown[] = [];
     for (const entry of journal.toReversed()) {
       try {
-        if (!entry.before) {
-          await this.rollbackCreatedCard(entry.after);
-          continue;
-        }
-        await this.rollbackUpdatedCard(entry.before, entry.after);
+        await this.rollbackCardMutation(entry.before, entry.after);
       } catch (error) {
         errors.push(error);
       }
@@ -123,12 +119,12 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
     await this.enqueueMutation(() =>
-      this.rollbackUpdatedCard(before, after, invertWorkboardWorkspaceMutation),
+      this.rollbackCardMutation(before, after, invertWorkboardWorkspaceMutation),
     );
   }
 
-  private async rollbackUpdatedCard(
-    before: WorkboardCard,
+  private async rollbackCardMutation(
+    before: WorkboardCard | undefined,
     after: WorkboardCard,
     invert = invertWorkboardCardMutation,
   ): Promise<void> {
@@ -136,6 +132,15 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       const current = await this.get(after.id);
       if (!current) {
         return;
+      }
+      if (!before) {
+        if (
+          !sameWorkboardCardState(current, after) ||
+          (await this.store.deleteIfUpdatedAt(after.id, current.updatedAt))
+        ) {
+          return;
+        }
+        continue;
       }
       const merged = invert(before, after, current);
       if (sameWorkboardCardState(current, merged)) {
@@ -156,19 +161,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       }
     }
     throw new Error(`card changed repeatedly during compensation: ${after.id}`);
-  }
-
-  private async rollbackCreatedCard(created: WorkboardCard): Promise<void> {
-    for (let attempt = 0; attempt < WORKBOARD_CAS_ATTEMPTS; attempt += 1) {
-      const current = await this.get(created.id);
-      if (!current || !sameWorkboardCardState(current, created)) {
-        return;
-      }
-      if (await this.store.deleteIfUpdatedAt(created.id, current.updatedAt)) {
-        return;
-      }
-    }
-    throw new Error(`card changed repeatedly during compensation: ${created.id}`);
   }
 
   protected async updateLatestCard(

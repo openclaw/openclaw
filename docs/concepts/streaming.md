@@ -88,8 +88,12 @@ replies until the phase is known. Chat Completions and native Ollama (`api:
 A long tool-free answer therefore produces no durable chunks during generation.
 
 Ordinary final answers and length-limited partial answers remain deliverable.
-The independent live assistant/preview stream can still update while generating
-when enabled and supported by the channel.
+The independent live assistant/preview stream updates while generating when
+enabled and supported by the channel. Visible Chat Completions text streams as
+it arrives, including after initial or resumed reasoning. A live preview can
+briefly show text that a later tool call or reasoning continuation classifies as
+commentary. The final reply payload excludes that commentary and contains the
+confirmed answer, even when the earlier text appeared in a live preview.
 
 ### Media delivery with block streaming
 
@@ -467,6 +471,10 @@ in the draft:
   the same preamble supplies the status headline even when this optional lane
   is off; other channels keep their existing progress behavior. See
   [Progress drafts](/concepts/progress-drafts#status-headline).
+
+When verbose logging owns standalone commentary, each preamble is sent once.
+Buffered commentary and tool summaries settle before the answer preview;
+text-only progress arriving after final delivery starts is suppressed.
 
 ```json
 {

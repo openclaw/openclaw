@@ -6,6 +6,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -31,7 +32,15 @@ async function installStartupGateway(page: Page) {
     assistantAgentId: "main",
     mainSessionKey: "agent:main:main",
     sessionKey,
-    sessions: [{ key: sessionKey, kind: "direct", label: "Selected conversation", updatedAt: 1 }],
+    sessions: [
+      {
+        key: sessionKey,
+        kind: "direct",
+        label: "Selected conversation",
+        updatedAt: 1,
+        owner: { actor: { type: "human", id: "reader" } },
+      },
+    ],
     historyMessages: [{ role: "assistant", content: historyText }],
     deferredMethods: ["chat.startup"],
     heldMethods: bulkMethods,
@@ -196,15 +205,39 @@ suite.define(() => {
           document.dispatchEvent(new Event("visibilitychange"));
         });
         await transcript.getByText(historyText, { exact: true }).waitFor();
-        for (const method of secondaryMethods) {
+        // Held roster and owner-count reads occupy both bootstrap slots. Inbox
+        // hydration stays queued until those replies are released below.
+        for (const method of secondaryMethods.filter(
+          (candidate) => candidate !== "mentions.list",
+        )) {
           await gateway.waitForRequest(method);
           expect(await gateway.getRequests(method)).toHaveLength(1);
         }
-        await page
-          .locator(".chat-pane-cache__pane--active")
+        const activePane = page.locator(".chat-pane-cache__pane--active");
+        await expect
+          .poll(() =>
+            activePane.evaluate((element) => {
+              const trigger = element
+                .querySelector(".chat-details-toggle")
+                ?.getBoundingClientRect();
+              const suggestionBounds = element
+                .querySelector(".task-suggestion")
+                ?.getBoundingClientRect();
+              return Boolean(trigger && suggestionBounds && trigger.bottom <= suggestionBounds.top);
+            }),
+          )
+          .toBe(true);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "details-with-suggestion.png"),
+          });
+        }
+        const details = await openChatDetails(activePane);
+        await details
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Current rollout progress", { exact: true })
           .waitFor();
+        await details.getByRole("button", { name: "Close details", exact: true }).click();
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -238,6 +271,8 @@ suite.define(() => {
           });
         }
         await expectBulkReadsReleased(gateway);
+        await gateway.waitForRequest("mentions.list");
+        expect(await gateway.getRequests("mentions.list")).toHaveLength(1);
         await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
       } finally {
         await writeFile(
@@ -305,8 +340,8 @@ suite.define(() => {
           await gateway.resolveDeferred("progressCard.get");
         }
         // Sidebar hovercards mirror this markdown; verify the active pane's card.
-        await page
-          .locator(".chat-pane-cache__pane--active")
+        const details = await openChatDetails(page.locator(".chat-pane-cache__pane--active"));
+        await details
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Resumed progress", { exact: true })
           .waitFor();
@@ -380,6 +415,14 @@ suite.define(() => {
       const gateway = await installStartupGateway(page);
       await openPendingChat(page, gateway);
       await expectBulkReadsHeld(gateway);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "All", exact: true }).click();
+      await gateway.waitForRequest("sessions.list", { match: { agentId: "research" } });
+      await sidebar.getByRole("button", { name: "Mine", exact: true }).click();
+      await gateway.waitForRequest("sessions.list", {
+        match: { agentId: "research", ownerId: "reader" },
+      });
+      expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
       await gateway.setSessionsListResponse({
         ts: 2,
         path: "",
@@ -390,6 +433,7 @@ suite.define(() => {
             key: "agent:research:archived-fixture",
             kind: "direct",
             label: "Archived fixture",
+            owner: { actor: { type: "human", id: "reader" } },
             updatedAt: 2,
             archived: true,
           },

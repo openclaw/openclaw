@@ -28,7 +28,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const checkpoint = vi.hoisted(() => ({
   startForeground: undefined as (() => void) | undefined,

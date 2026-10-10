@@ -211,6 +211,11 @@ suite.define(() => {
       expect(await observe()).toEqual(original);
 
       await cue("Read-only shared session: Rename stays unavailable");
+      // All exposes the authorized shared row, not permission to rename it.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
       await foreignRow.click({ button: "right" });
       const foreignRename = page.locator('openclaw-session-menu wa-dropdown-item[value="rename"]');
       await foreignRename.waitFor();

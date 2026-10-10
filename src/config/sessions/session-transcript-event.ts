@@ -28,7 +28,7 @@ export async function appendPreparedTranscriptEvent(
   requested: SessionTranscriptAccessScope & SessionTranscriptWriteScope,
   event: TranscriptEvent,
   assertCurrent: () => void,
-): Promise<void> {
+): Promise<boolean> {
   assertNonMessageTranscriptEvent(event);
   const fenced = withOwnedSessionTranscriptWriterFence(requested);
   const scope = captureLifecycleDatabaseScope(resolveSqliteTranscriptScope(fenced));
@@ -37,7 +37,7 @@ export async function appendPreparedTranscriptEvent(
   assertCurrent();
   const incognito = captureIncognitoSessionOperation(fenced);
   if (incognito) {
-    await incognito.actor.sessions.transcript(
+    const committed = await incognito.actor.sessions.transcript(
       {
         assertCurrent() {
           incognito.authority.assertCurrent();
@@ -68,7 +68,7 @@ export async function appendPreparedTranscriptEvent(
         }
       },
     );
-    return;
+    return committed.appended;
   }
   if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(database)) {
     // Maintenance and process-held incognito retain their existing transaction owner.
@@ -79,7 +79,7 @@ export async function appendPreparedTranscriptEvent(
       },
     });
   }
-  await runSessionEntryWorkerOperation<SessionTranscriptEventCommitted, boolean>({
+  return runSessionEntryWorkerOperation<SessionTranscriptEventCommitted, boolean>({
     database,
     agentId: scope.agentId,
     assertCurrent,
@@ -99,11 +99,11 @@ export async function appendPreparedTranscriptEvent(
           input: { scope, eventJson, fence: fenced },
         }),
       ),
-    onCommitted: ({ projectionNeedsReconcile }) => {
+    onCommitted: ({ appended, projectionNeedsReconcile }) => {
       if (projectionNeedsReconcile) {
         startSessionTranscriptIndexReconcile({ ...database, preferredSessionId: scope.sessionId });
       }
-      return true;
+      return appended;
     },
   });
 }

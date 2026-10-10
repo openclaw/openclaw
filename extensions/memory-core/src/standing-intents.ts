@@ -15,6 +15,7 @@ import {
   prepareStandingIntentMatch,
   type StandingIntent,
   type StandingIntentOperations,
+  type StandingIntentWorkerOperations,
   type StandingIntentRow,
   type StandingIntentStatus,
 } from "./standing-intents-model.js";
@@ -39,6 +40,7 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
 ): Promise<StandingIntentOperations[Key]["output"]> {
   const assertCurrent = params.assertCurrent;
   assertCurrent?.();
+  const capturedCommand = structuredClone(command);
   const options = captureMemoryAgentDatabaseOptions(params.agentId);
   return runOpenClawAgentWriteAdmission(
     options,
@@ -48,7 +50,7 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
         options,
         async ({ db }) => {
           assertCurrent?.();
-          const worker = await openOpenClawAgentSqliteWorkerStore<StandingIntentOperations>(
+          const worker = await openOpenClawAgentSqliteWorkerStore<StandingIntentWorkerOperations>(
             options,
             db,
             {
@@ -57,13 +59,19 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
             },
           );
           try {
-            return await worker.run(
-              (scope) => scope.execute(command),
-              () => {
-                assertAdmission();
-                assertCurrent?.();
-              },
-            );
+            const assertPublication = () => {
+              assertAdmission();
+              assertCurrent?.();
+            };
+            let result = await worker.execute(capturedCommand, assertPublication);
+            if (result.kind === "schema-prepared") {
+              // Only confirmed schema-only completion permits the separate business dispatch.
+              result = await worker.execute(capturedCommand, assertPublication);
+            }
+            if (result.kind === "schema-prepared") {
+              throw new Error("Standing-intent schema changed before its business operation");
+            }
+            return result.value;
           } finally {
             await worker.close();
           }

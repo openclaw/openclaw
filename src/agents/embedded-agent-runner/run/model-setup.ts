@@ -1,4 +1,5 @@
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { captureSessionEntryNativeMutationWitness } from "../../../config/sessions/session-entry-read-ordered.js";
 import {
   withSessionEntriesFromStoreInWorker,
   withSessionEntryReadOnlyInWorker,
@@ -165,17 +166,23 @@ async function prepareNativeSessionRuntime(
           reader.database,
           readDatabasePathIdentitySync(reader.database.path),
         );
-        const current = await reader.withRead(
+        const prepared = await reader.withRead(
           {
             sessionKeys: [admission.sessionKey],
             lifecycleSessionKey: admission.sessionKey,
             snapshotFields: [],
           },
           assertCallerCurrent,
-          (read) => read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
+          (read) => ({
+            entry: read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
+            assertNativeCurrent: captureSessionEntryNativeMutationWitness([reader.database]),
+          }),
         );
-        // The row publication subscription fences this snapshot while plugin ownership awaits.
-        return await consume(current, reader.assertCurrent.bind(reader));
+        // Retain the native witness too: legacy synchronous writes can skip row publication.
+        return await consume(prepared.entry, () => {
+          reader.assertCurrent();
+          prepared.assertNativeCurrent();
+        });
       }
       return await withSessionEntriesFromStoreInWorker(
         {

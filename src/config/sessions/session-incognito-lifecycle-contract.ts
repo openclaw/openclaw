@@ -70,6 +70,7 @@ export type IncognitoLifecycleOperations = {
       target: IncognitoLifecycleEntry;
       reason: "reset" | "deleted";
       expectedPluginOwnerId?: string;
+      expectedAgentHarnessId?: string;
       admissionIdentities: string[];
     };
     output: DeleteSessionEntryLifecycleResult;

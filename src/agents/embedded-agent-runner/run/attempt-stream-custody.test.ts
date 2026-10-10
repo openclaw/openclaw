@@ -1,10 +1,13 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
+import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
+import type { CompactionReplayRejection } from "@openclaw/ai/transports";
 import {
   createAssistantMessageEventStream,
+  type AssistantMessage,
   type AssistantMessageEvent,
   type AssistantMessageEventStream,
+  type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -45,12 +48,12 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-l
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 registerAgentSessionLoopTestLifecycle();
-const checkpoint: OpenAIResponsesCompactionRejection = {
+const checkpoint: CompactionReplayRejection = {
   data: "synthetic-rejected-checkpoint",
   id: "synthetic-checkpoint",
 };
 type ReplayOptions = NonNullable<Parameters<StreamFn>[2]> & {
-  onCompactionRejected?: (rejected: OpenAIResponsesCompactionRejection) => void;
+  onCompactionRejected?: (rejected: CompactionReplayRejection) => void;
 };
 
 afterEach(async () => {
@@ -63,6 +66,15 @@ const nextTurn = () =>
   new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
+
+function anthropicSse(events: Array<Record<string, unknown>>): Response {
+  return new Response(
+    events
+      .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+      .join(""),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
 
 function observeSettlement<T>(promise: Promise<T>) {
   let settled = false;
@@ -85,11 +97,20 @@ async function createFixture(
     >["withSessionWriteSettlement"];
     toolNames?: string[];
     thinkingRecovery?: boolean;
+    /** Durable owner carrying a real Anthropic compaction checkpoint for `model`. */
+    anthropicCompaction?: { model: Model; owner: AssistantMessage };
   } = {},
 ) {
-  const model = options.thinkingRecovery
-    ? { ...testModel, api: "anthropic-messages", provider: "anthropic", id: "synthetic-anthropic" }
-    : testModel;
+  const model =
+    options.anthropicCompaction?.model ??
+    (options.thinkingRecovery
+      ? {
+          ...testModel,
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "synthetic-anthropic",
+        }
+      : testModel);
   const root = realpathSync(tempDirs.make("openclaw-stream-custody-"));
   const target = {
     agentId: "main",
@@ -100,34 +121,36 @@ async function createFixture(
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
   const manager = SessionManager.open(target, root);
   manager.appendMessage({ role: "user", content: "Synthetic history", timestamp: 1 });
-  manager.appendMessage({
-    ...createAssistant(model, [
-      ...(options.thinkingRecovery
-        ? [
-            {
-              type: "thinking" as const,
-              thinking: "Synthetic historical reasoning",
-              thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
+  manager.appendMessage(
+    options.anthropicCompaction?.owner ?? {
+      ...createAssistant(model, [
+        ...(options.thinkingRecovery
+          ? [
+              {
+                type: "thinking" as const,
+                thinking: "Synthetic historical reasoning",
+                thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
+              },
+            ]
+          : []),
+        { type: "text", text: "Synthetic checkpoint owner" },
+      ]),
+      ...(!options.thinkingRecovery
+        ? {
+            providerReplay: {
+              v: 1,
+              type: "openai-responses-compaction",
+              ...checkpoint,
+              replayIndex: 0,
+              provider: model.provider,
+              api: model.api,
+              model: model.id,
+              baseUrlHash: "synthetic",
             },
-          ]
-        : []),
-      { type: "text", text: "Synthetic checkpoint owner" },
-    ]),
-    ...(!options.thinkingRecovery
-      ? {
-          providerReplay: {
-            v: 1,
-            type: "openai-responses-compaction",
-            ...checkpoint,
-            replayIndex: 0,
-            provider: model.provider,
-            api: model.api,
-            model: model.id,
-            baseUrlHash: "synthetic",
-          },
-        }
-      : {}),
-  });
+          }
+        : {}),
+    },
+  );
   const checkpointPresent = () =>
     manager
       .getBranch()
@@ -184,11 +207,14 @@ async function createFixture(
       sessionRuntime: {
         agentSession: { activeSession },
         sessionManager: manager,
-        contextGuards: { recordCacheTouch: () => {} },
-        isOpenAIResponsesApi: !options.thinkingRecovery,
+        contextGuards: { checkMidTurnPrecheck: () => {}, recordCacheTouch: () => {} },
+        isOpenAIResponsesApi: !options.thinkingRecovery && !options.anthropicCompaction,
         state: { systemPromptText: "Synthetic system prompt" },
         transcriptPolicy: options.thinkingRecovery ? { preserveSignatures: true } : {},
-        transport: { effectiveAgentTransport: "sse" },
+        transport: {
+          effectiveAgentTransport: "sse",
+          compactionReplayEnabled: options.anthropicCompaction !== undefined,
+        },
       },
       toolCatalog: {
         toolSearchRunPlan: {
@@ -415,6 +441,87 @@ describe("installed replay repair ownership", () => {
       }
     },
   );
+
+  it("durably strips a rejected Anthropic checkpoint so the next request sends full history", async () => {
+    const model: Model<"anthropic-messages"> = {
+      ...testModel,
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      baseUrl: "https://api.anthropic.com",
+    };
+    const requests: Array<{ messages: unknown }> = [];
+    const responses: Array<() => Response> = [
+      () =>
+        anthropicSse([
+          { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 50_001 } } },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "compaction", content: checkpoint.data },
+          },
+          { type: "content_block_stop", index: 0 },
+          { type: "content_block_start", index: 1, content_block: { type: "text", text: "Done." } },
+          { type: "content_block_stop", index: 1 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]),
+      () => {
+        throw Object.assign(new Error("context_management compaction block is invalid"), {
+          status: 400,
+        });
+      },
+      () =>
+        anthropicSse([
+          { type: "message_start", message: { id: "msg_3", usage: { input_tokens: 1 } } },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]),
+    ];
+    const client = {
+      messages: {
+        create: (params: { messages: unknown }) => {
+          requests.push(params);
+          const respond = responses[requests.length - 1];
+          return { asResponse: async () => respond!() };
+        },
+      },
+    };
+    // The real provider request owner builds replay, classifies the rejection, and notifies.
+    const provider: StreamFn = (streamModel, context, options) =>
+      streamAnthropic(streamModel as Model<"anthropic-messages">, context, {
+        ...options,
+        apiKey: "sk-ant-api-synthetic",
+        anthropicServerCompaction: true,
+        sessionId: "stream-custody",
+        client: client as never,
+      });
+    const owner = await Promise.resolve(
+      provider(model, { messages: [{ role: "user", content: "Synthetic history", timestamp: 1 }] }),
+    ).then((stream) => stream.result());
+    expect(owner.providerReplay).toMatchObject({ type: "anthropic-compaction" });
+    const fixture = await createFixture(provider, { anthropicCompaction: { model, owner } });
+
+    const rejected = await (await fixture.open()).result();
+
+    expect(rejected.stopReason).toBe("error");
+    expect(JSON.stringify(requests[1]?.messages)).toContain('"type":"compaction"');
+    expect(fixture.checkpointPresent()).toBe(false);
+    expect(fixture.repaired).toHaveBeenCalledOnce();
+    await Promise.resolve(
+      provider(model, { messages: convertToLlm(fixture.manager.buildSessionContext().messages) }),
+    ).then((stream) => stream.result());
+    expect(JSON.stringify(requests[2]?.messages)).not.toContain('"type":"compaction"');
+    expect(JSON.stringify(requests[2]?.messages)).toContain("Synthetic history");
+  });
 
   it("retains rejected stream setup until its notified repair settles", async () => {
     const setupError = new Error("Synthetic provider setup failed");

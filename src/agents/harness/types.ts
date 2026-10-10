@@ -463,6 +463,8 @@ type AgentHarnessContract<
   autoSelection?: { providerIds: readonly string[] };
   /** Declares host-owned remote execution and its exact paired-device requirements. */
   cloudPlacement?: { mode: "remote-exec"; devicePlacement?: DevicePlacementRequirement };
+  /** Provider-managed workspace presentation, not Gateway worker placement or readiness. */
+  workspaceEnvironment?: { kind: "provider-hosted"; label: string };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.

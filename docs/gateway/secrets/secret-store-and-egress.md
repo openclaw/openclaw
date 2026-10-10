@@ -11,7 +11,7 @@ This page covers the shared secret store, the default-off secret egress proxy an
 
 ## Shared secret store
 
-The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. The CLI commands operate on the local state database and do not accept Gateway URL or token options.
+The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values for the Gateway that owns the state directory. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. CLI writes route through that local Gateway, or take exclusive offline ownership when it is stopped. The commands do not accept Gateway URL or token options.
 
 Entries have two explicit access modes. Both retain the existing `secret` and `env` storage kinds, and either kind can back a SecretRef:
 
@@ -40,7 +40,7 @@ Reference an entry from `openclaw.json` with the `store` source:
 }
 ```
 
-Control UI set/delete operations automatically refresh the active secrets runtime when the changed name is referenced by a `store` SecretRef in the active source config or auth-profile snapshot. Names that are not referenced skip that work. Direct CLI writes remain an offline/local path; after changing a referenced value with the CLI, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
+Control UI mutations and routed CLI writes automatically refresh the active secrets runtime when a changed name is referenced by a `store` SecretRef in the active source config or auth-profile snapshot. Names that are not referenced skip that work. Offline CLI changes are loaded when the Gateway starts. If an online write succeeds but runtime refresh fails, the error reports the saved change; resolve the provider error and run `openclaw secrets reload`.
 
 The agent can also ask you to add an entry with the [`secrets` tool](/tools/secrets): it names the entry and the reason, you type the value into a masked prompt, and the Gateway writes it directly into the store. The value never enters the chat, the transcript, or the model's context, and the same automatic runtime refresh applies.
 

@@ -11,7 +11,7 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { STATE_SUPERVISION_KEY } from "../state/openclaw-state-ownership.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -194,65 +194,50 @@ describe("startup migration lease", () => {
   });
 
   it.each([false, true])(
-    "rechecks external ownership inside the final lease write transaction (admitted owner: %s)",
+    "fences a published ownership claim before the final lease write (cached handle: %s)",
     async (admittedOwner) => {
       const env = {
         OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
       };
-      runOpenClawStateWriteTransaction(() => undefined, { env });
+      const database = runOpenClawStateWriteTransaction(({ db }) => db, { env });
       if (!admittedOwner) {
         closeOpenClawStateDatabaseForTest();
       }
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const { DatabaseSync } = requireNodeSqlite();
-      const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")
-        ?.value as ((this: import("node:sqlite").DatabaseSync, sql: string) => void) | undefined;
+      // Enter before the cached handle's native observer, not from its callback scope.
+      const execTarget = admittedOwner ? database : DatabaseSync.prototype;
+      const originalExec = Object.getOwnPropertyDescriptor(execTarget, "exec")?.value as
+        | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
+        | undefined;
       if (!originalExec) {
         throw new Error("DatabaseSync.exec descriptor is unavailable");
       }
-      // External custody can change after outer admission but before the verified
-      // write transaction. Its inner authority check must refuse the new owner.
+      // Closing a handle leaves process admission warm. The real claim owner must
+      // publish its committed authority before this transaction can write.
       let claimed = false;
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+      const exec = vi.spyOn(execTarget, "exec").mockImplementation(function (
         this: import("node:sqlite").DatabaseSync,
         sql: string,
       ) {
         if ((sql === "BEGIN" || sql === "BEGIN IMMEDIATE") && !claimed) {
           claimed = true;
-          const claimant = new DatabaseSync(databasePath);
-          try {
-            claimant
-              .prepare(
-                `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-               VALUES (?, ?, ?)`,
-              )
-              .run(
-                STATE_SUPERVISION_KEY,
-                JSON.stringify({
-                  version: 1,
-                  mode: "external",
-                  managerId: "race-manager",
-                  claimedAt: 1,
-                }),
-                1,
-              );
-          } finally {
-            claimant.close();
-          }
+          claimOpenClawStateOwnership("race-manager", {
+            env: { ...env, OPENCLAW_SUPERVISOR_MODE: "external" },
+          });
         }
         return originalExec.call(this, sql);
       });
 
       try {
-        await expect(
-          acquireStartupMigrationLeaseWithWait({
-            env,
-            owner: "unmarked",
-            now: () => 1,
-            timeoutMs: 0,
-          }),
-        ).rejects.toThrow(OpenClawStateOwnershipError);
+        const acquisition = acquireStartupMigrationLeaseWithWait({
+          env,
+          owner: "unmarked",
+          now: () => 1,
+          timeoutMs: 0,
+        });
         expect(claimed).toBe(true);
+        await expect(acquisition).rejects.toThrow(OpenClawStateOwnershipError);
       } finally {
         exec.mockRestore();
       }

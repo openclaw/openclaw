@@ -1,4 +1,5 @@
 import { resolveEffectiveAgentDir } from "../../agents/agent-scope-config.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
@@ -9,6 +10,7 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { captureRuntimeStateEnvironment } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -33,6 +35,13 @@ export function resolveWorkerPlacementSessionRuntime(params: {
     source: {
       entry: params.entry,
       readSourceEntry: (key) => {
+        const metadata = captureSessionEntryMetadataRead({
+          sessionKey: key,
+          agentId: params.agentId,
+        });
+        if (metadata) {
+          return metadata.readCurrent();
+        }
         const target = resolveGatewaySessionStoreTargetWithStore({
           ...params,
           key: params.sessionKey,
@@ -79,6 +88,9 @@ export function resolveWorkerPlacementModelRuntime(
   },
 ): string {
   const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider(params);
+  if (params.cfg.cloudWorkers?.requiredProfile) {
+    return "openclaw";
+  }
   const pinnedHarnessId = resolveSessionPinnedHarnessId(params.entry);
   const locksPersistedHarness =
     pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
@@ -174,10 +186,12 @@ export function projectWorkerPlacementAgentRuntime(
   devicePlacement?: NonNullable<GatewayAgentRuntime["devicePlacement"]>;
   devicePlacementSupported: boolean;
 } {
-  const { source, ...identity } = runtime;
+  const { source, workspaceEnvironment: _previousEnvironment, ...identity } = runtime;
   const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(runtime.id);
+  const workspaceEnvironment = getRegisteredAgentHarness(runtime.id)?.harness.workspaceEnvironment;
   return {
     ...identity,
+    ...(workspaceEnvironment ? { workspaceEnvironment } : {}),
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
     ...(devicePlacement ? { devicePlacement } : {}),

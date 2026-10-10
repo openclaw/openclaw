@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   formatErrorMessage,
@@ -10,12 +9,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
-  resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
   emitMemoryCoreSidecarNotice,
@@ -28,6 +25,7 @@ import {
   syncMemoryWithProgress,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
+import { renderMemorySearch } from "./cli-search-output.js";
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
@@ -37,14 +35,13 @@ import type {
 } from "./cli.types.js";
 import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
-import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
+import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   rankShortTermPromotionCandidates,
-  recordShortTermRecalls,
   resolveShortTermRecallLockPath,
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
@@ -160,74 +157,15 @@ export async function runMemorySearch(
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
-      const dreamingEnabled = resolveMemoryDreamingConfig({
-        pluginConfig: memoryPluginConfig,
+      const result = await searchMemoryForCli({
+        manager,
         cfg,
-      }).enabled;
-      const dreaming = resolveMemoryDeepDreamingConfig({
-        pluginConfig: memoryPluginConfig,
-        cfg,
-      });
-      const sessionKey = buildAgentSessionKey({
         agentId,
-        channel: "cli",
-        peer: { kind: "direct", id: "memory-search" },
-        dmScope: "per-channel-peer",
+        query,
+        maxResults: opts.maxResults,
+        minScore: opts.minScore,
       });
-      let readRebuildWarning: () => string | undefined = () => undefined;
-      let results: Awaited<ReturnType<typeof manager.search>>;
-      try {
-        readRebuildWarning = captureMemoryRebuildNotice(manager.status());
-        results = await manager.search(query, {
-          maxResults: opts.maxResults,
-          minScore: opts.minScore,
-          sessionKey,
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        throw new Error(
-          [`Memory search failed: ${message}`, readRebuildWarning()].filter(Boolean).join(" "),
-          { cause: err },
-        );
-      }
-      const status = manager.status();
-      const staleness = resolveMemorySearchStaleness(status, agentId);
-      const warning = [staleness?.warning, readRebuildWarning()]
-        .filter((message): message is string => typeof message === "string")
-        .join(" ");
-      const workspaceDir = status.workspaceDir;
-      if (dreamingEnabled) {
-        await recordShortTermRecalls({
-          workspaceDir,
-          query,
-          results,
-          timezone: dreaming.timezone,
-        }).catch(() => {
-          // Persistence is best-effort, but the short-lived CLI must await it
-          // so process exit cannot discard an in-flight recall write.
-        });
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({ results, ...staleness, ...(warning ? { warning } : {}) });
-        return;
-      }
-      if (warning) {
-        defaultRuntime.error([warning, staleness?.action].filter(Boolean).join(" "));
-      }
-      if (results.length === 0) {
-        defaultRuntime.log("No matches.");
-        return;
-      }
-      const lines: string[] = [];
-      for (const result of results) {
-        lines.push(
-          `${success(result.score.toFixed(3))} ${accent(`${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`)}`,
-        );
-        lines.push(muted(result.snippet));
-        lines.push("");
-      }
-      defaultRuntime.log(lines.join("\n").trim());
+      renderMemorySearch(result, opts.json);
     },
   });
 }

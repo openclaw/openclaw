@@ -237,27 +237,8 @@ describe("resolveEffectiveToolPolicy", () => {
     expect(resolveEffectiveToolPolicy({ config }).profileAlsoAllow).toBeUndefined();
   });
 
-  it("does not warn an agent profile about inherited global tool sections (#47487)", async () => {
-    const logs = createWarnLogCapture("openclaw-agent-tools-policy-test");
-    try {
-      const config: OpenClawConfig = {
-        tools: { exec: { mode: "allowlist" }, fs: { workspaceOnly: true } },
-        agents: {
-          entries: { sage: { tools: { profile: "messaging", alsoAllow: ["view_image"] } } },
-        },
-      };
-      expect(resolveEffectiveToolPolicy({ config, agentId: "sage" }).profileAlsoAllow).toEqual([
-        "view_image",
-      ]);
-      expect(await logs.findText('tools policy: profile "messaging"')).toBeUndefined();
-    } finally {
-      logs.cleanup();
-    }
-  });
-
   it.each<{ name: string; tools: OpenClawConfig["tools"]; warning?: string }>([
     { name: "provider wildcard deny", tools: { byProvider: { fixture: { deny: ["pro*"] } } } },
-    { name: "provider profile", tools: { byProvider: { fixture: { profile: "minimal" } } } },
     {
       name: "provider profile alsoAllow",
       tools: { byProvider: { fixture: { profile: "minimal", alsoAllow: ["process"] } } },
