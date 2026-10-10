@@ -296,7 +296,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
     });
     expect(failure).toHaveProperty("cause", expect.any(PlatformMessageNotDispatchedError));
     expect(sendMedia).toHaveBeenCalledOnce();
-    expect(reply).toHaveBeenCalledExactlyOnceWith("caption", undefined);
+    expect(reply).toHaveBeenCalledExactlyOnceWith("caption", undefined, { reconnectWindows: 3 });
     expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",
       accountId: "default",
@@ -509,7 +509,9 @@ describe("WhatsApp canonical message_sent delivery", () => {
     );
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(sendMedia).toHaveBeenCalledOnce();
-    expect(reply).toHaveBeenCalledExactlyOnceWith("voice caption", undefined);
+    expect(reply).toHaveBeenCalledExactlyOnceWith("voice caption", undefined, {
+      reconnectWindows: 3,
+    });
     expect(replyLogger.warn).not.toHaveBeenCalled();
     expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",
