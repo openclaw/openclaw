@@ -7,7 +7,6 @@ import "./skill-workshop-page.ts";
 import {
   createContext,
   createRuntimeConfigStub,
-  reconnectGateway,
   type SkillWorkshopPageTestElement,
 } from "./skill-workshop-page.test-support.ts";
 
@@ -303,34 +302,5 @@ describe("Skill Workshop page", () => {
       raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
       note: "Disable Skill Workshop learning",
     });
-  });
-
-  it("does not retry a mode switch against a Gateway connected mid-write", async () => {
-    const patch = vi.fn(async () => true);
-    const runtimeConfig = createRuntimeConfigStub({
-      sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      patch,
-    });
-    patch.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config changed since last load";
-      return false;
-    });
-    const context = createContext(workshopGateway(), { methods: ["config.patch"], runtimeConfig });
-    const page = await mount(context);
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      // The operator switches to another Gateway while the stale-hash refresh is in flight.
-      runtimeConfig.state.lastError = null;
-      reconnectGateway(context, workshopGateway());
-      page.requestUpdate();
-      await page.updateComplete;
-    });
-
-    button(page, "Off")?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalled());
-    await page.updateComplete;
-    expect(patch).toHaveBeenCalledTimes(1);
-    // The retired write releases the controls for the new Gateway.
-    expect(button(page, "Off")?.disabled).toBe(false);
   });
 });

@@ -313,6 +313,28 @@ it.each(["agent", "profile", "connection hello"])(
   },
 );
 
+it("keeps a replacement load locked when the previous connection's read completes", async () => {
+  const old = createDeferred<typeof file>();
+  const current = createDeferred<typeof file>();
+  const request = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  const { element, emit } = mount(request);
+  await settle(element);
+  emit({ hello: { ...hello, server: { connId: "connection-2" } } });
+  await settle(element);
+  expect(request).toHaveBeenCalledTimes(2);
+
+  old.resolve(file);
+  await settle(element);
+  expect(element.querySelector("textarea")).toBeNull();
+  expect(button(element, "Save").disabled).toBe(true);
+
+  current.resolve({ ...file, content: "Current instructions" });
+  await settle(element);
+  await input(element, "New draft");
+  expect(element.querySelector("textarea")?.value).toBe("New draft");
+  expect(button(element, "Save").disabled).toBe(false);
+});
+
 it("retains the unsettled draft but ignores an old save completion after reconnecting", async () => {
   const saving = createDeferred<typeof file>();
   const request = vi.fn().mockResolvedValueOnce(file).mockReturnValueOnce(saving.promise);

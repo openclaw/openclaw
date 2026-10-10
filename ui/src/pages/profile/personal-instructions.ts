@@ -33,7 +33,6 @@ export class PersonalInstructions extends OpenClawLightDomElement {
   private gatewayUrl: string | null = null;
   private available = false;
   private multipleProfiles = false;
-  private generation = 0;
   private subscriptions: Array<() => void> = [];
   private drafts = new Map<string, { file: UsersPersonalFileGetResult; content: string }>();
 
@@ -51,7 +50,6 @@ export class PersonalInstructions extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.forEach((unsubscribe) => unsubscribe());
     this.subscriptions = [];
-    this.generation += 1;
     this.client = null;
     this.available = false;
     super.disconnectedCallback();
@@ -117,7 +115,6 @@ export class PersonalInstructions extends OpenClawLightDomElement {
       this.draft = pending?.content ?? "";
     }
     if (sourceChanged || agentChanged) {
-      this.generation += 1;
       this.busy = null;
       this.error = null;
       this.saved = false;
@@ -170,13 +167,20 @@ export class PersonalInstructions extends OpenClawLightDomElement {
     target: { agentId: string; profileId: string | null },
     request: () => Promise<UsersPersonalFileGetResult>,
   ) {
-    const generation = ++this.generation;
+    const client = this.client;
+    const connectionId = this.connectionId;
+    const isCurrent = () =>
+      this.available &&
+      this.client === client &&
+      this.connectionId === connectionId &&
+      this.agentId === target.agentId &&
+      this.profileId === target.profileId;
     this.busy = operation;
     this.error = null;
     this.saved = false;
     try {
       const result = await request();
-      if (generation !== this.generation) {
+      if (!isCurrent()) {
         return;
       }
       if (result.agentId !== target.agentId || result.profileId !== target.profileId) {
@@ -187,11 +191,11 @@ export class PersonalInstructions extends OpenClawLightDomElement {
       this.drafts.delete(result.agentId);
       this.saved = operation === "save";
     } catch (error) {
-      if (generation === this.generation) {
+      if (isCurrent()) {
         this.error = formatUiError(error);
       }
     } finally {
-      if (generation === this.generation) {
+      if (isCurrent()) {
         this.busy = null;
       }
     }
