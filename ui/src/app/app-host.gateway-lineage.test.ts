@@ -239,6 +239,8 @@ describe("Control UI Gateway target lineage", () => {
       const releaseOutbox = chatOutboxOwner(state).subscribe(state);
       const { container: shellContainer, draw: drawShell } = createGatewaySurface(gateway);
       drawShell();
+      await vi.dynamicImportSettled();
+      flush();
       const originalShell = shellContainer.querySelector("openclaw-app-shell");
       expect(originalShell).not.toBeNull();
       const releaseShell = gateway.subscribe(drawShell);
@@ -379,7 +381,7 @@ describe("Control UI Gateway target lineage", () => {
     expect(clients[1]?.opts.password).toBeUndefined();
   });
 
-  it("shows startup progress after a manual connection attempt", () => {
+  it("shows startup progress after a manual connection attempt", async () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();
     clients[0]?.opts.onClose?.({
@@ -412,6 +414,8 @@ describe("Control UI Gateway target lineage", () => {
 
     clients[1]?.opts.onHello?.(HELLO);
     draw();
+    await vi.dynamicImportSettled();
+    flush();
     expect(container.innerHTML).toContain("<openclaw-app-shell");
   });
 

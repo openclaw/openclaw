@@ -53,6 +53,7 @@ import {
 } from "./app-shell-gateway.ts";
 import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navigation.ts";
 import { ShellPresentation } from "./app-shell-presentation.ts";
+import "./app-shell-locale-recovery.ts";
 import { createShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.tsx";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -88,16 +89,6 @@ import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
-
-i18n.setLocaleLoadRecovery({
-  isUnrecoverableError: isStaleChunkImportError,
-  onUnrecoverableLocaleLoad: () => {
-    // Chrome 149 and WebKit can pin network-failed dynamic imports for the document. Keep the
-    // in-place retry for engines that refetch; repeat failures use the guarded stale-chunk reload
-    // owner instead of adding a locale-specific reload path.
-    void scheduleStaleChunkReload();
-  },
-});
 
 export class ShellOwner
   extends ShellPresentation

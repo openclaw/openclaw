@@ -86,7 +86,12 @@ function createWarmSurface(warm = true, startup?: Promise<void>) {
 }
 
 type LoginGateElement = HTMLElement & {
-  props: { onConnect: () => void; onOpenGatewaySettings?: () => void };
+  props: {
+    onConnect: () => void;
+    onOpenGatewaySettings?: () => void;
+    onToggleGatewaySecret: () => void;
+    showGatewaySecret: boolean;
+  };
 };
 
 function loginGate(container: HTMLElement) {
@@ -109,8 +114,10 @@ describe("warm boot app root", () => {
     expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
   });
 
-  it("keeps the credential-scoped warm shell after an unreachable connection retries", () => {
+  it("keeps the credential-scoped warm shell after an unreachable connection retries", async () => {
     const { snapshot, container, draw } = createWarmSurface();
+    await vi.dynamicImportSettled();
+    flush();
     const shell = container.querySelector("openclaw-app-shell");
     expect(shell).not.toBeNull();
     expect(container.querySelector(".connect-splash")).toBeNull();
@@ -127,6 +134,8 @@ describe("warm boot app root", () => {
 
   it("keeps saved-sign-in recovery reachable after auth fails without admitting other routes", async () => {
     const { snapshot, container, draw } = createWarmSurface();
+    await vi.dynamicImportSettled();
+    flush();
     expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
     const gateway = runtime!.context.gateway;
     let stored = true;
@@ -168,7 +177,7 @@ describe("warm boot app root", () => {
     expect(container.querySelector(surface)).not.toBeNull();
   });
 
-  it("pins a manual login attempt and releases it only after connection admission", () => {
+  it("pins a manual login attempt and releases it only after connection admission", async () => {
     const { snapshot, container, draw } = createWarmSurface();
     snapshot.phase = "offline";
     snapshot.lastError = "Connect to continue";
@@ -188,6 +197,8 @@ describe("warm boot app root", () => {
     expect(container.querySelector(".connect-splash")).not.toBeNull();
     snapshot.phase = "connected";
     draw();
+    await vi.dynamicImportSettled();
+    flush();
     expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
   });
 
@@ -208,8 +219,10 @@ describe("warm boot app root", () => {
     expect(loginGate(second.container).props.showGatewaySecret).toBe(false);
   });
 
-  it("provides the same ApplicationContext to Lit descendants and retires it on disposal", () => {
+  it("provides the same ApplicationContext to Lit descendants and retires it on disposal", async () => {
     const { container } = createWarmSurface();
+    await vi.dynamicImportSettled();
+    flush();
     const descendant = document.createElement("span");
     container.querySelector("openclaw-app-shell")!.append(descendant);
     const received = vi.fn();

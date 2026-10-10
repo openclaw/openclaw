@@ -30,13 +30,14 @@ import { projectRouter } from "../lib/reactive/router.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { OpenClawShell } from "./app-host.tsx";
+import "./app-shell-locale-recovery.ts";
 import { loadFocusDashboard, type FocusDashboardRouteState } from "./app-root-focus.ts";
 import {
   connectLegacyApplicationContext,
   renderLegacyFocusEscape,
   settleLegacyTerminalActivation,
 } from "./app-root-lit.ts";
+import { ShellLoader } from "./app-shell-loader.tsx";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   ControlUiReadiness,
@@ -629,7 +630,12 @@ export function OpenClawApp(props: {
           prop:context={context}
           prop:gateway={context.gateway}
         >
-          <OpenClawShell runtime={runtime} readiness={readiness} onboarding={onboarding} />
+          <ShellLoader
+            runtime={runtime}
+            readiness={readiness}
+            onboarding={onboarding}
+            fallback={<Splash />}
+          />
         </openclaw-session-progress-hovercard-provider>
       </openclaw-link-reader-hovercard-provider>
     );

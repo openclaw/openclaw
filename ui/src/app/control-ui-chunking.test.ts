@@ -91,7 +91,7 @@ describe("Control UI build chunking", () => {
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],
-      ["/repo/ui/src/app/app-host.ts", undefined],
+      ["/repo/ui/src/app/app-host.tsx", undefined],
       ["\0virtual:openclaw-control-ui-locale-config-hints/ru", "locale-config-hints-ru"],
       ["\0virtual:openclaw-control-ui-locale/ru", undefined],
     ] as const) {

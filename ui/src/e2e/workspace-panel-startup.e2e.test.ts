@@ -114,7 +114,7 @@ suite.define(() => {
                 }),
               )
             ).flat();
-            expect(sources.some((source) => source.endsWith("/app/app-host.ts"))).toBe(true);
+            expect(sources.some((source) => source.endsWith("/app/app-host.tsx"))).toBe(true);
             expect(
               sources.filter((source) =>
                 /components\/(terminal\/terminal-panel\.ts|browser\/browser-panel\.ts|desktop\/desktop-panel\.ts|assistant-panel-content\.ts)$|pages\/(chat\/chat-page|debug\/debug-overlay-content)\.ts$/.test(
