@@ -1786,6 +1786,7 @@
     "deps:vuln:gate": "node --import ./scripts/tsx.mjs scripts/dependency-vulnerability-gate.mts",
     "db:kysely:check": "node scripts/run-vitest.mjs test/scripts/generate-kysely-types.test.ts && node scripts/generate-kysely-types.mts --verify",
     "db:kysely:gen": "node scripts/generate-kysely-types.mts",
+    "db:postgres:gen": "node scripts/generate-postgres-schema.mts",
     "db:worker-inventory:check": "node scripts/database-worker-inventory.mjs --check",
     "db:worker-inventory:gen": "node scripts/database-worker-inventory.mjs --write",
     "dev": "node scripts/run-node.mjs",

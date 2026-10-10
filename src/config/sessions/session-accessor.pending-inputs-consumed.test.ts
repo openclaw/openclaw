@@ -19,7 +19,6 @@ import {
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -32,6 +31,7 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("committed pending input release", () => {

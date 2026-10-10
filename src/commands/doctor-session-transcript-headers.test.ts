@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
+import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
