@@ -2,7 +2,12 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { resolveProjectedSessionContextTokenBudget } from "../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createRunResult, withSession } from "./command/session-store.test-support.js";
-import { getContextWindowCaches, providerContextTokenCacheKey } from "./context-cache.js";
+import { prepareDiscoveredContextTokenCache } from "./context-cache-projection.js";
+import {
+  getContextWindowCaches,
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "./context-cache.js";
 import { resolveContextTokenBudgetForModel } from "./context.js";
 import { resetContextWindowCacheForTest } from "./context.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -875,84 +880,63 @@ it.each([
   },
 );
 
-it.each([
-  {
-    name: "matching successful account",
-    successful: "fixture:catalog",
-    expected: 777_000,
-    source: "resolved-v1",
-    runtime: undefined,
-    locked: false,
-    ambientOwner: false,
-  },
-  {
-    name: "different successful account",
-    successful: "fixture:run",
-    expected: 200_000,
-    source: "resolved",
-    runtime: undefined,
-    locked: false,
-    ambientOwner: false,
-  },
-  {
-    name: "matching successful runtime account",
-    successful: "fixture:catalog",
-    expected: 900_000,
-    source: "runtime",
-    runtime: 900_000,
-    locked: false,
-    ambientOwner: false,
-  },
-  {
-    name: "different successful runtime account",
-    successful: "fixture:run",
-    expected: 900_000,
-    source: "resolved",
-    runtime: 900_000,
-    locked: false,
-    ambientOwner: false,
-  },
-  {
-    name: "observed ambient runtime account",
-    successful: null,
-    expected: 900_000,
-    source: "resolved",
-    runtime: 900_000,
-    locked: false,
-    ambientOwner: false,
-  },
-  {
-    name: "locked native runtime account",
-    successful: "fixture:run",
-    expected: 900_000,
-    source: "runtime",
-    runtime: 900_000,
-    locked: true,
-    ambientOwner: false,
-  },
-  {
-    name: "observed ambient account without runtime capacity",
-    successful: null,
-    expected: 200_000,
-    source: "resolved",
-    runtime: undefined,
-    locked: false,
-    ambientOwner: false,
-  },
-  {
-    name: "matching observed ambient catalog account",
-    successful: null,
-    expected: 777_000,
-    source: "resolved-v1",
-    runtime: undefined,
-    locked: false,
-    ambientOwner: true,
-  },
+it.each<
+  [
+    name: string,
+    successful: string | null,
+    expected: number,
+    source: "runtime" | "resolved" | "resolved-v1",
+    runtime?: number,
+    locked?: boolean,
+    ambientOwner?: boolean,
+    catalogTokens?: number,
+  ]
+>([
+  ["matching successful account", "fixture:catalog", 777_000, "resolved-v1"],
+  ["different successful account", "fixture:run", 200_000, "resolved"],
+  ["matching successful runtime account", "fixture:catalog", 900_000, "runtime", 900_000],
+  ["different successful runtime account", "fixture:run", 900_000, "resolved", 900_000],
+  ["observed ambient runtime account", null, 900_000, "resolved", 900_000],
+  ["locked native runtime account", "fixture:run", 900_000, "runtime", 900_000, true],
+  ["observed ambient account without runtime capacity", null, 200_000, "resolved"],
+  [
+    "matching observed ambient catalog account",
+    null,
+    777_000,
+    "resolved-v1",
+    undefined,
+    false,
+    true,
+  ],
+  [
+    "accepted discovery with a foreign cache",
+    null,
+    654_321,
+    "resolved-v1",
+    undefined,
+    false,
+    true,
+    654_321,
+  ],
 ])(
-  "persists only the actual $name capacity through command accounting",
-  async ({ successful, expected, source, runtime, locked, ambientOwner }) => {
+  "persists only the actual %s capacity through command accounting",
+  async (
+    name,
+    successful,
+    expected,
+    source,
+    runtime,
+    locked = false,
+    ambientOwner = false,
+    catalogTokens = 777_000,
+  ) => {
     const provider = "fixture-accounting";
     const model = "account-bound-model";
+    replaceDiscoveredContextTokenCache(
+      await prepareDiscoveredContextTokenCache({
+        modelCatalog: { entries: [{ provider, id: model, contextTokens: 654_321 }] },
+      }),
+    );
     facts.owner = {
       isCurrent: () => true,
       modelCatalog: {
@@ -962,7 +946,7 @@ it.each([
             id: model,
             name: "Account model",
             contextWindow: 1_000_000,
-            contextTokens: 777_000,
+            contextTokens: catalogTokens,
           },
         ],
         providerOutcomes: [
@@ -992,7 +976,20 @@ it.each([
           contextTokens: runtime,
         }),
       });
-      expect(read()).toMatchObject({ contextTokens: expected, contextTokensSource: source });
+      const persisted = read();
+      expect(persisted).toMatchObject({ contextTokens: expected, contextTokensSource: source });
+      if (name === "accepted discovery with a foreign cache") {
+        resetContextWindowCacheForTest();
+        expect(
+          resolveProjectedSessionContextTokenBudget({
+            entry: persisted,
+            provider,
+            model,
+            agentHarnessId: "openclaw",
+            resolvedContextTokens: undefined,
+          }),
+        ).toEqual({ contextTokens: expected, contextTokensSource: "resolved-v1" });
+      }
     });
     expect(facts.load).not.toHaveBeenCalled();
   },

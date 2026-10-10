@@ -12,8 +12,6 @@ import {
 } from "../../config/sessions.js";
 import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { prepareDiscoveredContextTokenCache } from "../context-cache-projection.js";
-import { replaceDiscoveredContextTokenCache } from "../context-cache.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { recordCliCompactionInStore } from "./session-store.js";
 import {
@@ -960,42 +958,32 @@ describe("recordCliCompactionInStore", () => {
 
 afterEach(resetContextWindowCacheForTest);
 
-it.each([
-  ["deepseek", "deepseek-v4-flash", 1_000_000, false],
-  ["fixture-discovery", "fixture-large-context", 654_321, true],
-] as const)(
-  "retains model-owned capacity after %s accounting and cold projection",
-  async (provider, model, expected, discovered) => {
-    resetContextWindowCacheForTest();
-    if (discovered) {
-      replaceDiscoveredContextTokenCache(
-        await prepareDiscoveredContextTokenCache({
-          modelCatalog: { entries: [{ id: model, provider, contextTokens: expected }] },
-        }),
-      );
-    }
-    await withSession(async ({ seed, update, read }) => {
-      await seed({ agentHarnessId: "openclaw" });
-      await update({
-        defaultProvider: provider,
-        defaultModel: model,
-        result: createRunResult({ sessionId, provider, model, agentHarnessId: "openclaw" }),
-      });
-      const persisted = read();
-      expect(persisted).toMatchObject({
-        contextTokens: expected,
-        contextTokensSource: "resolved-v1",
-      });
-      resetContextWindowCacheForTest();
-      expect(
-        resolveProjectedSessionContextTokens({
-          entry: persisted,
-          provider,
-          model,
-          agentHarnessId: "openclaw",
-          resolvedContextTokens: undefined,
-        }),
-      ).toBe(expected);
+it("retains curated model-owned capacity after accounting and cold projection", async () => {
+  const provider = "deepseek",
+    model = "deepseek-v4-flash",
+    expected = 1_000_000;
+  resetContextWindowCacheForTest();
+  await withSession(async ({ seed, update, read }) => {
+    await seed({ agentHarnessId: "openclaw" });
+    await update({
+      defaultProvider: provider,
+      defaultModel: model,
+      result: createRunResult({ sessionId, provider, model, agentHarnessId: "openclaw" }),
     });
-  },
-);
+    const persisted = read();
+    expect(persisted).toMatchObject({
+      contextTokens: expected,
+      contextTokensSource: "resolved-v1",
+    });
+    resetContextWindowCacheForTest();
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: persisted,
+        provider,
+        model,
+        agentHarnessId: "openclaw",
+        resolvedContextTokens: undefined,
+      }),
+    ).toBe(expected);
+  });
+});
