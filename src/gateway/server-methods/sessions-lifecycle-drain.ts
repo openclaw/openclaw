@@ -211,7 +211,7 @@ export async function prepareSessionLifecycleDrain(
               timeoutMs,
             });
           },
-          onAuthorizedAfterQueuedAbort: () => {
+          onAuthorizedBeforeEmbeddedAbort: () => {
             const cleared = clearSessionLifecycleQueues({
               ...queueTarget,
               assertCurrent: () => params.authorize?.(),
@@ -223,7 +223,8 @@ export async function prepareSessionLifecycleDrain(
                 aborted = operation.abortByUser() || aborted;
               }
             }
-            if (params.sessionId) {
+            // Destructive lifecycle drain also owns global work; session Stop does not.
+            if (params.sessionId && params.sessionKey === "global") {
               aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
             }
             return aborted;
