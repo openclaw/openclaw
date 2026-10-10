@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import { installKillGroupSeccompFilter } from "@openclaw/proc-safe/test-support";
 import { acquireLinuxChildSubreaper } from "./linux-child-subreaper.js";
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
@@ -71,6 +72,51 @@ receipts.push({
   extinct: true,
   owner: "linux-subreaper",
 });
+
+// The root exits first, leaving its child to the dedicated owner. SIGCHLD is
+// the kernel's exit notification, so the drain observes a waitable real-time exit.
+const realtimeOwner = acquireLinuxChildSubreaper();
+const realtimeRoot = spawn(
+  process.execPath,
+  [
+    "-e",
+    `const { spawn } = require("node:child_process");
+     const child = spawn(process.execPath, ["-e", 'require("node:net").createServer().listen(String.fromCharCode(0) + "openclaw-realtime-" + process.pid)'], {
+       stdio: ["ignore", "inherit", "inherit"],
+     });
+     process.stdout.write(String(child.pid) + "\\n");
+     child.unref();`,
+  ],
+  { stdio: ["ignore", "pipe", "inherit"] },
+);
+assert.ok(realtimeRoot.pid);
+realtimeOwner.retainLibuvChild(realtimeRoot.pid, realtimeRoot);
+const realtimeRootExit = once(realtimeRoot, "exit");
+const realtimeRootClosed = once(realtimeRoot, "close");
+const realtimePid = await new Promise<number>((resolve) => {
+  let output = "";
+  realtimeRoot.stdout.on("data", (chunk) => {
+    output += chunk;
+    if (output.includes("\n")) {
+      resolve(Number(output.trim()));
+    }
+  });
+});
+assert.ok(Number.isSafeInteger(realtimePid) && realtimePid > 0);
+assert.deepEqual(await realtimeRootExit, [0, null]);
+const realtimeExited = once(process, "SIGCHLD");
+// Signal listeners are unref'd; the fixture's parent keeps this stdin pipe open.
+process.stdin.resume();
+try {
+  process.kill(realtimePid, 34);
+  await realtimeExited;
+} finally {
+  process.stdin.pause();
+}
+assert.equal(realtimeOwner.drain(), true);
+assert.equal(existsSync("/proc/" + realtimePid), false);
+assert.deepEqual(await realtimeRootClosed, [0, null]);
+receipts.push({ label: "realtime-signal", signalNumber: 34, extinct: true });
 
 const failed = await createServiceChildRelayAdapter({
   command: "/openclaw-missing-command-" + process.pid,

@@ -34,10 +34,8 @@ ${loader ? `await import(${JSON.stringify(loader)});` : ""}
 const { runCommandWithTimeout, spawnCommand } = await import(${JSON.stringify(execUrl.href)});
 const { withUpdateCommandExecutor } = await import(${JSON.stringify(executorUrl.href)});
 const require = createRequire(${JSON.stringify(execUrl.href)});
-const libc = require("koffi").load(null);
-const prctl = libc.func("int prctl(int option, unsigned long, unsigned long, unsigned long, unsigned long)");
-const waitpid = libc.func("int waitpid(int pid, int *status, int options)");
-assert.equal(prctl(36, 1, 0, 0, 0), 0, "isolated fixture must own orphan adoption");
+const { becomeChildSubreaper, inspectChildWaitState, reapChild } = require("@openclaw/proc-safe/reaper");
+becomeChildSubreaper();
 const directory = ${JSON.stringify(directory)};
 
 const unrelated = spawn(process.execPath, ["-e", \`
@@ -118,10 +116,21 @@ try {
         assert.notEqual(pids.descendant, unrelated.pid);
         assert.equal(Number(fields[1]), process.pid, "fixture cleanup requires actual adoption");
         assert.equal(Number(fields[2]), pids.root, "fixture cleanup requires the owned group");
-        try { process.kill(-pids.root, "SIGKILL"); } catch (error) {
-          if (error.code !== "ESRCH") throw error;
+        const noticeAbort = new AbortController();
+        const exited = once(process, "SIGCHLD", { signal: noticeAbort.signal });
+        try {
+          if (inspectChildWaitState(pids.descendant).kind === "running") {
+            try { process.kill(-pids.root, "SIGKILL"); } catch (error) {
+              if (error.code !== "ESRCH") throw error;
+            }
+            await exited;
+          }
+          assert.deepEqual(inspectChildWaitState(pids.descendant), { kind: "exited", pid: pids.descendant });
+          assert.equal(reapChild(pids.descendant)?.pid, pids.descendant);
+        } finally {
+          noticeAbort.abort();
+          await exited.catch(() => {});
         }
-        assert.equal(waitpid(pids.descendant, null, 0), pids.descendant);
       }
     }
   }
