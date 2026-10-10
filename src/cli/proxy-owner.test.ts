@@ -22,7 +22,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
     return child;
   },
 }));
-vi.mock("../proxy-capture/proxy-server.js", () => ({
+vi.mock("../proxy-capture/proxy-server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../proxy-capture/proxy-server.js")>()),
   startDebugProxyServer: async ({
     settings,
     captureStore,

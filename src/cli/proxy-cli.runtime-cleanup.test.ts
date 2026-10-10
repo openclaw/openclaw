@@ -25,7 +25,8 @@ vi.mock("../proxy-capture/store.async.js", () => ({
 vi.mock("../proxy-capture/proxy-server.js", () => ({
   startDebugProxyServer: startServer,
 }));
-vi.mock("./local-state-owner.js", () => ({
+vi.mock("./local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./local-state-owner.js")>()),
   runWithLocalStateOwner: ({
     runLocal,
   }: {
