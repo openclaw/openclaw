@@ -355,7 +355,11 @@ authority and mutation guards with their existing owners.
 The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
 imports. The content hash covers the complete generation, including its chunks.
 CSS remains attached to the entry; loading a JavaScript chunk does not attach
-stylesheets. Embed other static assets in the bundle; arbitrary files are
+stylesheets. Authenticated bootstrap advertises the entry, stylesheets, and static
+JavaScript dependencies so the browser can preload them together before the
+Gateway connection completes. Activation still waits for the current catalog,
+asset grants, and all stylesheets; dynamic imports remain lazy.
+Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
 `require` calls, and `require.resolve` are rejected. Import validation checks the

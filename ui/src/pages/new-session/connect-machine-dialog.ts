@@ -57,7 +57,7 @@ export class ConnectMachineSetupState {
     const { loadingValue: loading, errorValue: error, setupValue: setup } = this;
     const title = t("newSession.connectMachineTitle");
     const joinUrl = setup?.joinUrl?.trim();
-    const command = joinUrl ? `npx openclaw connect ${quoteCliArg(joinUrl)}` : null;
+    const command = joinUrl ? `npx -y openclaw connect ${quoteCliArg(joinUrl)} --service` : null;
     const expiresAt = setup?.expiresAtMs
       ? formatTimeMs(setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
       : "";
@@ -103,10 +103,14 @@ export class ConnectMachineSetupState {
             ${
               command
                 ? html`
-                    ${renderConnectCommand(command)}
+                    ${renderConnectCommand(`${command} --session-host`)}
                     <p class="connect-machine-dialog__hint">
                       ${t("newSession.connectMachineTeamHint")}
                     </p>
+                    <details>
+                      <summary>${t("newSession.connectMachineCommandOnly")}</summary>
+                      ${renderConnectCommand(command)}
+                    </details>
                     <p class="connect-machine-dialog__hint">
                       ${
                         expiresAt
