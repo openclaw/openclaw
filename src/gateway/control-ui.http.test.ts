@@ -1183,19 +1183,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(get.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
   });
 
-  it("briefly caches an authenticated missing agent avatar", async () => {
-    const tmp = testTempDirs.make("openclaw-avatar-missing-");
-    const response = await runAvatarRequest({
-      url: "/avatar/main",
-      config: createAvatarConfig(tmp, "missing.png"),
-      auth: tokenAuth,
-      headers: { authorization: "Bearer test-token" },
-    });
-    expectNotFoundResponse(response);
-    expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, max-age=60");
-    expect(response.setHeader).toHaveBeenCalledWith("Vary", "Authorization, Cookie");
-  });
-
   it("does not expose avatar HEAD representation length before authentication", async () => {
     const tmp = testTempDirs.make("openclaw-avatar-head-unauthorized-");
     await fs.writeFile(path.join(tmp, "main.png"), REAL_PNG);

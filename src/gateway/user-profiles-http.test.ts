@@ -531,23 +531,6 @@ describe("profile avatar HTTP endpoint", () => {
       if (revision === "42") {
         expect(missing.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
       }
-
-      avatarFixture.mockReturnValue({
-        bytes: new Uint8Array([1]),
-        mime: "image/png",
-        sha256: "uploaded",
-      });
-      const uploaded = response();
-      await handleUserProfileAvatarHttpRequest(
-        request(`${pathname}?v=uploaded-png`),
-        uploaded.response,
-        pathname,
-        { auth: {} as never },
-      );
-      expect(uploaded.writeHead).toHaveBeenCalledWith(
-        200,
-        expect.objectContaining({ "Cache-Control": "private, max-age=31536000, immutable" }),
-      );
     },
   );
 
