@@ -47,6 +47,7 @@ import {
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -554,6 +555,8 @@ describe("registered completion source custody", () => {
       });
     },
   );
+
+  registerRequesterCompletionCustodyTests({ registration, updateRun });
 
   it("retains raw child ownership, including unknown legacy ownership, on registration replay", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

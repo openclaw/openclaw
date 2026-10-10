@@ -300,6 +300,32 @@ async function isVersionedPublicAsset(url, pathname) {
   );
 }
 
+async function fetchChatNavigation(request, url) {
+  const entry = new URL(`${SCOPE_PATH}__openclaw__/session-entry`, SCOPE_URL);
+  entry.searchParams.set("path", url.pathname + url.search);
+  try {
+    // Registration is only a navigation hint. The protected route still owns
+    // authentication and session access; never follow its denial/login redirects.
+    const response = await fetch(entry.href, {
+      credentials: "same-origin",
+      redirect: "manual",
+      cache: "no-store",
+      signal: request.signal,
+    });
+    if (response.status === 200 && response.headers.get("X-OpenClaw-Session-Entry") === "1") {
+      return response;
+    }
+  } catch {
+    // A failed handoff must not prevent a public conversation from opening.
+  }
+  const response = await fetch(request);
+  // Some proxies also protect /chat. A worker response suppresses native HTTP
+  // auth dialogs, so hand those challenges to the unhandled protected navigation.
+  return response.status === 401 && response.headers.has("WWW-Authenticate")
+    ? Response.redirect(entry.href)
+    : response;
+}
+
 self.addEventListener("fetch", (event) => {
   // Only the requesting app owns recovery. Other origins and scoped apps keep
   // their own network and cache policies, even when this worker controls the tab.
@@ -312,12 +338,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Online navigations MUST bypass respondWith: even returning a network 401
-  // from a worker suppresses the browser's Basic/Digest/Negotiate auth dialog.
-  // onLine is only a browser hint, not an endpoint-reachability test: an outage
-  // while it remains true intentionally keeps native network navigation behavior.
   if (event.request.mode === "navigate") {
     if (
+      self.navigator.onLine &&
+      new URL(self.location.href).searchParams.get("session-entry") === "1" &&
+      pathname.startsWith("/chat/") &&
+      pathname !== "/chat/" &&
+      [...url.searchParams.keys()].every((key) => key === "dashboard" || key === "draft")
+    ) {
+      event.respondWith(fetchChatNavigation(event.request, url));
+    } else if (
       !self.navigator.onLine &&
       (pathname === "/" ||
         pathname === "/new" ||
