@@ -7,7 +7,9 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -24,6 +26,28 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("worker placement read cache", () => {
+  it("claims and releases an existing worker placement with a NULL execution mode", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-null-mode-"));
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const identity = { sessionId: "legacy", agentId: "main", sessionKey: "agent:main:legacy" };
+    const active = await advancePlacementFixtureToActive(store, database, identity, {
+      environmentId: "legacy-environment",
+    });
+    database.db
+      .prepare("UPDATE worker_session_placements SET execution_mode = NULL WHERE session_id = ?")
+      .run(identity.sessionId);
+    const claim = await store.claimTurn({
+      ...identity,
+      owner: placementTurnOwner(active),
+      claimId: "legacy-claim",
+      runId: "legacy-run",
+    });
+    expect((await store.getAsync(identity.sessionId))?.turnClaim?.claimId).toBe("legacy-claim");
+    await store.releaseTurnIfOwned(claim);
+    expect((await store.getAsync(identity.sessionId))?.turnClaim).toBeNull();
+  });
+
   it("reuses local projections and observes claims from another store without rereading", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-local-cache-"));
     const database = openOpenClawStateDatabase();

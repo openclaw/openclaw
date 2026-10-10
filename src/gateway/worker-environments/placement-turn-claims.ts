@@ -144,7 +144,12 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         local
           ? eb("state", "=", "local")
           : eb.and([
-              eb("execution_mode", "=", owner.kind === "worker" ? "worker-turn" : "remote-exec"),
+              owner.kind === "worker"
+                ? eb.or([
+                    eb("execution_mode", "=", "worker-turn"),
+                    eb("execution_mode", "is", null),
+                  ])
+                : eb("execution_mode", "=", "remote-exec"),
               eb("state", "in", options.allowDraining ? ["active", "draining"] : ["active"]),
               eb("environment_id", "=", owner.environmentId!),
               eb("active_owner_epoch", "=", owner.ownerEpoch!),
@@ -265,7 +270,11 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       );
     if (claim.owner.kind === "worker" || claim.owner.environmentId !== undefined) {
       statement = statement
-        .where("execution_mode", "=", claim.owner.kind === "worker" ? "worker-turn" : "remote-exec")
+        .where((eb) =>
+          claim.owner.kind === "worker"
+            ? eb.or([eb("execution_mode", "=", "worker-turn"), eb("execution_mode", "is", null)])
+            : eb("execution_mode", "=", "remote-exec"),
+        )
         .where(
           "state",
           "in",
