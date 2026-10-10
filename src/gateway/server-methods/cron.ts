@@ -69,6 +69,7 @@ import { cronHistoryHandler } from "./cron-history.js";
 import {
   assertValidCronUpdatePatch,
   captureCronCreatorSession,
+  CronJobConfigRevisionConflictError,
   requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
   normalizeCronUpdateRequest,
@@ -89,15 +90,6 @@ import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-class CronJobConfigRevisionConflictError extends Error {
-  constructor(
-    readonly expectedConfigRevision: string,
-    readonly actualConfigRevision: string,
-  ) {
-    super("cron job definition no longer matches the loaded version");
-  }
-}
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: async ({ params, respond, context, client, sessionMutationCommitGuard }) => {

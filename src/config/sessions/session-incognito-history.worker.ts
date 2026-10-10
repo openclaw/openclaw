@@ -33,7 +33,6 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   hasSessionTranscriptMessageInDatabase,
   readLatestAssistantTextFromDatabase,
@@ -44,6 +43,7 @@ import {
   prepareSessionHistoryReadOperation,
   type SessionHistoryReadOperationRequest,
 } from "./session-history-read-operation.worker.js";
+import { readIncognitoCompletionFacts } from "./session-incognito-completion-facts.worker.js";
 import type {
   IncognitoSessionFacts,
   IncognitoSessionOperations,
@@ -61,7 +61,6 @@ import { readSessionTranscriptMaintenance } from "./session-transcript-maintenan
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   runWithSessionTranscriptReadFence,
-  resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 
@@ -633,54 +632,7 @@ export function createIncognitoHistoryWorker(
   return {
     prepare,
     completionFacts(sessionKey: string): IncognitoSessionFacts["completionSources"] {
-      return [...completionSources.values()]
-        .filter((source) => source.sessionKey === sessionKey)
-        .map((source) => {
-          let valid = false;
-          try {
-            valid = runWithSessionTranscriptReadFence(source.admission, () => {
-              // Even an original admitted delivery must retain its exact branch/reset fence.
-              if (source.admission) {
-                resolveSqliteSessionTranscriptReadFence({
-                  database,
-                  agentId: database.agentId,
-                  sessionKey,
-                  sessionId: source.sessionId,
-                });
-              }
-              if ("entryId" in source) {
-                const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
-                return (
-                  entry?.sessionId === source.sessionId &&
-                  entry.lifecycleRevision === source.lifecycleRevision &&
-                  Boolean(
-                    readActiveTranscriptEntryAnchorInTransaction({
-                      database,
-                      resolved: {
-                        agentId: database.agentId,
-                        path: database.path,
-                        sessionKey,
-                        sessionId: source.sessionId,
-                      },
-                      entryId: source.entryId,
-                    }),
-                  )
-                );
-              }
-              const snapshot = readHarnessCompletionSourceInDatabase(database, source.claim);
-              return (
-                snapshot.entry?.sessionId === source.sessionId &&
-                snapshot.entry?.lifecycleRevision === source.lifecycleRevision &&
-                snapshot.validInput
-              );
-            });
-          } catch (error) {
-            if (!(error instanceof SessionTranscriptReadFenceError)) {
-              throw error;
-            }
-          }
-          return { sourceId: source.sourceId, valid };
-        });
+      return readIncognitoCompletionFacts(database, completionSources.values(), sessionKey);
     },
     execute(command: Command, facts: IncognitoSessionFacts[]) {
       const targets =

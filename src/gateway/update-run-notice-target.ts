@@ -7,9 +7,11 @@ import { createAccountActionGate } from "../channels/plugins/account-action-gate
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionThreadInfo } from "../channels/plugins/session-conversation.js";
+import { extractDeliveryInfo } from "../config/sessions.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import type { SessionDeliveryRoute } from "../infra/session-delivery-queue.records.js";
 import { getUpdateRun, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -30,6 +32,7 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveGatewayLifecycleNoticeRoute } from "./server-restart-sentinel-notice.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 type NoticeSession = ReturnType<typeof loadSessionEntry>;
@@ -150,6 +153,16 @@ export function authorizeUpdateRunNoticeTarget(
     : target;
 }
 
+export function assertUpdateRunNoticeTargetCurrent(
+  cfg: OpenClawConfig,
+  target: NoticeTarget,
+  message = "Lifecycle notice recipient is no longer a current command owner",
+): void {
+  if (authorizeUpdateRunNoticeTarget(cfg, target).kind !== "route") {
+    throw new PlatformMessageNotDispatchedError(message, { cause: undefined, retryable: false });
+  }
+}
+
 export function recordUpdateRunNoticeSkipped(
   runId: string | undefined,
   reason: string,
@@ -181,6 +194,29 @@ export function resolveActorSelectedNoticeOrigin(
     }
     throw error;
   }
+}
+
+/** Capture the request's canonical origin without promoting private session routes. */
+export function resolveUpdateRunNoticeOrigin(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  explicitDeliveryContext?: DeliveryContext;
+  threadId?: string;
+}) {
+  const sessionKey = params.sessionKey
+    ? resolveSessionStoreIdentity({ cfg: params.cfg, sessionKey: params.sessionKey }).canonicalKey
+    : undefined;
+  const inherited = resolveActorSelectedNoticeOrigin(sessionKey)
+    ? undefined
+    : extractDeliveryInfo(sessionKey, { cfg: params.cfg });
+  return {
+    sessionKey,
+    deliveryContext: mergeDeliveryContext(
+      params.explicitDeliveryContext,
+      inherited?.deliveryContext,
+    ),
+    threadId: params.threadId ?? inherited?.threadId,
+  };
 }
 
 /** Resolve the origin once; internal sessions intentionally have no external delivery context. */

@@ -1,15 +1,10 @@
 import { createHash } from "node:crypto";
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
@@ -66,6 +61,7 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
+import { createFollowupTranscriptTarget } from "./transcript-target.js";
 import { FollowupRunDeferredError, isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type InternalFollowupRun = FollowupRun & {
@@ -319,38 +315,6 @@ function buildCollectTranscriptInput(
     },
   });
   return { text, mentions };
-}
-
-function createFollowupTranscriptTarget(source: FollowupRun) {
-  const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
-  const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
-    agentId: source.run.agentId,
-  });
-  const scope = { storePath, sessionKey, agentId: source.run.agentId, clone: false };
-  const incognito = captureIncognitoSessionSource(scope);
-  const target = (sessionEntry: ReturnType<typeof loadSessionEntryReadOnly>) => ({
-    sessionId: sessionEntry?.sessionId ?? source.run.sessionId,
-    sessionKey,
-    sessionEntry,
-    storePath,
-    agentId: source.run.agentId,
-    cwd: source.run.cwd ?? source.run.workspaceDir,
-    config: source.run.config,
-  });
-  if (!incognito) {
-    return () => target(loadSessionEntryReadOnly(scope));
-  }
-  return async () =>
-    target(
-      await readSessionEntryReadOnlyInWorker(scope, () => {
-        incognito.admissionSignal?.throwIfAborted();
-        if ("kind" in incognito) {
-          incognito.assertCurrent();
-        } else {
-          incognito.actor.assertReadable();
-        }
-      }),
-    );
 }
 
 function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {

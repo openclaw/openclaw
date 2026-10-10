@@ -19,7 +19,6 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import {
   clearRestartSentinelIfRevision,
   formatRestartSentinelMessage,
@@ -77,7 +76,7 @@ import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 import {
-  authorizeUpdateRunNoticeTarget,
+  assertUpdateRunNoticeTargetCurrent,
   resolveActorSelectedNoticeOrigin,
   recordUpdateRunNoticeSkipped,
   resolveUpdateRunNoticeTarget,
@@ -490,12 +489,7 @@ async function loadRestartSentinelStartupTask(params: {
       }
       const assertNoticeCurrent = () => {
         queueContext.admission.assertCurrent();
-        if (authorizeUpdateRunNoticeTarget(getRuntimeConfig(), target).kind !== "route") {
-          throw new PlatformMessageNotDispatchedError(
-            "Lifecycle notice recipient is no longer a current command owner",
-            { cause: undefined, retryable: false },
-          );
-        }
+        assertUpdateRunNoticeTargetCurrent(getRuntimeConfig(), target);
       };
       const queuedNotice = await enqueueRestartSentinelNotice(
         {

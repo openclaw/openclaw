@@ -461,6 +461,16 @@ export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEviden
   );
 }
 
+export function hasUnexpectedRecoverySideEffects(result: AgentDeliveryEvidence): boolean {
+  return (
+    result.restartUnsafeSideEffectsDetected === true ||
+    result.messagingToolAggregateEvidenceUnaccounted === true ||
+    result.messagingToolSentTargetsTruncated === true ||
+    result.didSendDeterministicApprovalPrompt === true ||
+    hasCommittedOutboundDeliveryEvidence(result)
+  );
+}
+
 /** Returns whether any tool progress or outbound side effect makes a retry unsafe. */
 export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (

@@ -13,6 +13,7 @@ import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { makeDefaultEmbeddedResult, makeDefaultModelFallbackResult } from "./job-fixtures.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -434,27 +435,6 @@ export function makeCronSession(overrides?: Record<string, unknown>): CronSessio
     session.sessionEntry.lifecycleRevision = session.lifecycleRevision;
   }
   return session;
-}
-
-function makeDefaultModelFallbackResult() {
-  return {
-    result: {
-      result: {
-        payloads: [{ text: "test output" }],
-        meta: { agentMeta: {} },
-      },
-    },
-    provider: "openai",
-    model: "gpt-5.4",
-    attempts: [],
-  };
-}
-
-function makeDefaultEmbeddedResult() {
-  return {
-    payloads: [{ text: "test output" }],
-    meta: { agentMeta: {} },
-  };
 }
 
 export function mockRunCronFallbackPassthrough(): void {

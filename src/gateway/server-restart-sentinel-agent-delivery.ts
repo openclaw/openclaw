@@ -5,7 +5,7 @@ import {
   collectDeliveredMediaUrls,
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
-  hasCommittedOutboundDeliveryEvidence,
+  hasUnexpectedRecoverySideEffects,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
   hasExplicitlyVisibleAgentPayload,
   type AgentDeliveryEvidence,
@@ -79,16 +79,6 @@ async function deadLetterSessionDelivery(
 
 function hasQueuedVisibleAgentPayload(result: Pick<AgentDeliveryEvidence, "payloads">): boolean {
   return Array.isArray(result.payloads) && result.payloads.some(hasExplicitlyVisibleAgentPayload);
-}
-
-function hasUnexpectedRecoverySideEffects(result: AgentDeliveryEvidence): boolean {
-  return (
-    result.restartUnsafeSideEffectsDetected === true ||
-    result.messagingToolAggregateEvidenceUnaccounted === true ||
-    result.messagingToolSentTargetsTruncated === true ||
-    result.didSendDeterministicApprovalPrompt === true ||
-    hasCommittedOutboundDeliveryEvidence(result)
-  );
 }
 
 function resolveQueuedAgentRunId(entry: QueuedAgentTurnSessionDelivery) {

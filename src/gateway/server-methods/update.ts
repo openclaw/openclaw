@@ -6,7 +6,6 @@ import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { resolveConfigPath } from "../../config/paths.js";
-import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
@@ -58,7 +57,6 @@ import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-i
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isBrowserOperatorUiClient,
@@ -67,9 +65,8 @@ import {
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { recordLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
-import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
-  resolveActorSelectedNoticeOrigin,
+  resolveUpdateRunNoticeOrigin,
   resolveUpdateRunNoticeTarget,
 } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
@@ -109,28 +106,24 @@ export const updateHandlers: GatewayRequestHandlers = {
     } = parseRestartRequestParams(params);
     const getConfig = context.getRuntimeConfig;
     const config = getConfig();
-    let sessionKey: string | undefined;
-    if (rawSessionKey) {
-      try {
-        sessionKey = resolveSessionStoreIdentity({
-          cfg: config,
-          sessionKey: rawSessionKey,
-        }).canonicalKey;
-      } catch (error) {
-        if (!(error instanceof AgentSelectionRequiredError)) {
-          throw error;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
+    let noticeOrigin: ReturnType<typeof resolveUpdateRunNoticeOrigin>;
+    try {
+      noticeOrigin = resolveUpdateRunNoticeOrigin({
+        cfg: config,
+        sessionKey: rawSessionKey,
+        explicitDeliveryContext: requestedDeliveryContext,
+        threadId: requestedThreadId,
+      });
+    } catch (error) {
+      if (!(error instanceof AgentSelectionRequiredError)) {
+        throw error;
       }
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+      return;
     }
+    const { sessionKey, threadId } = noticeOrigin;
+    let { deliveryContext } = noticeOrigin;
     const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
-    const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
-      resolveActorSelectedNoticeOrigin(sessionKey)
-        ? {}
-        : extractDeliveryInfo(sessionKey, { cfg: config });
-    let deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
-    const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMs = params.timeoutMs === undefined ? undefined : Math.max(1000, params.timeoutMs);
 
     const requesterChannel = params.requester?.channel;

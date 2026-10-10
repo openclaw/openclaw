@@ -9,7 +9,6 @@ import {
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-notice.js";
@@ -17,6 +16,7 @@ import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sendGatewayLifecycleNotice } from "./server-restart-sentinel-notice.js";
 import {
+  assertUpdateRunNoticeTargetCurrent,
   authorizeUpdateRunNoticeTarget,
   recordUpdateRunNoticeSkipped,
   resolveActorSelectedNoticeOrigin,
@@ -85,12 +85,11 @@ export async function createUpdateRunNotifier(
             deliveryIntentId,
             assertCurrent() {
               context.workerContext.admission.assertCurrent();
-              if (authorizeUpdateRunNoticeTarget(getConfig(), noticeTarget).kind !== "route") {
-                throw new PlatformMessageNotDispatchedError("Update notice authority ended", {
-                  cause: undefined,
-                  retryable: false,
-                });
-              }
+              assertUpdateRunNoticeTargetCurrent(
+                getConfig(),
+                noticeTarget,
+                "Update notice authority ended",
+              );
             },
           },
           context,

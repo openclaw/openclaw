@@ -29,6 +29,15 @@ import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
 import type { GatewayClient } from "./types.js";
 
+export class CronJobConfigRevisionConflictError extends Error {
+  constructor(
+    readonly expectedConfigRevision: string,
+    readonly actualConfigRevision: string,
+  ) {
+    super("cron job definition no longer matches the loaded version");
+  }
+}
+
 export function requiresExplicitAgentRuntimeToolsAllow(params: {
   job: Pick<CronJob, "payload" | "trigger">;
   callerScope: CronCallerScope | undefined;
