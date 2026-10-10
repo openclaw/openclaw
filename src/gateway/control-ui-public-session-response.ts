@@ -22,7 +22,7 @@ export async function servePublicSessionRepresentation(params: {
   requestKey: string;
   document: Pick<
     Parameters<typeof renderPublicSessionDocument>[0],
-    "latestUrl" | "canonicalUrl" | "cardUrl" | "entryUrl" | "clientAuthBasePath"
+    "latestUrl" | "canonicalUrl" | "cardUrl" | "entryUrl" | "clientAuthBasePath" | "assetBasePath"
   >;
   olderUrl: (offset: number) => string;
   unavailable: (status: 404 | 429 | 503, retryAfterSeconds?: number) => void;

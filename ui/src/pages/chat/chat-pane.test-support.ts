@@ -160,7 +160,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   typingOverflow?: ChatTypingOverflow;
   clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
-  sendTypingState: (typing: boolean, preview?: string) => void;
+  sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
     suggestion: SessionSuggestion,

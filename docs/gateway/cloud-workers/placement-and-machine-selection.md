@@ -6,6 +6,21 @@ read_when: "You are choosing where a session runs, or overriding its operating s
 
 Choosing the machine a session runs on: an explicitly authorized paired device, a Crabbox cloud profile for either harness, and per-placement operating-system and machine-class overrides.
 
+## A deployment-required OpenClaw destination
+
+An operator can set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+when every session must use one OpenClaw worker profile. Control UI displays that
+destination without a chooser; it is not a user-selected cloud worker. The
+Gateway owns placement, including an empty managed workspace for a chat without
+a repository, and rejects attempts to select a local or different execution
+target. Normal users do not need manual dispatch privileges.
+
+If preparation fails, the initial message remains unsent and the existing
+placement recovery flow offers Retry or Stop. There is no local fallback. The
+optional selection procedures below apply when the Gateway has no required
+profile.
+
 ## Codex on a paired device
 
 Paired-device Codex placement requires the `codex` plugin to be installed and

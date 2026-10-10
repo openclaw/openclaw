@@ -747,6 +747,7 @@ source "$script_parent_dir/pr-lib/common.sh"
 source "$script_parent_dir/pr-lib/merge.sh"
 source "$script_parent_dir/pr-lib/review.sh"
 source "$script_parent_dir/pr-lib/gates.sh"
+source "$script_parent_dir/pr-lib/prepare-core.sh"
 repo_root() { printf '%s\\n' "$FIXTURE_REPO"; }
 ensure_gh_api_auth() { :; }
 verify_prep_branch_matches_prepared_head() { [ "$(command git rev-parse HEAD)" = "$2" ]; }

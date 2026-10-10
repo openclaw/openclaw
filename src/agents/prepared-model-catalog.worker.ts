@@ -24,7 +24,10 @@ import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import {
+  listManifestSyntheticAuthProviderRefs,
+  resolveRuntimeSyntheticAuthProviderRefs,
+} from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -282,6 +285,9 @@ async function runCatalogRequest(
           syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
             [
               ...new Set([
+                ...listManifestSyntheticAuthProviderRefs(
+                  pluginGenerationScope.metadataSnapshot.index,
+                ),
                 ...resolveRuntimeSyntheticAuthProviderRefs(),
                 ...request.syntheticAuth.map(({ providerRef }) => providerRef),
               ]),
@@ -420,18 +426,8 @@ async function runCatalogRequest(
         }),
       { refresh: request.refresh },
     );
-    // Deferred catalog providers can expose pure synthetic auth only after loading.
-    // Capture it before the registry decides whether to admit their discovered models.
-    const discoveryCredentials = {
-      ...resolveSyntheticCredentials([...providerModels.keys()]),
-      ...credentials,
-    };
     const facts = await prepareFullCatalogFacts(
-      {
-        ...exactAgentFacts,
-        credentials: discoveryCredentials,
-        templateAuthStorage: AuthStorage.inMemory(discoveryCredentials),
-      },
+      exactAgentFacts,
       catalogGeneration,
       "live",
       source,
@@ -452,7 +448,7 @@ async function runCatalogRequest(
           )
           .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
       ),
-      ...discoveryCredentials,
+      ...credentials,
     };
     const runtimeModels = new Map<string, Model[]>();
     const { catalogModels } = facts;
