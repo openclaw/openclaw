@@ -27,6 +27,8 @@ it.skipIf(process.platform !== "win32")(
         "-e",
         `
           import childProcess from "node:child_process";
+          import { Worker } from "node:worker_threads";
+          import { once } from "node:events";
           import { syncBuiltinESMExports } from "node:module";
           const powershell = ${JSON.stringify(getWindowsPowerShellExePath())};
           const expected = Date.parse(childProcess.execFileSync(powershell, [
@@ -40,6 +42,17 @@ it.skipIf(process.platform !== "win32")(
           if (!Number.isFinite(expected) || actual !== expected) {
             throw new Error("native creation timestamp differs from the kernel shell query");
           }
+          const worker = new Worker(new URL('data:text/javascript,' + encodeURIComponent(
+            'import { parentPort, workerData } from "node:worker_threads"; ' +
+            'import childProcess from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; ' +
+            'childProcess.spawnSync = () => { throw new Error("unexpected Worker shell fallback"); }; syncBuiltinESMExports(); ' +
+            'import { readWindowsProcessStartTimeSync } from ' + ${JSON.stringify(JSON.stringify(source))} + '; ' +
+            'parentPort.postMessage(readWindowsProcessStartTimeSync(workerData));'
+          )), { workerData: process.pid });
+          try {
+            const [workerTime] = await once(worker, "message");
+            if (workerTime !== expected) throw new Error("Worker timestamp differs from kernel query");
+          } finally { await worker.terminate(); }
           console.log("native identity matches");
         `,
       ],

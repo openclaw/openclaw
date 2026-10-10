@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { readProcessCoalition } from "@openclaw/proc-safe/darwin";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.js";
 import { spawnPsSync } from "../infra/spawn-ps.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
@@ -9,83 +9,26 @@ import { parseKeyValueOutput } from "./runtime-parse.js";
 type ServiceProcessMembership = "inside" | "outside" | "unknown" | "absent";
 type ResourceCoalition = { id: number; name?: string };
 const PROBE_TIMEOUT_MS = 2_000;
-// Node startup plus two native library loads; sized for old Intel Macs.
-const NATIVE_PROBE_TIMEOUT_MS = 10_000;
 declare const SEALED_RUNTIME_BUILD: boolean;
 
-// Koffi segfaults some Darwin hosts (x86_64 under Rosetta), so the query runs in a joined
-// child: a crash only loses the observation. Coalition IDs are kernel facts; the job name
-// comes from launchd and may be unavailable.
-const NATIVE_COALITION_SCRIPT = String.raw`
-const koffi = require(process.argv[1]);
-const pid = Number(process.argv[2]);
-const libproc = koffi.load('/usr/lib/libproc.dylib');
-const pidinfo = libproc.func('int proc_pidinfo(int pid, int flavor, uint64_t arg, _Out_ void *buffer, int buffersize)');
-// PROC_PIDCOALITIONINFO: resource and jetsam coalition IDs, then three reserved uint64s.
-const info = Buffer.alloc(40);
-if (pidinfo(pid, 20, 0, info, info.length) !== info.length) process.exit(1);
-const id = info.readBigUInt64LE(0);
-if (!id) process.exit(1);
-let name;
-try {
-  const xpc = koffi.load('/usr/lib/system/libxpc.dylib');
-  const copy = xpc.func('void *xpc_coalition_copy_info(uint64_t id)');
-  const release = xpc.func('void xpc_release(void *value)');
-  const type = xpc.func('void *xpc_get_type(void *value)');
-  const getId = xpc.func('uint64_t xpc_dictionary_get_uint64(void *value, const char *key)');
-  const getName = xpc.func('const char *xpc_dictionary_get_string(void *value, const char *key)');
-  const dictionaryType = koffi.address(xpc.symbol('_xpc_type_dictionary'));
-  const idKey = koffi.decode(xpc.symbol('XPC_COALITION_INFO_KEY_CID'), 'const char *');
-  const nameKey = koffi.decode(xpc.symbol('XPC_COALITION_INFO_KEY_NAME'), 'const char *');
-  const reply = copy(id);
-  if (reply) {
-    try {
-      if (koffi.address(type(reply)) === dictionaryType && BigInt(getId(reply, idKey)) === id) {
-        name = getName(reply, nameKey) ?? undefined;
-      }
-    } finally {
-      release(reply);
-    }
-  }
-} catch {}
-process.stdout.write(JSON.stringify({ id: String(id), name }));
-`;
-
-function readNativeResourceCoalition(pid: number): ResourceCoalition | undefined {
+function readNativeResourceCoalition(pid: number): ResourceCoalition | null | undefined {
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
     return undefined;
   }
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--input-type=commonjs",
-      "-e",
-      NATIVE_COALITION_SCRIPT,
-      createRequire(import.meta.url).resolve("koffi"),
-      String(pid),
-    ],
-    {
-      encoding: "utf8",
-      env: resolveDiagnosticProcessEnv(),
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: NATIVE_PROBE_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-      maxBuffer: 4096,
-    },
-  );
-  if (result.error || result.status !== 0) {
+  try {
+    const coalition = readProcessCoalition(pid);
+    if (!coalition) {
+      return null;
+    }
+    const id = Number(coalition.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return undefined;
+    }
+    const name = coalition.name?.trim();
+    return name && !containsAsciiControlCharacter(name) ? { id, name } : { id };
+  } catch {
     return undefined;
   }
-  const info: unknown = JSON.parse(result.stdout);
-  if (!info || typeof info !== "object" || !("id" in info) || typeof info.id !== "string") {
-    return undefined;
-  }
-  const id = Number(info.id);
-  if (!/^[1-9]\d*$/.test(info.id) || !Number.isSafeInteger(id)) {
-    return undefined;
-  }
-  const name = "name" in info && typeof info.name === "string" ? info.name.trim() : "";
-  return name && !containsAsciiControlCharacter(name) ? { id, name } : { id };
 }
 
 function readResourceCoalition(pid: number): ResourceCoalition | null | undefined {
