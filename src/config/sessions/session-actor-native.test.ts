@@ -268,6 +268,11 @@ it("retains unrelated session replicas through native entry, sharing, participan
         data: { value: 1 },
         timestamp: "2026-10-10T00:00:00.000Z",
       };
+      const siblingTailEvent = {
+        ...siblingEvent,
+        id: "native-sibling-tail",
+        parentId: siblingEvent.id,
+      };
       const mutations = [
         () =>
           replaceSessionEntrySync(siblingScope, {
@@ -293,19 +298,22 @@ it("retains unrelated session replicas through native entry, sharing, participan
             identity: { type: "agent", id: "helper-agent" },
             promptedAt: 5,
           }),
-        () =>
-          expect(
-            appendTranscriptEventSync(
-              { ...siblingScope, sessionId: siblingEntry.sessionId },
-              siblingEvent,
-            ),
-          ).toMatchObject({ ok: true, value: true }),
+        () => {
+          for (const event of [siblingEvent, siblingTailEvent]) {
+            expect(
+              appendTranscriptEventSync(
+                { ...siblingScope, sessionId: siblingEntry.sessionId },
+                event,
+              ),
+            ).toMatchObject({ ok: true, value: true });
+          }
+        },
         () =>
           expect(
             replaceTranscriptSuffixEventsSync(
               { ...siblingScope, sessionId: siblingEntry.sessionId },
+              [siblingEvent, siblingTailEvent],
               [siblingEvent],
-              [{ ...siblingEvent, data: { value: 2 } }],
             ),
           ).toBe(true),
         () =>
