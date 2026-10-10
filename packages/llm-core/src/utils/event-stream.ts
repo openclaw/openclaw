@@ -133,13 +133,10 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
         new Error("event stream ended without a terminal event or final result"),
       );
     }
-    while (this.waiting.length > 0) {
-      const waiter = this.waiting.shift();
-      if (!waiter) {
-        break;
-      }
-      waiter({ value: undefined as unknown, done: true });
+    for (const waiter of this.waiting) {
+      waiter({ value: undefined, done: true });
     }
+    this.waiting = [];
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<T> {

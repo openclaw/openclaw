@@ -65,7 +65,7 @@ describe("native attempt queued automation admission", () => {
       await withOpenClawTestState({ prefix: "native-cron-admission-" }, async (state) => {
         resetCommandQueueStateForTest();
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main" }], defaults: { workspace: state.workspaceDir } },
+          agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
           cron: { enabled: false },
         };
         await state.writeConfig(cfg);

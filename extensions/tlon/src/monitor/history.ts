@@ -59,18 +59,10 @@ async function fetchChannelHistory(
       return [];
     }
 
-    let posts: unknown[] = [];
-    if (Array.isArray(data)) {
-      posts = data;
-    } else {
-      const dataRecord = asRecord(data);
-      const postMap = asRecord(dataRecord?.posts);
-      if (postMap) {
-        posts = Object.values(postMap);
-      } else if (dataRecord) {
-        posts = Object.values(dataRecord);
-      }
-    }
+    const dataRecord = asRecord(data);
+    const posts = Array.isArray(data)
+      ? data
+      : Object.values(asRecord(dataRecord?.posts) ?? dataRecord ?? {});
 
     const messages = posts
       .map((item) => {
@@ -148,10 +140,6 @@ export async function fetchThreadRootAuthor(
   }
 }
 
-/**
- * Fetch thread/reply history for a specific parent post.
- * Used to get context when entering a thread conversation.
- */
 export async function fetchThreadHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
@@ -160,8 +148,6 @@ export async function fetchThreadHistory(
   runtime?: RuntimeEnv,
 ): Promise<TlonHistoryEntry[]> {
   try {
-    // Tlon API: fetch replies to a specific post
-    // Format: /channels/v4/{nest}/posts/post/{parentId}/replies/newest/{count}.json
     // parentId needs @ud formatting (dots every 3 digits)
     const formattedParentId = formatUd(parentId);
     runtime?.log?.(
@@ -192,9 +178,9 @@ export async function fetchThreadHistory(
       }
     }
 
+    // Thread replies use 'memo' structure
     const messages = replies
       .map((item) => {
-        // Thread replies use 'memo' structure
         const itemRecord = asRecord(item);
         const replyRecord = asRecord(itemRecord?.["r-reply"]);
         const replySet = asRecord(replyRecord?.set);
@@ -209,7 +195,6 @@ export async function fetchThreadHistory(
     return messages;
   } catch (error: unknown) {
     runtime?.log?.(`[tlon] Error fetching thread history: ${formatErrorMessage(error)}`);
-    // Fall back to trying alternate path structure
     try {
       const altPath = `/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`;
       runtime?.log?.(`[tlon] Trying alternate path: ${altPath}`);

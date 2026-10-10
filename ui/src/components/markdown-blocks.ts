@@ -1,36 +1,32 @@
 // One lifecycle owner for interactive Markdown in transcripts and previews.
 import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import {
-  PRESENTATION_CHANGED_EVENT,
+  PresentationAsyncDirective,
   type PresentationBinding,
+  type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
 let codeBlockRegionSequence = 0;
 const blockSelector = ".code-block-wrapper, .markdown-mermaid";
-class MarkdownBlocksDirective extends AsyncDirective {
-  private root: HTMLElement | undefined;
+export class MarkdownBlocks {
   private observedRoot: HTMLElement | undefined;
   private scanPending = false;
   private active = true;
-  private presentation?: PresentationBinding;
-  private readonly handlePresentationChange = () => {
-    if (this.presentation?.isPresented() === false) {
-      this.active = false;
-      this.release();
-    }
-  };
+  private connected = true;
+
+  constructor(private readonly root: HTMLElement) {}
+
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
   private readonly resizeObserver =
     typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver((entries) => {
-          if (!this.active || !this.isConnected) {
+          if (!this.active || !this.connected) {
             return;
           }
           const wrappers = new Set(
@@ -75,45 +71,26 @@ class MarkdownBlocksDirective extends AsyncDirective {
     }
   }
 
-  render(_active = true, _presentation?: PresentationBinding) {
-    return nothing;
-  }
-
-  override update(
-    part: ElementPart,
-    [active = true, presentation]: [boolean?, PresentationBinding?],
-  ) {
-    const previousOwner = this.presentation?.owner;
-    this.presentation = presentation;
-    if (previousOwner !== presentation?.owner) {
-      previousOwner?.removeEventListener(PRESENTATION_CHANGED_EVENT, this.handlePresentationChange);
-      if (this.isConnected) {
-        presentation?.owner.addEventListener(
-          PRESENTATION_CHANGED_EVENT,
-          this.handlePresentationChange,
-        );
-      }
-    }
-    const root = part.element instanceof HTMLElement ? part.element : undefined;
-    if (root !== this.root) {
-      this.release();
-      this.root = root;
-    }
-    this.active = active && presentation?.isPresented() !== false;
-    if (this.active) {
+  update(active: boolean): void {
+    this.active = active;
+    if (active) {
       this.scheduleScan();
     } else {
       this.release();
     }
-    return nothing;
   }
 
-  protected override disconnected(): void {
-    this.presentation?.owner.removeEventListener(
-      PRESENTATION_CHANGED_EVENT,
-      this.handlePresentationChange,
-    );
-    this.release();
+  setConnected(connected: boolean): void {
+    this.connected = connected;
+    if (connected) {
+      this.scheduleScan();
+    } else {
+      this.release();
+    }
+  }
+
+  dispose(): void {
+    this.setConnected(false);
   }
 
   private release(): void {
@@ -128,17 +105,8 @@ class MarkdownBlocksDirective extends AsyncDirective {
     }
   }
 
-  protected override reconnected(): void {
-    this.presentation?.owner.addEventListener(
-      PRESENTATION_CHANGED_EVENT,
-      this.handlePresentationChange,
-    );
-    this.handlePresentationChange();
-    this.scheduleScan();
-  }
-
   private scheduleScan(): void {
-    if (this.scanPending || !this.active || !this.isConnected) {
+    if (this.scanPending || !this.active || !this.connected) {
       return;
     }
     this.scanPending = true;
@@ -146,7 +114,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
     // and fence queued scans when the host is removed before the microtask runs.
     queueMicrotask(() => {
       this.scanPending = false;
-      if (this.active && this.isConnected && this.root?.isConnected) {
+      if (this.active && this.connected && this.root?.isConnected) {
         this.scan(this.root);
       }
     });
@@ -165,7 +133,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
       });
       this.observedRoot = root;
     }
-    // Lit's post-commit scan can precede observer delivery. Wire new controls
+    // A post-commit scan can precede observer delivery. Wire new controls
     // from this commit's records before consumers observe the rendered result.
     this.collectMutations(this.mutationObserver.takeRecords());
     const blocks = [...this.pendingBlocks];
@@ -178,7 +146,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
         if (wrapper.querySelector("pre code")) {
           const isCurrent = () =>
             this.active &&
-            this.isConnected &&
+            this.connected &&
             this.root === root &&
             root.isConnected &&
             root.contains(wrapper);
@@ -235,6 +203,44 @@ class MarkdownBlocksDirective extends AsyncDirective {
     for (const block of root.querySelectorAll<HTMLElement>(blockSelector)) {
       this.pendingBlocks.add(block);
     }
+  }
+}
+
+class MarkdownBlocksDirective extends PresentationAsyncDirective {
+  private root?: HTMLElement;
+  private owner?: MarkdownBlocks;
+
+  protected override presentationChanged(binding?: PresentationBinding) {
+    if (binding?.isPresented() === false) {
+      this.owner?.update(false);
+    }
+  }
+
+  render(_presented: PresentationValue = true) {
+    return nothing;
+  }
+
+  override update(part: ElementPart, [presented = true]: [PresentationValue?]) {
+    this.updatePresentation(presented);
+    const root = part.element instanceof HTMLElement ? part.element : undefined;
+    if (root !== this.root) {
+      this.owner?.dispose();
+      this.root = root;
+      this.owner = root ? new MarkdownBlocks(root) : undefined;
+    }
+    this.owner?.setConnected(this.isConnected);
+    this.owner?.update(typeof presented === "boolean" ? presented : presented.isPresented());
+    return nothing;
+  }
+
+  protected override disconnected(): void {
+    super.disconnected();
+    this.owner?.setConnected(false);
+  }
+
+  protected override reconnected(): void {
+    super.reconnected();
+    this.owner?.setConnected(true);
   }
 }
 

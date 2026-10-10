@@ -42,9 +42,6 @@ const remoteCatalogScope = resolveGlobalSingleton(
   Symbol.for("openclaw.remoteModelCatalogScope"),
   () => new AsyncLocalStorage<{ catalog: ActiveRemoteModelCatalog | null }>(),
 );
-let readBundledGeneratedAt = bundledCatalogGeneratedAt;
-let readStoredCatalog = readRemoteModelCatalog;
-let readStoredCatalogAsync = readRemoteModelCatalogAsync;
 
 function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: number): boolean {
   if (bundle.generatedAt <= bundledGeneratedAt) {
@@ -55,14 +52,6 @@ function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: 
   }
   const comparison = compareOpenClawVersions(VERSION, bundle.minVersion);
   return comparison !== null && comparison >= 0;
-}
-
-function readCompatibleRemoteModelCatalog(): ActiveRemoteModelCatalog | null {
-  const bundledGeneratedAt = readBundledGeneratedAt();
-  if (bundledGeneratedAt === undefined) {
-    return null;
-  }
-  return selectCompatibleRemoteModelCatalog(readStoredCatalog(), bundledGeneratedAt);
 }
 
 function selectCompatibleRemoteModelCatalog(
@@ -110,7 +99,11 @@ export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCat
   }
   let snapshot: ActiveRemoteModelCatalog | null;
   try {
-    snapshot = readCompatibleRemoteModelCatalog();
+    const bundledGeneratedAt = bundledCatalogGeneratedAt();
+    snapshot =
+      bundledGeneratedAt === undefined
+        ? null
+        : selectCompatibleRemoteModelCatalog(readRemoteModelCatalog(), bundledGeneratedAt);
   } catch {
     snapshot = null;
   }
@@ -127,7 +120,7 @@ export async function prepareRemoteModelCatalogStartupSnapshot(
   }
   let bundledGeneratedAt: number | undefined;
   try {
-    bundledGeneratedAt = readBundledGeneratedAt();
+    bundledGeneratedAt = bundledCatalogGeneratedAt();
   } catch {
     return publishRemoteModelCatalogStartupSnapshot(null);
   }
@@ -138,7 +131,7 @@ export async function prepareRemoteModelCatalogStartupSnapshot(
   let snapshot: ActiveRemoteModelCatalog | null;
   try {
     snapshot = selectCompatibleRemoteModelCatalog(
-      await readStoredCatalogAsync(context),
+      await readRemoteModelCatalogAsync(context),
       bundledGeneratedAt,
     );
   } catch {
@@ -174,13 +167,13 @@ export async function readRemoteModelCatalogUpdate(
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
   }
-  const bundledGeneratedAt = readBundledGeneratedAt();
+  const bundledGeneratedAt = bundledCatalogGeneratedAt();
   if (bundledGeneratedAt === undefined) {
     return undefined;
   }
   const context = captureOpenClawStateWorkerContext();
   const snapshot = selectCompatibleRemoteModelCatalog(
-    await readStoredCatalogAsync(context),
+    await readRemoteModelCatalogAsync(context),
     bundledGeneratedAt,
   );
   context.admission.assertCurrent();
@@ -222,37 +215,4 @@ export function getRemoteModelCatalogProviderOverlay(
 ): ModelCatalogProvider | undefined {
   const providerId = normalizeProviderId(provider);
   return providerId ? getActiveRemoteModelCatalog(config)?.providers[providerId] : undefined;
-}
-
-export function getRemoteModelCatalogPricing(
-  config: OpenClawConfig,
-): Readonly<Record<string, RemoteModelCatalogPrice>> | undefined {
-  return getActiveRemoteModelCatalog(config)?.pricing;
-}
-
-export function getRemoteModelCatalogUpstreamPricing(
-  config: OpenClawConfig,
-): Readonly<Record<string, RemoteModelCatalogUpstreamPrice>> | undefined {
-  return getActiveRemoteModelCatalog(config)?.upstreamPricing;
-}
-
-function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
-  bundledGeneratedAt?: typeof bundledCatalogGeneratedAt;
-  readStoredCatalog?: typeof readRemoteModelCatalog;
-}): void {
-  setEnvironmentData(STARTUP_SNAPSHOT_KEY, undefined);
-  readBundledGeneratedAt = sources?.bundledGeneratedAt ?? bundledCatalogGeneratedAt;
-  readStoredCatalog = sources?.readStoredCatalog ?? readRemoteModelCatalog;
-  const readTestCatalog = sources?.readStoredCatalog;
-  readStoredCatalogAsync = readTestCatalog
-    ? async () => readTestCatalog()
-    : readRemoteModelCatalogAsync;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.remoteModelCatalogOverlayTestApi")
-  ] = {
-    setRemoteModelCatalogOverlaySourcesForTest,
-  };
 }

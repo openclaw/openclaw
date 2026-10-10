@@ -36,11 +36,6 @@ type OutputMode = "human" | "json";
 // cannot allocate an unbounded input before format-specific validation runs.
 const MAX_OC_PATH_INPUT_BYTES = MAX_JSONC_INPUT_BYTES;
 
-type LoadedOcPathFile = {
-  readonly ast: OcAst;
-  readonly raw: string;
-};
-
 const SCRUB_PLACEHOLDER = "[REDACTED]";
 
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
@@ -76,7 +71,6 @@ function emitError(mode: OutputMode, message: string, code = "ERR"): void {
   process.stderr.write(`${code}: ${scrubbed}\n`);
 }
 
-/** Parse an oc-path string; emit structured error and return null on failure. */
 function tryParse(pathStr: string, mode: OutputMode): OcPath | null {
   try {
     return parseOcPath(pathStr);
@@ -94,7 +88,7 @@ async function loadOcPathFile(
   absPath: string,
   fileName: string,
   mode: OutputMode,
-): Promise<LoadedOcPathFile | null> {
+): Promise<OcAst | null> {
   const kind = inferKind(fileName);
   // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
   // preserves regular-file and symlink reads while making that check reachable.
@@ -139,15 +133,15 @@ async function loadOcPathFile(
       process.exitCode = 2;
       return null;
     }
-    return { ast: result.ast, raw };
+    return result.ast;
   }
   if (kind === "jsonl") {
-    return { ast: parseJsonl(raw).ast, raw };
+    return parseJsonl(raw).ast;
   }
   if (kind === "yaml") {
-    return { ast: parseYaml(raw).ast, raw };
+    return parseYaml(raw).ast;
   }
-  return { ast: parseMd(raw).ast, raw };
+  return parseMd(raw).ast;
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
@@ -211,21 +205,19 @@ function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): 
   return formatPatch(patch, FILE_HEADERS_ONLY);
 }
 
-// ---------- Commands -----------------------------------------------------
-
 async function pathResolveCommand(pathStr: string, options: PathCommandOptions): Promise<void> {
   const mode = detectMode(options);
   const ocPath = tryParse(pathStr, mode);
   if (ocPath === null) {
     return;
   }
-  const loaded = await loadOcPathFile(resolveFsPath(ocPath, options), ocPath.file, mode);
-  if (loaded === null) {
+  const ast = await loadOcPathFile(resolveFsPath(ocPath, options), ocPath.file, mode);
+  if (ast === null) {
     return;
   }
   let match: OcMatch | null;
   try {
-    match = resolveOcPath(loaded.ast, ocPath);
+    match = resolveOcPath(ast, ocPath);
   } catch (err) {
     if (err instanceof OcPathError) {
       // resolveOcPath throws on wildcard patterns — point at find.
@@ -263,14 +255,14 @@ async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const loaded = await loadOcPathFile(fsPath, ocPath.file, mode);
-  if (loaded === null) {
+  const ast = await loadOcPathFile(fsPath, ocPath.file, mode);
+  if (ast === null) {
     return;
   }
 
   let result: ReturnType<typeof setOcPath>;
   try {
-    result = setOcPath(loaded.ast, ocPath, value, { valueJson: options.valueJson === true });
+    result = setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true });
   } catch (err) {
     // Keep sentinel errors inside the scrubbed --json error boundary.
     if (err instanceof OcEmitSentinelError) {
@@ -295,8 +287,7 @@ async function pathSetCommand(
   const byteLength = Buffer.byteLength(newBytes, "utf8");
 
   if (options.dryRun === true) {
-    const diff =
-      options.diff === true ? formatUnifiedDiff(loaded.raw, newBytes, fsPath) : undefined;
+    const diff = options.diff === true ? formatUnifiedDiff(ast.raw, newBytes, fsPath) : undefined;
     emit(
       mode,
       { ok: true, dryRun: true, bytes: newBytes, ...(diff !== undefined ? { diff } : {}) },
@@ -332,11 +323,11 @@ async function pathFindCommand(patternStr: string, options: PathCommandOptions):
     process.exitCode = 2;
     return;
   }
-  const loaded = await loadOcPathFile(resolveFsPath(pattern, options), pattern.file, mode);
-  if (loaded === null) {
+  const ast = await loadOcPathFile(resolveFsPath(pattern, options), pattern.file, mode);
+  if (ast === null) {
     return;
   }
-  const matches = findOcPaths(loaded.ast, pattern);
+  const matches = findOcPaths(ast, pattern);
   emit(
     mode,
     {
@@ -371,13 +362,7 @@ function pathValidateCommand(pathStr: string, options: PathCommandOptions): void
         valid: true,
         ocPath: pathStr,
         formatted: formatOcPath(ocPath),
-        structure: {
-          file: ocPath.file,
-          section: ocPath.section,
-          item: ocPath.item,
-          field: ocPath.field,
-          session: ocPath.session,
-        },
+        structure: ocPath,
       },
       () => {
         const lines = [`valid: ${pathStr}`, `  file:    ${ocPath.file}`];
@@ -417,19 +402,17 @@ async function pathEmitCommand(fileArg: string, options: PathCommandOptions): Pr
       ? resolvePath(options.file)
       : resolvePath(options.cwd ?? process.cwd(), fileArg);
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
-  const loaded = await loadOcPathFile(fsPath, fileName, mode);
-  if (loaded === null) {
+  const ast = await loadOcPathFile(fsPath, fileName, mode);
+  if (ast === null) {
     return;
   }
-  const bytes = loaded.ast.raw;
+  const bytes = ast.raw;
   if (mode === "json") {
-    process.stdout.write(scrubSentinel(JSON.stringify({ ok: true, kind: loaded.ast.kind, bytes })));
+    process.stdout.write(scrubSentinel(JSON.stringify({ ok: true, kind: ast.kind, bytes })));
     return;
   }
   process.stdout.write(bytes);
 }
-
-// ---------- Commander wiring ---------------------------------------------
 
 function withCommonOpts(cmd: Command): Command {
   return cmd

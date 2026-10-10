@@ -160,6 +160,119 @@ describePosix("correction publication authority handoff", () => {
     },
   );
 
+  it.each([
+    ["auto", "prepare_push"],
+    ["graphql", "prepare_push"],
+    ["graphql", "prepare_sync_head"],
+  ] as const)(
+    "publishes and resumes a reviewed %s correction through %s with pending GitHub gates",
+    (transport, command) => {
+      const f = fixture(transport);
+      const incomingReview = readFileSync(join(f.local, "review.json"), "utf8");
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.candidate}\n`,
+      );
+      const published = runCorrection(f, { command: `${command} 4242` });
+      expect(published.status, published.stdout + published.stderr).toBe(0);
+      const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+      const gates = readFileSync(join(f.local, "gates.env"), "utf8");
+      expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
+      expect(gates).not.toMatch(/GATES_PASSED_AT|LAST_VERIFIED_HEAD_SHA|FULL_GATES_HEAD_SHA/);
+      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+        `LOCAL_PREP_HEAD_SHA=${f.candidate}\n`,
+      );
+      expect(readFileSync(join(f.local, "prep.md"), "utf8")).not.toContain("Gates passed");
+      const resumed = runCorrection(f);
+      expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+      expect(readFileSync(join(f.local, "gates.env"), "utf8")).toBe(gates);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
+        `${transport === "auto" ? "push" : "graphql"}\n`,
+      );
+      expect(readFileSync(join(f.local, "review.json"), "utf8")).toBe(incomingReview);
+    },
+  );
+
+  it.each(["missing", "stale", "foreign-pr", "changed-review"])(
+    "refuses pending correction publication with %s binding",
+    (fault) => {
+      const f = fixture();
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `PR_NUMBER=${fault === "foreign-pr" ? 42 : 4242}\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${fault === "missing" ? "" : fault === "stale" ? f.source : f.candidate}\n`,
+      );
+      if (fault === "changed-review") {
+        const path = join(f.local, "correction-review.json");
+        const review = JSON.parse(readFileSync(path, "utf8"));
+        review.pr.headSha = f.source;
+        writeFileSync(path, JSON.stringify(review));
+      }
+      const result = runCorrection(f);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+    },
+  );
+
+  it("publishes a signed baseline refresh only after fresh exact-candidate review and gates", () => {
+    const f = fixture("auto");
+    f.git("branch", "-m", "pr-4242-prep");
+    const contextPath = join(f.local, "prep-context.env");
+    writeFileSync(
+      contextPath,
+      readFileSync(contextPath, "utf8").replace("PREP_BRANCH=prep", "PREP_BRANCH=pr-4242-prep"),
+    );
+    const oldGates = readFileSync(join(f.local, "gates.env"));
+    f.git("checkout", "-q", "-b", "baseline", f.base);
+    writeFileSync(join(f.repoDir, "upstream.txt"), "upstream baseline repair\n");
+    f.git("add", "upstream.txt");
+    f.git("commit", "-qm", "fix: upstream baseline");
+    const baseline = f.git("rev-parse", "HEAD");
+    f.git("checkout", "-q", "pr-4242-prep");
+    const refreshed = runCorrection(f, {
+      command: `prepare_baseline_refresh 4242 --expected-head ${f.candidate} --baseline ${baseline}`,
+      setup: [
+        'source "$script_parent_dir/pr-lib/operation-lock.sh"',
+        "mark_pr_operation_side_effects_started() { :; }",
+        `enter_worktree() { PR_MAIN_SHA=${baseline}; }`,
+        "PR_OPERATION_LOCK_REF=refs/openclaw/pr-operation-locks/4242",
+        `PR_OPERATION_LOCK_OWNER_OID=${f.source}`,
+        'git update-ref "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"',
+      ],
+    });
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const head = f.git("rev-parse", "HEAD");
+    const initialized = runCorrection(f, { command: "prepare_correction_review_init 4242" });
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const reviewPath = join(f.local, "correction-review.json");
+    const review = JSON.parse(readFileSync(reviewPath, "utf8"));
+    Object.assign(review, validReview(head));
+    review.pr.number = 4242;
+    review.recommendation = "READY FOR /prepare-pr";
+    review.issueValidation.status = "valid";
+    review.correction.resolvedFindings[0].resolution = "Reviewed the full refreshed product delta.";
+    writeFileSync(reviewPath, JSON.stringify(review));
+    writeFileSync(join(f.local, "gates.env"), oldGates);
+    const stale = runCorrection(f);
+    expect(stale.status).not.toBe(0);
+    expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+    expect(readFileSync(join(f.local, "events"), "utf8")).not.toContain("push");
+    writeFileSync(
+      join(f.local, "gates.env"),
+      `PR_NUMBER=4242\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${head}\nFULL_GATES_HEAD_SHA=${head}\n`,
+    );
+    const published = runCorrection(f);
+    expect(published.status, published.stdout + published.stderr).toBe(0);
+    expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(head);
+    expect(f.git("show", "-s", "--format=%P", head)).toBe(`${f.candidate} ${baseline}`);
+    f.git("verify-commit", head);
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\n");
+    expect(readFileSync(join(f.local, "prepare-push-result.env"), "utf8")).toContain(
+      `PUSH_LOCAL_PREP_HEAD_SHA=${head}\n`,
+    );
+  });
+
   it.each(["review", "other receipt", "selected receipt", "removed receipt"])(
     "rejects %s mutation while protected proof is running",
     (changed) => {
@@ -209,46 +322,34 @@ describePosix("correction publication authority handoff", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
   });
 
-  it("does not advance authority or start proof when the result writer fails", () => {
-    const f = fixture();
-    const result = runCorrection(f, {
-      setup: [
-        "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
-        "pr_git() {",
-        '  if [ "$*" = "hash-object --stdin" ]; then mkdir .local/prepare-push-result.env; fi',
-        '  fixture_git "$@"',
-        "}",
-      ],
-      command: [
-        "if prepare_push 4242; then exit 99; else status=$?; fi",
-        `test "$PREP_PUBLICATION_LEASE_SHA" = '${f.source}' || exit 98`,
-        'exit "$status"',
-      ].join("\n"),
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Is a directory");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-    expectIncomplete(f);
-  });
-
-  it("rejects a replaced result instead of admitting whatever the writer path contains", () => {
-    const f = fixture();
-    const result = runCorrection(f, {
-      setup: [
-        "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
-        "pr_git() {",
-        '  if [ "$*" = "hash-object --no-filters -- .local/prepare-push-result.env" ]; then',
-        '    printf "\\n" >> .local/prepare-push-result.env',
-        "  fi",
-        '  fixture_git "$@"',
-        "}",
-      ],
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Correction review authority changed");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-    expectIncomplete(f);
-  });
+  it.each(["writer failure", "replaced result"])(
+    "does not advance authority or start proof after %s",
+    (fault) => {
+      const f = fixture();
+      const result = runCorrection(f, {
+        setup: [
+          "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
+          "pr_git() {",
+          fault === "writer failure"
+            ? '  if [ "$*" = "hash-object --stdin" ]; then mkdir .local/prepare-push-result.env; fi'
+            : '  if [ "$*" = "hash-object --no-filters -- .local/prepare-push-result.env" ]; then printf "\\n" >> .local/prepare-push-result.env; fi',
+          '  fixture_git "$@"',
+          "}",
+        ],
+        command: [
+          "if prepare_push 4242; then exit 99; else status=$?; fi",
+          `test "$PREP_PUBLICATION_LEASE_SHA" = '${f.source}' || exit 98`,
+          'exit "$status"',
+        ].join("\n"),
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        fault === "writer failure" ? "Is a directory" : "Correction review authority changed",
+      );
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
+      expectIncomplete(f);
+    },
+  );
 
   it("preserves an exact no-op receipt and advances stale process-local authority", () => {
     const f = fixture();

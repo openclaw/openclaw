@@ -37,6 +37,7 @@ import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./client-run-authority.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn() }));
+// mock-isolation: replace inference while exercising real source guards and native effects.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
 
 // A fixed-action backend replaces inference. Transcript capability, run binding,

@@ -366,10 +366,12 @@ describe("host-owned current admission annotation", () => {
         effectiveEngine: engine,
         effectiveEngineId: "annotation",
         degraded: false,
+        disposed: false,
         selectForHost: vi.fn(),
         degradeBeforeStart: vi.fn(),
         begin: vi.fn(),
         deferDisposalUntil: vi.fn(),
+        onDispose: vi.fn(),
         dispose: async () => {},
       };
       const warn = vi.fn();
@@ -619,7 +621,7 @@ describe("host-owned current admission annotation", () => {
         ],
         ["starting", "active", { activeOwnerEpoch: 7 }],
       ] as const) {
-        placement = placements.transition({
+        placement = await placements.transition({
           sessionId: f.target.sessionId,
           from,
           to,

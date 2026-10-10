@@ -9,11 +9,11 @@ import {
 } from "../shared/update-outcome.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
-import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,
+  UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
@@ -109,6 +109,22 @@ export function formatUpdateRunCurrentHealth(health: UpdateRunReportHealth): str
     : "Current health unavailable; saved verification describes the update attempt only.";
 }
 
+/** Serving observation is independent of permission to restart or roll back. */
+export function resolveUpdateRunVerifiedServingVersion(
+  verification: UpdateRunRecord["verification"],
+  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
+): string | undefined {
+  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
+    return undefined;
+  }
+  const { recovery } = verification;
+  return recovery?.serviceRestartSafe && recovery.service === "healthy"
+    ? recovery.version
+    : verification.versionMatch && verification.readyz && verification.settled
+      ? verification.runningVersion
+      : undefined;
+}
+
 /** Public-report callers redact identifiers before using this shared formatter. */
 export function formatUpdateRunRecovery(
   verification: UpdateRunRecord["verification"],
@@ -136,28 +152,28 @@ export function formatUpdateRunRecovery(
       : "runtime files verified";
     return `${packageOutcome}; Gateway health ${recovery.service === "failed" ? "failed" : "unverified"} (${reason}). Run \`openclaw gateway status --deep\` to check the serving version and readiness.`;
   }
-  const version =
-    recovery?.serviceRestartSafe && recovery.service === "healthy"
-      ? recovery.version
-      : verification.versionMatch && verification.readyz && verification.settled
-        ? verification.runningVersion
-        : undefined;
-  if (observation.exitCode === 0 && version && !observation.failureFacts?.length) {
+  const version = resolveUpdateRunVerifiedServingVersion(verification, observation);
+  if (version) {
     const constraint =
       recovery?.serviceRestartSafe === false ? `; restart remains unsafe (${reason})` : "";
     return `${recovery?.packageRollbackVerified ? "package rollback verified; " : ""}verified serving ${bounded(version, 120)}${constraint}`;
   }
   const code = observation.failureFacts?.[0]?.code;
   if (!code) {
-    return "Gateway readiness is pending; recovery probe completed without verified readiness";
+    return "Gateway readiness is pending; recovery check completed without verified readiness";
   }
   return code === "gateway-probe-failed"
-    ? `recovery probe failed (${code})`
+    ? `recovery check failed (${code})`
     : `not serving (${code})`;
 }
 
 function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${sliceUtf16Safe(text, 0, limit - 1)}…`;
+}
+
+function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undefined {
+  const sha = identity.sha?.slice(0, 8);
+  return identity.version ? `${identity.version}${sha ? ` (${sha})` : ""}` : sha;
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
@@ -179,13 +195,27 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
     return nextAction ? [] : [`Next step: ${UPDATE_DESTINATION_RECOVERY}`];
   }
+  if (
+    run.reason === "state-migrated-no-rollback" ||
+    run.verification.rollbackOutcome?.reason === "state-migrated-no-rollback"
+  ) {
+    return nextAction
+      ? []
+      : [
+          "State may have changed during migration, so rolling back code alone is unsafe. Keep the new installation and backups; inspect openclaw update status and run openclaw doctor before recovery.",
+        ];
+  }
   const hint =
     run.reason && Object.hasOwn(FAILURE_RECOVERY_HINTS, run.reason)
       ? FAILURE_RECOVERY_HINTS[run.reason]
       : undefined;
   const hints = hint ? [hint] : [];
   if (!nextAction) {
-    hints.push("Run openclaw triage to diagnose and repair the failed update.");
+    hints.push(
+      run.reason === "repair-failed"
+        ? "Run openclaw triage to diagnose this repair failure."
+        : "Run openclaw triage to diagnose and repair the failed update.",
+    );
   }
   return hints;
 }
@@ -198,6 +228,7 @@ export function renderUpdateRunReport(
     nextAction?: string;
     currentHealth?: UpdateRunReportHealth;
     mode?: UpdateRunResult["mode"] | "package";
+    markdownLimit?: number;
   } = {},
 ): UpdateRunReport {
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
@@ -209,9 +240,9 @@ export function renderUpdateRunReport(
     run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
-  // Git updates can change commits without changing the package version.
-  const before = run.before.sha?.slice(0, 8) ?? run.before.version;
-  const after = run.after.sha?.slice(0, 8) ?? run.after.version;
+  // Keep the version visible and distinguish Git updates within the same version.
+  const before = formatUpdateVersion(run.before);
+  const after = formatUpdateVersion(run.after);
   const reason = bounded(
     run.reason?.trim() ||
       (run.status === "failed" &&
@@ -243,7 +274,7 @@ export function renderUpdateRunReport(
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
           : runtimeCheckFailed
             ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-            : `⚠️ OpenClaw update failed: ${reason}.`;
+            : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -251,7 +282,9 @@ export function renderUpdateRunReport(
           ? `ℹ️ OpenClaw${after ? ` ${after}` : ""} installed; Gateway still starting; readiness unverified; recovery backups retained.`
           : run.reason === "gateway-readiness-unverified"
             ? `ℹ️ OpenClaw${after ? ` ${after}` : ""} installed; Gateway readiness unverified; recovery backups retained.`
-            : `ℹ️ OpenClaw update skipped: ${reason}.`;
+            : run.reason === "doctor-maintenance-pending"
+              ? "ℹ️ OpenClaw repair pending: Doctor maintenance remains unfinished."
+              : `ℹ️ OpenClaw update skipped: ${reason}.`;
       break;
     case "rolled-back":
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
@@ -261,7 +294,11 @@ export function renderUpdateRunReport(
       break;
   }
   headline = bounded(headline, 500);
-  const lines: string[] = [];
+  const markdownLimit = opts.markdownLimit ?? 1500;
+  const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
+  // Successful activation must not bury recovery constraints behind snapshot inventory.
+  // Failed runs keep their failure diagnostics ahead of warnings in the short report.
+  const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
   if (currentHealth && !run.origin.nextAction && !opts.nextAction) {
     lines.push(formatUpdateRunCurrentHealth(currentHealth));
   }
@@ -273,7 +310,7 @@ export function renderUpdateRunReport(
     const candidateVersion = admission.candidateVersion
       ? ` (${bounded(admission.candidateVersion, 120)})`
       : "";
-    lines.push(`Admission: ${admission.owner}${candidateVersion}.`);
+    lines.push(`Update safety checks ran in the ${admission.owner} updater${candidateVersion}.`);
     if (admission.checks?.length) {
       lines.push(
         `Admission checks: ${admission.checks.map((check) => `${bounded(check.name, 120)}: ${check.status}`).join(", ")}.`,
@@ -333,6 +370,9 @@ export function renderUpdateRunReport(
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
+    if (step.termination === "signal" && step.stderrTail) {
+      lines.push(`Stderr (${step.signal ?? "unknown signal"}):\n${step.stderrTail}`);
+    }
     lines.push(
       ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
         formatUpdateFailureFact({
@@ -345,8 +385,8 @@ export function renderUpdateRunReport(
       ),
     );
   }
-  for (const message of updateRunWarningMessages(run.steps, 3)) {
-    lines.push(`Warning: ${bounded(message, 500)}`);
+  if (run.status !== "succeeded") {
+    lines.push(...warnings);
   }
   const facts = run.verification;
   const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
@@ -437,7 +477,7 @@ export function renderUpdateRunReport(
             ),
           ];
   const next = hints.at(-1);
-  if (runtimeCheckFailed) {
+  if (runtimeCheckFailed || run.reason === "doctor-maintenance-pending") {
     // Keep the owner's selected action ahead of the diagnostic dump, including
     // historical-advice qualifications. Neither this layout nor truncation selects recovery.
     const details = [
@@ -450,13 +490,13 @@ export function renderUpdateRunReport(
     return {
       headline,
       lines: [...(next ? [next, ""] : []), ...details],
-      markdown: `${lead}\n${bounded(details.join("\n"), 1500 - lead.length - 1)}`,
+      markdown: `${lead}\n${bounded(details.join("\n"), markdownLimit - lead.length - 1)}`,
     };
   }
   lines.push(...hints);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");
   const suffix = next ? `\n${bounded(next, 1100)}` : "";
-  return { headline, lines, markdown: `${bounded(body, 1500 - suffix.length)}${suffix}` };
+  return { headline, lines, markdown: `${bounded(body, markdownLimit - suffix.length)}${suffix}` };
 }
 
 /** Old CLI finalization paths still return runner results; all wording stays in the report. */

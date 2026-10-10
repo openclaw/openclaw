@@ -70,8 +70,8 @@ describe("resolveSessionForRun", () => {
     expect(resolveSessionForRun("run-1", { agentId, projection })).toEqual(expected);
   });
 
-  it("defaults an unscoped persisted lookup to the configured default agent", () => {
-    hoisted.loadConfigMock.mockReturnValue({ agents: { list: [{ id: "work", default: true }] } });
+  it("defaults an unscoped persisted lookup to the sole configured agent", () => {
+    hoisted.loadConfigMock.mockReturnValue({ agents: { entries: { work: {} } } });
     const projection = indexedProjection({ main: { sessionId: "run-1", updatedAt: 1 } }, "work");
     expect(resolveSessionForRun("run-1", { projection })).toEqual({
       sessionKey: "main",
@@ -115,19 +115,19 @@ describe("resolveSessionForRun", () => {
     expect(projection.findBySessionId).not.toHaveBeenCalled();
   });
 
-  it("waits for a cached raw-key owner instead of assigning a current default", () => {
+  it("waits for a cached raw-key owner across roster changes", () => {
     const projection = indexedProjection({ global: { sessionId: "pending", updatedAt: 1 } });
     registerAgentRunContext("pending", { sessionKey: "global" });
     hoisted.loadConfigMock.mockReturnValue({
       session: { scope: "global" },
-      agents: { entries: { main: { default: true }, research: {} } },
+      agents: { entries: { main: {}, research: {} } },
     });
     expect.soft(resolveSessionForRun("pending", { projection })).toBeUndefined();
     expect.soft(resolveSessionForRun("pending", { agentId: "main", projection })).toBeUndefined();
     registerAgentRunContext("pending", { agentId: "research" });
     hoisted.loadConfigMock.mockReturnValue({
       session: { scope: "global" },
-      agents: { entries: { work: { default: true }, research: {} } },
+      agents: { entries: { work: {}, research: {} } },
     });
     expect(resolveSessionForRun("pending", { projection })).toEqual({
       sessionKey: "global",

@@ -12,6 +12,7 @@ import type {
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
+  CliToolInputDelta,
   CliToolResultDelta,
   CliToolUseStartDelta,
   CliUsage,
@@ -23,12 +24,17 @@ import {
   isGeminiStreamJsonDialect,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
+import {
+  updateLiveEditDiffProgressFromInput,
+  type LiveEditDiffProgressState,
+} from "./embedded-agent-live-edit-diff.js";
 
 type PendingToolUse = {
   toolCallId: string;
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  inputJsonLength: number;
   /**
    * Complete input carried on `content_block_start`. Some CLI backends send the
    * whole tool input there and never emit `input_json_delta` chunks, so without
@@ -38,19 +44,15 @@ type PendingToolUse = {
   blockInput?: Record<string, unknown>;
 };
 
-type ToolUseTracker = {
-  pendingByIndex: Map<number, PendingToolUse>;
-  nameById: Map<string, string>;
-  startedIds: Set<string>;
-  resultDeliveredIds: Set<string>;
-};
+type ToolUseTracker = ReturnType<typeof createToolUseTracker>;
 
-export function createToolUseTracker(): ToolUseTracker {
+export function createToolUseTracker() {
   return {
-    pendingByIndex: new Map(),
-    nameById: new Map(),
-    startedIds: new Set(),
-    resultDeliveredIds: new Set(),
+    pendingByIndex: new Map<number, PendingToolUse>(),
+    inputProgressById: new Map<string, LiveEditDiffProgressState>(),
+    nameById: new Map<string, string>(),
+    startedIds: new Set<string>(),
+    resultDeliveredIds: new Set<string>(),
   };
 }
 
@@ -62,6 +64,7 @@ function emitToolStartOnce(
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
+  tracker.inputProgressById.delete(toolCallId);
   // Streaming and final assistant records may both describe the same tool call.
   if (tracker.startedIds.has(toolCallId)) {
     return;
@@ -119,12 +122,14 @@ export function projectCliBackendEvent(params: {
     return;
   }
   state.sawCustomJsonlEvent = true;
-  if (event.kind === "sessionId") {
-    const sessionId = event.sessionId.trim();
+  const observeSessionId = (sessionId: string | undefined) => {
     if (sessionId && sessionId !== state.sessionId) {
       state.sessionId = sessionId;
       params.onSessionId?.(sessionId);
     }
+  };
+  if (event.kind === "sessionId") {
+    observeSessionId(event.sessionId.trim());
     if (state.output) {
       state.output = { ...state.output, sessionId: state.sessionId };
     }
@@ -179,11 +184,7 @@ export function projectCliBackendEvent(params: {
     );
     return;
   }
-  const normalizedSessionId = event.sessionId?.trim();
-  if (normalizedSessionId && normalizedSessionId !== state.sessionId) {
-    state.sessionId = normalizedSessionId;
-    params.onSessionId?.(normalizedSessionId);
-  }
+  observeSessionId(event.sessionId?.trim());
   if (event.usage) {
     state.usage = event.usage;
     params.onUsage?.(event.usage, true);
@@ -262,6 +263,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
   parsed: Record<string, unknown>;
   tracker: ToolUseTracker;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolInputDelta?: (delta: CliToolInputDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
 }): void {
   if (!supportsCliJsonlToolEvents(params) || isClaudeSubagentRecord(params.parsed)) {
@@ -277,6 +279,11 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.content_block)
     ) {
       const block = event.content_block;
+      const previous = tracker.pendingByIndex.get(event.index);
+      const nextToolCallId = typeof block.id === "string" ? block.id.trim() : "";
+      if (previous && previous.toolCallId !== nextToolCallId) {
+        tracker.inputProgressById.delete(previous.toolCallId);
+      }
       if (isClaudeToolUseBlockType(block.type)) {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
@@ -286,6 +293,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
             name,
             kind: block.type,
             inputJsonParts: [],
+            inputJsonLength: 0,
             ...(isRecord(block.input) ? { blockInput: block.input } : {}),
           });
         }
@@ -300,7 +308,22 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.delta)
     ) {
       if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
-        tracker.pendingByIndex.get(event.index)?.inputJsonParts.push(event.delta.partial_json);
+        const pending = tracker.pendingByIndex.get(event.index);
+        if (pending) {
+          pending.inputJsonParts.push(event.delta.partial_json);
+          pending.inputJsonLength += event.delta.partial_json.length;
+          if (params.onToolInputDelta && !tracker.startedIds.has(pending.toolCallId)) {
+            const progress = updateLiveEditDiffProgressFromInput(tracker.inputProgressById, {
+              toolCallId: pending.toolCallId,
+              name: pending.name,
+              partialJsonLength: pending.inputJsonLength,
+              readPartialJson: () => pending.inputJsonParts.join(""),
+            });
+            if (progress) {
+              params.onToolInputDelta(progress);
+            }
+          }
+        }
       }
       return;
     }
@@ -407,17 +430,10 @@ function resetThinkingTrackerForMessage(
 }
 
 function beginClaudeContentBlock(tracker: ThinkingTracker, index: unknown): void {
-  if (typeof index === "number") {
-    tracker.currentSyntheticBlockIndex = index;
-    tracker.nextSyntheticBlockIndex = Math.max(tracker.nextSyntheticBlockIndex, index + 1);
-    return;
-  }
-  if (index !== undefined) {
-    tracker.currentSyntheticBlockIndex = undefined;
-    return;
-  }
-  tracker.currentSyntheticBlockIndex = tracker.nextSyntheticBlockIndex;
-  tracker.nextSyntheticBlockIndex += 1;
+  tracker.currentSyntheticBlockIndex =
+    index === undefined
+      ? tracker.nextSyntheticBlockIndex++
+      : (resolveClaudeContentBlockIndex(tracker, index) ?? undefined);
 }
 
 function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown): number | null {

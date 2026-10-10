@@ -1,3 +1,4 @@
+import type { PreparedReplyTranscriptStart } from "../auto-reply/get-reply-options.types.js";
 /**
  * Shared display and chunking types for embedded-agent subscription handlers.
  */
@@ -11,6 +12,8 @@ export type ToolProgressDetailMode = "explain" | "raw";
 
 export type EmbeddedAgentEvent = {
   stream: string;
+  /** Internal callback facts; never included in publicly emitted event data. */
+  transcriptStart?: PreparedReplyTranscriptStart | null;
   data: Record<string, unknown> &
     Omit<Partial<AgentCommandOutputEventFields>, "phase" | "status"> & {
       phase?: string;

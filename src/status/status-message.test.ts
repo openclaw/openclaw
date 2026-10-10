@@ -45,7 +45,7 @@ describe("buildStatusMessage current time", () => {
       ...displayParams,
       modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now,
-      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
     });
 
@@ -61,7 +61,7 @@ describe("buildStatusMessageParts presentation", () => {
       ...displayParams,
       modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now: 1_751_529_600_000,
-      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
     });
 
@@ -73,7 +73,7 @@ describe("buildStatusMessageParts presentation", () => {
       ...displayParams,
       modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now: 1_751_529_600_000,
-      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
       uptimeValue: "gateway 1h · system 2d",
       channelFeatureLine: "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled",
@@ -143,7 +143,7 @@ describe("buildStatusMessageParts presentation", () => {
       ...displayParams,
       modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now: 1_751_529_600_000,
-      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
       runtimeContextTokens: 100_000,
       sessionEntry: {

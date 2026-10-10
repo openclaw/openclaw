@@ -5,13 +5,13 @@ import { captureSessionEntryCurrentRead } from "../../config/sessions/session-en
 import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { isCurrentActiveWorkerEnvironment } from "./placement-dispatch-failure.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
@@ -41,8 +41,8 @@ export function createRepositoryWorkspaceMutationService(options: {
         mutate: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>;
       },
     ): Promise<T> {
+      const placement = await placements.getAsync(params.sessionId);
       params.assertCurrent();
-      const placement = placements.get(params.sessionId);
       if (placement?.state !== "active") {
         throw new Error("Repository workspace editing requires an active cloud placement");
       }
@@ -121,13 +121,17 @@ export function createRepositoryWorkspaceMutationService(options: {
           assertPlacementCurrent(placements.get(params.sessionId));
         };
         assertOwner();
-        const claim = placements.claimWorkspaceMutationResult({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          claimId: `workspace-mutation-${randomUUID()}`,
-          owner: placementTurnOwner(placement),
-        });
+        const claim = await placements.claimWorkspaceMutationResult(
+          {
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+            claimId: `workspace-mutation-${randomUUID()}`,
+            owner: placementTurnOwner(placement),
+          },
+          assertWorkerCurrent,
+          currentCheck,
+        );
         const assertCurrent = () => {
           assertOwner();
           if (!placements.validateWorkspaceResultClaim(claim)) {
@@ -139,8 +143,12 @@ export function createRepositoryWorkspaceMutationService(options: {
           const result = await params.mutate(assertCurrent);
           assertCurrent();
           if (!result.changed) {
-            placements.acceptWorkspaceResult(claim);
-            placements.completeWorkspaceResultAndReleaseTurn(claim);
+            await placements.acceptWorkspaceResult(claim, assertWorkerCurrent, currentCheck);
+            await placements.completeWorkspaceResultAndReleaseTurn(
+              claim,
+              assertWorkerCurrent,
+              currentCheck,
+            );
             return result.value;
           }
           const tunnel = await environments.startTunnel({
@@ -191,7 +199,7 @@ export function createRepositoryWorkspaceMutationService(options: {
             if (!journal.wasAccepted()) {
               throw new Error("Repository workspace edit was not durably accepted");
             }
-            placements.acceptWorkspaceResult(claim);
+            await placements.acceptWorkspaceResult(claim, assertWorkerCurrent, currentCheck);
             await settleStagedWorkspaceResult({
               assertCurrent,
               placements,
@@ -199,6 +207,12 @@ export function createRepositoryWorkspaceMutationService(options: {
               workspace,
               stagedResultRef,
               conflictRetained: false,
+              complete: () =>
+                placements.completeWorkspaceResultAndReleaseTurn(
+                  claim,
+                  assertWorkerCurrent,
+                  currentCheck,
+                ),
               beforeComplete: async () => {
                 await quiescence.resume();
                 resumed = true;
@@ -215,7 +229,7 @@ export function createRepositoryWorkspaceMutationService(options: {
           // The remote write may have completed before transport or capture failed.
           // Retain its custody so ordinary result recovery can capture it safely.
           if (placements.validateWorkspaceResultClaim(claim)) {
-            placements.handoffWorkspaceResultRecovery(claim);
+            await placements.handoffWorkspaceResultRecovery(claim);
           }
           throw error;
         }

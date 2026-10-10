@@ -1,0 +1,187 @@
+import type {
+  SqliteWorkerCommand,
+  SqliteWorkerEphemeralTarget,
+} from "../../infra/sqlite-worker-contract.js";
+import type {
+  DeleteSessionEntryLifecycleResult,
+  SessionTranscriptContextVersion,
+} from "./session-accessor.sqlite-contract.js";
+import type {
+  LifecycleArtifactCleanupInput,
+  LifecycleArtifactCleanupPlan,
+  SqliteSessionReclamationResult,
+} from "./session-accessor.sqlite-lifecycle-types.js";
+import type { ParentForkSourceTranscript } from "./session-accessor.sqlite-parent-fork.js";
+import type {
+  SessionMessageCutIntent,
+  SessionMessageCutResult,
+} from "./session-message-cut.types.js";
+import type {
+  ParentForkCandidate,
+  ParentForkCommit,
+  ParentForkEntryParams,
+  ParentForkEntryPreparation,
+} from "./session-parent-fork.types.js";
+import type { SessionEntry } from "./types.js";
+
+export type IncognitoLifecycleEntry = { sessionKey: string; entry: SessionEntry };
+export type IncognitoLifecycleSettlement = {
+  beforeCommit(): void;
+  settle(outcome: "committed" | "rolled-back" | "unknown"): void;
+};
+type IncognitoForkPreparation = IncognitoLifecycleEntry & {
+  identity: Readonly<SqliteWorkerEphemeralTarget>;
+  version: SessionTranscriptContextVersion;
+  source: ParentForkSourceTranscript;
+  parentSessionFile: string;
+};
+type IncognitoReclamationPlan = LifecycleArtifactCleanupPlan & {
+  identity: Readonly<SqliteWorkerEphemeralTarget>;
+};
+
+/** Checked operations only; lifecycle hooks and companion mutations remain on the host. */
+export type IncognitoLifecycleOperations = {
+  "session.lifecycle.maintenance": {
+    input: { plan: LifecycleArtifactCleanupPlan };
+    output: Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }>["value"];
+  };
+  "session.lifecycle.messageCut": {
+    input: {
+      intent: SessionMessageCutIntent;
+      sourceRepositoryWorkspaceId?: string;
+      target?: IncognitoLifecycleEntry;
+    };
+    output: { result: SessionMessageCutResult; projectionNeedsReconcile: boolean };
+  };
+  "session.lifecycle.parentFork.prepare": {
+    input: ParentForkEntryParams;
+    output: ParentForkEntryPreparation;
+  };
+  "session.lifecycle.parentFork.source": {
+    input: { sessionKey: string; sessionId: string; forkFrom?: "last-completed" };
+    output: ParentForkSourceTranscript | null;
+  };
+  "session.lifecycle.parentFork.commit": {
+    input: ParentForkCommit;
+    output: ParentForkCandidate["result"];
+  };
+  "session.lifecycle.delete": {
+    input: {
+      target: IncognitoLifecycleEntry;
+      reason: "reset" | "deleted";
+      expectedPluginOwnerId?: string;
+      admissionIdentities: string[];
+    };
+    output: DeleteSessionEntryLifecycleResult;
+  };
+  "session.lifecycle.reclaim.prepare": {
+    input: Omit<
+      LifecycleArtifactCleanupInput,
+      "agentId" | "continuation" | "archiveDirectory" | "archiveRemovedEntryTranscripts"
+    >;
+    output: IncognitoReclamationPlan;
+  };
+  "session.lifecycle.reclaim": {
+    input: { plan: IncognitoReclamationPlan };
+    output: Extract<SqliteSessionReclamationResult, { kind: "lifecycle-artifacts" }>["value"];
+  };
+  "session.lifecycle.fork.prepare": {
+    input: { parent: IncognitoLifecycleEntry; forkFrom?: "last-completed" };
+    output: IncognitoForkPreparation | undefined;
+  };
+  "session.lifecycle.fork": {
+    input: {
+      parent: IncognitoForkPreparation;
+      child: IncognitoLifecycleEntry & { expectedEntry?: SessionEntry };
+      cliSessionBindings?: SessionEntry["cliSessionBindings"];
+    };
+    output: SessionEntry;
+  };
+};
+
+export function isIncognitoLifecycleCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<IncognitoLifecycleOperations> {
+  return command.type.startsWith("session.lifecycle.");
+}
+
+export function isIncognitoLifecycleWrite(type: keyof IncognitoLifecycleOperations): boolean {
+  return (
+    type !== "session.lifecycle.reclaim.prepare" &&
+    type !== "session.lifecycle.fork.prepare" &&
+    type !== "session.lifecycle.parentFork.prepare" &&
+    type !== "session.lifecycle.parentFork.source"
+  );
+}
+
+export function captureIncognitoLifecycleSettlement(
+  input: SqliteWorkerCommand<IncognitoLifecycleOperations>["input"],
+  capture?: (entries: readonly IncognitoLifecycleEntry[]) => IncognitoLifecycleSettlement,
+): IncognitoLifecycleSettlement | undefined {
+  const removedEntries =
+    "target" in input
+      ? input.target
+        ? [input.target]
+        : undefined
+      : "plan" in input
+        ? input.plan.entries.flatMap(({ sessionKey, expectedEntry }) =>
+            expectedEntry ? [{ sessionKey, entry: expectedEntry }] : [],
+          )
+        : undefined;
+  if (removedEntries && !capture) {
+    throw new Error("Incognito deletion requires its prepared lifecycle owner");
+  }
+  return removedEntries ? capture?.(removedEntries) : undefined;
+}
+
+export function incognitoLifecycleKeys(
+  command: SqliteWorkerCommand<IncognitoLifecycleOperations>,
+  identity: Readonly<SqliteWorkerEphemeralTarget>,
+): string[] {
+  switch (command.type) {
+    case "session.lifecycle.maintenance":
+      return command.input.plan.entries.map(({ sessionKey }) => sessionKey);
+    case "session.lifecycle.messageCut":
+      return [...new Set([command.input.intent.sourceKey, command.input.intent.targetKey])];
+    case "session.lifecycle.parentFork.source":
+      return [command.input.sessionKey];
+    case "session.lifecycle.parentFork.prepare":
+      return parentForkEntryKeys(command.input);
+    case "session.lifecycle.parentFork.commit": {
+      const input = command.input;
+      return input.kind === "entry"
+        ? parentForkEntryKeys(input.params)
+        : [
+            ...new Set([
+              ...(input.source === undefined ? [input.params.parentSessionKey] : []),
+              input.params.sessionKey,
+            ]),
+          ];
+    }
+    case "session.lifecycle.delete":
+      return [command.input.target.sessionKey];
+    case "session.lifecycle.reclaim":
+      return command.input.plan.entries.map(({ sessionKey }) => sessionKey);
+    case "session.lifecycle.reclaim.prepare":
+      return [];
+    case "session.lifecycle.fork.prepare":
+      return [command.input.parent.sessionKey];
+    case "session.lifecycle.fork":
+      return command.input.parent.identity.handle === identity.handle &&
+        command.input.parent.identity.incarnation === identity.incarnation
+        ? [command.input.parent.sessionKey, command.input.child.sessionKey]
+        : [command.input.child.sessionKey];
+  }
+  throw new Error("Unsupported incognito lifecycle operation");
+}
+
+function parentForkEntryKeys(params: ParentForkEntryParams): string[] {
+  return [
+    ...new Set([
+      params.parentTarget.canonicalKey,
+      ...params.parentTarget.storeKeys,
+      params.sessionTarget.canonicalKey,
+      ...params.sessionTarget.storeKeys,
+    ]),
+  ];
+}

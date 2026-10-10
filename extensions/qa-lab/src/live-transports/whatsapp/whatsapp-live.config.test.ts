@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfigFileSnapshot, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/health";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { createCanonicalAgentConfigFixture, withTempHome } from "openclaw/plugin-sdk/test-env";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildQaGatewayConfig } from "../../qa-gateway-config.js";
 import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
 
 describe("WhatsApp QA broadcast config", () => {
-  it.each(["generated", "explicit", "legacy-default"] as const)(
+  it.each(["generated", "explicit"] as const)(
     "builds valid WhatsApp broadcast config from the %s roster without replacing agents",
     async (roster) => {
       await withTempHome(
@@ -25,16 +25,11 @@ describe("WhatsApp QA broadcast config", () => {
           if (roster !== "generated") {
             base.agents = {
               ...base.agents,
-              ...(roster === "explicit"
-                ? {
-                    ownership: "explicit",
-                    defaults: { ...base.agents?.defaults, systemAgent: { agentId: "main" } },
-                  }
-                : {}),
+              ownership: "explicit",
+              defaults: { ...base.agents?.defaults, systemAgent: { agentId: "main" } },
               entries: {
                 ...base.agents?.entries,
                 main: {
-                  ...(roster === "legacy-default" ? { default: true } : {}),
                   identity: { name: "Existing main agent" },
                   model: "mock-openai/custom-main",
                 },
@@ -56,22 +51,6 @@ describe("WhatsApp QA broadcast config", () => {
           const configPath = path.join(home, ".openclaw", "openclaw.json");
           const authored = JSON.stringify(cfg);
           await fs.writeFile(configPath, authored);
-          if (roster === "legacy-default") {
-            const before = await readConfigFileSnapshot({
-              pluginValidation: "core-only",
-              observe: false,
-            });
-            expect(before.valid).toBe(false);
-            expect(before.sourceConfig.agents?.entries?.main?.default).toBe(true);
-            expect(await fs.readFile(configPath, "utf8")).toBe(authored);
-          }
-          const runtimeConfig = createCanonicalAgentConfigFixture(cfg, {
-            homedir: () => home,
-          }).config;
-          const originalRuntimeConfig = createCanonicalAgentConfigFixture(original, {
-            homedir: () => home,
-          }).config;
-          await fs.writeFile(configPath, JSON.stringify(runtimeConfig));
           const snapshot = await readConfigFileSnapshot({
             pluginValidation: "core-only",
             observe: false,
@@ -79,12 +58,12 @@ describe("WhatsApp QA broadcast config", () => {
           expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
           expect(cfg.agents?.defaults).toMatchObject(original.agents?.defaults ?? {});
           const route = { channel: "whatsapp", accountId: "sut" };
-          expect(resolveAgentRoute({ cfg: runtimeConfig, ...route }).agentId).toBe(
-            resolveAgentRoute({ cfg: originalRuntimeConfig, ...route }).agentId,
+          expect(resolveAgentRoute({ cfg, ...route }).agentId).toBe(
+            resolveAgentRoute({ cfg: original, ...route }).agentId,
           );
           for (const agentId of Object.keys(original.agents?.entries ?? {})) {
-            expect(resolveAgentWorkspaceDir(runtimeConfig, agentId)).toBe(
-              resolveAgentWorkspaceDir(originalRuntimeConfig, agentId),
+            expect(resolveAgentWorkspaceDir(cfg, agentId)).toBe(
+              resolveAgentWorkspaceDir(original, agentId),
             );
           }
           expect(cfg.agents?.entries).toMatchObject(original.agents?.entries ?? {});

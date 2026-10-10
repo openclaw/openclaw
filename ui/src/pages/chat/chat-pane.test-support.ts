@@ -37,6 +37,7 @@ import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
+import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -122,11 +123,11 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
-  acceptTaskSuggestion: (
+  resolveTaskSuggestion: (
     suggestion: TaskSuggestion,
+    action: "accept" | "dismiss",
     mode?: TaskSuggestionStartMode,
   ) => Promise<void>;
-  dismissTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
@@ -159,7 +160,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   typingOverflow?: ChatTypingOverflow;
   clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
-  sendTypingState: (typing: boolean, preview?: string) => void;
+  sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
     suggestion: SessionSuggestion,
@@ -186,13 +187,12 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
   resetOlderMessagesViewport: () => void;
-  requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
-  headerEditing: boolean;
+  headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null;
   headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
   handleHeaderSessionAction: (action: HeaderMenuAction, row: GatewaySessionRow) => Promise<void>;
@@ -214,8 +214,10 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   headerPlacementMovingKey: string | null;
   headerPlacementReclaimingKey: string | null;
   headerPlacementRestartingKey: string | null;
-  changeHeaderPlacement: (row: GatewaySessionRow, mode: "move" | "recover") => Promise<void>;
-  reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
+  changeHeaderPlacement: (
+    row: GatewaySessionRow,
+    mode: "move" | "recover" | "reclaim",
+  ) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
@@ -253,6 +255,7 @@ type FixtureContextServices =
   | "agentIdentity"
   | "agents"
   | "sessions"
+  | "plugins"
   | "connectionBootstrap"
   | "chatAttachmentHandoff";
 
@@ -276,7 +279,9 @@ function withLiveCapabilities(
   const sessions =
     context.sessions ??
     createSessionCapability(context.gateway, context.agentSelection, { connectionBootstrap });
+  const plugins = new ControlUiPluginRuntime(() => applicationContext);
   onTestFinished(() => {
+    plugins.dispose();
     stopBootstrap();
     chatAttachmentHandoff.dispose();
     connectionBootstrap.reset();
@@ -286,15 +291,17 @@ function withLiveCapabilities(
     agents.dispose();
     theme.dispose();
   });
-  return {
+  const applicationContext: ApplicationContext = {
     ...context,
     chatAttachmentHandoff,
     connectionBootstrap,
     theme,
     agents,
     sessions,
+    plugins,
     agentIdentity: createAgentIdentityCapability(context.gateway),
   };
+  return applicationContext;
 }
 
 export function createInitializationContext(client?: GatewayBrowserClient): ApplicationContext {
@@ -469,15 +476,14 @@ export function createSessionContext(
   } as unknown as Omit<ApplicationContext, FixtureContextServices> & {
     sessions?: SessionCapability;
   });
-  return {
-    ...context,
-    publishGatewaySnapshot(next) {
+  return Object.assign(context, {
+    publishGatewaySnapshot(next: ApplicationContext["gateway"]["snapshot"]) {
       snapshot = next;
       for (const listener of snapshotListeners) {
         listener(next);
       }
     },
-  };
+  });
 }
 
 export function createTestChatPane(params: {

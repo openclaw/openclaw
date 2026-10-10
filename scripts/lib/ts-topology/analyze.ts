@@ -3,11 +3,11 @@ import * as ts from "typescript/unstable/ast";
 import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
 import {
   canonicalSymbolInfo,
-  countIdentifierUsages,
-  countNamespacePropertyUsages,
+  countImportUsages,
   createProgramContext,
   getRepoRevision,
 } from "./context.js";
+import { classifyUsageBucket, consumerOwner } from "./scope.js";
 import type {
   ProgramContext,
   PublicEntrypoint,
@@ -97,15 +97,18 @@ function recordConsumer(
   bucket: UsageBucket,
   usageCount: number,
   relPath: string,
-  scope: TopologyScope,
 ) {
   record[`${bucket}ImportCount`] += 1;
   record[`${bucket}RefCount`] += usageCount;
   pushUnique(record[`${bucket}Consumers`], relPath);
   if (bucket === "production") {
-    pushUnique(record.productionOwners, scope.ownerForPath(relPath));
-    pushUnique(record.productionExtensions, scope.extensionForPath(relPath));
-    pushUnique(record.productionPackages, scope.packageOwnerForPath(relPath));
+    const owner = consumerOwner(relPath);
+    pushUnique(record.productionOwners, owner);
+    if (owner?.startsWith("extension:")) {
+      pushUnique(record.productionExtensions, owner.slice("extension:".length));
+    } else {
+      pushUnique(record.productionPackages, owner);
+    }
   }
 }
 
@@ -170,7 +173,7 @@ function collectConsumers(
       continue;
     }
     const relPath = context.relativeToRepo(sourceFile.fileName);
-    const bucket = scope.classifyUsageBucket(relPath);
+    const bucket = classifyUsageBucket(scope, relPath);
     if (!includeTests && bucket === "test") {
       continue;
     }
@@ -180,9 +183,6 @@ function collectConsumers(
         continue;
       }
       const importSpecifier = statement.moduleSpecifier.text.trim();
-      if (!scope.importFilter(importSpecifier)) {
-        continue;
-      }
       const recordMap = recordBySpecifierAndExportName.get(importSpecifier);
       if (!recordMap) {
         continue;
@@ -212,9 +212,8 @@ function collectConsumers(
           recordConsumer(
             record,
             bucket,
-            countIdentifierUsages(context, sourceFile, localSymbol, element.name.text),
+            countImportUsages(context, sourceFile, localSymbol, element.name.text, "identifier"),
             relPath,
-            scope,
           );
         }
         continue;
@@ -226,16 +225,17 @@ function collectConsumers(
           continue;
         }
         for (const [exportedName, record] of recordMap.entries()) {
-          const usageCount = countNamespacePropertyUsages(
+          const usageCount = countImportUsages(
             context,
             sourceFile,
             namespaceSymbol,
             exportedName,
+            "namespace",
           );
           if (usageCount <= 0) {
             continue;
           }
-          recordConsumer(record, bucket, usageCount, relPath, scope);
+          recordConsumer(record, bucket, usageCount, relPath);
         }
       }
     }

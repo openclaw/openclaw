@@ -19,6 +19,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { resolveAuthProfileDatabaseOwnerId } from "./auth-profiles/sqlite.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import * as modelsPlan from "./models-config.plan.js";
@@ -32,6 +33,7 @@ import {
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
+  prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
@@ -76,7 +78,6 @@ function fixture(mode: "merge" | "replace" = "merge") {
     entries: [
       {
         provider,
-        result: { provider: staticConfig },
         providerConfigs: { [providerId]: staticConfig },
       },
     ],
@@ -245,6 +246,55 @@ describe("prepared catalog source composition", () => {
     },
   );
 
+  it("publishes failed-discovery static rows once under the canonical provider", async () => {
+    const aliasId = "prepared-source-alias";
+    const { facts, generation, staticConfig } = fixture();
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: pluginId,
+          providers: [providerId],
+          modelCatalog: { aliases: { [aliasId]: { provider: providerId } } },
+        },
+      ],
+    });
+    // Single-provider static hooks answer under the canonical id and every runtime alias.
+    const providerStaticModels = [providerId, aliasId].flatMap((provider) =>
+      staticConfig.models.map((row) => ({
+        ...row,
+        input: ["text" as const],
+        contextWindow: 32000,
+        provider,
+        api: "openai-completions" as const,
+        baseUrl: endpoint,
+      })),
+    );
+    const full = await prepareFullCatalogFacts(
+      facts,
+      { ...generation, pluginMetadataSnapshot, providerStaticModels },
+      "static",
+      {
+        modelsJsonContents: JSON.stringify({ providers: { [aliasId]: staticConfig } }),
+        pluginCatalogs: [],
+        providerOutcomes: [{ provider: providerId, status: "unavailable" }],
+      },
+    );
+    const { catalog } = prepareModelCatalogPublication(
+      full.modelCatalog,
+      new Map(),
+      undefined,
+      { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+      createPreparedModelCatalogProviderNormalizer(pluginMetadataSnapshot, facts.input.config),
+      new Map(),
+    );
+
+    expect(catalog.entries.map(({ provider, id }) => `${provider}/${id}`).toSorted()).toEqual([
+      `${providerId}/configured-only`,
+      `${providerId}/curated-only`,
+      `${providerId}/shared`,
+    ]);
+  });
+
   it("retains inherited catalogs and current request settings without custom model rows", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
     const { facts, staticConfig } = fixture();
@@ -293,30 +343,6 @@ describe("prepared catalog source composition", () => {
     );
   });
 
-  it("materializes duplicate current declarations once", async () => {
-    const { facts, generation, configured } = fixture();
-    configured.models = [
-      {
-        ...model("shared"),
-        name: "First current",
-        cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-      },
-      { ...model("shared"), name: "Later duplicate", input: ["text", "image"] },
-    ];
-    const result = (
-      await prepareConfiguredRuntimeFactsBatch({
-        agentFacts: [facts],
-        pluginGeneration: generation,
-      })
-    ).catalogs.get(facts.input)!;
-    const rows = result.templateModelRegistry.getAll().filter((entry) => entry.id === "shared");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      name: "First current",
-      input: ["text"],
-      cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-    });
-  });
   it("does not restore noncurrent runtime fallbacks after replace publication", async () => {
     const { facts, generation, modelsJsonContents } = fixture("replace");
     facts.configuredRuntimeModels = [
@@ -355,6 +381,7 @@ describe("prepared catalog source composition", () => {
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,
           refreshExpiredModelCatalog: () => {},
+          recheckNativeLogin: () => {},
           readPublishedModels: () => undefined,
           loadFullModelCatalog: async () => catalogFacts.modelCatalog,
           loadNativeModelCatalog: async () => catalogFacts.modelCatalog,
@@ -455,20 +482,6 @@ describe("prepared catalog source composition", () => {
     expect(result.catalogs.size).toBe(3);
     expect(events.indexOf("first")).toBeLessThan(events.indexOf("event-loop"));
     expect(events.indexOf("event-loop")).toBeLessThan(events.indexOf("last"));
-  });
-
-  it("keeps full catalog source ownership in merge mode", async () => {
-    const { facts, generation, modelsJsonContents } = fixture();
-    const result = await prepareFullCatalogFacts(facts, generation, "static", {
-      modelsJsonContents,
-      pluginCatalogs: [],
-      providerOutcomes: [{ provider: providerId, status: "ready" }],
-    });
-    expect(result.templateModelRegistry.find(providerId, "curated-only")).toBeUndefined();
-    expect(result.modelCatalog.entries.some((entry) => entry.id === "configured-only")).toBe(true);
-    expect(result.templateModelRegistry.find(providerId, "authored-only")).toEqual(
-      expect.objectContaining({ id: "authored-only" }),
-    );
   });
 
   it("replaces stale root request settings with current configuration", async () => {

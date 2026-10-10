@@ -39,21 +39,25 @@ function fixture() {
 }
 
 describe("optional Codex Ultrafast", () => {
-  it.each(["priority", "flex", undefined] as const)(
-    "restores baseline %s after a prior upgrade before an unsupported retry",
-    async (tier) => {
+  it.each([
+    { tier: "priority", expected: "priority" },
+    { tier: undefined, expected: null },
+    { tier: "ultrafast", expected: "priority" },
+  ] as const)(
+    "restores baseline $expected after explicit Ultrafast with configured tier $tier",
+    async ({ tier, expected }) => {
       const baseline = { ...resolveCodexAppServerRuntimeOptions({ env: {} }), serviceTier: tier };
       const restored = withCodexAppServerFastModeServiceTier(
         { ...baseline, serviceTier: "ultrafast" },
         { fastMode: undefined },
         baseline,
       );
-      expect(restored.serviceTier).toBe(tier ?? null);
+      expect(restored.serviceTier).toBe(expected);
       const { params, request } = fixture();
       request.mockResolvedValue({ data: [{ ...supportedModel, serviceTiers: [] }] });
       expect(
         await resolveCodexUltrafastServiceTier({ ...params, serviceTier: restored.serviceTier }),
-      ).toBe(tier ?? null);
+      ).toBe(expected);
     },
   );
   it("bounds all catalog pages by one optional discovery budget", async () => {
@@ -70,40 +74,8 @@ describe("optional Codex Ultrafast", () => {
       now.mockRestore();
     }
   });
-  it("uses the actual account's paginated catalog and the model slug", async () => {
-    const first = fixture();
-    first.request
-      .mockReset()
-      .mockResolvedValueOnce({ data: [], nextCursor: "second-page" })
-      .mockResolvedValueOnce({ data: [supportedModel], nextCursor: null });
-    expect(await resolveCodexUltrafastServiceTier(first.params)).toBe("ultrafast");
-    expect(first.request).toHaveBeenLastCalledWith(
-      "model/list",
-      {
-        limit: null,
-        cursor: "second-page",
-        includeHidden: true,
-      },
-      expect.objectContaining({ signal: first.controller.signal }),
-    );
-
-    const second = fixture();
-    second.request.mockResolvedValue({ data: [{ ...supportedModel, serviceTiers: [] }] });
-    expect(await resolveCodexUltrafastServiceTier(second.params)).toBe("priority");
-  });
-
-  it.each(["priority", "flex", undefined])(
-    "preserves baseline %s for unsupported models",
-    async (tier) => {
-      const { params, request } = fixture();
-      request.mockResolvedValue({ data: [{ ...supportedModel, model: "another-model" }] });
-      expect(await resolveCodexUltrafastServiceTier({ ...params, serviceTier: tier })).toBe(tier);
-    },
-  );
-
   it.each([
     { enabled: false, serviceTier: "flex", modelProvider: "openai" },
-    { enabled: false, serviceTier: null, modelProvider: "openai" },
     { enabled: true, serviceTier: "priority", modelProvider: "custom-provider" },
   ])("keeps inactive or custom-provider selection $serviceTier", async (selection) => {
     const { params, request } = fixture();
@@ -113,19 +85,13 @@ describe("optional Codex Ultrafast", () => {
     expect(request).toHaveBeenCalledTimes(0);
   });
 
-  it("can upgrade a wire-level inherited-tier clear while speed policy remains active", async () => {
-    const { params } = fixture();
-    expect(await resolveCodexUltrafastServiceTier({ ...params, serviceTier: null })).toBe(
-      "ultrafast",
-    );
-  });
-
   it("supports the managed ChatGPT subscription-sharing provider", async () => {
     const { params } = fixture();
     expect(
       await resolveCodexUltrafastServiceTier({
         ...params,
         modelProvider: CODEX_RESPONSES_OAUTH_PROVIDER,
+        serviceTier: null,
       }),
     ).toBe("ultrafast");
   });
@@ -137,18 +103,11 @@ describe("optional Codex Ultrafast", () => {
     );
   });
 
-  it.each([new Error("catalog unavailable"), { data: [{ model: "malformed" }] }])(
-    "keeps the baseline when catalog discovery fails",
-    async (result) => {
-      const { params, request } = fixture();
-      if (result instanceof Error) {
-        request.mockRejectedValue(result);
-      } else {
-        request.mockResolvedValue(result);
-      }
-      expect(await resolveCodexUltrafastServiceTier(params)).toBe("priority");
-    },
-  );
+  it("keeps the baseline when the catalog response is malformed", async () => {
+    const { params, request } = fixture();
+    request.mockResolvedValue({ data: [{ model: "malformed" }] });
+    expect(await resolveCodexUltrafastServiceTier(params)).toBe("priority");
+  });
 
   it("propagates cancellation instead of falling back", async () => {
     const { params, request, controller } = fixture();

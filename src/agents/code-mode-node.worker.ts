@@ -45,6 +45,8 @@ type NodeCell = {
   location: SourceLocation;
   pendingRequests: PendingBridgeRequest[];
   canceledRequestIds: string[];
+  replies?: SettledBridgeRequest[];
+  replyIndex: number;
   rejections: Map<Promise<unknown>, unknown>;
   outcome?: GuestOutcome;
   admissionError?: string;
@@ -122,7 +124,7 @@ const initializeScript = new Script(
       const stringify = JSON.stringify;
       const string = String;
       const encodeError = (error) => {
-        const bridgeError = __openclawIsBridgeError(error);
+        const bridgeCode = __openclawBridgeFailureCode(error) ?? null;
         const diagnostic = (read, fallback) => {
           try { return read(); } catch { return fallback; }
         };
@@ -131,7 +133,7 @@ const initializeScript = new Script(
         // Provenance records contain primitives and never inherit guest toJSON hooks.
         return stringify({
           __proto__: null,
-          bridgeError,
+          bridgeCode,
           name: diagnostic(() => string(error?.name ?? "Error"), "Error"),
           message: diagnostic(() => string(error?.message ?? error), "Error"),
           stack: typeof stack === "string" ? stack : "",
@@ -147,10 +149,9 @@ const initializeScript = new Script(
   `,
   { filename: "openclaw-code-mode:controller.js" },
 );
-const settleScript = new Script(
-  "for (const reply of JSON.parse(__openclawNodeReplies)) __openclawSettleBridge(reply.id, reply.ok, reply.json); delete globalThis.__openclawNodeReplies;",
-  { filename: "openclaw-code-mode:controller.js" },
-);
+const settleScript = new Script("__openclawSettleBridge()", {
+  filename: "openclaw-code-mode:controller.js",
+});
 const drainScript = new Script(
   `(() => {
     const error = __openclawAdmissionError();
@@ -235,6 +236,7 @@ function createCell(
     location: program.location,
     pendingRequests: [],
     canceledRequestIds: [],
+    replyIndex: 0,
     rejections: new Map(),
     deadline,
     progress,
@@ -279,6 +281,16 @@ function createCell(
       current.canceledRequestIds.push(id);
     }
   };
+  context["__openclawHostTakeBridgeReply"] = () => {
+    const request = current.replies?.[current.replyIndex];
+    if (!request) {
+      return undefined;
+    }
+    current.replyIndex++;
+    const reply = { __proto__: null, id: request.id, ok: request.ok, json: request.json };
+    request.json = "";
+    return reply;
+  };
   context["__openclawHostObserveNetworkContent"] = () => {
     current.networkContentObserved = true;
     current.progress.observeNetworkContent();
@@ -303,10 +315,13 @@ function createCell(
 }
 
 function settle(current: NodeCell, requests: SettledBridgeRequest[]): void {
-  current.context["__openclawNodeReplies"] = JSON.stringify(requests);
+  current.replies = requests;
+  current.replyIndex = 0;
   try {
     evaluate(current, settleScript);
   } finally {
+    current.replies = undefined;
+    current.replyIndex = 0;
     for (const request of requests) {
       request.json = "";
     }
@@ -329,18 +344,18 @@ function formatGuestFailure(
     name: string;
     message: string;
     stack: string;
-    bridgeError: boolean;
+    bridgeCode: "invalid_input" | "internal_error" | null;
   };
   if (
-    !value.bridgeError &&
+    value.bridgeCode === null &&
     value.name === "ReferenceError" &&
     /^(?:require|module|process) is not defined$/u.test(value.message)
   ) {
     return { code: "invalid_input", error: "code mode module access is disabled." };
   }
   return {
-    code: "internal_error",
-    ...(value.bridgeError ? { failurePhase: "bridge" as const } : {}),
+    code: value.bridgeCode ?? "internal_error",
+    ...(value.bridgeCode === null ? {} : { failurePhase: "bridge" as const }),
     error: [`${value.name}: ${value.message}`, ...sourceFrames(value.stack, current.location)].join(
       "\n",
     ),
@@ -459,19 +474,13 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
         continue;
       }
       const outcome = current.outcome!;
-      if (!outcome.ok) {
-        const failure = formatGuestFailure(current, outcome.json);
-        return failed(
-          failure.code,
-          boundCodeModeError(failure.error, config.maxOutputBytes),
-          captureCodeModeOutput(output, config.maxOutputBytes),
-          failure.failurePhase,
-        );
-      }
-      if (current.rejections.size > 0) {
+      let failureJson = outcome.ok ? undefined : outcome.json;
+      if (outcome.ok && current.rejections.size > 0) {
         current.context["__openclawNodeRejection"] = current.rejections.values().next().value;
-        const encoded = evaluate(current, rejectionScript);
-        const failure = formatGuestFailure(current, String(encoded));
+        failureJson = String(evaluate(current, rejectionScript));
+      }
+      if (failureJson !== undefined) {
+        const failure = formatGuestFailure(current, failureJson);
         return failed(
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),

@@ -16,22 +16,21 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
-  loadSubagentRunsForSessionFromSqlite,
-} from "./subagent-registry.store.sqlite.js";
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRunsForSessionFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -102,8 +101,9 @@ describe("parent runtime facts from retained completion obligations", () => {
       receipt.complete(buildAgentRunTerminalOutcome({ status: "ok" }));
       receipt.finish("interrupted");
       await resetSubagentRegistryForTests({ persist: false });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
       const shared = openOpenClawStateDatabase().db;
       const agent = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))).db;
       const rows = () => shared.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
@@ -123,7 +123,7 @@ describe("parent runtime facts from retained completion obligations", () => {
       const agentWrites = agent.prepare("SELECT total_changes() AS count").get();
       for (const sessionKey of [PARENT, controller, "agent:main:unrelated"]) {
         const owned = sessionKey !== "agent:main:unrelated";
-        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey);
+        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey, { db: shared });
         expect(loaded).toHaveLength(owned ? 1 : 0);
         if (owned) {
           expect(loaded[0]).toMatchObject({

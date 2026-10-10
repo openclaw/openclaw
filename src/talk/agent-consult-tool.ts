@@ -14,28 +14,23 @@ import type { RealtimeVoiceTool } from "./provider-types.js";
 
 /** Stable provider-facing tool name for realtime voice agent delegation. */
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME = "openclaw_agent_consult";
-/** Closed policy set controlling whether the consult tool is exposed. */
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES = [
   "safe-read-only",
   "owner",
   "none",
 ] as const;
-/** Tool exposure policy for the shared realtime voice consult tool. */
 export type RealtimeVoiceAgentConsultToolPolicy =
   (typeof REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES)[number];
-/** Normalized tool-call arguments accepted from realtime providers. */
 export type RealtimeVoiceAgentConsultArgs = {
   question: string;
   context?: string;
   responseStyle?: string;
 };
-/** Compact transcript entry included in delegated agent prompts. */
 export type RealtimeVoiceAgentConsultTranscriptEntry = {
   role: "user" | "assistant";
   text: string;
 };
 
-/** Shared realtime voice function-tool descriptor projected to providers. */
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
   type: "function",
   name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -61,7 +56,6 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
   },
 };
 
-/** Build the interim spoken instruction while the delegated agent turn runs. */
 export function buildRealtimeVoiceAgentConsultWorkingResponse(
   audienceLabel = "person",
 ): Record<string, unknown> {
@@ -72,7 +66,6 @@ export function buildRealtimeVoiceAgentConsultWorkingResponse(
   };
 }
 
-/** Default safe tool allowlist for voice consults in read-only mode. */
 const SAFE_READ_ONLY_TOOLS = [
   "read",
   "web_search",
@@ -82,14 +75,12 @@ const SAFE_READ_ONLY_TOOLS = [
   "memory_get",
 ] as const;
 
-/** Type guard for user/config supplied consult tool policies. */
 export function isRealtimeVoiceAgentConsultToolPolicy(
   value: unknown,
 ): value is RealtimeVoiceAgentConsultToolPolicy {
   return isStringOption(value, REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
 }
 
-/** Normalize a configured consult tool policy with a caller-owned fallback. */
 export function resolveRealtimeVoiceAgentConsultToolPolicy(
   value: unknown,
   fallback: RealtimeVoiceAgentConsultToolPolicy,
@@ -98,7 +89,6 @@ export function resolveRealtimeVoiceAgentConsultToolPolicy(
   return isRealtimeVoiceAgentConsultToolPolicy(normalized) ? normalized : fallback;
 }
 
-/** Merge the shared consult tool with provider/plugin custom realtime tools. */
 export function resolveRealtimeVoiceAgentConsultTools(
   policy: RealtimeVoiceAgentConsultToolPolicy,
   customTools: RealtimeVoiceTool[] = [],
@@ -127,7 +117,6 @@ function readRealtimeVoiceCustomToolName(tool: RealtimeVoiceTool): string | unde
   }
 }
 
-/** Resolve the OpenClaw tool allowlist paired with the consult exposure policy. */
 export function resolveRealtimeVoiceAgentConsultToolsAllow(
   policy: RealtimeVoiceAgentConsultToolPolicy,
 ): string[] | undefined {
@@ -140,7 +129,6 @@ export function resolveRealtimeVoiceAgentConsultToolsAllow(
   return [];
 }
 
-/** Build model instructions for when the voice agent should call the consult tool. */
 export function buildRealtimeVoiceAgentConsultPolicyInstructions(config: {
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
   consultPolicy?: "auto" | "substantive" | "always";
@@ -164,7 +152,6 @@ export function buildRealtimeVoiceAgentConsultPolicyInstructions(config: {
   ].join("\n");
 }
 
-/** Build the shared instructions for a realtime voice agent session. */
 export function buildRealtimeVoiceSessionInstructions(params: {
   base: string;
   isAgentProxy: boolean;
@@ -200,7 +187,6 @@ export function buildRealtimeVoiceSessionInstructions(params: {
   return (params.isAgentProxy ? instructions : instructions.filter(Boolean)).join("\n\n");
 }
 
-/** Parse provider-owned consult tool arguments into the normalized contract. */
 export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoiceAgentConsultArgs {
   const record = asOptionalRecord(args);
   const question =
@@ -229,7 +215,6 @@ export function buildRealtimeVoiceAgentConsultChatMessage(args: unknown): string
     .join("\n\n");
 }
 
-/** Build the delegated OpenClaw agent prompt for a live voice consult. */
 export function buildRealtimeVoiceAgentConsultPrompt(params: {
   args: unknown;
   transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
@@ -264,7 +249,6 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
     .join("\n\n");
 }
 
-/** Collect only visible answer text from streamed delegated-agent payloads. */
 export function collectRealtimeVoiceAgentConsultVisibleText(
   payloads: Array<{
     text?: unknown;

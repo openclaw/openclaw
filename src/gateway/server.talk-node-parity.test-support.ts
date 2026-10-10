@@ -28,7 +28,6 @@ export async function createTalkParityNodeFixture(
     config,
     commands,
     enableAgentRuns: false,
-    enableWorkerRuns: false,
     installedAppsSharingEnabled: false,
     desktopSharingEnabled: false,
   });

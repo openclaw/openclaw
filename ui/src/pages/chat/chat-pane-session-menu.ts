@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsFilesRevealResult,
-  SystemInfoResult,
   WorktreesBranchesResult,
   WorktreesListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -12,13 +11,13 @@ import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-ses
 import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
+import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -31,15 +30,16 @@ import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
   parseAgentSessionKey,
+  isSubagentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import { showToast } from "../../lib/toast.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -109,18 +109,29 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
     ).sessionKey;
     const label = this.resolveHeaderSessionTitle(row);
-    const isChild = Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
+    const isChild =
+      !isSubagentSessionKey(row.key) &&
+      Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
+    const hasChildren = hasSessionArchiveDescendants(
+      row,
+      this.state?.sessionsResult?.sessions ?? [],
+    );
     const archiving = this.context.sessions.archiveVisibility(row.key) === "pending";
     return this.headerSessionDataMemo.read(
       [
         label,
+        row.key,
+        row.agentId,
         row.sessionId,
         isChild,
+        hasChildren,
         row.pinned,
         pinnable,
         row.snoozedUntil,
         row.unread,
         row.hiddenFromInvolvingMe,
+        row.communication,
+        row.effectiveCommunication,
         row.archived,
         archiving,
         row.category,
@@ -129,13 +140,17 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       ],
       () => ({
         label,
+        target: { key: row.key, agentId: row.agentId },
         sessionId: row.sessionId ?? null,
         isChild,
+        hasChildren,
         pinned: row.pinned === true,
         pinnable,
         snoozedUntil: row.snoozedUntil ?? null,
         unread: row.unread === true,
         hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+        communication: row.communication,
+        effectiveCommunication: row.effectiveCommunication,
         archived: row.archived === true,
         archiving,
         category: normalizeOptionalString(row.category) ?? null,
@@ -153,26 +168,22 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     client: GatewayBrowserClient,
     generation: number,
   ): Promise<void> {
-    if (!isGatewayMethodAdvertised(this.context.gateway.snapshot, "system.info")) {
-      return;
-    }
-    let platformRequest = headerPlatformByClient.get(client);
-    if (!platformRequest) {
-      platformRequest = client
-        .request<SystemInfoResult>("system.info", {})
-        .then((result) => result.platform)
-        .catch(() => null);
-      headerPlatformByClient.set(client, platformRequest);
-    }
-    const platform = await platformRequest;
-    if (this.connectedClient === client && this.connectionGeneration === generation) {
+    const gateway = this.context.gateway;
+    const platform = await readSystemInfo(gateway)
+      .then((sample) => sample.value.platform)
+      .catch(() => null);
+    if (
+      this.context.gateway === gateway &&
+      this.connectedClient === client &&
+      this.connectionGeneration === generation
+    ) {
       this.headerPlatform = platform;
     }
   }
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
     if (action.kind === "stop-cloud-worker") {
-      return this.reclaimHeaderPlacement(row);
+      return this.changeHeaderPlacement(row, "reclaim");
     }
     if (action.kind === "toggle-archived" && !row.archived && !this.canArchiveHeaderSession(row)) {
       return;
@@ -242,9 +253,14 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       unread: candidate.unread === true,
       archived: candidate.archived === true,
       category: candidate.category,
+      sidebarRoot: candidate.sidebarRoot,
+      isChild:
+        !isSubagentSessionKey(candidate.key) &&
+        Boolean(resolveSidebarSessionParentKey(candidate, new Set())),
       active: true,
       hasActiveRun: candidate.hasActiveRun ?? candidate.status === "running",
       gatewayHasActiveRun: candidate.hasActiveRun,
+      hasActiveSubagentRun: candidate.hasActiveSubagentRun,
     });
     const session = toActionSession(row);
     // Refresh metadata only on the selected instance; replacements must keep
@@ -296,6 +312,17 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             scope.sessions.state.result?.sessions ?? [],
           ),
       };
+      const assignCategory = (category: string | null) =>
+        operations.assignSessionCategory(
+          host,
+          session,
+          category,
+          scope,
+          {},
+          {
+            resolveSession: resolveCurrentSession,
+          },
+        );
       switch (action.kind) {
         case "toggle-involving-me":
           await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
@@ -304,6 +331,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "toggle-unread":
         case "set-icon":
         case "set-color":
+        case "set-communication":
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
@@ -316,7 +344,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
                     ? { icon: action.icon }
                     : action.kind === "set-color"
                       ? { color: action.color }
-                      : { icon: null, color: null };
+                      : action.kind === "set-communication"
+                        ? { communication: action.communication }
+                        : { icon: null, color: null };
             await operations.patchSession(
               host,
               currentSession,
@@ -333,17 +363,14 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "fork":
           await operations.forkSession(host, session, scope);
           break;
+        case "move-to-top-level":
+          await operations.promoteSession(host, session, scope);
+          break;
+        case "archive-tree":
+          await operations.archiveSessionTreeWithUndo(host, session, scope);
+          break;
         case "move-to-group":
-          await operations.assignSessionCategory(
-            host,
-            session,
-            action.category,
-            scope,
-            {},
-            {
-              resolveSession: resolveCurrentSession,
-            },
-          );
+          await assignCategory(action.category);
           break;
         case "new-group": {
           const { showInputDialog } = await import("../../components/input-dialog.ts");
@@ -354,14 +381,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             requireValue: true,
           });
           if (name && this.isHeaderSessionActionCurrent(scope, owner)) {
-            await operations.assignSessionCategory(
-              host,
-              session,
-              name,
-              scope,
-              {},
-              { resolveSession: resolveCurrentSession },
-            );
+            await assignCategory(name);
           }
           break;
         }
@@ -514,7 +534,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
     this.headerRenameValue = this.headerRenameInitialValue;
-    this.headerEditing = true;
     void this.updateComplete.then(() => {
       const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       input?.focus();
@@ -523,24 +542,22 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected cancelHeaderRename(): void {
-    this.headerEditing = false;
     this.headerRenameSession = null;
   }
 
   protected commitHeaderRename(): void {
-    if (!this.headerEditing) {
+    const session = this.headerRenameSession;
+    if (!session) {
       return;
     }
-    const session = this.headerRenameSession;
     const patch = resolveSessionRenamePatch(
       this.headerRenameValue,
       this.headerRenameInitialValue,
-      session?.label,
+      session.label,
     );
-    this.headerEditing = false;
     this.headerRenameSession = null;
     const state = this.state;
-    if (!session || !state || !patch) {
+    if (!state || !patch) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
@@ -574,7 +591,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!client) {
       return;
     }
-    const loads: Promise<void>[] = [];
+    const loads = [this.loadHeaderPlatform(client, this.connectionGeneration)];
     // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
     const immediateRoot =
       (row.execNode ? row.execCwd?.trim() : undefined) ||
@@ -585,7 +602,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (worktreeId && !immediateRoot) {
       const entry = this.headerWorktreePaths.get(worktreeId) ?? {};
       this.headerWorktreePaths.set(worktreeId, entry);
-      if (!entry.loaded && !entry.loading) {
+      if (entry.path === undefined && !entry.loading) {
         entry.loading = true;
         loads.push(
           client
@@ -595,11 +612,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
                 result.worktrees.find(
                   (candidate) => candidate.id === worktreeId && candidate.removedAt === undefined,
                 )?.path ?? null;
-              entry.loaded = true;
             })
             .catch(() => {
-              entry.path = null;
-              entry.loaded = false;
+              entry.path = undefined;
             })
             .finally(() => {
               entry.loading = false;

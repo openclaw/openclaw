@@ -5,7 +5,7 @@ import type {
   QaBusStateSnapshot,
   QaBusThread,
   QaBusWaitForInput,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 

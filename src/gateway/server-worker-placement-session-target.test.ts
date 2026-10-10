@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, test, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -11,13 +12,18 @@ import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as transcriptWriteGuard from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import * as repositoryPublications from "../state/session-repository-workspaces.publication.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
-import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
+import {
+  createWorkerWorkspaceRecoveryPreparer,
+  resolveWorkerPlacementSessionTarget,
+} from "./server-worker-placement-session-target.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
@@ -25,6 +31,7 @@ import {
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
+import type { PreparedWorkerWorkspaceRecovery } from "./worker-environments/placement-reclaim-contract.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./worker-environments/placement-worker-gate.js";
@@ -44,7 +51,7 @@ test.each([
     await withStateDirEnv("full-target-recovery-probe-", async () => {
       const profile = { provider: "full-target-probe", settings: { region: "synthetic" } };
       const individual: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         cloudWorkers: { profiles: { development: profile } },
       };
       setRuntimeConfigSnapshot(individual, individual);
@@ -108,7 +115,7 @@ test.each([
         ...identity,
         executionMode: "worker-turn",
       });
-      const captured = placements.transition({
+      const captured = await placements.transition({
         sessionId: identity.sessionId,
         from: "requested",
         to: "provisioning",
@@ -231,7 +238,7 @@ test.each([
 
 test("rejects stale repository selection and refreshes the accepted checkpoint after drain", async () => {
   await withStateDirEnv("worker-repository-selection-", async () => {
-    const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config, config);
     const storePath = resolveSessionStorePathCore(undefined, { agentId: REQUEST.agentId });
     const repositories = getSessionRepositoryWorkspaceStore();
@@ -260,7 +267,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     const sessionRuntime = {
       resolveGatewaySessionStoreTargetWithStore,
       resolveCanonicalSessionEntryFromStoreKeys,
-      managedWorktrees: { findLiveByOwner: () => undefined },
+      managedWorktrees: { findLiveByOwner: async () => undefined },
     };
     const select = () =>
       resolveWorkerPlacementSessionTarget({
@@ -324,12 +331,12 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     });
     const reclaimed = await barriers.runReclaimBarrier({
       ...REQUEST,
-      begin: () => {
+      begin: async () => {
         const current = placements.get(REQUEST.sessionId);
         if (current?.state !== "active") {
           throw new Error("Expected active placement before reclaim");
         }
-        const result = placements.startDrain({
+        const result = await placements.startDrain({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
@@ -345,13 +352,13 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
         if (current.state !== "draining") {
           throw new Error("Expected a newly drained placement");
         }
-        const reconciling = placements.startReconcile({
+        const reconciling = await placements.startReconcile({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
           expectedGeneration: current.generation,
         });
-        const result = placements.transition({
+        const result = await placements.transition({
           sessionId: current.sessionId,
           from: "reconciling",
           to: "reclaimed",
@@ -371,7 +378,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
 
 test("resolves consecutive placement workspaces without decoding unrelated session payloads", async () => {
   await withStateDirEnv("worker-exact-target-", async () => {
-    const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config, config);
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const keys = ["agent:main:placement-a", "agent:main:placement-b"] as const;
@@ -405,7 +412,7 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
             resolveGatewaySessionStoreTargetWithStore,
             resolveCanonicalSessionEntryFromStoreKeys,
             managedWorktrees: {
-              findLiveByOwner: (_kind, ownerId) => ({
+              findLiveByOwner: async (_kind, ownerId) => ({
                 id: ownerId,
                 ownerId,
                 path: `/synthetic/${ownerId}`,
@@ -429,3 +436,104 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
     }
   });
 });
+
+test.each([
+  { field: "label", otherSession: false, conflicts: false, stage: "prepare" },
+  { field: "activeWriterRunId", otherSession: true, conflicts: false, stage: "prepare" },
+  { field: "sessionId", otherSession: false, conflicts: true, stage: "prepare" },
+  { field: "lifecycleRevision", otherSession: false, conflicts: true, stage: "prepare" },
+  { field: "activeWriterRunId", otherSession: false, conflicts: true, stage: "prepare" },
+  { field: "label", otherSession: false, conflicts: false, stage: "recovery" },
+  { field: "activeWriterRunId", otherSession: false, conflicts: true, stage: "recovery" },
+])(
+  "recovers only unchanged owners when $field commits during $stage (other session: $otherSession)",
+  async ({ field, otherSession, conflicts, stage }) => {
+    await withStateDirEnv("worker-recovery-revision-", async () => {
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(config, config);
+      const identity = {
+        agentId: "main",
+        sessionKey: "agent:main:recovery-revision",
+        sessionId: "recovery-session",
+      };
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: identity.agentId });
+      const otherKey = `${identity.sessionKey}-other`;
+      await replaceSessionEntry(
+        { ...identity, storePath },
+        {
+          sessionId: identity.sessionId,
+          updatedAt: 1,
+          lifecycleRevision: "original-lifecycle",
+          worktree: { id: "recovery-worktree", branch: "synthetic", repoRoot: "/synthetic" },
+        },
+      );
+      if (otherSession) {
+        await replaceSessionEntry(
+          { agentId: identity.agentId, sessionKey: otherKey, storePath },
+          { sessionId: "other-session", updatedAt: 1 },
+        );
+      }
+      const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
+      const other = new DatabaseSync(database.path);
+      const mutate = (key: string, property: string) =>
+        other
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+          )
+          .run(`$.${property}`, "concurrent-write", key);
+      let armed = stage === "prepare";
+      let committed = false;
+      const createPredicate = transcriptWriteGuard.createSessionTranscriptOwnerPredicate;
+      const predicate = vi
+        .spyOn(transcriptWriteGuard, "createSessionTranscriptOwnerPredicate")
+        .mockImplementation((...args) => {
+          const matches = createPredicate(...args);
+          return () => {
+            const result = matches();
+            if (armed && !committed) {
+              committed = true;
+              mutate(otherSession ? otherKey : identity.sessionKey, field);
+            }
+            return result;
+          };
+        });
+      const recover = createWorkerWorkspaceRecoveryPreparer({
+        getConfig: () => config,
+        loadSessionRuntime: async () => ({
+          resolveGatewaySessionStoreTargetWithStore,
+          resolveCanonicalSessionEntryFromStoreKeys,
+          managedWorktrees: {
+            findLiveByOwner: async (_kind, ownerId) => ({
+              id: "recovery-worktree",
+              ownerId,
+              path: "/synthetic/recovery",
+            }),
+          },
+        }),
+      });
+      const run = vi.fn(async ({ workspace, assertCurrent }: PreparedWorkerWorkspaceRecovery) => {
+        if (stage === "recovery") {
+          mutate(identity.sessionKey, "label");
+          armed = true;
+        }
+        assertCurrent();
+        return workspace;
+      });
+      try {
+        const recovery = recover(identity, () => {}, run);
+        if (conflicts) {
+          await expect(recovery).rejects.toThrow(
+            "Prepared session entry facts are no longer current",
+          );
+        } else {
+          await expect(recovery).resolves.toEqual({ kind: "local", path: "/synthetic/recovery" });
+        }
+        expect(committed).toBe(true);
+        expect(run).toHaveBeenCalledTimes(conflicts && stage === "prepare" ? 0 : 1);
+      } finally {
+        predicate.mockRestore();
+        other.close();
+      }
+    });
+  },
+);

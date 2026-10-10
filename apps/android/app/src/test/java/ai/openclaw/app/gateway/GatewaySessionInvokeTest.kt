@@ -154,7 +154,7 @@ private data class NodeHarness(
 )
 
 private data class InvokeScenarioResult(
-  val request: GatewaySession.InvokeRequest,
+  val request: GatewayNodeInvokeRequest,
   val resultParams: JsonObject,
 )
 
@@ -384,7 +384,7 @@ class GatewaySessionInvokeTest {
         contextPath = contextPath,
       )
       awaitConnectedOrThrow(connected, lastDisconnect, server)
-      val oldUrl = requireNotNull(harness.session.currentCanvasHostUrl())
+      val oldUrl = requireNotNull(harness.session.currentCanvasHostRoute()?.url)
       val beforeRefresh = loadDocument(oldUrl)
       val refreshed = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
       val lagging = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
@@ -397,7 +397,7 @@ class GatewaySessionInvokeTest {
       assertEquals(404, expiredDocument.first)
       assertTrue(oldUrl.endsWith("/old-token"))
       assertTrue(refreshed.endsWith("/new-token"))
-      assertEquals(refreshed, harness.session.currentCanvasHostUrl())
+      assertEquals(refreshed, harness.session.currentCanvasHostRoute()?.url)
       assertEquals(refreshed, lagging)
       assertEquals(1, refreshRequests.get())
     } finally {
@@ -428,7 +428,7 @@ class GatewaySessionInvokeTest {
       try {
         connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.read"), contextPath = contextPath)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
-        assertEquals(advertised.get(), harness.session.currentCanvasHostUrl())
+        assertEquals(advertised.get(), harness.session.currentCanvasHostRoute()?.url)
         val origin = "http://127.0.0.1:${server.port}"
         val explicitRoutes =
           listOf(
@@ -445,7 +445,7 @@ class GatewaySessionInvokeTest {
           )
         for (route in explicitRoutes) {
           advertised.set(route)
-          assertEquals(route, harness.session.refreshCanvasHostUrlIfCurrent(harness.session.currentCanvasHostUrl()))
+          assertEquals(route, harness.session.refreshCanvasHostUrlIfCurrent(harness.session.currentCanvasHostRoute()?.url))
         }
       } finally {
         shutdownHarness(harness, server)
@@ -2069,7 +2069,8 @@ class GatewaySessionInvokeTest {
 
         val sent =
           async {
-            harness.session.sendNodeEvent(
+            harness.session.sendNodeEventForEndpoint(
+              expectedEndpointStableId = null,
               event = "agent.request",
               payloadJson = """{"message":"restore"}""",
             )
@@ -2141,7 +2142,8 @@ class GatewaySessionInvokeTest {
         withTimeout(TEST_TIMEOUT_MS) { connectRequestSeen.await() }
 
         assertFalse(
-          harness.session.sendNodeEvent(
+          harness.session.sendNodeEventForEndpoint(
+            expectedEndpointStableId = null,
             event = "notifications.changed",
             payloadJson = """{"change":"posted","key":"before"}""",
           ),
@@ -2151,7 +2153,8 @@ class GatewaySessionInvokeTest {
         releaseConnectResponse.complete(Unit)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
         assertTrue(
-          harness.session.sendNodeEvent(
+          harness.session.sendNodeEventForEndpoint(
+            expectedEndpointStableId = null,
             event = "notifications.changed",
             payloadJson = """{"change":"posted","key":"after"}""",
           ),
@@ -2180,7 +2183,7 @@ class GatewaySessionInvokeTest {
     extraContext: CoroutineContext = EmptyCoroutineContext,
     deviceAuthStore: DeviceAuthTokenStore = InMemoryDeviceAuthStore(),
     onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -2280,11 +2283,11 @@ class GatewaySessionInvokeTest {
     invokeEventFrame: String,
     onHandshake: ((RecordedRequest) -> Unit)? = null,
     afterResult: suspend (InvokeScenarioResult) -> Unit = {},
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
   ): InvokeScenarioResult {
     val json = testJson()
     val connected = CompletableDeferred<Unit>()
-    val invokeRequest = CompletableDeferred<GatewaySession.InvokeRequest>()
+    val invokeRequest = CompletableDeferred<GatewayNodeInvokeRequest>()
     val invokeResultParams = CompletableDeferred<String>()
     val lastDisconnect = AtomicReference("")
     val server =

@@ -335,7 +335,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
 struct OpenClawQuestionCard: View {
     @Bindable private var model: OpenClawQuestionCardModel
     private let onSubmit: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
-    private let onSkip: (@MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)?
+    private let onSkip: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
     #if os(macOS)
     @FocusState private var focusedQuestionID: String?
     #endif
@@ -547,21 +547,19 @@ struct OpenClawQuestionCard: View {
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if let onSkip = self.onSkip {
-                    Button {
-                        Task { await onSkip(self.model) }
-                    } label: {
-                        if self.model.isSkipping {
-                            Text("Skipping…")
-                                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
-                        } else {
-                            Text("Skip")
-                                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
-                        }
+                Button {
+                    Task { await self.onSkip(self.model) }
+                } label: {
+                    if self.model.isSkipping {
+                        Text("Skipping…")
+                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                    } else {
+                        Text("Skip")
+                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(status == .submitting)
                 }
+                .buttonStyle(.bordered)
+                .disabled(status == .submitting)
                 Button {
                     Task { await self.onSubmit(self.model) }
                 } label: {
@@ -574,6 +572,7 @@ struct OpenClawQuestionCard: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .disabled(!self.model.canSubmit || status == .submitting)
             }
             if let errorText = self.model.errorText {
@@ -624,11 +623,6 @@ private enum QuestionLookupResult {
     case record(QuestionRecord)
     case notFound
     case failed
-}
-
-private struct QuestionRefreshApplyResult {
-    let complete: Bool
-    let changed: Bool
 }
 
 extension OpenClawChatViewModel {
@@ -750,7 +744,7 @@ extension OpenClawChatViewModel {
 
     private func applyQuestionRefresh(
         records: [QuestionRecord],
-        lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)]) -> QuestionRefreshApplyResult
+        lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)]) -> (complete: Bool, changed: Bool)
     {
         var changed = false
         for record in records {
@@ -780,7 +774,7 @@ extension OpenClawChatViewModel {
             self.questionStateRevision &+= 1
             self.markTimelineChanged()
         }
-        return QuestionRefreshApplyResult(complete: complete, changed: changed)
+        return (complete: complete, changed: changed)
     }
 
     private func clearPendingQuestionsForUnavailableList() {
@@ -854,19 +848,19 @@ extension OpenClawChatViewModel {
         self.markTimelineChanged()
     }
 
-    func handleQuestionEvent(_ event: OpenClawChatTransportEvent) {
+    func handleQuestionEvent(_ event: OpenClawChatTransportEvent) -> Task<Void, Never>? {
         switch event {
         case let .questionRequested(question): self.upsertQuestion(question)
         case let .questionResolved(resolved): self.resolveQuestionEvent(resolved)
-        default: return
+        default: return nil
         }
-        guard !self.isQuestionAuthorityRetired else { return }
+        guard !self.isQuestionAuthorityRetired else { return nil }
         // Invalidate a list snapshot captured before this event, then fetch the
         // authoritative set so other pending cards from that snapshot are not lost.
         self.questionRefreshGeneration &+= 1
         self.questionRefreshRetryTask?.cancel()
         self.questionRefreshRetryTask = nil
-        Task { [weak self] in await self?.refreshQuestions() }
+        return Task { [weak self] in await self?.refreshQuestions() }
     }
 
     func submitQuestion(_ model: OpenClawQuestionCardModel) async {

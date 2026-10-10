@@ -67,8 +67,8 @@ describe("worker placement restart recovery", () => {
             },
           });
           if (scenario === "pending result") {
-            placements.markWorkspaceResultPending(claim);
-            placements.handoffWorkspaceResultRecovery(claim);
+            await placements.markWorkspaceResultPending(claim);
+            await placements.handoffWorkspaceResultRecovery(claim);
           }
         }
 
@@ -98,7 +98,7 @@ describe("worker placement restart recovery", () => {
             turnClaim: null,
           });
         }
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       },
     );
   });
@@ -613,6 +613,12 @@ describe("worker placement restart recovery", () => {
       let replacement: ReturnType<typeof placements.get>;
       const observedPlacements = {
         ...placements,
+        getAsync: async (sessionId: string) => {
+          const current = await placements.getAsync(sessionId);
+          return change === "session" && replacement && current
+            ? { ...current, sessionKey: "agent:main:replacement-session" }
+            : current;
+        },
         get: (sessionId: string) => {
           const current = placements.get(sessionId);
           return change === "session" && replacement && current
@@ -621,13 +627,13 @@ describe("worker placement restart recovery", () => {
         },
       };
       const replacePlacement = async () => {
-        placements.fail({
+        await placements.fail({
           sessionId: original.sessionId,
           expectedGeneration: original.generation,
           recoveryError: "superseded placement",
         });
         const requested = await placements.startDispatch(REQUEST);
-        replacement = placements.transition({
+        replacement = await placements.transition({
           sessionId: original.sessionId,
           from: "requested",
           to: "provisioning",
@@ -635,7 +641,7 @@ describe("worker placement restart recovery", () => {
           patch: { environmentId: replacementEnvironmentId },
         });
         if (state === "syncing" || state === "starting") {
-          replacement = placements.transition({
+          replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "provisioning",
             to: "syncing",
@@ -644,7 +650,7 @@ describe("worker placement restart recovery", () => {
           });
         }
         if (state === "starting") {
-          replacement = placements.transition({
+          replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "syncing",
             to: "starting",
@@ -671,7 +677,6 @@ describe("worker placement restart recovery", () => {
           throw new Error("stale recovery lifecycle was replaced");
         },
         runActivationBarrier: async ({ activate }) => activate(),
-        reportTransition: (observer, placement) => observer?.(placement),
       });
 
       await startup.resumeProvisioning(original, async () => {});
@@ -722,7 +727,7 @@ describe("worker placement restart recovery", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(claim);
+    await placements.markWorkspaceResultPending(claim);
 
     const restartedStore = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -738,7 +743,7 @@ describe("worker placement restart recovery", () => {
       state: "failed",
       recoveryError: "Pending cloud workspace result lost its worker: session-1",
     });
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
@@ -836,8 +841,8 @@ describe("worker placement restart recovery", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placements.markWorkspaceResultPending(claim);
-      placements.handoffWorkspaceResultRecovery(claim);
+      await placements.markWorkspaceResultPending(claim);
+      await placements.handoffWorkspaceResultRecovery(claim);
       currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
       recoveryState.started = true;
 
@@ -847,7 +852,7 @@ describe("worker placement restart recovery", () => {
         state: "active",
         turnClaim: { claimId: claim.claimId, runId: claim.runId },
       });
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       expect(workerService.get(active.environmentId)).toMatchObject({
         state: "attached",
         destroyRequestedAtMs: null,

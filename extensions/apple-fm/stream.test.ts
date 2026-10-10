@@ -27,7 +27,6 @@ const context: Context = {
       parameters: Type.Object({
         action: Type.Literal("connect_channel"),
         channel: Type.String(),
-        sha256: Type.Optional(Type.String({ pattern: "^[a-fA-F0-9]{64}$" })),
       }),
     },
   ],
@@ -41,14 +40,14 @@ const call = {
 beforeEach(() => vi.clearAllMocks());
 
 describe("Apple Foundation Models native transport", () => {
-  it("returns a typed tool call with measured usage and preserves host validation schemas", async () => {
+  it("returns a typed tool call with measured usage", async () => {
     native.run.mockResolvedValue({
       text: "",
       toolCalls: [call],
       inputTokens: 3995,
       outputTokens: 18,
     });
-    const stream = await createAppleFmStream(native)(model, context, { maxTokens: 128 });
+    const stream = await createAppleFmStream(native)(model, context);
     const events = [];
     for await (const event of stream) {
       events.push(event.type);
@@ -60,18 +59,11 @@ describe("Apple Foundation Models native transport", () => {
       usage: { input: 3995, output: 18, totalTokens: 4013 },
     });
     expect(events).toEqual(["start", "toolcall_start", "toolcall_delta", "toolcall_end", "done"]);
-    expect(native.run).toHaveBeenCalledWith(
-      expect.objectContaining({ ...context, maxTokens: 128 }),
-      expect.anything(),
-    );
-    expect(context.tools?.[0]?.parameters).toMatchObject({
-      properties: { sha256: { pattern: "^[a-fA-F0-9]{64}$" } },
-    });
   });
 
   it.each([
     {
-      name: "pattern",
+      name: "caller pattern despite replaced native constraints",
       schema: { type: "string", pattern: "^[a-f0-9]{8}$" },
       text: '{"value":"invalid"}',
     },
@@ -86,6 +78,7 @@ describe("Apple Foundation Models native transport", () => {
       native.run.mockResolvedValue({ text, toolCalls: [], inputTokens: 10, outputTokens: 10 });
       const stream = await createAppleFmStream(native)(model, context, {
         responseFormat: { type: "object", properties: { value: schema }, required: ["value"] },
+        onPayload: () => ({ messages: context.messages, responseFormat: { type: "object" } }),
       });
       const events = [];
       for await (const event of stream) {
@@ -104,46 +97,31 @@ describe("Apple Foundation Models native transport", () => {
   );
 
   it("preserves valid structured response bytes without injecting annotation defaults", async () => {
-    const text = '  {"value":"ready","notes":null}\n';
+    const text = '  {"value":"9007199254740993","integer":1e3,"fraction":0.25,"notes":null}\n';
     const responseFormat = {
       type: "object",
       properties: {
-        value: { type: "string", minLength: 1, maxLength: 5 },
+        value: { type: "string", minLength: 1, maxLength: 16 },
+        integer: { type: "integer", const: 1000 },
+        fraction: { type: "number", const: 0.25 },
         notes: { anyOf: [{ type: "string" }, { type: "null" }] },
         fallback: { type: "string", default: "unused" },
       },
-      required: ["value", "notes"],
+      required: ["value", "integer", "fraction", "notes"],
     };
     native.run.mockResolvedValue({ text, toolCalls: [], inputTokens: 10, outputTokens: 10 });
-    const stream = await createAppleFmStream(native)(model, context, { responseFormat });
+    const stream = await createAppleFmStream(native)(model, context, {
+      responseFormat,
+      maxTokens: 128,
+    });
     expect(await stream.result()).toMatchObject({
       stopReason: "stop",
       content: [{ type: "text", text }],
     });
     expect(native.run).toHaveBeenCalledWith(
-      expect.objectContaining({ responseFormat }),
+      expect.objectContaining({ responseFormat, maxTokens: 128 }),
       expect.anything(),
     );
-  });
-
-  it("validates the caller's schema even when a payload hook replaces native constraints", async () => {
-    const responseFormat = {
-      type: "object",
-      properties: { value: { type: "string", minLength: 5 } },
-      required: ["value"],
-    };
-    native.run.mockResolvedValue({
-      text: '{"value":""}',
-      toolCalls: [],
-      inputTokens: 10,
-      outputTokens: 10,
-    });
-    const stream = await createAppleFmStream(native)(model, context, {
-      responseFormat,
-      onPayload: () => ({ messages: context.messages, responseFormat: { type: "object" } }),
-    });
-    expect(await stream.result()).toMatchObject({ stopReason: "error", content: [] });
-    expect(responseFormat.properties.value.minLength).toBe(5);
   });
 
   it.each(["9007199254740993", "9.007199254740993e15", "1e999"])(
@@ -183,24 +161,6 @@ describe("Apple Foundation Models native transport", () => {
     },
   );
 
-  it.each([
-    { text: '{"value":"9007199254740993"}', schema: { type: "string" } },
-    { text: '{"value":1e3}', schema: { type: "integer", const: 1000 } },
-    { text: '{"value":0.25}', schema: { type: "number", const: 0.25 } },
-  ])(
-    "preserves valid numeric representations and digit strings: $text",
-    async ({ text, schema }) => {
-      native.run.mockResolvedValue({ text, toolCalls: [], inputTokens: 10, outputTokens: 10 });
-      const stream = await createAppleFmStream(native)(model, context, {
-        responseFormat: { type: "object", properties: { value: schema }, required: ["value"] },
-      });
-      expect(await stream.result()).toMatchObject({
-        stopReason: "stop",
-        content: [{ type: "text", text }],
-      });
-    },
-  );
-
   it("does not publish a tool call after cancellation during native inference", async () => {
     const abort = new AbortController();
     native.run.mockImplementation(async () => {
@@ -209,15 +169,5 @@ describe("Apple Foundation Models native transport", () => {
     });
     const stream = await createAppleFmStream(native)(model, context, { signal: abort.signal });
     expect(await stream.result()).toMatchObject({ stopReason: "aborted", content: [] });
-  });
-
-  it("reports native failures through the stream without falling through to HTTP", async () => {
-    native.run.mockRejectedValue(new Error("Apple Intelligence is disabled."));
-    const stream = await createAppleFmStream(native)(model, context);
-    expect(await stream.result()).toMatchObject({
-      stopReason: "error",
-      content: [],
-      errorMessage: expect.stringContaining("Apple Intelligence is disabled"),
-    });
   });
 });

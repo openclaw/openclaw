@@ -18,6 +18,7 @@ import { closeRelaySession } from "./operations.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn(), steer: vi.fn() }));
+// mock-isolation: isolate relay lifecycle from deterministic consult execution.
 vi.mock("../client-agent-consult.js", () => ({
   createTalkClientAgentConsultRunner: () => ({
     runPrompt: Object.assign(mocks.run, {

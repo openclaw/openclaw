@@ -1,8 +1,3 @@
-/**
- * Interactive terminal theme loader.
- *
- * Validates theme JSON, resolves color variables, and exposes terminal styling helpers.
- */
 import * as fs from "node:fs";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -100,6 +95,14 @@ type ThemeBg =
 
 type ColorMode = "truecolor" | "256color";
 
+const THINKING_BORDER_COLORS = new Map<string, ThemeColor>([
+  ["minimal", "thinkingMinimal"],
+  ["low", "thinkingLow"],
+  ["medium", "thinkingMedium"],
+  ["high", "thinkingHigh"],
+  ["xhigh", "thinkingXhigh"],
+]);
+
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const cleaned = hex.replace("#", "");
   if (cleaned.length !== 6) {
@@ -176,8 +179,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   const minC = Math.min(r, g, b);
   const spread = maxC - minC;
 
-  // Only consider grayscale if color is nearly neutral (spread < 10)
-  // AND grayscale is actually closer
   if (spread < 10 && grayDist < cubeDist) {
     return grayIndex;
   }
@@ -314,22 +315,8 @@ export class Theme {
   getThinkingBorderColor(
     level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
   ): (str: string) => string {
-    switch (level) {
-      case "off":
-        return (str: string) => this.fg("thinkingOff", str);
-      case "minimal":
-        return (str: string) => this.fg("thinkingMinimal", str);
-      case "low":
-        return (str: string) => this.fg("thinkingLow", str);
-      case "medium":
-        return (str: string) => this.fg("thinkingMedium", str);
-      case "high":
-        return (str: string) => this.fg("thinkingHigh", str);
-      case "xhigh":
-        return (str: string) => this.fg("thinkingXhigh", str);
-      default:
-        return (str: string) => this.fg("thinkingOff", str);
-    }
+    const color = THINKING_BORDER_COLORS.get(level) ?? "thinkingOff";
+    return (str: string) => this.fg(color, str);
   }
 
   getBashModeBorderColor(): (str: string) => string {
@@ -433,43 +420,25 @@ export const interactiveAgentTheme: Theme = new Proxy({} as Theme, {
   },
 });
 
-type CliHighlightTheme = Record<string, (s: string) => string>;
+// Resolve the shared proxy at render time so replacing the global theme stays live.
+const cliHighlightTheme: Record<string, (s: string) => string> = {
+  keyword: (s) => interactiveAgentTheme.fg("syntaxKeyword", s),
+  built_in: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  literal: (s) => interactiveAgentTheme.fg("syntaxNumber", s),
+  number: (s) => interactiveAgentTheme.fg("syntaxNumber", s),
+  string: (s) => interactiveAgentTheme.fg("syntaxString", s),
+  comment: (s) => interactiveAgentTheme.fg("syntaxComment", s),
+  function: (s) => interactiveAgentTheme.fg("syntaxFunction", s),
+  title: (s) => interactiveAgentTheme.fg("syntaxFunction", s),
+  class: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  type: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  attr: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  variable: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  params: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  operator: (s) => interactiveAgentTheme.fg("syntaxOperator", s),
+  punctuation: (s) => interactiveAgentTheme.fg("syntaxPunctuation", s),
+};
 
-let cachedHighlightThemeFor: Theme | undefined;
-let cachedCliHighlightTheme: CliHighlightTheme | undefined;
-
-function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
-  return {
-    keyword: (s: string) => t.fg("syntaxKeyword", s),
-    built_in: (s: string) => t.fg("syntaxType", s),
-    literal: (s: string) => t.fg("syntaxNumber", s),
-    number: (s: string) => t.fg("syntaxNumber", s),
-    string: (s: string) => t.fg("syntaxString", s),
-    comment: (s: string) => t.fg("syntaxComment", s),
-    function: (s: string) => t.fg("syntaxFunction", s),
-    title: (s: string) => t.fg("syntaxFunction", s),
-    class: (s: string) => t.fg("syntaxType", s),
-    type: (s: string) => t.fg("syntaxType", s),
-    attr: (s: string) => t.fg("syntaxVariable", s),
-    variable: (s: string) => t.fg("syntaxVariable", s),
-    params: (s: string) => t.fg("syntaxVariable", s),
-    operator: (s: string) => t.fg("syntaxOperator", s),
-    punctuation: (s: string) => t.fg("syntaxPunctuation", s),
-  };
-}
-
-function getCliHighlightTheme(t: Theme): CliHighlightTheme {
-  if (cachedHighlightThemeFor !== t || !cachedCliHighlightTheme) {
-    cachedHighlightThemeFor = t;
-    cachedCliHighlightTheme = buildCliHighlightTheme(t);
-  }
-  return cachedCliHighlightTheme;
-}
-
-/**
- * Highlight code with syntax coloring based on file extension or language.
- * Returns array of highlighted lines.
- */
 export function highlightCode(code: string, lang?: string): string[] {
   // Validate language before highlighting to avoid stderr spam from cli-highlight
   const validLang = lang && supportsLanguage(lang) ? lang : undefined;
@@ -479,21 +448,13 @@ export function highlightCode(code: string, lang?: string): string[] {
   if (!validLang) {
     return code.split("\n").map((line) => interactiveAgentTheme.fg("mdCodeBlock", line));
   }
-  const opts = {
-    language: validLang,
-    ignoreIllegals: true,
-    theme: getCliHighlightTheme(interactiveAgentTheme),
-  };
   try {
-    return highlight(code, opts).split("\n");
+    return highlight(code, validLang, cliHighlightTheme).split("\n");
   } catch {
     return code.split("\n");
   }
 }
 
-/**
- * Get language identifier from file path extension.
- */
 export function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
   if (!ext) {

@@ -4,6 +4,7 @@ import {
 } from "../../daemon/schtasks.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -18,19 +19,7 @@ export class UpdateCommandAbort extends Error {
   }
 }
 
-export type WindowsTaskAutoStartRecovery = {
-  suspended: Promise<boolean>;
-  beginMutation: () => void;
-  assertRecoveryCurrent: () => void;
-  restore: (
-    restartSafe?: boolean,
-    guard?: () => Promise<void>,
-    assertCurrent?: () => void,
-  ) => Promise<void>;
-  handoff: (guard: () => Promise<void>) => void;
-  complete: (restartSafe?: boolean, options?: { preserveState?: true }) => Promise<void>;
-  interrupted: () => boolean;
-};
+export type WindowsTaskAutoStartRecovery = ReturnType<typeof createWindowsTaskAutoStartRecovery>;
 
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
@@ -38,7 +27,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
   assertCurrent?: (phase?: "restore") => void;
   alreadySuspended?: true;
   updateRun?: UpdateCommandOptions["run"];
-}): WindowsTaskAutoStartRecovery {
+}) {
   let guard = params.assertCurrentService;
   let restorePromise: Promise<void> | undefined;
   let settlement: Promise<void> | undefined;
@@ -49,16 +38,13 @@ export function createWindowsTaskAutoStartRecovery(params: {
   let closed = false;
   let interrupted = false;
   let unregisterSignalExitBarrier = () => {};
-  let finishUpdate: (() => void) | undefined;
   const assertCurrentService = async (phase?: "restore") => {
     params.assertCurrent?.(phase);
     await guard?.();
     params.assertCurrent?.(phase);
   };
-  const updateFinished = new Promise<void>((resolve) => {
-    finishUpdate = resolve;
-  });
-  const unregisterSignalExitGate = registerSignalExitGate(updateFinished);
+  const updateFinished = createDeferredCore();
+  const unregisterSignalExitGate = registerSignalExitGate(updateFinished.promise);
   const onSignal = (exitCode: number) => {
     interrupted = true;
     void waitForSignalExitBarriers()
@@ -69,11 +55,10 @@ export function createWindowsTaskAutoStartRecovery(params: {
   };
   const onSigint = () => onSignal(130);
   const onSigterm = () => onSignal(143);
-  const onSigbreak = () => onSignal(130);
   const removeSignalHandlers = () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
-    process.off("SIGBREAK", onSigbreak);
+    process.off("SIGBREAK", onSigint);
     unregisterSignalExitBarrier();
   };
   const restore = (
@@ -151,7 +136,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
           cause instanceof Error ? cause : new Error("Windows native recovery failed", { cause });
       }
       try {
-        if (finishUpdate && recordInterruption && params.updateRun) {
+        if (recordInterruption && params.updateRun) {
           params.assertCurrent?.("restore");
           const failed = restorationFailed || !restartSafe;
           finishUpdateRun(
@@ -181,8 +166,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
           : settlementFailure;
       } finally {
         removeSignalHandlers();
-        finishUpdate?.();
-        finishUpdate = undefined;
+        updateFinished.resolve();
         unregisterSignalExitGate();
       }
       if (failure) {
@@ -193,7 +177,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
   };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
-  process.on("SIGBREAK", onSigbreak);
+  process.on("SIGBREAK", onSigint);
   unregisterSignalExitBarrier = registerSignalExitBarrier(restore);
   // The parent retains failed-handoff compensation; the fresh worker adopts
   // this observed suspension and enables only at its activation boundary.
@@ -221,7 +205,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
       restoreAllowed = false;
     },
     restore,
-    handoff: (guardianGuard) => {
+    handoff: (guardianGuard: () => Promise<void>) => {
       params.assertCurrent?.();
       if (closed || delegated) {
         throw new Error("Windows task recovery cannot transfer after settlement.");

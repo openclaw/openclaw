@@ -2,13 +2,16 @@ import type {
   ContentBlockParam,
   MessageCreateParamsStreaming,
   MessageParam,
-  Tool as AnthropicTool,
   ImageBlockParam,
   TextBlockParam,
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
-import type { Context, Model, Tool } from "@openclaw/llm-core";
-import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  supportsClaudeInHistorySystemMessages,
+  type Context,
+  type Model,
+} from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -27,6 +30,7 @@ import {
   requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
   resolveClaudeSonnet55ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -66,7 +70,6 @@ import { resolveAnthropicMessagesMaxTokens } from "./anthropic-transport-options
 import { resolveProviderEndpoint } from "./host-policy.js";
 import {
   coerceTransportToolCallArguments,
-  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -99,14 +102,13 @@ async function convertContentBlocks(
     (profile === "provider" || model.input.includes("image")) &&
     content.some(isImageWithMediaPayload);
   if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(
-      extractToolResultText(content),
-      mediaPlaceholder ??
-        (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""),
-    );
+    const text = extractToolResultText(content);
+    return text.trim()
+      ? text
+      : (mediaPlaceholder ??
+          (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""));
   }
   const blocks: Array<TextBlockParam | ImageBlockParam> = [];
-  let hasTextBlock = false;
   for (const block of content) {
     const record = asOptionalObjectRecord(block);
     if (!record) {
@@ -114,8 +116,7 @@ async function convertContentBlocks(
     }
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
-      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
-      hasTextBlock = true;
+      blocks.push({ type: "text", text: blockText });
     }
     if (!isImageWithMediaPayload(record)) {
       continue;
@@ -124,7 +125,7 @@ async function convertContentBlocks(
       [
         {
           type: "image" as const,
-          data: typeof record.data === "string" ? record.data : "",
+          data: record.data,
           mimeType:
             typeof record.mimeType === "string"
               ? record.mimeType
@@ -147,7 +148,7 @@ async function convertContentBlocks(
       },
     });
   }
-  if (!hasTextBlock) {
+  if (!blocks.some((block) => block.type === "text")) {
     blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
@@ -195,17 +196,18 @@ async function convertAnthropicMessages(
     }
     if (msg.role === "user") {
       const operatorMessage = inHistorySystemUpdates ? msg.operatorMessage : undefined;
+      const sourceContent = msg.content;
       let content: AnthropicWireMessage["content"];
-      if (typeof msg.content === "string") {
-        if (msg.content.trim().length === 0) {
+      if (typeof sourceContent === "string") {
+        if (sourceContent.trim().length === 0) {
           continue;
         }
-        content = sanitizeTransportPayloadText(msg.content);
+        content = sanitizeTransportPayloadText(sourceContent);
       } else {
         const normalizedContent =
           !managed || model.input.includes("image")
-            ? await normalizeAnthropicInlineContent(msg.content, imageBudget)
-            : msg.content.map((item) =>
+            ? await normalizeAnthropicInlineContent(sourceContent, imageBudget)
+            : sourceContent.map((item) =>
                 item.type === "image"
                   ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
                   : item,
@@ -243,10 +245,11 @@ async function convertAnthropicMessages(
           : content,
         ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
       });
-      if (
-        msg.runtimeContextCarrier &&
-        !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
-      ) {
+      const runtimeContextRetained =
+        msg.runtimeContext !== undefined
+          ? msg.runtimeContext.retained
+          : msg.runtimeContextCarrierRetained;
+      if (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext)) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length - 1);
       }
       continue;
@@ -372,14 +375,14 @@ async function convertAnthropicMessages(
 function buildAnthropicGenerationParams({
   model,
   options,
-  tools,
   toolProjection,
+  eagerToolInputStreaming,
   profile,
 }: {
   model: Model<"anthropic-messages">;
   options?: AnthropicOptions;
-  tools?: AnthropicTool[];
   toolProjection?: AnthropicToolProjection;
+  eagerToolInputStreaming: boolean;
   profile: "provider" | "transport";
 }) {
   const params: Pick<
@@ -403,8 +406,13 @@ function buildAnthropicGenerationParams({
     params.stop_sequences = options.stop;
   }
 
-  if (tools && tools.length > 0) {
-    params.tools = tools;
+  if (toolProjection && toolProjection.tools.length > 0) {
+    params.tools = toolProjection.tools.map((tool) => ({
+      name: tool.wireName,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+      ...(eagerToolInputStreaming ? { eager_input_streaming: true } : {}),
+    }));
   }
 
   // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
@@ -448,9 +456,10 @@ function buildAnthropicGenerationParams({
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking ||
-        options?.thinkingEnabled === true ||
-        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
+      resolveClaudeHaiku55ModelIdentity(model) === undefined &&
+        (mandatoryAdaptiveThinking ||
+          options?.thinkingEnabled === true ||
+          resolveClaudeSonnet55ModelIdentity(model) !== undefined),
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection
@@ -462,33 +471,6 @@ function buildAnthropicGenerationParams({
   }
 
   return params;
-}
-
-function convertAnthropicTools(
-  tools: Tool[],
-  isOAuthTokenLocal: boolean,
-  supportsEagerToolInputStreaming = false,
-): {
-  projection: AnthropicToolProjection;
-  tools: AnthropicTool[];
-} {
-  const projection = projectAnthropicTools(tools, (name) =>
-    isOAuthTokenLocal ? toClaudeCodeToolName(name) : name,
-  );
-  return {
-    projection,
-    tools: projection.tools.map((tool) => {
-      const projected: AnthropicTool = {
-        name: tool.wireName,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      };
-      if (supportsEagerToolInputStreaming) {
-        projected.eager_input_streaming = true;
-      }
-      return projected;
-    }),
-  };
 }
 
 /** Assemble both public Messages routes without changing their replay/default profiles. */
@@ -524,15 +506,16 @@ export async function buildAnthropicRequest(
     cacheControl,
     claudeCodeVersion,
   );
-  const convertedTools = context.tools
-    ? convertAnthropicTools(
-        context.tools,
-        isOAuthToken,
-        !managed &&
-          (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks"),
-      )
-    : undefined;
-  const toolProjection = convertedTools?.projection;
+  let toolProjection: AnthropicToolProjection | undefined;
+  let eagerToolInputStreaming = false;
+  if (context.tools) {
+    const tools = context.tools;
+    eagerToolInputStreaming =
+      !managed && (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks");
+    toolProjection = projectAnthropicTools(tools, (name) =>
+      isOAuthToken ? toClaudeCodeToolName(name) : name,
+    );
+  }
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
     authProfileId: options?.authProfileId,
@@ -579,8 +562,8 @@ export async function buildAnthropicRequest(
     buildAnthropicGenerationParams({
       model,
       options,
-      tools: convertedTools?.tools,
       toolProjection,
+      eagerToolInputStreaming,
       profile,
     }),
   );

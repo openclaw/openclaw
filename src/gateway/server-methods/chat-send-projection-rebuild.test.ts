@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import {
   appendTranscriptMessage,
@@ -163,9 +167,9 @@ describe("registered chat.send during SQLite projection rebuild", () => {
     },
   );
 
-  it.each(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
+  it.for(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
     "never revives a %s reservation while projection is rebuilding",
-    async (change) => {
+    async (change, { signal }) => {
       const fixture = await createRebuildingFixture();
       const entered = createDeferred();
       const release = createDeferred();
@@ -177,9 +181,33 @@ describe("registered chat.send during SQLite projection rebuild", () => {
       try {
         await entered.promise;
         fixture.markRebuilding();
-        request = fixture.send();
         const key = pendingChatSendDedupeKey(fixture.params.idempotencyKey);
-        await vi.waitFor(() => expect(fixture.context.dedupe.has(key)).toBe(true));
+        const reserved = createDeferred();
+        const setDedupe = fixture.context.dedupe.set.bind(fixture.context.dedupe);
+        // Observe real admission while the writer gate prevents it from completing.
+        const observeReservation = vi
+          .spyOn(fixture.context.dedupe, "set")
+          .mockImplementation((pendingKey, entry) => {
+            const result = setDedupe(pendingKey, entry);
+            if (pendingKey === key) {
+              reserved.resolve();
+            }
+            return result;
+          });
+        try {
+          request = fixture.send();
+          await withinTest(
+            awaitGateBeforeSettlement(
+              reserved.promise,
+              request,
+              "chat.send settled before its pending reservation",
+            ),
+            signal,
+          );
+          expect(fixture.context.dedupe.has(key)).toBe(true);
+        } finally {
+          observeReservation.mockRestore();
+        }
         if (change === "removed") {
           fixture.context.dedupe.delete(key);
         } else if (change === "expired") {
@@ -223,7 +251,22 @@ describe("registered chat.send during SQLite projection rebuild", () => {
           summary: "aborted",
         });
         const retry = await fixture.send();
-        expect(retry.mock.calls[0]?.[1]).toMatchObject({ status: "timeout", summary: "aborted" });
+        expect(retry).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ status: "timeout", summary: "aborted" }),
+          undefined,
+          { cached: true },
+        );
+        fixture.params.message = "A different input must not reuse the aborted request.";
+        const conflict = await fixture.send();
+        expect(conflict).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-request-conflict" },
+          }),
+        );
         await fixture.assertNoDispatch();
       } finally {
         release.resolve();

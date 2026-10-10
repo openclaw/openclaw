@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -23,7 +24,10 @@ import { listSessionEntryRows } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import {
+  markCanonicalSessionValidationPending,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cold-session-keys-");
@@ -119,6 +123,7 @@ describe("cold canonical session validation", () => {
         pending.db.exec(
           "UPDATE session_nodes SET entry_json = entry_json || ' '; UPDATE session_nodes SET entry_valid = 1",
         );
+        markCanonicalSessionValidationPending(pending, [scope.sessionKey]);
         closeOpenClawAgentDatabaseByPath(scope.storePath);
       } else {
         closeOpenClawAgentDatabasesForTest();
@@ -140,6 +145,9 @@ describe("cold canonical session validation", () => {
           writer
             .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
             .run(scope.sessionKey);
+          markCanonicalSessionValidationPending({ agentId: scope.agentId, db: writer }, [
+            scope.sessionKey,
+          ]);
           writer.exec("COMMIT");
         }
         return value;
@@ -237,13 +245,16 @@ describe("cold canonical session validation", () => {
           ),
         { ...scope, path: scope.storePath },
       );
-    // A separate writer changes policy without clearing this reader's warm validation.
+    // Raw repair publishes pending rows after changing the persisted policy.
     const external = new DatabaseSync(scope.storePath);
     try {
+      external.exec("BEGIN IMMEDIATE");
       external.prepare("UPDATE session_key_contract SET main_key = ? WHERE id = 1").run("custom");
       external
         .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
         .run(otherKey);
+      markCanonicalSessionValidationPending({ agentId: scope.agentId, db: external }, [otherKey]);
+      external.exec("COMMIT");
       expect(append).toThrow(
         "invalid persisted session row requires repair for agent:main:z-later",
       );
@@ -354,6 +365,7 @@ describe("cold canonical session validation", () => {
       { ...scope, sessionKey: "agent:main:unrelated" },
       { sessionId: "unrelated", updatedAt: 2, skillsSnapshot: { prompt, skills: [] } },
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
 
@@ -384,6 +396,7 @@ describe("cold canonical session validation", () => {
     database.db
       .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
       .run("agent:main:different", scope.sessionKey);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
 

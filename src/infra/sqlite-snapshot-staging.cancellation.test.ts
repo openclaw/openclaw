@@ -12,10 +12,12 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-staging.js";
@@ -77,6 +79,71 @@ beforeEach(async () => {
     }
     return child;
   });
+});
+
+it("skips empty reclamation passes and observes later snapshot allocations", async () => {
+  const cache = tempDirs.make("sqlite-reclaim-empty-");
+  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+
+  const unrelated = path.join(cache, "operator-data");
+  const namedFile = path.join(cache, "openclaw-sqlite-readonly-12345-File00");
+  fs.mkdirSync(unrelated);
+  fs.writeFileSync(namedFile, "preserved");
+  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+
+  const abandoned = path.join(cache, "openclaw-sqlite-readonly-12345-Later0");
+  fs.mkdirSync(abandoned);
+  const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  fs.utimesSync(abandoned, stale, stale);
+  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  expect(processMocks.execFile).toHaveBeenCalledTimes(1);
+  expect(fs.existsSync(abandoned)).toBe(false);
+  expect(fs.readdirSync(cache).toSorted()).toEqual([path.basename(namedFile), "operator-data"]);
+  expect(fs.readFileSync(namedFile, "utf8")).toBe("preserved");
+});
+
+it("joins a pending reclamation scan and prevents a late launch during shutdown", async () => {
+  const cache = tempDirs.make("sqlite-reclaim-scanning-");
+  const abandoned = path.join(cache, "openclaw-sqlite-readonly-12345-Later0");
+  fs.mkdirSync(abandoned);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const readdir = fs.promises.readdir;
+  vi.spyOn(fs.promises, "readdir").mockImplementation(async (...args) => {
+    const entries = await readdir(...args);
+    if (args[0] === cache) {
+      entered.resolve();
+      await release.promise;
+    }
+    return entries;
+  });
+  const reclamation = reclaimAbandonedSqliteSnapshotsAsync(cache);
+  let shutdown: Promise<void> | undefined;
+  let shutdownSettled = false;
+  try {
+    await Promise.race([
+      entered.promise,
+      reclamation.then(() => {
+        throw new Error("Reclamation settled before its candidate scan");
+      }),
+    ]);
+    shutdown = cleanupSnapshotOperations().then(() => {
+      shutdownSettled = true;
+    });
+    expect((await fs.promises.stat(abandoned)).isDirectory()).toBe(true);
+    expect(shutdownSettled).toBe(false);
+    expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+    release.resolve();
+    await shutdown;
+    await reclamation;
+    expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+    expect(fs.existsSync(abandoned)).toBe(true);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([reclamation, shutdown]);
+  }
 });
 
 function fixture(count = 3, payloadBytes = 4096) {
@@ -210,13 +277,14 @@ async function readSnapshot(source: string, signal?: AbortSignal): Promise<void>
   }
 }
 
-it("keeps caller cancellation independent of idle reclamation", async ({ signal }) => {
+it("keeps cancelled and surviving callers independent of idle reclamation", async ({ signal }) => {
   for (const mode of ["snapshot", "update"] as const) {
     const f = mode === "snapshot" ? fixture(64, 4 * 1024 * 1024) : fixture();
     const controller = new AbortController();
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
     const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
     let operation: Promise<unknown> | undefined;
+    let survivor: Promise<void> | undefined;
     try {
       const entered = await withinTest(f.entered(reclamation), signal);
       operation = withSqliteReadOnlyWorkerScope(async () => {
@@ -233,6 +301,9 @@ it("keeps caller cancellation independent of idle reclamation", async ({ signal 
         () => undefined,
         (error: unknown) => error,
       );
+      if (mode === "snapshot") {
+        survivor = readSnapshot(f.source);
+      }
       controller.abort(reason);
       const error = await withinTest(operation, signal);
       // Cancellation must settle while reclamation is still held at the native gate.
@@ -240,53 +311,23 @@ it("keeps caller cancellation independent of idle reclamation", async ({ signal 
       expect(error).toMatchObject({ name: "AbortError" });
       expect(f.worker().settled, mode).toBe(false);
       expect(fs.existsSync(entered.file), mode).toBe(true);
+      await survivor;
+      expect(f.worker().settled, mode).toBe(false);
       f.release();
       await reclamation;
       await f.worker().closed;
       expect(fs.existsSync(entered.claimedRoot)).toBe(false);
+      expect(f.worker().child.exitCode).toBe(0);
+      expect(f.worker().child.signalCode).toBeNull();
+      expect(fs.readdirSync(f.cache)).toEqual([]);
     } finally {
       controller.abort(reason);
       f.release();
-      await operation;
+      await Promise.allSettled([operation, survivor]);
       await reclamation;
       await workers.get(path.resolve(f.cache))?.closed;
       f.close();
     }
-  }
-});
-
-it("serves another snapshot without waiting for shared idle reclamation", async ({ signal }) => {
-  const f = fixture();
-  const controller = new AbortController();
-  const reason = new Error("first snapshot caller stopped");
-  const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
-  let first: Promise<unknown> | undefined;
-  let second: Promise<void> | undefined;
-  try {
-    await withinTest(f.entered(reclamation), signal);
-    first = withSqliteReadOnlyWorkerScope(() => readSnapshot(f.source, controller.signal)).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    second = readSnapshot(f.source);
-    controller.abort(reason);
-    const error = await first;
-    expect(error).toBe(reason);
-    expect(f.worker().settled).toBe(false);
-    await second;
-    expect(f.worker().settled).toBe(false);
-    f.release();
-    await reclamation;
-    await f.worker().closed;
-    expect(f.worker().child.exitCode).toBe(0);
-    expect(f.worker().child.signalCode).toBeNull();
-    expect(fs.readdirSync(f.cache)).toEqual([]);
-  } finally {
-    controller.abort(reason);
-    f.release();
-    await Promise.allSettled([first, second, reclamation]);
-    await workers.get(path.resolve(f.cache))?.closed;
-    f.close();
   }
 });
 

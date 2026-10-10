@@ -10,6 +10,7 @@ import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
 } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
 
 const TERMINAL_DELIVERY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -25,23 +26,6 @@ type QuestionChannelEntry = {
   finalizedDeliveryIds: Set<string>;
   scheduler: GatewayScheduler;
   cleanupJob?: GatewayScheduledJob;
-};
-
-type QuestionChannelRuntime = {
-  handleRequested: (record: QuestionRecord, scheduler: GatewayScheduler) => void;
-  handleResolved: (event: QuestionResolvedEvent) => void;
-  runWithDeliveries: <T>(
-    questionIds: readonly (string | undefined)[],
-    run: () => T,
-    options?: { unbound?: boolean },
-  ) => T;
-  registerDelivery: (params: {
-    questionId: string;
-    deliveryId: string;
-    finalize: QuestionDeliveryFinalizer;
-  }) => void;
-  retireGateway: (owner: AbortSignal) => void;
-  clear: () => Promise<void>;
 };
 
 function formatQuestionTerminalStatusLine(
@@ -77,7 +61,7 @@ export function createQuestionChannelRuntime(
   options: {
     onFinalizeError?: (error: unknown, questionId: string, deliveryId: string) => void;
   } = {},
-): QuestionChannelRuntime {
+) {
   const entries = new Map<string, QuestionChannelEntry>();
   const retainedEntries = new Set<QuestionChannelEntry>();
   const deliveryContext = new AsyncLocalStorage<{
@@ -128,7 +112,7 @@ export function createQuestionChannelRuntime(
   };
 
   return {
-    handleRequested(record, scheduler) {
+    handleRequested: (record: QuestionRecord, scheduler: GatewayScheduler) => {
       const owner = getAsyncWorkSignal();
       if (clearing || (owner && retiredGateways.has(owner))) {
         return;
@@ -146,7 +130,7 @@ export function createQuestionChannelRuntime(
       retainedEntries.add(entry);
       entries.set(record.id, entry);
     },
-    handleResolved(event) {
+    handleResolved: (event: QuestionResolvedEvent) => {
       const entry = entries.get(event.id);
       if (!entry || entry.terminal) {
         return;
@@ -156,14 +140,20 @@ export function createQuestionChannelRuntime(
         finalizeDelivery(entry, deliveryId, finalize);
       }
       if (retainedEntries.has(entry)) {
-        entry.cleanupJob = entry.scheduler.schedule({
-          id: `question-delivery:${randomUUID()}`,
-          delayMs: TERMINAL_DELIVERY_RETENTION_MS,
-          run: () => releaseEntry(entry),
-        });
+        entry.cleanupJob = runInDetachedAsyncContext(() =>
+          entry.scheduler.schedule({
+            id: `question-delivery:${randomUUID()}`,
+            delayMs: TERMINAL_DELIVERY_RETENTION_MS,
+            run: () => releaseEntry(entry),
+          }),
+        );
       }
     },
-    runWithDeliveries(questionIds, run, deliveryOptions) {
+    runWithDeliveries: <T>(
+      questionIds: readonly (string | undefined)[],
+      run: () => T,
+      deliveryOptions?: { unbound?: boolean },
+    ): T => {
       if (!questionIds.some(Boolean)) {
         return run();
       }
@@ -186,7 +176,15 @@ export function createQuestionChannelRuntime(
         run,
       );
     },
-    registerDelivery({ questionId, deliveryId, finalize }) {
+    registerDelivery: ({
+      questionId,
+      deliveryId,
+      finalize,
+    }: {
+      questionId: string;
+      deliveryId: string;
+      finalize: QuestionDeliveryFinalizer;
+    }) => {
       const captured = deliveryContext.getStore();
       if (
         clearing ||
@@ -222,7 +220,7 @@ export function createQuestionChannelRuntime(
       entry.deliveries.set(deliveryId, finalize);
       finalizeDelivery(entry, deliveryId, finalize);
     },
-    retireGateway(owner) {
+    retireGateway: (owner: AbortSignal) => {
       // The Gateway calls this after joining received work and its finalizers,
       // not at beginClose: an admitted resolve can still finalize deliveries.
       retiredGateways.add(owner);
@@ -232,7 +230,7 @@ export function createQuestionChannelRuntime(
         }
       }
     },
-    clear() {
+    clear: () => {
       if (clearing) {
         return clearing;
       }

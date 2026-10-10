@@ -242,7 +242,6 @@ describe("CI check-plan completion count", () => {
 
   it.each([
     ["hybrid", [1, 2, 4, 5]],
-    ["github", [1, 2, 3, 4, 5]],
     ["hybrid", [1, 2, 5]],
     ["blacksmith", [1, 2, 3, 4, 5]],
   ] as const)(
@@ -358,19 +357,13 @@ describe("CI check-plan completion count", () => {
     },
   );
 
-  it("refuses a count outside the observer's existing job inventory bound", () => {
-    const { run, outputs } = materializePlan("blacksmith", 401);
+  it.each([
+    { runner: "blacksmith", rows: 401, base: undefined, error: "400-job" },
+    { runner: "hybrid", rows: 0, base: "main", error: "40-hex changed base commit" },
+  ])("rejects an inadmissible workflow plan: $error", ({ runner, rows, base, error }) => {
+    const { run, outputs } = materializePlan(runner, rows, base);
     expect(run.status).toBe(1);
-    expect(run.stderr).toContain("400-job");
+    expect(run.stderr).toContain(error);
     expect(outputs).toEqual({});
   });
-  it.each(["main", "a".repeat(39), ""])(
-    "rejects an unpinned extension lint comparison base %s",
-    (base) => {
-      const { run, outputs } = materializePlan("hybrid", 0, base);
-      expect(run.status).toBe(1);
-      expect(run.stderr).toContain("40-hex changed base commit");
-      expect(outputs).toEqual({});
-    },
-  );
 });

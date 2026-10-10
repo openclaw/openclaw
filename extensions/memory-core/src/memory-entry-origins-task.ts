@@ -54,34 +54,26 @@ export type MemoryEntryOriginOperations = {
   delete: { input: MemoryOriginDeletion; output: number };
 };
 
-export type MemorySessionTombstone = {
-  sessionId: string;
-  agentId: string;
-  reason: string;
-  createdAt: number;
-};
-
-export type MemoryOriginReadTarget = {
-  agentId: string;
-  databasePath: string;
-  stateDir: string;
-};
+export const MEMORY_SESSION_TOMBSTONE_BATCH_SIZE = 256;
 
 export type MemoryOriginReadFilters = {
   entryKeys?: readonly string[];
   sessionIds?: readonly string[];
 };
 
-export type MemoryOriginReadInput = MemoryOriginReadTarget &
-  (
-    | ({ kind: "origin-rows" } & MemoryOriginReadFilters)
-    | ({ kind: "origin-exists"; entryKeys: readonly string[] } & MemoryOriginReadFilters)
-    | { kind: "session-tombstones"; sessionIds?: readonly string[] }
-    | { kind: "origin-index-keys" }
-  );
+export type MemoryOriginReadInput = {
+  agentId: string;
+  databasePath: string;
+  stateDir: string;
+} & (
+  | ({ kind: "origin-rows" } & MemoryOriginReadFilters)
+  | ({ kind: "origin-exists"; entryKeys: readonly string[] } & MemoryOriginReadFilters)
+  | { kind: "session-tombstones"; sessionIds: readonly string[] }
+  | { kind: "origin-index-keys" }
+);
 
 export type MemoryOriginReadOutput =
   | { kind: "origin-rows"; rows: MemoryEntryOrigin[] }
   | { kind: "origin-exists"; exists: boolean }
-  | { kind: "session-tombstones"; rows: MemorySessionTombstone[] }
+  | { kind: "session-tombstones"; indices: number[] }
   | { kind: "origin-index-keys"; keys: string[] };

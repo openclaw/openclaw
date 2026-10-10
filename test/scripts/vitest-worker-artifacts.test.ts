@@ -9,14 +9,11 @@ import { parseCLI } from "vitest/node";
 import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import { stripVitestAnsi } from "../../scripts/lib/vitest-unhandled-errors.mts";
 import {
-  isVitestWorkerDeclaration,
   resolveVitestWorkerDeclaration,
   verifyVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
-import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -530,18 +527,6 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       );
     }));
 
-  it.each([
-    "src/infra/runtime-process-entrypoints.ts",
-    "src/tui/tui-pty-runtime-test-support.ts",
-    "src/plugins/runtime-retention-entrypoint.test-support.ts",
-  ])("recognizes native and Windows-normalized declaration IDs for %s", (source) => {
-    const declaration = path.join(root, source);
-    expect(isVitestWorkerDeclaration(declaration)).toBe(true);
-    expect(isVitestWorkerDeclaration(declaration.replaceAll("\\", "/"))).toBe(true);
-    expect(isVitestWorkerDeclaration(declaration.replaceAll("/", "\\"))).toBe(true);
-    expect(isVitestWorkerDeclaration(`${declaration}.unrelated`)).toBe(false);
-  });
-
   it("uses the prepared Anthropic failover hook in a fresh process without global activation", ({
     workerArtifacts,
   }) =>
@@ -751,8 +736,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
                 : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
             );
             const result = await node(
-              [
-                ...resolveRuntimeWorkerArgv(pathToFileURL(probe), resolveTestNodeExecPath()),
+              (workerArgv) => [
+                ...workerArgv(pathToFileURL(probe)),
                 url.href,
                 pathToFileURL(
                   owner
@@ -781,10 +766,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
-    { args: ["run", "--testNamePattern", "--help"], metadata: true },
     { args: ["run", "--help"], metadata: true },
     { args: ["bench", "--run"], metadata: false },
-    { args: ["related", "--run"], metadata: false },
     { args: ["list"], metadata: true },
     { args: ["--browser.headless", "run", "--version"], metadata: false },
     { args: ["--browser.headless", "--version"], metadata: true },

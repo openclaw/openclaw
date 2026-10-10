@@ -38,10 +38,10 @@ async function replyOptions(
         },
         ...(params.perAgent
           ? {
-              list: [
-                { id: "main", default: true },
-                { id: "ops", workspace: tmpDir, heartbeat: params.perAgent },
-              ],
+              entries: {
+                main: {},
+                ops: { workspace: tmpDir, heartbeat: params.perAgent },
+              },
             }
           : {}),
       },
@@ -76,29 +76,15 @@ async function replyOptions(
 
 it("keeps configured run options when a direct wake overrides only the destination", async () => {
   const { options } = await replyOptions({
-    heartbeat: { timeoutSeconds: 45, lightContext: true },
+    heartbeat: { timeoutSeconds: 45, lightContext: true, model: "openai/gpt-5.4" },
+    perAgent: { model: "  ollama/llama3.2:1b  " },
     wake: { source: "manual", heartbeat: { target: "last" } },
   });
   expect(options).toMatchObject({
     timeoutOverrideSeconds: 45,
     bootstrapContextMode: "lightweight",
+    heartbeatModelOverride: "ollama/llama3.2:1b",
   });
-});
-
-it("passes the trimmed per-agent model override after merging defaults", async () => {
-  const { options } = await replyOptions({
-    heartbeat: { model: "openai/gpt-5.4" },
-    perAgent: { model: "  ollama/llama3.2:1b  " },
-  });
-  expect(options?.heartbeatModelOverride).toBe("ollama/llama3.2:1b");
-});
-
-it("retires the bundle MCP runtime only for isolated heartbeat runs", async () => {
-  expect((await replyOptions({ heartbeat: { isolatedSession: true } })).options).toHaveProperty(
-    "cleanupBundleMcpOnRunEnd",
-    true,
-  );
-  expect((await replyOptions()).options).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
 });
 
 it.each([
@@ -149,5 +135,14 @@ it.each([
     expect(resolveAgentTimeoutMs({ cfg, overrideSeconds: options?.timeoutOverrideSeconds })).toBe(
       expected,
     );
+    if (isolated) {
+      expect(options).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+    } else {
+      expect(options).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+    }
+    if (scheduled) {
+      expect(ctx.Body).toContain("- status: Check service status");
+      expect(ctx.Body).toContain("After completing all due tasks");
+    }
   },
 );

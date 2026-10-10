@@ -7,13 +7,18 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
-import { parseProjectGitUrl } from "../../projects/project-git-url.js";
+import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -21,10 +26,12 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import { generateWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
 import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
 } from "../session-create-service.types.js";
+import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { hasExplicitSessionName, resolveExplicitSessionName } from "../session-title-state.js";
 import {
@@ -153,7 +160,7 @@ export function prepareSessionRepositoryWorkspace(
 
 export function normalizeSessionProjectGitUrl(value: unknown): string | undefined {
   return typeof value === "string" && value.length <= 2048
-    ? parseProjectGitUrl(value)?.url
+    ? parseConfiguredProjectGitUrl(value)?.url
     : undefined;
 }
 
@@ -249,7 +256,7 @@ export async function prepareSessionWorkspaceForRun(params: {
   context: Parameters<typeof emitSessionsChanged>[0] &
     Pick<GatewayRequestHandlerOptions["context"], "logGateway">;
   signal: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   runSetupScript: boolean;
 }): Promise<void> {
   const {
@@ -262,10 +269,13 @@ export async function prepareSessionWorkspaceForRun(params: {
     context,
     signal,
   } = params;
-  const assertRunOwnership = () => {
-    signal.throwIfAborted();
-    params.assertCurrent();
-  };
+  const assertRunOwnership = composeSessionSourceAssertion(
+    [params.assertCurrent],
+    (assertSources) => {
+      signal.throwIfAborted();
+      assertSources();
+    },
+  );
   assertRunOwnership();
   emitAgentRunStatusEvent({
     runId: clientRunId,
@@ -312,12 +322,31 @@ export async function prepareSessionWorkspaceForRun(params: {
       delete entry.pendingWorktree;
       return;
     }
+    const configuredToken = gitUrl ? githubApiToken(process.env, cfg) : undefined;
+    const projectIdentity =
+      gitUrl && !configuredToken
+        ? await prepareGatewayProjectGitHubIdentity({
+            agentId,
+            assertActive: assertRunOwnership,
+            config: cfg,
+            context,
+          })
+        : undefined;
+    const projectToken = configuredToken ?? projectIdentity?.token;
+    const assertProjectCurrent = () => {
+      assertRunOwnership();
+      projectIdentity?.assertSelected();
+    };
+    const cloneOptions = {
+      signal,
+      token: projectToken,
+      assertCurrent: assertProjectCurrent,
+      startRun: projectIdentity?.start,
+    };
     const project = gitUrl
-      ? await materializeProjectClone(
-          { cfg, gitUrl },
-          { signal, token: githubApiToken(process.env, cfg) },
-        )
+      ? await materializeProjectClone({ cfg, gitUrl }, cloneOptions)
       : undefined;
+    projectIdentity?.assertSelected();
     assertRunOwnership();
     const directory = project
       ? await resolveProjectDirectory(project.repoRoot)
@@ -375,10 +404,8 @@ export async function prepareSessionWorkspaceForRun(params: {
           resolved.error.code === ErrorCodes.INVALID_REQUEST &&
           project?.source === "cloned"
         ) {
-          await refreshProjectClone(project, {
-            signal,
-            token: githubApiToken(process.env, cfg),
-          });
+          await refreshProjectClone(project, cloneOptions);
+          projectIdentity?.assertSelected();
           assertRunOwnership();
           resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
         }
@@ -395,7 +422,7 @@ export async function prepareSessionWorkspaceForRun(params: {
             return { pendingWorktree: next };
           },
           {
-            assertCommitAllowed: assertRunOwnership,
+            ...sessionEntryCommitGuardOptions(assertRunOwnership),
             requireWriteSuccess: true,
             skipMaintenance: true,
           },
@@ -421,7 +448,7 @@ export async function prepareSessionWorkspaceForRun(params: {
         baseRef: pending.baseRef,
         checkoutCommit: pending.baseCommit,
         label: title ?? resolveExplicitSessionName(saved),
-        runSetupScript: params.runSetupScript,
+        runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
@@ -432,40 +459,16 @@ export async function prepareSessionWorkspaceForRun(params: {
       }
       prepared = result.value;
     }
-    let bound;
-    try {
-      const bind = async (assertSourceCurrent: () => void) =>
-        await patchSessionEntryCore(
-          target,
-          (current) => {
-            assertSourceCurrent();
-            assertSavedWorkspaceIntent(current);
-            return {
-              ...(project ? { projectId: project.id } : {}),
-              sessionRoot: prepared.sessionRoot,
-              spawnedCwd: prepared.spawnedCwd,
-              ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
-              pendingProjectGitUrl: undefined,
-              pendingWorktree: undefined,
-            };
-          },
-          {
-            assertCommitAllowed: () => {
-              assertRunOwnership();
-              assertSourceCurrent();
-            },
-            requireWriteSuccess: true,
-            skipMaintenance: true,
-          },
-        );
-      bound = prepared.withCommit ? await prepared.withCommit(bind) : await bind(() => {});
-      if (!bound) {
-        throw new Error("Session disappeared while preparing its workspace; start a new session.");
-      }
-    } catch (error) {
-      await prepared.rollback?.();
-      throw error;
-    }
+    const bound = await commitPreparedSessionWorkspace({
+      prepared,
+      target,
+      projectId: project?.id,
+      assertCurrent: assertRunOwnership,
+      assertEntry: assertSavedWorkspaceIntent,
+      clearPendingIntent: true,
+      missingSessionMessage:
+        "Session disappeared while preparing its workspace; start a new session.",
+    });
     // Once committed the session, not this run, owns the checkout; abort must
     // retain it for retry and must not roll it back after publication.
     Object.assign(entry, bound);

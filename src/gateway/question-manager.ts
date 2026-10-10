@@ -16,12 +16,16 @@ import type {
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { bindMcpFormQuestionRecord } from "../agents/mcp-form-resource-context.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import {
   retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import type { QuestionSessionAccess } from "./question-session-access.types.js";
+import type {
+  QuestionClientAuthorization,
+  QuestionSessionAccess,
+} from "./question-session-access.types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -57,6 +61,8 @@ type QuestionManagerRequest = {
   onResolved?:
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => Promise<void>);
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
   requesterRun?: OperationalRunInstanceRef;
@@ -73,11 +79,16 @@ type QuestionEntry = {
   job: GatewayScheduledJob;
   waiters: Set<Waiter>;
   onResolved?: QuestionManagerRequest["onResolved"];
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
   requesterRun?: OperationalRunInstanceRef;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   releaseHumanInputWait?: (resolved: boolean) => void;
+  committing?: boolean;
+  commitUnknown?: boolean;
+  retired?: boolean;
 };
 
 /** Private entry identity. Never reselect a successor by its public question id. */
@@ -85,6 +96,7 @@ export type QuestionObservation = {
   readonly record: QuestionRecord;
   readonly ordinary: boolean;
   readonly sessionAccess?: QuestionSessionAccess;
+  readonly authorizeClient?: QuestionClientAuthorization;
   isCurrent: () => boolean;
   refreshRequester: () => void;
 };
@@ -186,6 +198,7 @@ export class QuestionManager {
       waiters: new Set(),
       onResolved: params.onResolved,
       sessionAccess: params.sessionAccess,
+      authorizeClient: params.authorizeClient,
       isRequesterActive: params.isRequesterActive,
       requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
@@ -232,13 +245,18 @@ export class QuestionManager {
       },
       ordinary: entry.ordinary,
       sessionAccess: entry.sessionAccess,
+      authorizeClient: entry.authorizeClient,
       isCurrent: () => this.entries.get(entry.record.id) === entry,
       refreshRequester: () => this.refreshRequester(entry),
     };
   }
 
   private refreshRequester(entry: QuestionEntry): void {
-    if (this.entries.get(entry.record.id) !== entry || entry.record.status !== "pending") {
+    if (
+      this.entries.get(entry.record.id) !== entry ||
+      entry.record.status !== "pending" ||
+      entry.committing
+    ) {
       return;
     }
     const active = entry.isRequesterActive?.();
@@ -353,8 +371,62 @@ export class QuestionManager {
       answers: canonical,
       ...(resolvedBy ? { resolvedBy } : {}),
     };
-    this.finish(entry);
+    void this.finish(entry);
     return { status: "answered", answers: canonical };
+  }
+
+  /** Async persistence keeps the v2026.8.1 SDK's ordinary resolve() synchronous. */
+  resolveWithCommit(
+    id: string,
+    answers: QuestionAnswers,
+    resolvedBy: string | undefined,
+    options: { commit: (assertCurrent: () => void) => Promise<void>; resolutionId?: string },
+  ): Promise<QuestionResolveResult> {
+    const entry = this.requirePendingEntry(id);
+    const canonical = this.validateAnswers(entry.record.questions, answers);
+    entry.committing = true;
+    const assertCurrent = () => {
+      const active = entry.isRequesterActive?.();
+      if (
+        this.closed ||
+        entry.retired ||
+        this.entries.get(id) !== entry ||
+        entry.record.status !== "pending" ||
+        entry.record.expiresAtMs <= this.scheduler.now() ||
+        active === false
+      ) {
+        throw new QuestionManagerError(
+          QuestionManagerErrorCodes.REQUESTER_INACTIVE,
+          "the question's resolution authority is no longer active",
+        );
+      }
+    };
+    return this.publications.track(async () => {
+      try {
+        assertCurrent();
+        await options.commit(assertCurrent);
+        // A known commit owns the terminal fact even if authority retires before its ACK arrives.
+        entry.resolutionId = options.resolutionId;
+        entry.record = {
+          ...entry.record,
+          status: "answered",
+          answers: canonical,
+          ...(resolvedBy ? { resolvedBy } : {}),
+        };
+        await this.finish(entry);
+        return { status: "answered", answers: canonical };
+      } catch (error) {
+        entry.commitUnknown = hasSqliteWorkerOutcomeUnknown(error);
+        throw error;
+      } finally {
+        entry.committing = false;
+        if (entry.retired) {
+          this.releaseEntry(entry);
+        } else {
+          this.get(id);
+        }
+      }
+    });
   }
 
   cancel(id: string, resolvedBy?: string): QuestionResolveResult {
@@ -368,7 +440,7 @@ export class QuestionManager {
       status: "cancelled",
       ...(resolvedBy ? { resolvedBy } : {}),
     };
-    this.finish(entry);
+    void this.finish(entry);
     return { status: "cancelled" };
   }
 
@@ -387,16 +459,31 @@ export class QuestionManager {
     const entries = [...this.entries.values()];
     this.entries.clear();
     for (const entry of entries) {
-      entry.sessionAccess?.release();
-      entry.job.cancel();
-      const releaseHumanInputWait = entry.releaseHumanInputWait;
-      entry.releaseHumanInputWait = undefined;
-      releaseHumanInputWait?.(false);
-      entry.admissionContinuation?.release();
-      entry.admissionContinuation = null;
-      for (const waiter of entry.waiters) {
-        waiter();
+      if (entry.committing) {
+        entry.retired = true;
+        entry.job.cancel();
       }
+    }
+    for (const entry of entries) {
+      if (!entry.committing) {
+        this.releaseEntry(entry);
+      }
+    }
+  }
+
+  private releaseEntry(entry: QuestionEntry): void {
+    if (this.entries.get(entry.record.id) === entry) {
+      this.entries.delete(entry.record.id);
+    }
+    entry.sessionAccess?.release();
+    entry.job.cancel();
+    const releaseHumanInputWait = entry.releaseHumanInputWait;
+    entry.releaseHumanInputWait = undefined;
+    releaseHumanInputWait?.(false);
+    entry.admissionContinuation?.release();
+    entry.admissionContinuation = null;
+    for (const waiter of entry.waiters) {
+      waiter();
     }
   }
 
@@ -415,10 +502,14 @@ export class QuestionManager {
 
   private requirePendingEntry(id: string): QuestionEntry {
     const entry = this.requireEntry(id);
-    if (entry.record.status !== "pending") {
+    if (entry.record.status !== "pending" || entry.committing || entry.commitUnknown) {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.ALREADY_TERMINAL,
-        `question '${id}' is already ${entry.record.status}`,
+        entry.commitUnknown
+          ? `question '${id}' has an unknown write outcome; do not resubmit this answer`
+          : entry.committing
+            ? `question '${id}' is already being resolved`
+            : `question '${id}' is already ${entry.record.status}`,
       );
     }
     return entry;
@@ -486,14 +577,14 @@ export class QuestionManager {
 
   private expire(id: string): void {
     const entry = this.entries.get(id);
-    if (!entry || entry.record.status !== "pending") {
+    if (!entry || entry.record.status !== "pending" || entry.committing) {
       return;
     }
     entry.record = { ...entry.record, status: "expired" };
-    this.finish(entry);
+    void this.finish(entry);
   }
 
-  private finish(entry: QuestionEntry): void {
+  private finish(entry: QuestionEntry): Promise<void> {
     entry.job.cancel();
     const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
@@ -532,7 +623,7 @@ export class QuestionManager {
     };
     // Track before invoking: synchronous truth and callbacks retain their ordering,
     // while worker preparation and rejected publication are joined by Gateway shutdown.
-    void this.publications
+    return this.publications
       .track(async () => {
         try {
           let publication: Promise<void>;

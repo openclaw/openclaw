@@ -126,6 +126,7 @@ export function captureUserProfileModelAccountLinksAuthority(
   const links = store.modelAccountLinks.get(profileId);
   const identity = store.profileIdentities.get(profileId);
   const key = mutationKey("identity", profileId);
+  const linksKey = mutationKey("modelAccountLinks", profileId);
   return () => {
     try {
       admission.assertCurrent();
@@ -134,11 +135,45 @@ export function captureUserProfileModelAccountLinksAuthority(
         store.modelAccountLinks.get(profileId) === links &&
         store.profileIdentities.get(profileId) === identity &&
         !store.pending.get(key)?.size &&
-        !store.uncertain.has(key)
+        !store.uncertain.has(key) &&
+        !store.pending.get(linksKey)?.size &&
+        !store.uncertain.has(linksKey)
       );
     } catch {
       return false;
     }
+  };
+}
+
+/** Fence link readers until the original worker's native outcome is acknowledged. */
+export function fenceUserProfileModelAccountLinks(
+  admission: OpenClawStateDatabaseReadAdmission,
+  profileId: string,
+): { settle: (known: boolean) => void } {
+  observeAuthorityLifecycle();
+  admission.assertCurrent();
+  const store = authorityStore(admission.identity);
+  const key = mutationKey("modelAccountLinks", profileId);
+  const pending = createDeferredCore();
+  store.modelAccountLinks.set(profileId, {});
+  const entries = store.pending.get(key) ?? new Set<Promise<void>>();
+  store.pending.set(key, entries);
+  entries.add(pending.promise);
+  return {
+    settle(known) {
+      if (!entries.delete(pending.promise)) {
+        return;
+      }
+      if (!known) {
+        store.uncertain.add(key);
+      }
+      // Retire reads prepared while COMMIT or its acknowledgement was pending.
+      store.modelAccountLinks.set(profileId, {});
+      if (entries.size === 0) {
+        store.pending.delete(key);
+      }
+      pending.resolve();
+    },
   };
 }
 
@@ -171,7 +206,7 @@ function publishAuthorityStoreChange(
   }
 }
 
-const mutationKey = (kind: "profile" | "identity" | "channel", id: string) =>
+const mutationKey = (kind: "profile" | "identity" | "channel" | "modelAccountLinks", id: string) =>
   JSON.stringify([kind, id]);
 
 /** Close affected preparation before granting COMMIT; settlement, not delivery, reopens it. */

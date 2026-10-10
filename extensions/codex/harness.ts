@@ -11,7 +11,11 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  CODEX_NATIVE_TOOL_REQUIREMENTS,
+  CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+} from "./native-tool-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -45,27 +49,6 @@ function requireCodexCompactionCapabilities<T extends AgentHarnessCompactParams>
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
   "openclaw.codexAppServerClientDisposer",
 );
-// Audited against @openai/codex 0.150.1 (rust-v0.150.1). These exact denies
-// either have no Codex-native equivalent or are enforced by the harness. Keep
-// the list positive and conservative: an omitted tool isolates the native surface.
-const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
-  "web_fetch",
-  "x_search",
-  "memory_search",
-  "memory_get",
-  "dashboard",
-  "canvas",
-  "show_widget",
-  "message",
-  "heartbeat_respond",
-  "automations",
-  "gateway",
-  "skill_workshop",
-  "image_generate",
-  "music_generate",
-  "video_generate",
-  "tts",
-] as const;
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -240,6 +223,14 @@ export function createCodexAppServerAgentHarness(
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
+    filterModelServiceTiers: ({ config, serviceTiers }) => {
+      const appServer = asOptionalRecord(
+        asOptionalRecord(resolveAttemptPluginConfig(config))?.appServer,
+      );
+      return appServer?.enableUltrafast === false
+        ? serviceTiers.filter((tier) => tier !== "ultrafast")
+        : serviceTiers;
+    },
     acquireMcpAppRuntime: async (params) => {
       const { acquireCodexMcpAppRuntime } =
         await import("./src/app-server/effective-mcp-catalog.js");
@@ -258,12 +249,10 @@ export function createCodexAppServerAgentHarness(
       return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
     },
     supports: (ctx) => {
+      const unsupported = (reason: string) => ({ supported: false as const, reason });
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {
-        return {
-          supported: false,
-          reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
-        };
+        return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
       }
       if (ctx.modelProvider?.requestTransportOverrides === "present") {
         return {
@@ -292,26 +281,17 @@ export function createCodexAppServerAgentHarness(
           (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
         );
         if (!compatible) {
-          return {
-            supported: false,
-            reason: "Codex cannot reproduce the prepared provider route",
-          };
+          return unsupported("Codex cannot reproduce the prepared provider route");
         }
       } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
-        return {
-          supported: false,
-          reason: "provider route compatibility with Codex is not declared",
-        };
+        return unsupported("provider route compatibility with Codex is not declared");
       }
       if (preparedAuth?.requirement === "subscription") {
         const reproducibleSubscription =
           preparedAuth.source === "profile" &&
           (preparedAuth.mode === "oauth" || preparedAuth.mode === "token");
         if (!reproducibleSubscription) {
-          return {
-            supported: false,
-            reason: "Codex subscription auth requires a prepared OAuth or token profile",
-          };
+          return unsupported("Codex subscription auth requires a prepared OAuth or token profile");
         }
       } else if (preparedAuth?.requirement === "api-key") {
         const reproducibleApiKey =
@@ -319,10 +299,7 @@ export function createCodexAppServerAgentHarness(
           preparedAuth.source !== "harness" &&
           (preparedAuth.mode === "api-key" || preparedAuth.mode === "api_key");
         if (!reproducibleApiKey) {
-          return {
-            supported: false,
-            reason: "Codex Platform auth requires a prepared API key",
-          };
+          return unsupported("Codex Platform auth requires a prepared API key");
         }
       }
       return { supported: true, priority: 100 };

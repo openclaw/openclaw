@@ -10,17 +10,23 @@ import {
   unlinkSync,
 } from "node:fs";
 import nodePath from "node:path";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
+import type { DatabaseSync } from "node:sqlite";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  isTerminalSqliteIntegrityError,
+} from "../infra/sqlite-integrity.js";
+import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
@@ -32,15 +38,14 @@ import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenan
 export async function backupDoctorMigrationDatabases(params: {
   env: NodeJS.ProcessEnv;
   pendingDatabasePaths: readonly string[];
+  agentDatabaseTargets?: readonly AgentDatabaseMigrationTarget[];
   /** Complete discovery keeps the retry group stable after some migrations finish. */
   databasePaths: readonly string[];
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
 }): Promise<MigrationMessages> {
-  const { detectOpenClawStateDatabaseSchemaMigrations } =
-    await import("../state/openclaw-state-db-schema-discovery.js");
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
-  if (detectOpenClawStateDatabaseSchemaMigrations({ env: params.env }).length > 0) {
+  if (existsSync(sharedPath) && needsOpenClawStateDatabaseSchemaRepair(sharedPath)) {
     pending.add(sharedPath);
   }
   if (pending.size === 0) {
@@ -50,11 +55,36 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
-  return backupDoctorSqliteDatabases({
-    ...params,
-    pendingDatabasePaths: [...pending],
-    authority: { assertCurrent: () => maintenance.assertAdmission() },
-  });
+  const backup = () =>
+    backupDoctorSqliteDatabases({
+      ...params,
+      pendingDatabasePaths: [...pending],
+      authority: { assertCurrent: () => maintenance.assertAdmission() },
+    });
+  try {
+    return await backup();
+  } catch (error) {
+    if (
+      error instanceof DoctorMaintenanceRefusalError ||
+      !params.agentDatabaseTargets?.length ||
+      !collectNestedErrorCandidates(error).some(
+        (cause) => cause instanceof Error && isTerminalSqliteIntegrityError(cause),
+      )
+    ) {
+      throw error;
+    }
+    const { repairDoctorSessionWindowsBeforeMigration } =
+      await import("../infra/state-migrations.session-window-repair.js");
+    const changes = await repairDoctorSessionWindowsBeforeMigration({
+      env: params.env,
+      targets: params.agentDatabaseTargets,
+    });
+    if (changes.length === 0) {
+      throw error;
+    }
+    const result = await backup();
+    return { ...result, changes: [...changes, ...result.changes] };
+  }
 }
 
 /** Schema and same-schema repairs share verified snapshots under their existing Doctor owner. */
@@ -63,6 +93,7 @@ export async function backupDoctorSqliteDatabases(params: {
   pendingDatabasePaths: readonly string[];
   databasePaths: readonly string[];
   authority: DoctorSqliteMaintenanceAuthority;
+  repair?: { key: string; validate: (database: DatabaseSync) => void };
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
 }): Promise<MigrationMessages> {
   const pending = new Set(params.pendingDatabasePaths);
@@ -120,6 +151,7 @@ export async function backupDoctorSqliteDatabases(params: {
   const backupDigest = createHash("sha256")
     .update(
       JSON.stringify([
+        ...(params.repair ? [params.repair.key] : []),
         VERSION,
         resolveRuntimeServiceBuildId(),
         resolveRuntimeServiceCommit(),
@@ -218,13 +250,12 @@ export async function backupDoctorSqliteDatabases(params: {
         }
         const snapshot = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(targetPath), {
           readOnly: true,
-          allowExtension: true,
         });
         try {
           snapshot.exec("PRAGMA trusted_schema = OFF;");
-          await loadSqliteVecExtension({ db: snapshot });
           assertCapture();
           assertSqliteIntegrity(snapshot, targetPath);
+          params.repair?.validate(snapshot);
         } finally {
           snapshot.close();
         }
@@ -253,6 +284,7 @@ export async function backupDoctorSqliteDatabases(params: {
       preserveRowIds: true,
       transform: sanitizeOpenClawStateLeaseRows,
       beforePublish: assertCapture,
+      validate: params.repair?.validate,
     });
     assertCapture();
     changes.push(`Saved pre-migration SQLite backup: ${backup.path}`);

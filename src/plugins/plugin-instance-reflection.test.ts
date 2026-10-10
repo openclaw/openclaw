@@ -82,6 +82,31 @@ describe("managed plugin reflection", () => {
   });
 
   it.each(cases)(
+    "assigns $realm $kind data without inspecting its old value",
+    async ({ realm, kind }) => {
+      const reads: PropertyKey[] = [];
+      const previous = new Proxy((): string => "previous", {
+        get(target, key, receiver) {
+          reads.push(key);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const source = Object.assign(createSource(realm, kind), { current: previous });
+      const view = instance.wrap(source);
+      const replacement = () => "replacement";
+      view.current = replacement;
+      expect(source.current).toBe(replacement);
+      expect(reads).toEqual([]);
+      const current = view.current;
+      expect(current()).toBe("replacement");
+      await instance.dispose();
+      expect(() => (view.current = previous)).toThrow("reloaded or disabled");
+      expect(source.current).toBe(replacement);
+      expect(() => current()).toThrow("reloaded or disabled");
+    },
+  );
+
+  it.each(cases)(
     "keeps existing $realm $kind methods fenced when made fixed",
     async ({ realm, kind }) => {
       const source = createSource(realm, kind);
@@ -222,7 +247,7 @@ describe("managed plugin proxy exports", () => {
         },
       });
       const source: object = testCase.placement === "direct" ? proxy : Object.create(proxy);
-      const view = instance.wrap(() => source)();
+      const view = instance.wrap(source);
       admissions.length = 0;
       expect(testCase.operation.read(view)).toEqual(testCase.operation.expected);
       expect(admissions.length).toBeGreaterThan(0);

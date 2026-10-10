@@ -11,7 +11,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { resolveVisibleHistoryEventCount } from "./session-accessor.sqlite-history-projection.js";
 import {
-  readSessionTranscriptHistoryEventsFromProjection,
+  readSessionTranscriptHistoryEventPageFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
   readSessionTranscriptHistoryAnchorPageFromProjection,
   type SessionTranscriptMessageByIdOptions,
@@ -132,7 +132,11 @@ export function readSessionTranscriptHistoryEvents(
 ): SessionTranscriptMessageEvent[] {
   return withCurrentProjectionSnapshot(
     scope,
-    (projection) => readSessionTranscriptHistoryEventsFromProjection(projection),
+    (projection) =>
+      readSessionTranscriptHistoryEventPageFromProjection(projection, {
+        offset: 0,
+        maxMessages: Number.MAX_SAFE_INTEGER,
+      }).events,
     options,
   );
 }

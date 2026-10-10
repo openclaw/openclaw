@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createGatewayMethodDescriptorsFromHandlers } from "../src/gateway/methods/registry.js";
 import { createLazyCoreHandlers } from "../src/gateway/server-methods/lazy-core-handlers.js";
 import {
   connectOk,
@@ -23,10 +24,13 @@ import {
   type DiagnosticEventPayload,
 } from "../src/infra/diagnostic-events.js";
 import type {
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginServiceContextV2,
 } from "../src/plugin-sdk/plugin-entry.js";
-import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "../src/plugin-sdk/plugin-test-api.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 import { withEnvAsync } from "../src/test-utils/env.js";
@@ -80,8 +84,9 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
       let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
       let ws: WebSocket | undefined;
       let unsubscribe: (() => void) | undefined;
-      let serviceContext: OpenClawPluginServiceContext | undefined;
-      let prometheus: OpenClawPluginService | undefined;
+      let serviceContext: OpenClawPluginServiceContextV2 | undefined;
+      let prometheus: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+      const scheduler = createTestPluginServiceScheduler();
       const cleanupFailures: unknown[] = [];
       try {
         const receiverPort = await receiver.listen();
@@ -102,7 +107,13 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
             };
           },
         });
-        const services: OpenClawPluginService[] = [];
+        // Registry descriptors are normalized inputs; plugin-owned methods default to a required profile.
+        registry.gatewayMethodDescriptors = createGatewayMethodDescriptorsFromHandlers({
+          handlers: registry.gatewayHandlers,
+          owner: { kind: "plugin", pluginId: "synthetic-rpc-proof" },
+          defaultScope: "operator.admin",
+        }).map((descriptor) => Object.assign(descriptor, { profileAccess: "required" as const }));
+        const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         prometheusPlugin.register(
           createTestPluginApi({
             registerService: (service) => {
@@ -141,6 +152,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         );
         const endpoint = `http://127.0.0.1:${receiverPort}`;
         serviceContext = {
+          scheduler,
           config: {
             diagnostics: {
               enabled: true,
@@ -221,24 +233,26 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         ]);
         await waitForDiagnosticEventsDrained();
         const preparing = await scrape();
-        expect(preparing).toContain('openclaw_gateway_rpc_requests_total{method="other"} 1');
+        expect(preparing).toContain('openclaw_gateway_rpc_requests_total{method="test.trace"} 1');
         expect(preparing).not.toContain(
-          'openclaw_gateway_rpc_first_response_seconds_count{method="other"}',
+          'openclaw_gateway_rpc_first_response_seconds_count{method="test.trace"}',
         );
         expect(preparing).not.toContain(
-          'openclaw_gateway_rpc_handler_seconds_count{method="other"}',
+          'openclaw_gateway_rpc_handler_seconds_count{method="test.trace"}',
         );
         const familyHeldMs = performance.now() - familyStartedAt;
         releaseFamily.resolve();
         expect(await firstResponse).toMatchObject({ ok: true });
         await waitForDiagnosticEventsDrained();
         const acknowledged = await scrape();
-        expect(acknowledged).toContain('openclaw_gateway_rpc_requests_total{method="other"} 1');
         expect(acknowledged).toContain(
-          'openclaw_gateway_rpc_first_response_seconds_count{method="other"} 1',
+          'openclaw_gateway_rpc_requests_total{method="test.trace"} 1',
+        );
+        expect(acknowledged).toContain(
+          'openclaw_gateway_rpc_first_response_seconds_count{method="test.trace"} 1',
         );
         expect(acknowledged).not.toContain(
-          'openclaw_gateway_rpc_handler_seconds_count{method="other"}',
+          'openclaw_gateway_rpc_handler_seconds_count{method="test.trace"}',
         );
         await vi.waitFor(
           () =>
@@ -307,22 +321,35 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         const settled = await scrape();
         for (const metric of ["first_response", "handler", "admission", "queue_wait"]) {
           expect(settled).toContain(
-            `openclaw_gateway_rpc_${metric}_seconds_count{method="other"} 2`,
+            `openclaw_gateway_rpc_${metric}_seconds_count{method="test.trace"} 2`,
           );
         }
-        const measured = events.filter((event) => event.method === "other");
+        const measured = events.filter((event) => event.method === "test.trace");
+        expect(settled).toContain(
+          'openclaw_gateway_rpc_response_bytes_count{method="test.trace"} 3',
+        );
+        expect(
+          measured
+            .filter((event) => event.phase === "response")
+            .map((event) => event.firstResponse),
+        ).toEqual([true, true, false]);
         for (const [metric, phase] of [
           ["first_response", "response"],
           ["handler", "handler"],
         ] as const) {
           const totalMs = measured.reduce(
-            (sum, event) => sum + (event.phase === phase ? event.durationMs : 0),
+            (sum, event) =>
+              sum +
+              (event.phase === phase &&
+              !(event.phase === "response" && event.firstResponse === false)
+                ? event.durationMs
+                : 0),
             0,
           );
           const sample = settled
             .split("\n")
             .find((line) =>
-              line.startsWith(`openclaw_gateway_rpc_${metric}_seconds_sum{method="other"} `),
+              line.startsWith(`openclaw_gateway_rpc_${metric}_seconds_sum{method="test.trace"} `),
             );
           expect(Number(sample?.split(" ").at(-1))).toBeCloseTo(totalMs / 1000, 6);
         }
@@ -348,7 +375,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         await vi.waitFor(
           () =>
             expect(
-              events.filter((event) => event.method === "unknown" && event.phase === "dispatch"),
+              events.filter((event) => event.method === "other" && event.phase === "dispatch"),
             ).toHaveLength(1),
           { timeout: 10_000 },
         );
@@ -357,8 +384,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           body
             .split("\n")
             .filter(
-              (line) =>
-                line.startsWith("openclaw_gateway_rpc_") && line.includes('method="unknown"'),
+              (line) => line.startsWith("openclaw_gateway_rpc_") && line.includes('method="other"'),
             )
             .map((line) => line.slice(0, line.lastIndexOf(" ")))
             .toSorted();
@@ -369,7 +395,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         await vi.waitFor(
           () =>
             expect(
-              events.filter((event) => event.method === "unknown" && event.phase === "dispatch"),
+              events.filter((event) => event.method === "other" && event.phase === "dispatch"),
             ).toHaveLength(65),
           { timeout: 10_000 },
         );
@@ -379,7 +405,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         for (const key of ["count", "sum", "observed"] as const) {
           expect(retainedWindows[key]).toBeGreaterThanOrEqual(completedWindow[key]);
         }
-        expect(flooded).toContain('openclaw_gateway_rpc_requests_total{method="unknown"} 65');
+        expect(flooded).toContain('openclaw_gateway_rpc_requests_total{method="other"} 65');
         expect(unknownSeries(flooded)).toEqual(initialUnknown);
         expect(flooded).not.toMatch(
           /private-rpc-proof|held-rpc-proof|concurrent-rpc-proof|11111111111111111111111111111111|22222222222222222222222222222222/,
@@ -430,8 +456,10 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           () => server?.close(),
           () => waitForDiagnosticEventsDrained(),
           () => unsubscribe?.(),
+          () => scheduler.beginClose(),
           () => serviceContext && otel.stop?.(serviceContext),
           () => serviceContext && prometheus?.stop?.(serviceContext),
+          () => scheduler.stop(),
           () => receiver.close(),
           () => resetTestPluginRegistry(),
         ]) {

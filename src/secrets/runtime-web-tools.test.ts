@@ -641,7 +641,7 @@ describe("runtime web tools resolution", () => {
     ]);
   });
 
-  it("resolves search credentials through required external-provider accessors", async () => {
+  it("resolves providerless search credentials through required external-provider accessors", async () => {
     const pluginId = "external.search";
     const provider: PluginWebSearchProviderEntry = {
       pluginId,
@@ -678,7 +678,6 @@ describe("runtime web tools resolution", () => {
               external: {
                 apiKey: {
                   source: "env",
-                  provider: "default",
                   id: "EXTERNAL_SEARCH_API_KEY",
                 },
               },
@@ -1155,14 +1154,14 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("uses exact plugin-id hints for configured bundled provider entries without manifest owner lookup", async () => {
+  it("normalizes configured provider IDs before using exact bundled plugin hints", async () => {
     const { metadata, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
           web: {
             search: {
               enabled: true,
-              provider: "brave",
+              provider: " BrAvE ",
             },
           },
         },
@@ -1554,14 +1553,13 @@ describe("runtime web tools resolution", () => {
     expect(String(error)).not.toContain("fixture-api-key");
   });
 
-  it("resolves web fetch fallback SecretRefs with provider env var allowlist", async () => {
+  it("resolves providerless web fetch fallback refs with provider env var allowlist", async () => {
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
       config: asConfig({
         plugins: {
           entries: {
             firecrawl: createWebCredentialEntry("webSearch", {
               source: "env",
-              provider: "default",
               id: "FIRECRAWL_API_KEY",
             }),
           },

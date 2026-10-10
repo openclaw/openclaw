@@ -3,6 +3,8 @@ import type { ManagedWorktreeBranchesResult } from "../agents/worktrees/types.js
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 
 export type GitCheckoutContext = {
+  /** Omitted host is the public GitHub default. */
+  host?: string;
   owner: string;
   repo: string;
   branch: string | null;
@@ -40,8 +42,14 @@ export type GitReadOperations = {
       | undefined
     >;
   };
-  "checkout.revision": { input: { root: string; includeIndex: boolean }; output: string | null };
-  "checkout.context": { input: { root: string }; output: GitCheckoutContext | null };
+  "checkout.revision": {
+    input: { root: string; includeIndex: boolean; branch?: string; defaultBranch?: string };
+    output: string | null;
+  };
+  "checkout.context": {
+    input: { root: string; githubHost?: string };
+    output: GitCheckoutContext | null;
+  };
   "checkout.diff": { input: GitCheckoutDiffInput; output: Omit<SessionsDiffResult, "sessionKey"> };
   "repository.branches": {
     input: { repoRoot: string; includeRepositoryStatus?: boolean };
@@ -53,6 +61,8 @@ export type GitReadOperations = {
       branch: string;
       defaultBranch?: string;
       mergedHeads: readonly GitMergedPullHead[];
+      /** The session's persisted managed-worktree binding owns index stat refreshes. */
+      refreshIndex?: boolean;
     };
     output: GitPullRequestBranchFacts | undefined;
   };
@@ -65,4 +75,3 @@ export type GitReadOperations = {
 export type GitReadOperation = {
   [K in keyof GitReadOperations]: { type: K; input: GitReadOperations[K]["input"] };
 }[keyof GitReadOperations];
-export type GitReadOperationResult = GitReadOperations[keyof GitReadOperations]["output"];

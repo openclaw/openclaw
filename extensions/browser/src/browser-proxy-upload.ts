@@ -1,6 +1,4 @@
 /**
- * Browser proxy upload transport.
- *
  * Existing Browser upload paths are Gateway-owned. Proxied requests carry
  * bounded bytes to the node, which stages private copies under its upload root.
  */
@@ -11,6 +9,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   assertBrowserProxyFileBytesWithinLimits,
   assertBrowserProxyFileCountWithinLimit,
@@ -131,15 +130,11 @@ export async function prepareBrowserProxyUploadRequest(params: {
   signal?: AbortSignal;
 }): Promise<PreparedBrowserProxyUploadRequest> {
   params.signal?.throwIfAborted();
-  if (!isFileChooserRequest(params.method, params.path)) {
-    return { body: params.body };
-  }
-  const body = asNullableRecord(params.body);
-  if (!body) {
-    return { body: params.body };
-  }
-  const requestedPaths = readUploadPaths(body);
-  if (!requestedPaths) {
+  const body = isFileChooserRequest(params.method, params.path)
+    ? asNullableRecord(params.body)
+    : null;
+  const requestedPaths = body && readUploadPaths(body);
+  if (!body || !requestedPaths) {
     return { body: params.body };
   }
   assertBrowserProxyFileCountWithinLimit(requestedPaths.length, "request");
@@ -223,17 +218,20 @@ async function removeStagedUpload(directory: string): Promise<void> {
   }
 }
 
-async function readDirectoryBytes(directory: string, signal?: AbortSignal): Promise<number> {
+async function readUploadDirectoryEntries(directory: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  let entries;
   try {
-    entries = await fs.readdir(directory, { withFileTypes: true });
+    return await fs.readdir(directory, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
+      return [];
     }
     throw error;
   }
+}
+
+async function readDirectoryBytes(directory: string, signal?: AbortSignal): Promise<number> {
+  const entries = await readUploadDirectoryEntries(directory, signal);
   let totalBytes = 0;
   for (const entry of entries) {
     signal?.throwIfAborted();
@@ -255,16 +253,7 @@ async function readOwnedStagedUploads(
   stagingRoot: string,
   signal?: AbortSignal,
 ): Promise<OwnedStagedUpload[]> {
-  signal?.throwIfAborted();
-  let entries;
-  try {
-    entries = await fs.readdir(stagingRoot, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
+  const entries = await readUploadDirectoryEntries(stagingRoot, signal);
   const uploads = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() && entry.name.startsWith(BROWSER_PROXY_UPLOAD_PREFIX))
@@ -416,32 +405,6 @@ export function ensureBrowserProxyUploadCleanup(options?: {
   return recovery;
 }
 
-async function waitForStagingLock(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await previous;
-    return;
-  }
-  signal.throwIfAborted();
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => {
-      try {
-        signal.throwIfAborted();
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    await Promise.race([previous, aborted]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-}
-
 async function withStagingLock<T>(
   uploadDir: string,
   task: () => Promise<T>,
@@ -461,7 +424,10 @@ async function withStagingLock<T>(
     }
   });
   try {
-    await waitForStagingLock(previous, signal);
+    signal?.throwIfAborted();
+    await racePromiseWithAbortSignal(previous, signal, ({ reason }) =>
+      reason instanceof Error ? reason : new Error(String(reason)),
+    );
     return await task();
   } finally {
     release();
@@ -481,7 +447,6 @@ function validateUploadEnvelope(upload: BrowserProxyUploadV1): BrowserProxyUploa
   return upload.files;
 }
 
-/** Stage a validated upload envelope under the node's managed Browser upload root. */
 export async function stageBrowserProxyUploadRequest(params: {
   method: string;
   path: string;

@@ -103,35 +103,6 @@ function advanceHostCtime(): void {
   hostBirth.ctimeAdvanceNs += 1n;
 }
 
-it("keeps healthy same-file admissions when birthtime falls back to ctime", async () => {
-  await withOpenClawTestState({ label: "state-ctime-alias" }, async (state) => {
-    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
-    const pathname = state.statePath("same-file.sqlite");
-    const alias = state.statePath("same-file-alias.sqlite");
-    const initial = new DatabaseSync(pathname);
-    initial.exec("PRAGMA user_version = 0");
-    initial.close();
-    observeHostBirthtime("ctime", [pathname, alias]);
-    const before = statSync(pathname, { bigint: true });
-    const admitted = lifecycle.capture(pathname);
-    expect(admitted.identity.birthtime).toBe(
-      process.platform === "linux" ? "0" : before.ctimeNs.toString(),
-    );
-    const peer = new DatabaseSync(pathname);
-    peer.exec("PRAGMA user_version = 0");
-    peer.close();
-    linkSync(pathname, alias);
-    advanceHostCtime();
-    const after = statSync(pathname, { bigint: true });
-    expect(after.ino).toBe(before.ino);
-    expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
-    const linked = lifecycle.capture(alias);
-    expect(linked.identity.key).toBe(admitted.identity.key);
-    expect(admitted.assertCurrent).not.toThrow();
-    expect(linked.assertCurrent).not.toThrow();
-  });
-});
-
 it("permits a lazy native write after healthy peer changes when birthtime falls back to ctime", async () => {
   await withOpenClawTestState({ label: "state-ctime-lazy" }, async (state) => {
     const pathname = openOpenClawStateDatabase({ env: state.env }).path;
@@ -161,6 +132,10 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
       const after = statSync(pathname, { bigint: true });
       expect(after.ino).toBe(before.ino);
       expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
+      const linked = captureOpenClawStateDatabaseReadAdmission(alias);
+      expect(linked.identity.key).toBe(captured.admission.identity.key);
+      expect(captured.admission.assertCurrent).not.toThrow();
+      expect(linked.assertCurrent).not.toThrow();
       await withExistingOpenClawStateSchema({ path: pathname }, async () => {
         const current =
           preparedRead?.workerContext() ?? captureOpenClawStateWorkerContext({ env: state.env });
@@ -408,7 +383,7 @@ it("propagates an unexpected recorded-admission error without retiring the actor
 });
 
 it.each(["read", "refused-read", "closed-writer"] as const)(
-  "admits first worker creation when a retired %s inode becomes its target",
+  "admits a new target path when a retired %s physical database moves into it",
   async (kind) => {
     await withOpenClawTestState({ label: "state-read-admission" }, async (state) => {
       const inspectedPath = path.join(state.stateDir, "inspected.sqlite");
@@ -457,7 +432,9 @@ it.each(["read", "refused-read", "closed-writer"] as const)(
           ) {
             // The target is absent at admission, then gets the real retained inode before native open.
             renameSync(retainedPath, databasePath);
-            writeFileSync(databasePath, "");
+            if (kind !== "closed-writer") {
+              writeFileSync(databasePath, "");
+            }
             expect(databaseIdentity.readDatabasePathIdentitySync(databasePath).key).toBe(
               retiredIdentity.key,
             );

@@ -7,6 +7,7 @@ import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { showToast } from "../toast.ts";
+import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import {
   adoptConfigWriteAck,
   isConfigWriteAck,
@@ -150,13 +151,8 @@ export type ConfigWriteCoordinatorContext = {
     beforeApplySnapshot?: () => void,
     preservePendingChanges?: boolean,
   ) => Promise<boolean>;
-  canCallConfigMethod: (
-    method: ConfigMethod,
-    options?: { requireAdvertisement?: boolean },
-  ) => boolean;
-  cancelAppliedRefresh: () => void;
-  reconcileAppliedRefresh: () => void;
-  disposeAppliedRefresh: () => void;
+  canCallConfigMethod: (method: ConfigMethod) => boolean;
+  appliedRefresh: AppliedConfigRefresh;
   isDisposed: () => boolean;
 };
 
@@ -167,7 +163,7 @@ export async function executeConfigExternalMutation<T>(
   task: (client: GatewayBrowserClient) => Promise<T>,
   options: RuntimeConfigExternalMutationOptions<T>,
   refresh: () => Promise<Result<void, string>>,
-  onSubmitted?: ConfigSubmissionObserver,
+  onSubmitted: ConfigSubmissionObserver,
 ): Promise<RuntimeConfigExternalMutationResult<T>> {
   if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
     return {
@@ -220,7 +216,7 @@ export async function executeConfigExternalMutation<T>(
   try {
     const receipt = options.configWriteAck?.(value);
     if (receipt && receipt.noop !== true) {
-      onSubmitted?.({ ...submitted, ack: receipt });
+      onSubmitted({ ...submitted, ack: receipt });
       if (isCurrentConfigConnection(state, client, connectionEpoch)) {
         adoptConfigWriteAck(state, submitted, receipt);
       }
@@ -271,7 +267,7 @@ type ConfigLoadOptions = LoadConfigOptions & {
 
 function startConfigLoad(
   state: RuntimeConfigState,
-  options: ConfigLoadOptions = {},
+  options: ConfigLoadOptions,
   isCurrentLoad: () => boolean = () => true,
 ): ConfigRead | null {
   const client = state.client;
@@ -294,7 +290,7 @@ export function loadConfig(
 
 export async function refreshConfigAfterMutation(
   state: RuntimeConfigState,
-  options: ConfigLoadOptions = {},
+  options: ConfigLoadOptions,
 ): Promise<Result<void, string>> {
   // A generation event can precede the RPC's final commit. Always issue a fresh
   // read here; only actual later reads can satisfy this mutation's refresh.
@@ -405,10 +401,7 @@ async function readConfig(
 
 export async function loadConfigSchema(state: RuntimeConfigState) {
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.configSchemaLoading) {
+  if (!client || !state.connected || state.configSchemaLoading) {
     return;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
@@ -447,8 +440,8 @@ export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 export async function submitConfigDraft(
   state: RuntimeConfigState,
   mode: "auto" | "save" | "apply",
-  onSubmitted?: ConfigSubmissionObserver,
-  canDispatch: () => boolean = () => true,
+  onSubmitted: ConfigSubmissionObserver | undefined,
+  canDispatch: () => boolean,
 ): Promise<boolean> {
   const client = state.client;
   const canSubmitDraft = () =>
@@ -585,7 +578,7 @@ export function teardownFlushConfigDraft(
 export async function patchConfig(
   state: RuntimeConfigState,
   options: ConfigPatchOptions,
-  onSubmitted?: ConfigSubmissionObserver,
+  onSubmitted: ConfigSubmissionObserver,
 ): Promise<boolean> {
   const client = state.client;
   const currentSnapshot = state.configSnapshot;
@@ -625,7 +618,7 @@ export async function patchConfig(
       config: ack.noop === true ? currentConfig : ack.config,
       hash: ack.noop === true ? baseHash : ack.hash,
     };
-    onSubmitted?.({ ...submitted, ack: receipt });
+    onSubmitted({ ...submitted, ack: receipt });
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return false;
     }
@@ -657,7 +650,7 @@ export async function patchConfig(
         isConfigWriteAck(err.details.persistedConfig)
       ) {
         // This negative response confirms persistence, not runtime application.
-        onSubmitted?.({ ...submitted, ack: err.details.persistedConfig });
+        onSubmitted({ ...submitted, ack: err.details.persistedConfig });
         const adoptedStatus = adoptConfigWriteAck(state, submitted, err.details.persistedConfig);
         state.configNeedsApply = true;
         if (adoptedStatus === "conflict") {

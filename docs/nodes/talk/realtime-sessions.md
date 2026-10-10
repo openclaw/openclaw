@@ -135,6 +135,8 @@ Actions requiring ordinary approval still require that approval through the
 host-authenticated approval flow; saying “yes” or supplying confirmation text to
 the model does not grant permission. Denied actions remain denied.
 
+Gateway shutdown joins accepted voice transcripts, final tool outcomes, and provider-close summaries before releasing persistence resources. Accepted consults keep their persistence ownership until all queued and deferred work finishes, including when diagnostics are disabled. Queued summaries keep their original physical stores while waiting for a delivery slot. Recipient lookup honors `session.store`; voice metadata and delivery markers remain in their separate per-agent store. A missing conversation is reported as a failed digest attempt instead of silently dropping its summary. Provider cleanup failures do not bypass that persistence drain. Stored formats and retry limits are unchanged. Confirmed deliveries retry only their completion marker; partial or uncertain deliveries are not resent. Unresolved outcomes retain a fence for the lifetime of the delivery owner within its existing bounded retry capacity.
+
 Direct provider delegations and chat-backed Talk retain their real voice identity.
 Operator and source revocation, cancellation, sandbox restrictions, node routing,
 and final executable checks still apply. Previous external delivery history can

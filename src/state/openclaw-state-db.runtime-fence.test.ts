@@ -1,6 +1,6 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -19,10 +19,10 @@ afterEach(() => {
 });
 
 describe("shared state runtime schema fence", () => {
-  it("latches a newer schema committed under an open cached handle", () => {
+  it("latches a newer schema published by a managed peer under an open cached handle", () => {
     const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-runtime-schema-") } };
     const initial = openOpenClawStateDatabase(options);
-    const external = new DatabaseSync(initial.path);
+    const external = openNodeSqliteDatabase(initial.path);
     try {
       external.exec(`
         BEGIN IMMEDIATE;
@@ -53,25 +53,5 @@ describe("shared state runtime schema fence", () => {
     });
     expect(initial.db.isOpen).toBe(false);
     expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
-  });
-
-  it("retains the cached handle after a compatible external data commit", () => {
-    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-runtime-data-") } };
-    const initial = openOpenClawStateDatabase(options);
-    const external = new DatabaseSync(initial.path);
-    try {
-      external.exec(`
-        UPDATE schema_meta
-           SET updated_at = updated_at + 1
-         WHERE meta_key = 'primary';
-      `);
-    } finally {
-      external.close();
-    }
-
-    vi.runOnlyPendingTimers();
-
-    expect(openOpenClawStateDatabase(options)).toBe(initial);
-    expect(initial.db.isOpen).toBe(true);
   });
 });

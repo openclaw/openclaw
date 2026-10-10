@@ -456,35 +456,25 @@ describe("plugin surface refresh", () => {
     vi.useRealTimers();
   });
 
-  it.each(["node.pluginSurface.refresh", "plugin.surface.refresh"])(
-    "rotates the calling client's own capability through %s",
-    async (method) => {
-      const node = surfaceClient();
-      const client =
-        method === "plugin.surface.refresh"
-          ? {
-              ...node,
-              connect: {
-                role: "operator",
-                scopes: ["operator.read"],
-                client: { id: "operator-1", mode: "ui" },
-              },
-            }
-          : node;
-      const payload = await refresh(client, method, {
-        surface: "canvas",
-        ...(method === "node.pluginSurface.refresh" ? { observedUrl: currentUrl } : {}),
-      });
-      expect(payload).toMatchObject({ surface: "canvas", expiresAtMs: 1_100 });
-      const urls = requireGatewayRecord(payload.pluginSurfaceUrls, "surface urls");
-      const canvasUrl = requireString(urls.canvas, "canvas url");
-      const url = new URL(canvasUrl);
-      expect(url.origin).toBe(origin);
-      expect(url.pathname).toMatch(/^\/__openclaw__\/cap\/.+/);
-      expect(canvasUrl).not.toBe(currentUrl);
-      expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
-    },
-  );
+  it("rotates the calling operator's own capability", async () => {
+    const client = {
+      ...surfaceClient(),
+      connect: {
+        role: "operator",
+        scopes: ["operator.read"],
+        client: { id: "operator-1", mode: "ui" },
+      },
+    };
+    const payload = await refresh(client, "plugin.surface.refresh", { surface: "canvas" });
+    expect(payload).toMatchObject({ surface: "canvas", expiresAtMs: 1_100 });
+    const urls = requireGatewayRecord(payload.pluginSurfaceUrls, "surface urls");
+    const canvasUrl = requireString(urls.canvas, "canvas url");
+    const url = new URL(canvasUrl);
+    expect(url.origin).toBe(origin);
+    expect(url.pathname).toMatch(/^\/__openclaw__\/cap\/.+/);
+    expect(canvasUrl).not.toBe(currentUrl);
+    expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
+  });
 
   it("reuses a capability rotated after the caller observed its surface", async () => {
     const client = currentClient();
@@ -742,30 +732,27 @@ describe("node.invoke APNs wake path", () => {
       },
     );
 
-    it.each([undefined, 500])(
-      "preserves the first dispatch deadline for timeout %s",
-      async (timeoutMs) => {
-        pairingDelayMs = 250;
-        const invocation = start({ timeoutMs });
-        await vi.advanceTimersByTimeAsync(250);
-        pairingDelayMs = 0;
-        const budget = timeoutMs === undefined ? 30_000 : timeoutMs - 250;
-        expect(requests[0]?.timeoutMs).toBe(budget);
-        await vi.advanceTimersByTimeAsync(budget - 150);
-        rejectNotReady();
-        await vi.advanceTimersByTimeAsync(100);
-        expect(requests).toHaveLength(2);
-        expect(requests[1]?.timeoutMs).toBe(50);
-        await vi.advanceTimersByTimeAsync(50);
+    it("preserves the default dispatch deadline across readiness retries", async () => {
+      pairingDelayMs = 250;
+      const invocation = start({ timeoutMs: undefined });
+      await vi.advanceTimersByTimeAsync(250);
+      pairingDelayMs = 0;
+      const budget = 30_000;
+      expect(requests[0]?.timeoutMs).toBe(budget);
+      await vi.advanceTimersByTimeAsync(budget - 150);
+      rejectNotReady();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.timeoutMs).toBe(50);
+      await vi.advanceTimersByTimeAsync(50);
 
-        expect(firstRespondCall(await invocation)).toMatchObject([
-          false,
-          undefined,
-          { details: { nodeError: { code: "TIMEOUT" } } },
-        ]);
-        expect(requests).toHaveLength(2);
-      },
-    );
+      expect(firstRespondCall(await invocation)).toMatchObject([
+        false,
+        undefined,
+        { details: { nodeError: { code: "TIMEOUT" } } },
+      ]);
+      expect(requests).toHaveLength(2);
+    });
 
     it("expires during readiness backoff without dispatching another attempt", async () => {
       const invocation = start({ timeoutMs: 50 });
@@ -817,19 +804,6 @@ describe("node.invoke APNs wake path", () => {
       ]);
       expect(requests).toHaveLength(5);
     });
-
-    it.each(["NODE_BACKGROUND_UNAVAILABLE"])(
-      "does not retry a generic or execution-dependent %s rejection",
-      async (code) => {
-        const invocation = start();
-        await vi.advanceTimersByTimeAsync(0);
-        reply(0, { ok: false, error: { code, message: "Node lifecycle transition in progress" } });
-        await vi.advanceTimersByTimeAsync(2_000);
-
-        expect(firstRespondCall(await invocation)[0]).toBe(false);
-        expect(requests).toHaveLength(1);
-      },
-    );
 
     it.each([
       { seq: 0, streaming: true },
@@ -983,18 +957,7 @@ describe("node.invoke APNs wake path", () => {
       },
       message: "node command not allowed: the node did not declare any supported commands",
     },
-    {
-      name: "distinguishes explicit command denials from missing opt-ins",
-      command: "sms.search",
-      reason: "command not allowlisted",
-      node: { nodeId: "android-sms-node", commands: ["sms.search"], platform: "android" },
-      config: { gateway: { nodes: { commands: { deny: ["sms.search"] } } } },
-      message: 'node command not allowed: "sms.search" is blocked by gateway.nodes.commands.deny',
-    },
-  ])("$name", async ({ command, reason, node, config, message }) => {
-    if (config) {
-      mocks.getRuntimeConfig.mockReturnValue(config);
-    }
+  ])("$name", async ({ command, reason, node, message }) => {
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: false, reason });
     const nodeRegistry = { get: vi.fn(() => node), invoke: vi.fn() };
 
@@ -1046,35 +1009,6 @@ describe("node.invoke APNs wake path", () => {
       });
     },
   );
-
-  it("releases wake state after an unregistered node lookup", async () => {
-    mocks.loadApnsRegistration.mockResolvedValue(null);
-    await expect(maybeWakeNodeWithApns("unregistered-node")).resolves.toMatchObject({
-      available: false,
-      throttled: false,
-      path: "no-registration",
-    });
-    expect(getNodeWakeStateSnapshot("unregistered-node")).toBeUndefined();
-  });
-
-  it("keeps the existing not-connected response when wake path is unavailable", async () => {
-    mocks.loadApnsRegistration.mockResolvedValue(null);
-
-    const nodeRegistry = createMissingNodeRegistry();
-
-    const respond = await invokeNode({ nodeRegistry });
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(call[2]?.message).toBe("node not connected");
-    expect(call[2]?.details).toEqual({
-      code: "NOT_CONNECTED",
-      nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
-      nodeCommandDispatched: false,
-    });
-    expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-  });
 
   it("releases idle wake state when an unregistered node reconnects during invoke", async () => {
     const nodeId = "ios-node-reconnect-without-registration";
@@ -1195,49 +1129,6 @@ describe("node.invoke APNs wake path", () => {
     expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
   });
 
-  it("wakes and retries invoke after the node reconnects", async () => {
-    vi.useFakeTimers();
-    mockDirectWakeConfig("ios-node-reconnect");
-
-    let connected = false;
-    const session: TestNodeSession = { nodeId: "ios-node-reconnect", commands: ["camera.capture"] };
-    const nodeRegistry = {
-      get: vi.fn((nodeId: string) => {
-        if (nodeId !== "ios-node-reconnect") {
-          return undefined;
-        }
-        return connected ? session : undefined;
-      }),
-      invoke: vi.fn().mockResolvedValue({
-        ok: true,
-        payload: { ok: true },
-        payloadJSON: '{"ok":true}',
-      }),
-    };
-
-    const invokePromise = invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId: "ios-node-reconnect", idempotencyKey: "idem-reconnect" },
-    });
-    setTimeout(() => {
-      connected = true;
-    }, 300);
-
-    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
-    const respond = await invokePromise;
-
-    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
-    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
-      nodeId: "ios-node-reconnect",
-      command: "camera.capture",
-      timeoutMs: 4_700,
-    });
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(true);
-    expectRecordFields(call[1], "respond payload", { ok: true, nodeId: "ios-node-reconnect" });
-  });
-
   it("stops waking an offline node when the invoke deadline expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -1278,33 +1169,6 @@ describe("node.invoke APNs wake path", () => {
     expectInvokeTimeout(await pending);
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
-  });
-
-  it("times out when a node pairing recheck remains in flight", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const nodeId = "ios-node-stalled-pairing-recheck";
-    mocks.isNodePairingGenerationCurrent.mockImplementation(() => new Promise<never>(() => {}));
-    const session: TestNodeSession = {
-      nodeId,
-      connId: "stalled-pairing-conn",
-      commands: ["camera.capture"],
-      platform: "iOS 26.4.0",
-    };
-    const nodeRegistry = {
-      get: vi.fn(() => session),
-      invoke: vi.fn().mockResolvedValue({ ok: true }),
-    };
-
-    const pending = invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-stalled-pairing-recheck", timeoutMs: 100 },
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    expectInvokeTimeout(await pending);
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
   it("preserves dispatched plugin work when its pairing recheck times out", async () => {

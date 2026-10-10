@@ -20,6 +20,7 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
   "packages/retry/src",
+  "packages/worker-runtime/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "packages/net-policy/src",
@@ -51,6 +52,8 @@ export const normalizeRunNodePath = (filePath: unknown): string =>
 export const isIgnoredRunNodeSourcePath = (relativePath: string): boolean =>
   relativePath.endsWith(".test.ts") ||
   relativePath.endsWith(".test.tsx") ||
+  relativePath.endsWith(".test-utils.ts") ||
+  relativePath.endsWith(".test-utils.tsx") ||
   relativePath.endsWith("test-helpers.ts");
 
 const isBuildRelevantSourcePath = (relativePath: string): boolean =>

@@ -304,7 +304,7 @@ describe("matrix thread bindings", () => {
   });
 
   it("posts intro messages inside existing Matrix threads for current placement", async () => {
-    const cfg = { agents: { list: [{ id: "main" }, { id: "molty" }] } };
+    const cfg = { agents: { entries: { main: {}, molty: {} } } };
     await createBindingManager({ cfg });
 
     const binding = await bindCurrentThread({

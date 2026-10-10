@@ -1,7 +1,15 @@
+import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
+
+export type WorkboardClientContext = {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+};
 
 export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
@@ -17,6 +25,7 @@ type WorkboardLiveRefreshEntry = {
 
 type WorkboardRuntime = {
   state?: WorkboardUiState;
+  cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
   loadToken?: WorkboardLoadToken;
   loadError?: string;
@@ -26,7 +35,6 @@ type WorkboardRuntime = {
   liveHighestSeenRevision?: number;
   liveAppliedRevision?: number;
   liveRefreshPending?: boolean;
-  liveInvalidationRevision?: number;
   liveRefreshPromise?: Promise<void>;
   liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
   liveRefreshEntry?: WorkboardLiveRefreshEntry;
@@ -57,6 +65,7 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
       }
     }
   }
+  delete runtime.cardsRevision;
   nextWorkboardLoadGeneration(host);
   delete runtime.loadPromise;
   delete runtime.loadToken;
@@ -76,7 +85,6 @@ export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   delete runtime.liveHighestSeenRevision;
   delete runtime.liveAppliedRevision;
   delete runtime.liveRefreshPending;
-  delete runtime.liveInvalidationRevision;
   if (loadInFlight) {
     invalidateWorkboardLoads(host);
   }
@@ -97,9 +105,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     state.loaded = false;
     state.loadAttempted = false;
   }
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
+  invalidateWorkboardLoads(host);
 }
 
 function createDefaultState(): WorkboardUiState {
@@ -180,4 +186,12 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
   return Boolean(state.bulkSaving || state.draftSaving || state.busyCardIds.size);
+}
+
+export function hasCurrentWorkboardCards(host: WorkboardHost, payload: unknown): boolean {
+  const change = normalizeWorkboardChange(payload);
+  const held = getWorkboardRuntime(host).cardsRevision;
+  return Boolean(
+    change && held && change.epoch === held.epoch && change.cardsRevision === held.revision,
+  );
 }

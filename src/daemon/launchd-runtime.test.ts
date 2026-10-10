@@ -9,62 +9,40 @@ vi.mock("./launchd-exec.js", async (importOriginal) => ({
 
 const target = "gui/501/ai.openclaw.fixture";
 
-it("reports the selected job state instead of its native coalition states", async () => {
-  vi.mocked(execLaunchctl).mockResolvedValue({
-    code: 0,
-    termination: "exit",
-    stderr: "",
-    stdout: [
-      `${target} = {`,
-      "\tstate =  running \t",
-      "\tpid = 4242",
-      "\tlast exit status = 1",
-      "\tlast exit reason =  exited \t",
-      "\tresource coalition = {",
-      "\t\tstate = active",
-      "\t}",
-      "\tjetsam coalition = {",
-      "\t\tstate = active",
-      "\t}",
-      "}",
-    ].join("\n"),
-  });
-
-  await expect(probeLaunchAgentState(target)).resolves.toEqual({
-    state: "running",
-    runtime: { state: "running", pid: 4242, lastExitStatus: 1, lastExitReason: "exited" },
-  });
-});
-
-it("rejects pid and exit status values with junk suffixes", async () => {
-  vi.mocked(execLaunchctl).mockResolvedValue({
-    code: 0,
-    termination: "exit",
-    stderr: "",
-    stdout: [
-      `${target} = {`,
-      "\tstate = waiting",
-      "\tpid = 123abc",
-      "\tlast exit status = 7ms",
-      "\tlast exit reason = exited",
-      "}",
-    ].join("\n"),
-  });
-
-  await expect(probeLaunchAgentState(target)).resolves.toEqual({
-    state: "stopped",
-    runtime: { state: "waiting", lastExitReason: "exited" },
-  });
-});
-
 it.each([
-  "gui/501/ai.openclaw.other = {\n\tstate = running\n\tpid = 4242\n}",
-  `${target} = {\n\tstate = running\n\tstate = waiting\n}`,
-])("keeps unrecognized native job output unknown", async (stdout) => {
+  {
+    name: "selected job state, ignoring nested coalitions",
+    output: `${target} = {
+\tstate =  running \t
+\tpid = 4242
+\tlast exit status = 1
+\tlast exit reason =  exited \t
+\tresource coalition = {
+\t\tstate = active
+\t}
+\tjetsam coalition = {
+\t\tstate = active
+\t}
+}`,
+    expected: {
+      state: "running",
+      runtime: { state: "running", pid: 4242, lastExitStatus: 1, lastExitReason: "exited" },
+    },
+  },
+  {
+    name: "invalid integer suffixes",
+    output: `${target} = {\n\tstate = waiting\n\tpid = 123abc\n\tlast exit status = 7ms\n\tlast exit reason = exited\n}`,
+    expected: { state: "stopped", runtime: { state: "waiting", lastExitReason: "exited" } },
+  },
+  ...[
+    "gui/501/ai.openclaw.other = {\n\tstate = running\n\tpid = 4242\n}",
+    `${target} = {\n\tstate = running\n\tstate = waiting\n}`,
+  ].map((output) => ({
+    name: `unrecognized output: ${output}`,
+    output,
+    expected: { state: "unknown", detail: expect.any(String) },
+  })),
+])("reports $name", async ({ output: stdout, expected }) => {
   vi.mocked(execLaunchctl).mockResolvedValue({ code: 0, termination: "exit", stderr: "", stdout });
-
-  await expect(probeLaunchAgentState(target)).resolves.toMatchObject({
-    state: "unknown",
-    detail: expect.any(String),
-  });
+  await expect(probeLaunchAgentState(target)).resolves.toEqual(expected);
 });

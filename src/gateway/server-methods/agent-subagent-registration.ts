@@ -84,11 +84,15 @@ export async function registerPluginSubagentRunFromGateway(params: {
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
-  const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
-    await import("../../agents/subagents/registry/subagent-registry.js");
+  const {
+    adoptPausedSubagentRunForFollowUp,
+    adoptPausedSubagentRunIntoSuccessor,
+    registerSubagentRun,
+  } = await import("../../agents/subagents/registry/subagent-registry.js");
   const sessionEntry = params.assertCurrent();
   // Resume a yielded run with its original audience unless the follow-up names
-  // a requester and therefore owns a separate delivery.
+  // a requester and therefore owns a separate delivery. Recheck after sibling
+  // registration in case the pause publishes while admission is in flight.
   if (
     !params.requester &&
     (await adoptPausedSubagentRunForFollowUp({
@@ -121,4 +125,11 @@ export async function registerPluginSubagentRunFromGateway(params: {
     },
     { assertCurrent: params.assertCurrent },
   );
+  if (!params.requester) {
+    await adoptPausedSubagentRunIntoSuccessor({
+      childSessionKey,
+      childAgentId: params.childAgentId,
+      assertCurrent: params.assertCurrent,
+    });
+  }
 }

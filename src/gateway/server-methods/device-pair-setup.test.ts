@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerDevicesCli } from "../../cli/devices-cli.js";
 import * as gatewayRpc from "../../cli/gateway-rpc.js";
 import * as devicePairingJoinCode from "../../infra/device-pairing-join-code.js";
@@ -295,7 +296,7 @@ describe("device.pair.setupCode", () => {
     // with the real mint/redeem test, where a leaked module mock creates unbacked codes.
     const registerDevicePairingJoinCode = vi
       .spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode")
-      .mockReturnValue("a".repeat(22));
+      .mockResolvedValue("a".repeat(22));
 
     const respond = await runSetupCode({ includeQr: false, joinUrl: true });
 
@@ -306,10 +307,49 @@ describe("device.pair.setupCode", () => {
     expect(registerDevicePairingJoinCode).toHaveBeenCalledWith({
       payload: resolution.payload,
       expiresAtMs: resolution.expiresAtMs,
+      context: expect.objectContaining({ admission: expect.any(Object) }),
+      assertCurrent: expect.any(Function),
     });
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       joinUrl: `https://gateway.tailnet.example/public-gateway/j/${"a".repeat(22)}`,
     });
+  });
+
+  it("retains the original requester authority while resolving a join setup", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    let current = true;
+    const { options, respond } = createOptions({ includeQr: false, joinUrl: true });
+    options.hasCurrentClientAuthority = () => current;
+    mocks.resolvePairingSetupFromConfig.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return okResolution;
+    });
+    const register = vi
+      .spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode")
+      .mockResolvedValue("a".repeat(22));
+    const pending = Promise.resolve(
+      expectDefined(
+        devicePairSetupHandlers["device.pair.setupCode"],
+        "device pairing handler is registered",
+      )(options),
+    );
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "setup resolution was not reached");
+      current = false;
+      options.hasCurrentClientAuthority = () => true;
+    } finally {
+      release.resolve();
+      await pending;
+    }
+
+    expect(register).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("requester authority changed") }),
+    );
   });
 
   it.each([
@@ -326,7 +366,7 @@ describe("device.pair.setupCode", () => {
       }),
     );
     mocks.encodePairingSetupCode.mockImplementation(pairing.encodePairingSetupCode);
-    vi.spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode").mockReturnValue(
+    vi.spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode").mockResolvedValue(
       "a".repeat(22),
     );
     vi.spyOn(gatewayRpc, "callGatewayFromCliWithTransport").mockImplementation(

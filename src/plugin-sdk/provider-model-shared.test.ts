@@ -3,11 +3,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   buildProviderReplayFamilyHooks,
   modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -134,6 +132,18 @@ describe("modelCostsEqual", () => {
     expect(modelCostsEqual({ ...EXPECTED_COST }, EXPECTED_COST)).toBe(true);
     expect(modelCostsEqual(undefined, EXPECTED_COST)).toBe(false);
     expect(modelCostsEqual({ ...EXPECTED_COST, output: 15 }, EXPECTED_COST)).toBe(false);
+  });
+
+  it("distinguishes missing or changed tiers while accepting normalized range ends", () => {
+    const tier = { ...EXPECTED_COST, range: [100001] as [number] };
+    const cost = { ...EXPECTED_COST, tieredPricing: [tier] };
+    expect(modelCostsEqual(EXPECTED_COST, cost)).toBe(false);
+    expect(modelCostsEqual({ ...cost, tieredPricing: [{ ...tier, output: 99 }] }, cost)).toBe(
+      false,
+    );
+    expect(
+      modelCostsEqual({ ...cost, tieredPricing: [{ ...tier, range: [100001, Infinity] }] }, cost),
+    ).toBe(true);
   });
 });
 
@@ -368,7 +378,7 @@ describe("buildProviderReplayFamilyHooks", () => {
 
   it("exposes canonical replay hooks for reused provider families", () => {
     expectFields(
-      OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "openai-compatible" }).buildReplayPolicy?.({
         provider: "xai",
         modelApi: "openai-completions",
         modelId: "google/gemma-4-26b-a4b-it",
@@ -417,7 +427,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     );
 
     expectFields(
-      ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "anthropic-by-model" }).buildReplayPolicy?.({
         provider: "amazon-bedrock",
         modelApi: "bedrock-converse-stream",
         modelId: "claude-sonnet-4-6",

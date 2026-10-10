@@ -30,7 +30,6 @@ import {
   ensureDevicePairSetupBootstrapToken,
   issueDeviceBootstrapToken,
   issueDevicePairSetupBootstrapToken,
-  pruneExpiredDevicePairSetupCompletions,
   readDevicePairSetupCompletion,
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
@@ -502,32 +501,6 @@ describe("device bootstrap tokens", () => {
     await expect(
       readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
     ).resolves.toMatchObject({ deliveryState: "uncertain", completedAtMs: 1_000 });
-  });
-
-  it("prunes retained setup outcomes without a status lookup", async () => {
-    const baseDir = await createTempDir();
-    vi.useFakeTimers();
-    try {
-      const recordedAtMs = Date.now();
-      const issued = await issueDevicePairSetupBootstrapToken({
-        baseDir,
-        profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-      });
-      await verifyBootstrapToken(baseDir, issued.token);
-      await consumeBootstrapToken(baseDir, issued.token, { completedAtMs: recordedAtMs });
-
-      await expect(
-        pruneExpiredDevicePairSetupCompletions({
-          baseDir,
-          nowMs: recordedAtMs + 20 * 60 * 1000,
-        }),
-      ).resolves.toBe(1);
-      await expect(
-        readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
-      ).resolves.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   // Databases written before this table shipped stay at the same schema

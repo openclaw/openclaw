@@ -51,11 +51,11 @@ The runtime store keeps `SessionEntry` values in per-agent SQLite. The value typ
 - `chatType`: `direct | group | room`
 - `label`: explicit custom name; always takes precedence, including older records whose label resembles an automatic device name. Clearing it with `sessions.patch { label: null }` restores automatic naming.
 - `autoLabel`: optional automatic device label, separate from the custom name. Android writes it through `sessions.patch`; duplicate values are allowed, and `null` clears it. It is a display fallback below a saved `displayName`, not a unique session label.
-- `provider`, `subject`, `room`, `space`, `displayName`: group/channel labeling metadata; `displayName` also stores generated conversation titles.
+- `subject`, `groupChannel`, `space`, `displayName`: group/channel labeling metadata; `displayName` also stores generated conversation titles.
 - Toggles: `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`, `sendPolicy` (per-session override)
 - Model selection: `providerOverride`, `modelOverride`, `authProfileOverride`
 - Token counters (best-effort/provider-dependent): `inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`
-- `compactionCount`: how many times auto-compaction completed for this session key
+- `compactionCount`: total number of completed compactions for this session key
 - `memoryFlushAt` / `memoryFlushCompactionCount`: timestamp and compaction count of the last pre-compaction memory flush
 
 Existing label-only records are preserved: the Gateway does not infer whether a

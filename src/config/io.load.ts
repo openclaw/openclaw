@@ -26,20 +26,16 @@ import {
   snapshotEnv,
 } from "./io.read-helpers.js";
 import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
-import { materializeConfigSnapshotDefaults } from "./io.snapshot-preparation.js";
+import {
+  materializeConfigSnapshotDefaults,
+  prepareConfigSnapshotValidation,
+} from "./io.snapshot-preparation.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
-import {
-  logConfigWarningsOnce,
-  warnIfConfigFromFuture,
-  warnOnConfigMiskeys,
-} from "./io.warnings.js";
+import { logConfigWarningsOnce, warnIfConfigFromFuture } from "./io.warnings.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
-import {
-  validateConfigObjectWithPlugins,
-  validateConfigObjectWithPluginsAsync,
-} from "./validation.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
 
@@ -128,7 +124,6 @@ function* loadConfigWithEffects(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
     }
-    warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
     // A scalar/null root (truncated or clobbered file) must fail validation
     // below like any invalid config — never load as an empty config marked
     // valid, which would run with defaults and poison lastKnownGood.
@@ -163,17 +158,14 @@ function* loadConfigWithEffects(
             }),
           };
         }),
-      async: async () => {
-        const pending = await context.resolveDeferredPluginMigrationsAsync();
-        return {
-          deferredPluginMigrations: pending,
-          validated: await validateConfigObjectWithPluginsAsync(effectiveConfigRaw, {
-            ...validationParams,
-            deferredPluginMigrations: pending,
-            loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
-          }),
-        };
-      },
+      async: () =>
+        prepareConfigSnapshotValidation({
+          kind: "validate",
+          context,
+          metadata: pluginMetadata,
+          raw: effectiveConfigRaw,
+          sourceRaw: parsed,
+        }),
     });
     if (!validated.ok) {
       const invalidSnapshot = createConfigFileSnapshot({

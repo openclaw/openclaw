@@ -543,7 +543,10 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith({
       // The inspection snapshot retains the scoped marker after the updater
       // restores process.env on refusal.
-      env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      env: expect.objectContaining({
+        OPENCLAW_STATE_DIR: profileStateDir(),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      }),
       supportedVersions: { state: 3, agent: 9 },
       preserveSourceArtifacts: false,
       configuredAgentDatabaseTargets: [],
@@ -562,21 +565,22 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     ]);
   });
 
-  it("refuses incompatible managed-state schemas before stopping the package service", async () => {
+  it("refuses incompatible shared caller and managed schemas before stopping the package service", async () => {
     const { pkgRoot } = await setupInstalledPackageRoot(createCaseDir("schema-package"), "1.0.0");
     const entrypoint = path.join(pkgRoot, "dist", "index.js");
     const nodeRunner = path.join(fixtureRoot, "managed", "node");
+    const managedState = profileStateDir();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
     mockOwnedGitService(pkgRoot);
     primeServiceCommand([nodeRunner, entrypoint, "gateway", "run"], {
-      OPENCLAW_STATE_DIR: profileStateDir(),
+      OPENCLAW_STATE_DIR: managedState,
     });
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
     );
     databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) =>
-      env?.OPENCLAW_STATE_DIR === profileStateDir()
+      env?.OPENCLAW_STATE_DIR === managedState
         ? {
             incompatible: [
               {
@@ -598,16 +602,17 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     });
 
     expect(serviceStop).not.toHaveBeenCalled();
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.calls[1]?.[0].env).toEqual(
-      expect.objectContaining({ OPENCLAW_STATE_DIR: profileStateDir() }),
+    const refusal = lastWriteJsonCall();
+    expect(isRecord(refusal) ? refusal.reason : undefined).toBe("database-schema-preflight");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_STATE_DIR: managedState }),
+      }),
     );
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(freshRestartCalls()).toEqual([]);
     expectNoSideEffects(serviceStart, serviceRestart);
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "error",
-      reason: "database-schema-preflight",
-    });
+    expect(refusal).toMatchObject({ status: "error" });
     expect(getTriageFailures()).toContainEqual(
       expect.objectContaining({
         error: expect.stringContaining("openclaw-agent.sqlite"),
@@ -649,8 +654,15 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expectNoSideEffects(updateGitCheckout, defaultRuntime.exit);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
+    const refusal = "Failing check node-runtime (node-runtime-preflight); key engines.node: ";
     expect(defaultRuntime.log).toHaveBeenCalledWith(
-      `openclaw@2026.3.23-2 requires Node >=22.19.0; selected runtime is Node ${process.versions.node}.\n${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
+      [
+        `${refusal}Required: openclaw@2026.3.23-2 Node >=22.19.0; detected: Node ${process.versions.node} at ${process.execPath}`,
+        `${refusal}Update install root: ${fsSync.realpathSync(root)}`,
+        `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
+        `${refusal}Gateway install root: unresolved`,
+        `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
+      ].join("\n"),
     );
   });
 }

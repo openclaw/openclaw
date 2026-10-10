@@ -5,19 +5,27 @@ import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "./async-work
 import { createDeferredCore } from "./deferred.js";
 
 describe("async work resources", () => {
-  it("releases opted-in idle resources exactly once before returning the result", async () => {
+  it.each([
+    { eager: true, fails: false },
+    { eager: true, fails: true },
+    { eager: false, fails: true },
+  ])("releases idle resources once (eager=$eager, fails=$fails)", async ({ eager, fails }) => {
     const owner = new AsyncWorkScope();
     const cleanupStarted = createDeferredCore();
     const finishCleanup = createDeferredCore();
+    const failure = new Error("resource cleanup failed");
     const release = vi.fn(async () => {
       cleanupStarted.resolve();
       await finishCleanup.promise;
+      if (fails) {
+        throw failure;
+      }
     });
     let returned = false;
     const result = owner
       .run(() =>
         runWithAsyncWorkResources(async (onAcquired) => {
-          onAcquired({ release, releaseBeforeResultWhenIdle: true });
+          onAcquired({ release, releaseBeforeResultWhenIdle: eager ? true : undefined });
           return "completed";
         }),
       )
@@ -25,61 +33,27 @@ describe("async work resources", () => {
         returned = true;
         return value;
       });
+    const outcome =
+      eager && fails
+        ? expect(result).rejects.toBe(failure)
+        : expect(result).resolves.toBe("completed");
     try {
       await cleanupStarted.promise;
       await nextTurn();
-      expect(returned).toBe(false);
+      expect(returned).toBe(!eager);
+      if (!eager) {
+        expect(await result).toBe("completed");
+        expect(owner.hasPendingWork).toBe(true);
+      }
       expect(release).toHaveBeenCalledOnce();
     } finally {
       finishCleanup.resolve();
       await owner.drain();
     }
-    expect(await result).toBe("completed");
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("rejects opted-in idle cleanup failures without attempting release twice", async () => {
-    const owner = new AsyncWorkScope();
-    const failure = new Error("resource cleanup failed");
-    const release = vi.fn(async () => {
-      throw failure;
-    });
-    const result = owner.run(() =>
-      runWithAsyncWorkResources(async (onAcquired) => {
-        onAcquired({ release, releaseBeforeResultWhenIdle: true });
-        return "completed";
-      }),
-    );
-    await expect(result).rejects.toBe(failure);
-    await owner.drain();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("does not replace a default logical result when later cleanup fails", async () => {
-    const owner = new AsyncWorkScope();
-    const cleanupStarted = createDeferredCore();
-    const finishCleanup = createDeferredCore();
-    const release = vi.fn(async () => {
-      cleanupStarted.resolve();
-      await finishCleanup.promise;
-      throw new Error("resource cleanup failed");
-    });
-    const result = owner.run(() =>
-      runWithAsyncWorkResources(async (onAcquired) => {
-        onAcquired({ release });
-        return "accepted";
-      }),
-    );
-    try {
-      expect(await result).toBe("accepted");
-      await cleanupStarted.promise;
-      expect(owner.hasPendingWork).toBe(true);
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      finishCleanup.resolve();
-      await owner.drain();
+    await outcome;
+    if (!eager) {
+      expect(await result).toBe("completed");
     }
-    expect(await result).toBe("accepted");
     expect(release).toHaveBeenCalledOnce();
   });
 

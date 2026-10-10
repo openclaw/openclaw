@@ -85,23 +85,27 @@ async function fetchLiveGroups(
   sock: GroupFetchSocket,
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const groups = await sock.groupFetchAllParticipating();
-  const query = params.query?.trim().toLowerCase() ?? "";
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
-  const entries = Object.entries(groups)
-    .map(([jid, metadata]) => ({
-      kind: "group" as const,
-      id: jid,
-      name: metadata?.subject?.trim() || undefined,
-    }))
-    .filter((entry) => {
-      if (!query) {
-        return true;
-      }
-      return entry.id.toLowerCase().includes(query) || entry.name?.toLowerCase().includes(query);
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
-  return limit ? entries.slice(0, limit) : entries;
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    const query = params.query?.trim().toLowerCase() ?? "";
+    const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+    const entries = Object.entries(groups)
+      .map(([jid, metadata]) => ({
+        kind: "group" as const,
+        id: jid,
+        name: metadata?.subject?.trim() || undefined,
+      }))
+      .filter((entry) => {
+        if (!query) {
+          return true;
+        }
+        return entry.id.toLowerCase().includes(query) || entry.name?.toLowerCase().includes(query);
+      })
+      .toSorted((left, right) => left.id.localeCompare(right.id));
+    return limit ? entries.slice(0, limit) : entries;
+  } catch (error) {
+    throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
+  }
 }
 
 function unavailable(
@@ -178,11 +182,6 @@ function scheduleStandaloneCleanupRetry(cleanup: ManagedStandaloneCleanup): void
   cleanup.retryTimer.unref?.();
 }
 
-function retainStandaloneCleanup(cleanup: ManagedStandaloneCleanup): void {
-  pendingStandaloneCleanups.set(cleanup.authDir, cleanup);
-  scheduleStandaloneCleanupRetry(cleanup);
-}
-
 async function finishStandaloneCleanupOrThrow(
   cleanup: ManagedStandaloneCleanup,
   operationError?: unknown,
@@ -190,7 +189,8 @@ async function finishStandaloneCleanupOrThrow(
   try {
     await runStandaloneCleanup(cleanup);
   } catch (cleanupError) {
-    retainStandaloneCleanup(cleanup);
+    pendingStandaloneCleanups.set(cleanup.authDir, cleanup);
+    scheduleStandaloneCleanupRetry(cleanup);
     const cause =
       operationError === undefined
         ? cleanupError
@@ -199,16 +199,12 @@ async function finishStandaloneCleanupOrThrow(
             "WhatsApp live group lookup and cleanup failed",
             { cause: operationError },
           );
-    throw cleanupUnavailable(cause);
+    throw unavailable(
+      "cleanup_failed",
+      "WhatsApp live group lookup could not safely close its standalone connection.",
+      cause,
+    );
   }
-}
-
-function cleanupUnavailable(error: unknown): WhatsAppDirectoryUnavailableError {
-  return unavailable(
-    "cleanup_failed",
-    "WhatsApp live group lookup could not safely close its standalone connection.",
-    error,
-  );
 }
 
 async function finishPriorStandaloneCleanup(authDir: string): Promise<void> {
@@ -216,12 +212,7 @@ async function finishPriorStandaloneCleanup(authDir: string): Promise<void> {
   if (!cleanup) {
     return;
   }
-  try {
-    await runStandaloneCleanup(cleanup);
-  } catch (error) {
-    scheduleStandaloneCleanupRetry(cleanup);
-    throw cleanupUnavailable(error);
-  }
+  await finishStandaloneCleanupOrThrow(cleanup);
 }
 
 async function listGroupsThroughStandaloneOwner(
@@ -296,11 +287,7 @@ async function listGroupsThroughStandaloneOwner(
       );
     }
 
-    try {
-      groups = await fetchLiveGroups(cleanup.sock, params);
-    } catch (error) {
-      throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
-    }
+    groups = await fetchLiveGroups(cleanup.sock, params);
   } catch (error) {
     await finishStandaloneCleanupOrThrow(cleanup, error);
     throw error;
@@ -325,9 +312,5 @@ export async function listWhatsAppDirectoryGroupsLive(
       "WhatsApp live groups are unavailable while the gateway connection is offline.",
     );
   }
-  try {
-    return await fetchLiveGroups(sock, params);
-  } catch (error) {
-    throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
-  }
+  return await fetchLiveGroups(sock, params);
 }

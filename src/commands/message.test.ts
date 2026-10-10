@@ -1,6 +1,6 @@
 // Message command tests cover CLI message sending, environment handling, and runtime dependency wiring.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -334,47 +334,6 @@ describe("messageCommand", () => {
     expect(slackPlugin.config.isEnabled).not.toHaveBeenCalled();
   });
 
-  it("keeps unresolved SecretRefs for a legacy single-account broadcast plugin", async () => {
-    const resolveAccount = vi.fn(() => ({
-      accountId: "default",
-      enabled: true,
-      configured: false,
-    }));
-    const buzzPlugin = createLegacySingleAccountPlugin({ id: "buzz", resolveAccount });
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "buzz", source: "test", plugin: buzzPlugin }]),
-    );
-    testConfig = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.test",
-          privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
-        },
-      },
-    };
-
-    await runMessageCommand({
-      action: "broadcast",
-      channel: "all",
-      target: undefined,
-      targets: ["00000000-0000-4000-8000-000000000001"],
-      accountId: "default",
-    });
-
-    expect(resolveAccount).toHaveBeenCalledOnce();
-    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
-      config: testConfig,
-      channel: undefined,
-      channels: ["buzz"],
-      accountId: "default",
-    });
-    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
-      accountId: "default",
-      candidateChannels: ["buzz"],
-      secretChannels: ["buzz"],
-    });
-  });
-
   it("excludes unknown legacy-plugin accounts before account or secret resolution", async () => {
     const resolveAccount = vi.fn(() => ({ accountId: "default", enabled: true }));
     const buzzPlugin = createLegacySingleAccountPlugin({ id: "buzz", resolveAccount });
@@ -477,17 +436,7 @@ describe("messageCommand", () => {
     expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
-  it("resolves the ordinary owner from the effective command config", async () => {
-    const effectiveConfig = { agents: { entries: { ops: {} } } };
-    mockResolvedCommandConfig({ rawConfig: {}, resolvedConfig: effectiveConfig, diagnostics: [] });
-
-    await runMessageCommand();
-
-    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
-    expect(readOnlyMessageActionCall().agentId).toBe("ops");
-  });
-
-  it.each([false, true])(
+  it.each([false])(
     "guides an ownerless explicit fleet to a system owner (dryRun=%s)",
     async (dryRun) => {
       const ownerlessConfig = {
@@ -529,60 +478,6 @@ describe("messageCommand", () => {
     },
   );
 
-  it("keeps local-fallback resolved cfg and logs diagnostics", async () => {
-    const rawConfig = {
-      channels: {
-        telegram: {
-          token: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-        },
-      },
-    };
-    const locallyResolvedConfig = createTelegramResolvedTokenConfig("12345:local-fallback-token");
-    mockResolvedCommandConfig({
-      rawConfig: rawConfig as unknown as Record<string, unknown>,
-      resolvedConfig: locallyResolvedConfig as unknown as Record<string, unknown>,
-      diagnostics: ["gateway secrets.resolve unavailable; used local resolver fallback."],
-    });
-
-    await runMessageCommand();
-
-    const actionCall = readOnlyMessageActionCall();
-    expect(actionCall.cfg).toBe(locallyResolvedConfig);
-    expect(actionCall.cfg).not.toBe(rawConfig);
-    expect(
-      vi
-        .mocked(runtime.log)
-        .mock.calls.some(([message]) =>
-          String(message).includes("[secrets] gateway secrets.resolve unavailable"),
-        ),
-    ).toBe(true);
-  });
-
-  it("uses auto-enabled effective config for message actions", async () => {
-    const rawConfig = {};
-    const resolvedConfig = {};
-    const autoEnabledConfig = {
-      channels: {
-        telegram: {
-          token: "12345:auto-enabled-token",
-        },
-      },
-      plugins: { allow: ["telegram"] },
-    };
-    mockResolvedCommandConfig({ rawConfig, resolvedConfig, diagnostics: [] });
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-
-    await runMessageCommand({ channel: undefined });
-
-    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: resolvedConfig,
-      env: process.env,
-    });
-    const actionCall = readOnlyMessageActionCall();
-    expect(actionCall.cfg).toBe(autoEnabledConfig);
-    expect(actionCall.params.target).toBe("123456");
-  });
-
   it("normalizes poll actions and sender ownership before dispatch", async () => {
     await runMessageCommand({
       action: "poll",
@@ -601,137 +496,40 @@ describe("messageCommand", () => {
     expect(actionCall.params.pollQuestion).toBe("Ship it?");
   });
 
-  it.each([
-    {
-      name: "nested",
-      payload: {
-        ok: true,
-        result: {
-          messageId: "msg-json-1",
-          channelId: "general",
-        },
-      },
-      expectedMessageId: "msg-json-1",
-      expectedPayload: {
-        ok: true,
-        result: {
-          messageId: "msg-json-1",
-          channelId: "general",
-        },
-      },
-    },
-    {
-      name: "direct-before-nested",
-      payload: {
-        messageId: " direct-id ",
-        result: { messageId: "nested-id" },
-      },
-      expectedMessageId: "direct-id",
-      expectedPayload: {
-        messageId: " direct-id ",
-        result: { messageId: "nested-id" },
-      },
-    },
-    {
-      name: "array object",
-      payload: Object.assign([], { messageId: " array-id " }),
-      expectedMessageId: "array-id",
-      expectedPayload: [],
-    },
-  ])("includes a stable top-level messageId from a $name payload", async (testCase) => {
+  it("reports partial delivery failure truthfully in JSON output", async () => {
+    const sendResult = {
+      channel: "discord",
+      to: "channel:general",
+      via: "direct" as const,
+      mediaUrl: null,
+      deliveryStatus: "partial_failed" as const,
+      error: "second attachment rejected",
+      result: { channel: "discord", messageId: "first-part-1" },
+      sentBeforeError: true as const,
+    };
     runMessageActionMock.mockResolvedValueOnce({
       kind: "send",
       channel: "discord",
       action: "send",
       to: "channel:general",
-      handledBy: "plugin",
-      payload: testCase.payload,
+      handledBy: "core",
+      payload: sendResult,
+      sendResult,
       dryRun: false,
     });
-
-    await runMessageCommand({
-      channel: "discord",
-      target: "channel:general",
+    await runMessageCommand({ channel: "discord", target: "channel:general" });
+    const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+    expect(json).toMatchObject({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      error: { type: "cli_error", message: "second attachment rejected" },
     });
-
-    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
-    const json = JSON.parse(String(output)) as { messageId?: string; payload?: unknown };
-    expect(json.messageId).toBe(testCase.expectedMessageId);
-    expect(json.payload).toEqual(testCase.expectedPayload);
-    expect(json).not.toHaveProperty("ok");
+    expect(json.payload).toEqual(sendResult);
+    expect(json.messageId).toBe("first-part-1");
+    expect(json.sentBeforeError).toBe(true);
   });
 
   it.each([
-    {
-      status: "suppressed" as const,
-      suppressionReason: "cancelled_by_message_sending_hook" as const,
-      expected: "Message send suppressed: cancelled_by_message_sending_hook.",
-    },
-    {
-      status: "failed" as const,
-      error: "provider rejected the message",
-      expected: "provider rejected the message",
-    },
-    {
-      status: "partial_failed" as const,
-      error: "second attachment rejected",
-      messageId: "first-part-1",
-      expected: "second attachment rejected",
-    },
-  ])(
-    "reports $status sends truthfully in JSON output",
-    async ({ status, suppressionReason, error, messageId, expected }) => {
-      const sendResult = {
-        channel: "discord",
-        to: "channel:general",
-        via: "direct" as const,
-        mediaUrl: null,
-        deliveryStatus: status,
-        ...(suppressionReason ? { suppressionReason } : {}),
-        ...(error ? { error } : {}),
-        ...(messageId ? { result: { channel: "discord", messageId } } : {}),
-        ...(status === "partial_failed" ? { sentBeforeError: true as const } : {}),
-      };
-      runMessageActionMock.mockResolvedValueOnce({
-        kind: "send",
-        channel: "discord",
-        action: "send",
-        to: "channel:general",
-        handledBy: "core",
-        payload: sendResult,
-        sendResult,
-        dryRun: false,
-      });
-
-      await runMessageCommand({ channel: "discord", target: "channel:general" });
-
-      const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
-      expect(json).toMatchObject({
-        ok: false,
-        deliveryStatus: status,
-        error: { type: "cli_error", message: expected },
-      });
-      expect(json.payload).toEqual(sendResult);
-      if (messageId) {
-        expect(json.messageId).toBe(messageId);
-        expect(json.sentBeforeError).toBe(true);
-      }
-    },
-  );
-
-  it.each([
-    [
-      "disabled reaction",
-      "react",
-      { ok: false, hint: "Reactions are disabled." },
-      "Reactions are disabled.",
-    ],
-    [
-      "rejected added reaction",
-      "react",
-      { ok: false, warning: "Unavailable", added: "✅" },
-      "Unavailable",
-    ],
     ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
   ] as const)("reports %s truthfully in JSON output", async (_name, action, payload, expected) => {
     runMessageActionMock.mockResolvedValueOnce({

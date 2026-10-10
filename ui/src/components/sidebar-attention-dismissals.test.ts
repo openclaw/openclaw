@@ -39,52 +39,50 @@ describe("reconcileSidebarAttentionDismissals", () => {
     });
   };
 
-  it("drops a dismissal when the affected set changes so the chip resurfaces", () => {
-    expect(
-      reconcile({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] }, [
-        chip("cronFailed", "beta"),
-        chip("modelAuthExpired", "openai"),
-      ]),
-    ).toEqual({ modelAuthExpired: ["openai"] });
-  });
-
-  it("preserves dismissals outside a selected agent's partial inventory", () => {
-    const dismissals = {
-      cronFailed: ["main-job", "writer-job"],
-      modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
-    };
-    expect(
-      reconcile(
-        dismissals,
-        [chip("cronFailed", "main-job"), chip("modelAuthExpired", "agent:main\nopenai")],
-        { cronInventoryComplete: false, modelAuthAgentId: "main" },
-      ),
-    ).toEqual(dismissals);
+  it.each([
+    {
+      name: "changed affected set",
+      stored: { cronFailed: ["alpha"], modelAuthExpired: ["openai"] },
+      active: [chip("cronFailed", "beta"), chip("modelAuthExpired", "openai")],
+      scope: undefined,
+      expected: { modelAuthExpired: ["openai"] },
+    },
+    {
+      name: "partial agent inventory",
+      stored: {
+        cronFailed: ["main-job", "writer-job"],
+        modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
+      },
+      active: [chip("cronFailed", "main-job"), chip("modelAuthExpired", "agent:main\nopenai")],
+      scope: { cronInventoryComplete: false, modelAuthAgentId: "main" },
+      expected: {
+        cronFailed: ["main-job", "writer-job"],
+        modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
+      },
+    },
+  ])("reconciles only authoritative dismissals: $name", ({ stored, active, scope, expected }) => {
+    expect(reconcile(stored, active, scope)).toEqual(expected);
   });
 });
 
 describe("scope upgrade dismissal fact", () => {
-  it("keeps a pending upgrade visible without a dismiss control", () => {
+  it.each([
+    [{ phase: "pending", requestId: "request-1" }, null],
+    [
+      { phase: "guidance" },
+      { kind: "scopeUpgrade", signature: '["guidance","operator.read","operator.write"]' },
+    ],
+    [
+      { phase: "available" },
+      { kind: "scopeUpgrade", signature: '["available","operator.read","operator.write"]' },
+    ],
+  ] as const)("binds dismissal to the actionable upgrade phase: %j", (state, dismissal) => {
     const entry = buildScopeUpgradeInboxEntry({
       scopes: ["operator.write", "operator.read"],
-      state: { phase: "pending", requestId: "request-1" },
+      state,
     });
-    expect(entry).toMatchObject({ type: "scopeUpgrade", dismissal: null });
-  });
-
-  it("resurfaces when manual guidance becomes an actionable upgrade", () => {
-    const scopes = ["operator.write", "operator.read"];
-    const guidance = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "guidance" } });
-    const available = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "available" } });
-
-    expect(guidance?.dismissal).toEqual({
-      kind: "scopeUpgrade",
-      signature: '["guidance","operator.read","operator.write"]',
-    });
-    expect(available?.dismissal).toEqual({
-      kind: "scopeUpgrade",
-      signature: '["available","operator.read","operator.write"]',
-    });
+    expect(entry).toMatchObject({ type: "scopeUpgrade" });
+    expect(entry?.dismissal).toEqual(dismissal);
   });
 });
 
@@ -134,54 +132,52 @@ describe("dismissSidebarAttention", () => {
 });
 
 describe("update dismissal fact", () => {
-  it("uses the canonical package target and persists the literal boot binding", () => {
-    const dismissal = resolveUpdateAttentionDismissal({
-      gatewayBootId: "boot-a",
-      updateAvailable: {
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "latest",
-      },
+  it.each([
+    {
+      name: "canonical package version",
+      latestVersion: "2026.8.2",
+      channel: "latest",
       updateSchedule: {
         channel: "stable",
         autoEnabled: false,
         target: { kind: "package", version: "2026.8.3" },
       },
-    });
-    expect(dismissal).toEqual({
-      kind: "updateAvailable",
       signature: '["2026.8.3","boot-a"]',
-    });
-    const stored = dismissSidebarAttention(ATTENTION_KEY, dismissal!);
-    expect(isSidebarAttentionDismissed(stored, dismissal!)).toBe(true);
-    expect(JSON.parse(localStorage.getItem(ATTENTION_KEY) ?? "null")).toEqual({
-      updateAvailable: ['["2026.8.3","boot-a"]'],
-    });
-  });
-
-  it("uses the git target SHA instead of an unchanged package version", () => {
-    expect(
-      resolveUpdateAttentionDismissal({
+    },
+    {
+      name: "git SHA with unchanged package version",
+      latestVersion: "2026.8.1",
+      channel: "dev",
+      updateSchedule: {
+        channel: "dev",
+        autoEnabled: true,
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "abcdef1234567890",
+          commitsBehind: 2,
+        },
+      },
+      signature: '["abcdef1234567890","boot-a"]',
+    },
+  ] as const)(
+    "persists the $name and literal boot binding",
+    ({ latestVersion, channel, updateSchedule, signature }) => {
+      const dismissal = resolveUpdateAttentionDismissal({
         gatewayBootId: "boot-a",
         updateAvailable: {
           currentVersion: "2026.8.1",
-          latestVersion: "2026.8.1",
-          channel: "dev",
+          latestVersion,
+          channel,
         },
-        updateSchedule: {
-          channel: "dev",
-          autoEnabled: true,
-          target: {
-            kind: "git",
-            upstreamRef: "origin/main",
-            upstreamSha: "abcdef1234567890",
-            commitsBehind: 2,
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "updateAvailable",
-      signature: '["abcdef1234567890","boot-a"]',
-    });
-  });
+        updateSchedule,
+      });
+      expect(dismissal).toEqual({ kind: "updateAvailable", signature });
+      const stored = dismissSidebarAttention(ATTENTION_KEY, dismissal!);
+      expect(isSidebarAttentionDismissed(stored, dismissal!)).toBe(true);
+      expect(JSON.parse(localStorage.getItem(ATTENTION_KEY) ?? "null")).toEqual({
+        updateAvailable: [signature],
+      });
+    },
+  );
 });

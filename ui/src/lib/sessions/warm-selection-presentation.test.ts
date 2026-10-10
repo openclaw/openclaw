@@ -113,11 +113,40 @@ it.each([
   "query",
   "replacement-client",
   "observer",
+  "observed-membership",
+  "invalidated-read",
 ] as const)(
   "reuses only a live matching primary window across selection: %s",
   async (retirement) => {
     const h = await createWarmSelectionHarness(retirement === "observer");
     expect(h.sessions.state.result).toEqual(h.result("main"));
+    if (retirement === "observed-membership") {
+      const query = { ...mainQuery, limit: 50 };
+      await h.sessions.refresh(query);
+      const observed = h.sessions.observeList(query, () => undefined);
+      cleanup.push(() => observed.dispose());
+      await vi.advanceTimersByTimeAsync(0);
+      h.request.mockResolvedValueOnce(
+        sessionsResult(
+          [
+            ...h.result("main").sessions,
+            { key: "agent:main:new", agentId: "main", kind: "direct", updatedAt: 2 },
+          ],
+          2,
+        ),
+      );
+      await h.sessions.refresh(query);
+      expect(h.sessions.state.result?.sessions).toHaveLength(2);
+    } else if (retirement === "invalidated-read") {
+      const stale = createDeferred<SessionsListResult>();
+      cleanup.push(() => stale.resolve(h.result("main")));
+      h.request.mockImplementationOnce(() => stale.promise);
+      const refresh = h.sessions.refresh({ agentId: "main", force: true });
+      h.emitEvent({ type: "event", event: "config.changed", payload: {} });
+      stale.resolve(h.result("main"));
+      await refresh;
+      // Navigate before the scheduled corrective read can repair the old agent.
+    }
     h.select("writer");
     await vi.advanceTimersByTimeAsync(0);
     expect(h.sessions.state.agentId).toBe("writer");
@@ -154,13 +183,15 @@ it.each([
     h.select("main");
     expect(h.sessions.presentation.result).toEqual(retirement === "none" ? h.result("main") : null);
     await vi.advanceTimersByTimeAsync(0);
-    expect(
-      h.request.mock.calls.filter(
-        ([method, params]) =>
-          method === "sessions.list" &&
-          requireRecord(params, "sessions.list params").agentId === "main",
-      ),
-    ).toHaveLength(retirement === "local-delete" ? 3 : 2);
+    if (retirement !== "observed-membership" && retirement !== "invalidated-read") {
+      expect(
+        h.request.mock.calls.filter(
+          ([method, params]) =>
+            method === "sessions.list" &&
+            requireRecord(params, "sessions.list params").agentId === "main",
+        ),
+      ).toHaveLength(retirement === "local-delete" ? 3 : 2);
+    }
     expect(h.sessions.state.agentId).not.toBe("main");
   },
 );
@@ -238,44 +269,3 @@ it.each(["archive", "delete"] as const)(
     expect(displayed).toBeNull();
   },
 );
-
-it("retires an observed warm lease when a newer primary membership is accepted", async () => {
-  const h = await createWarmSelectionHarness();
-  const query = { ...mainQuery, limit: 50 };
-  await h.sessions.refresh(query);
-  const observed = h.sessions.observeList(query, () => undefined);
-  cleanup.push(() => observed.dispose());
-  await vi.advanceTimersByTimeAsync(0);
-  const newest = sessionsResult(
-    [
-      ...h.result("main").sessions,
-      { key: "agent:main:new", agentId: "main", kind: "direct", updatedAt: 2 },
-    ],
-    2,
-  );
-  h.request.mockResolvedValueOnce(newest);
-  await h.sessions.refresh(query);
-  expect(h.sessions.state.result?.sessions).toHaveLength(2);
-  h.select("writer");
-  await vi.advanceTimersByTimeAsync(0);
-  h.holdMain();
-  h.select("main");
-  expect(h.sessions.presentation.result).toBeNull();
-});
-
-it("does not restore a warm lease from a read spanning configuration invalidation", async () => {
-  const h = await createWarmSelectionHarness();
-  const stale = createDeferred<SessionsListResult>();
-  cleanup.push(() => stale.resolve(h.result("main")));
-  h.request.mockImplementationOnce(() => stale.promise);
-  const refresh = h.sessions.refresh({ agentId: "main", force: true });
-  h.emitEvent({ type: "event", event: "config.changed", payload: {} });
-  stale.resolve(h.result("main"));
-  await refresh;
-  // Navigate before the scheduled corrective read can repair the old agent.
-  h.select("writer");
-  await vi.advanceTimersByTimeAsync(0);
-  h.holdMain();
-  h.select("main");
-  expect(h.sessions.presentation.result).toBeNull();
-});

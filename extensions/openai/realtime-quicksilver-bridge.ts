@@ -187,7 +187,6 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
     let reachedReady = false;
     let readySettled = false;
-    let removeAbortListener = () => {};
     const ready = createDeferred();
     const settleReady = (providerReady = true, error?: Error) => {
       if (readySettled) {
@@ -197,10 +196,8 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       if (!error) {
         reachedReady = providerReady;
       }
-      if (readyTimeout) {
-        clearTimeout(readyTimeout);
-      }
-      removeAbortListener();
+      clearTimeout(readyTimeout);
+      connection.signal.removeEventListener("abort", onAbort);
       if (error) {
         ready.reject(error);
       } else {
@@ -229,7 +226,6 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       }
     };
     connection.signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => connection.signal.removeEventListener("abort", onAbort);
     if (connection.signal.aborted) {
       onAbort();
     }

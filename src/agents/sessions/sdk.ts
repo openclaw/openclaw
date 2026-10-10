@@ -1,13 +1,5 @@
-/**
- * Agent session SDK factory.
- *
- * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
- */
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+/** Assembles an agent session from the run owner's selected model and prepared resources. */
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
-import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -18,11 +10,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { registerResolvedAgentDir } from "../agent-dir-registry.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
-import { getAgentDirResolution } from "../config.js";
-import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
@@ -36,95 +24,33 @@ import {
   type InternalBeforeToolBatchHook,
 } from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
-import { AgentSession, type AgentSessionWriteSettlementRunner } from "./agent-session.js";
-import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
-import { AuthStorage } from "./auth-storage.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
-import type {
-  ExtensionRunner,
-  LoadExtensionsResult,
-  SessionStartEvent,
-  ToolDefinition,
-} from "./extensions/index.js";
+import { AgentSession } from "./agent-session.js";
+import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
-import { ModelRegistry } from "./model-registry.js";
-import { findInitialModel } from "./model-resolver.js";
-import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
+import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import type { ToolName } from "./tools/index.js";
 
-export interface CreateAgentSessionOptions {
-  /** Working directory for project-local discovery. Default: process.cwd() */
+export interface CreateAgentSessionOptions extends Omit<
+  AgentSessionConfig,
+  "agent" | "cwd" | "extensionRunnerRef" | "allowedToolNames"
+> {
+  beforeToolBatch?: InternalBeforeToolBatchHook;
+  /** Execution directory; defaults to the prepared session's directory. */
   cwd?: string;
-  /** Agent config directory. Defaults to the configured installation owner. */
-  agentDir?: string;
 
-  /** Auth storage for credentials. Default: canonical per-agent SQLite auth profiles. */
-  authStorage?: AuthStorage;
-  /** Model registry. Default: ModelRegistry.create(authStorage, agentDir/models.json) */
-  modelRegistry?: ModelRegistry;
+  /** Model already selected by the run owner. */
+  model: Model;
+  /** Admitted thinking level, clamped to the selected model capabilities. */
+  thinkingLevel: ThinkingLevel;
 
-  /** Model to use. Default: from settings, else first available */
-  model?: Model;
-  /** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
-  thinkingLevel?: ThinkingLevel;
-
-  /**
-   * Optional default tool suppression mode when no explicit allowlist is provided.
-   *
-   * - "all": start with no tools enabled
-   * - "builtin": disable the default built-in tools (read, bash, edit, write)
-   *   but keep extension/custom tools enabled
-   */
-  noTools?: "all" | "builtin";
-  /**
-   * Optional allowlist of tool names.
-   *
-   * When omitted, OpenClaw enables the default built-in tools (read, bash, edit, write)
-   * and leaves extension/custom tools enabled unless `noTools` changes that default.
-   * When provided, only the listed tool names are enabled.
-   */
-  tools?: string[];
-  /** Custom tools to register (in addition to built-in tools). */
-  customTools?: ToolDefinition[];
+  /** Runtime-owned allowlist; extensions cannot expand it. */
+  tools: string[];
   /** Hydrate an authorized tool deferred out of the current provider-visible tool set. */
   resolveDeferredTool?: AgentOptions["resolveDeferredTool"];
-
-  /** Resource loader. When omitted, DefaultResourceLoader is used. */
-  resourceLoader?: ResourceLoader;
-
-  /** Session manager. Defaults to a new SQLite-backed session for the selected agent. */
-  sessionManager?: SessionManager;
-
-  /** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
-  settingsManager?: SettingsManager;
-  /** Session start event metadata for extension runtime startup. */
-  sessionStartEvent?: SessionStartEvent;
-  /** Optional settlement boundary for session writes and write-capable extension hooks. */
-  withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
-}
-
-type CreateAgentSessionInternalOptions = Pick<
-  AgentSessionConfig,
-  | "cleanupProviderSessionResourcesOnDispose"
-  | "contextOverflowRecoveryOwner"
-  | "resolveCompactionThinkingLevel"
-> & { beforeToolBatch?: InternalBeforeToolBatchHook };
-
-/** Result from createAgentSession */
-interface CreateAgentSessionResult {
-  /** The created session */
-  session: AgentSession;
-  /** Extensions result (for UI context setup in interactive mode) */
-  extensionsResult: LoadExtensionsResult;
-  /** Warning if session was restored with a different model than saved */
-  modelFallbackMessage?: string;
 }
 
 function createSessionPrepareNextTurnWithContext(
@@ -223,65 +149,11 @@ function getAttributionHeaders(
   return undefined;
 }
 
-/**
- * Create an AgentSession with the specified options.
- *
- * @example
- * ```typescript
- * // Minimal - uses defaults
- * const { session } = await createAgentSession();
- *
- * // Full control
- * const loader = new DefaultResourceLoader({
- *   cwd: process.cwd(),
- *   agentDir: getAgentDir(),
- *   settingsManager: SettingsManager.create(),
- * });
- * await loader.reload();
- * const { session } = await createAgentSession({
- *   model: myModel,
- *   tools: ["read", "bash"],
- *   resourceLoader: loader,
- *   sessionManager: SessionManager.inMemory(),
- * });
- * ```
- */
 export async function createAgentSession(
-  options: CreateAgentSessionOptions = {},
-): Promise<CreateAgentSessionResult> {
-  return await createAgentSessionImpl(options);
-}
-
-/** Internal factory for temporary embedded sessions that do not own durable provider resources. */
-export async function createAgentSessionForEmbeddedRunner(
   options: CreateAgentSessionOptions,
-  internalOptions: CreateAgentSessionInternalOptions,
-): Promise<CreateAgentSessionResult> {
-  return await createAgentSessionImpl(options, internalOptions, false);
-}
-
-async function createAgentSessionImpl(
-  options: CreateAgentSessionOptions,
-  internalOptions: CreateAgentSessionInternalOptions = {},
-  cleanupProviderSessionResourcesOnDispose = true,
-): Promise<CreateAgentSessionResult> {
-  const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
-  const install = getAgentDirResolution(options.agentDir);
-  const { dir: agentDir } = install.directory;
-  if (options.agentDir === undefined && install.directory.owner) {
-    registerResolvedAgentDir({ agentId: install.directory.owner, agentDir, env: install.env });
-  }
-  let resourceLoader = options.resourceLoader;
-
-  const config = options.authStorage && options.modelRegistry ? undefined : install.config;
-  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, config);
-  const modelRegistry =
-    options.modelRegistry ??
-    ModelRegistry.create(authStorage, join(agentDir, "models.json"), { config, workspaceDir: cwd });
-
-  const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-  const sessionManager =
-    options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, install));
+): Promise<{ session: AgentSession }> {
+  const { modelRegistry, settingsManager, sessionManager } = options;
+  const cwd = options.cwd ?? sessionManager.getCwd();
 
   const initialTarget = sessionManager.getSessionTarget();
   const initialSessionId = sessionManager.getSessionId();
@@ -295,13 +167,6 @@ async function createAgentSessionImpl(
     }
   };
 
-  if (!resourceLoader) {
-    resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
-    await resourceLoader.reload();
-    assertInitialSessionCurrent();
-    modelRegistry.refresh();
-  }
-
   const existingSession = await sessionManager[sessionManagerReadInitialContext]();
   assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
@@ -309,92 +174,9 @@ async function createAgentSessionImpl(
     .getBranch()
     .some((entry) => entry.type === "thinking_level_change");
 
-  let model = options.model;
-  let modelFallbackMessage: string | undefined;
+  const model = options.model;
+  const thinkingLevel = clampThinkingLevel(model, options.thinkingLevel) as ThinkingLevel;
 
-  if (!model && hasExistingSession && existingSession.model) {
-    const restoredModel = modelRegistry.find(
-      existingSession.model.provider,
-      existingSession.model.modelId,
-    );
-    if (restoredModel && modelRegistry.hasConfiguredAuth(restoredModel)) {
-      model = restoredModel;
-    }
-    if (!model) {
-      modelFallbackMessage = `Could not restore model ${existingSession.model.provider}/${existingSession.model.modelId}`;
-    }
-  }
-
-  // If still no model, use findInitialModel (checks settings default, then provider defaults)
-  if (!model) {
-    const result = await findInitialModel({
-      scopedModels: [],
-      isContinuing: hasExistingSession,
-      defaultProvider: settingsManager.getDefaultProvider(),
-      defaultModelId: settingsManager.getDefaultModel(),
-      defaultThinkingLevel: settingsManager.getDefaultThinkingLevel(),
-      modelRegistry,
-    });
-    model = result.model;
-    if (!model) {
-      modelFallbackMessage = formatNoModelsAvailableMessage();
-    } else if (modelFallbackMessage) {
-      modelFallbackMessage += `. Using ${model.provider}/${model.id}`;
-    }
-  }
-
-  // Use "off" when a provider explicitly opts out of thinking (e.g. Ollama). Non-off
-  // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
-  // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
-  const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
-  const modelThinkingCompat = model ? projectModelThinkingCompat(model.compat) : undefined;
-  const resolvedProviderDefault =
-    model && modelThinkingProvider
-      ? resolveThinkingDefaultForModel({
-          provider: modelThinkingProvider,
-          model: model.id,
-          catalog: [
-            {
-              provider: modelThinkingProvider,
-              id: model.id,
-              api: model.api,
-              reasoning: model.reasoning,
-              ...(model.params ? { params: model.params } : {}),
-              ...(modelThinkingCompat ? { compat: modelThinkingCompat } : {}),
-            },
-          ],
-        })
-      : undefined;
-  const modelThinkingDefault: ThinkingLevel =
-    resolvedProviderDefault === "off" ? "off" : DEFAULT_THINKING_LEVEL;
-
-  let thinkingLevel =
-    options.thinkingLevel ??
-    (hasExistingSession && hasThinkingEntry
-      ? (existingSession.thinkingLevel as ThinkingLevel)
-      : undefined) ??
-    settingsManager.getDefaultThinkingLevel() ??
-    modelThinkingDefault;
-
-  if (!model) {
-    thinkingLevel = "off";
-  } else {
-    thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
-  }
-
-  const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
-  const customToolNames = options.customTools?.map((tool) => tool.name) ?? [];
-  const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
-  const disableBuiltInTools = !options.tools && options.noTools === "builtin";
-  const initialActiveToolNames: string[] = options.tools
-    ? [...options.tools]
-    : options.noTools === "all"
-      ? []
-      : options.noTools === "builtin"
-        ? customToolNames
-        : defaultActiveToolNames;
-
-  // Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
   const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
     const converted = convertToLlm(messages);
     // Check setting dynamically so mid-session changes take effect
@@ -402,32 +184,28 @@ async function createAgentSessionImpl(
       return converted;
     }
     return converted.map((msg) => {
-      if (msg.role === "user" || msg.role === "toolResult") {
-        const content = msg.content;
-        if (Array.isArray(content)) {
-          const hasImages = content.some((c) => c.type === "image");
-          if (hasImages) {
-            const filteredContent = content
-              .map((c) =>
-                c.type === "image"
-                  ? { type: "text" as const, text: "Image reading is disabled." }
-                  : c,
-              )
-              .filter((c, i, arr) => {
-                const previous = arr.at(i - 1);
-                return !(
-                  c.type === "text" &&
-                  c.text === "Image reading is disabled." &&
-                  i > 0 &&
-                  previous?.type === "text" &&
-                  previous.text === "Image reading is disabled."
-                );
-              });
-            return Object.assign({}, msg, { content: filteredContent });
-          }
-        }
+      if (msg.role !== "user" && msg.role !== "toolResult") {
+        return msg;
       }
-      return msg;
+      const content = msg.content;
+      if (!Array.isArray(content) || !content.some((c) => c.type === "image")) {
+        return msg;
+      }
+      const filteredContent = content
+        .map((c) =>
+          c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
+        )
+        .filter((c, i, arr) => {
+          const previous = arr.at(i - 1);
+          return !(
+            c.type === "text" &&
+            c.text === "Image reading is disabled." &&
+            i > 0 &&
+            previous?.type === "text" &&
+            previous.text === "Image reading is disabled."
+          );
+        });
+      return Object.assign({}, msg, { content: filteredContent });
     });
   };
 
@@ -441,7 +219,7 @@ async function createAgentSessionImpl(
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
-      systemPrompt: "",
+      systemPrompt: options.systemPrompt,
       model,
       thinkingLevel,
       tools: [],
@@ -507,7 +285,7 @@ async function createAgentSessionImpl(
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
-  setInternalBeforeToolBatch(agent, internalOptions.beforeToolBatch);
+  setInternalBeforeToolBatch(agent, options.beforeToolBatch);
   if (agent.streamFn) {
     bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
   }
@@ -522,10 +300,6 @@ async function createAgentSessionImpl(
       },
       append,
     );
-  const appendInitialThinking = () =>
-    appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
-      sessionManager.appendThinkingLevelChange(thinkingLevel),
-    );
   const initializeMetadata = () => {
     // Prepared history needs no write permit when its initial metadata already exists.
     // Otherwise restoration waits behind unrelated writes, including reclamation.
@@ -534,19 +308,18 @@ async function createAgentSessionImpl(
     }
     return withSessionManagerWrite(sessionManager, async () => {
       assertInitialSessionCurrent();
-      if (hasExistingSession) {
-        await appendInitialThinking();
+      if (!hasExistingSession) {
+        await appendInitialMetadata(
+          { type: "model_change", provider: model.provider, modelId: model.id },
+          () => sessionManager.appendModelChange(model.provider, model.id),
+        );
         assertInitialSessionCurrent();
-      } else {
-        // Persist initial settings before exposing the new session to callers.
-        if (model) {
-          await appendInitialMetadata(
-            { type: "model_change", provider: model.provider, modelId: model.id },
-            () => sessionManager.appendModelChange(model.provider, model.id),
-          );
-          assertInitialSessionCurrent();
-        }
-        await appendInitialThinking();
+      }
+      await appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
+        sessionManager.appendThinkingLevelChange(thinkingLevel),
+      );
+      if (hasExistingSession) {
+        assertInitialSessionCurrent();
       }
     });
   };
@@ -576,61 +349,11 @@ async function createAgentSessionImpl(
   }
 
   const session = new AgentSession({
+    ...options,
     agent,
-    sessionManager,
-    settingsManager,
     cwd,
-    resourceLoader,
-    customTools: options.customTools,
-    modelRegistry,
-    initialActiveToolNames,
-    allowedToolNames,
-    disableBuiltInTools,
+    allowedToolNames: options.tools,
     extensionRunnerRef,
-    sessionStartEvent: options.sessionStartEvent,
-    withSessionWriteSettlement: options.withSessionWriteSettlement,
-    contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
-    resolveCompactionThinkingLevel: internalOptions.resolveCompactionThinkingLevel,
-    cleanupProviderSessionResourcesOnDispose,
   });
-  const extensionsResult = resourceLoader.getExtensions();
-
-  return {
-    session,
-    extensionsResult,
-    modelFallbackMessage,
-  };
-}
-
-async function createDefaultSdkSessionManager(
-  cwd: string,
-  install: ReturnType<typeof getAgentDirResolution>,
-): Promise<SessionManager> {
-  const { dir: agentDir, owner: agentId } = install.directory;
-  if (!agentId) {
-    throw new Error(
-      "Select an agent owner or provide a sessionManager before creating an SDK session.",
-    );
-  }
-  const sessionId = randomUUID();
-  const target = {
-    agentId,
-    sessionId,
-    sessionKey: `agent:${agentId}:sdk:${sessionId}`,
-    storePath: join(agentDir, "openclaw-agent.sqlite"),
-    env: install.env,
-  };
-  openOpenClawAgentDatabase({ agentId, env: install.env, path: target.storePath });
-  const created = await createSessionEntryWithTranscript(
-    target,
-    () => ({
-      ok: true,
-      entry: { sessionId, updatedAt: Date.now() },
-    }),
-    { cwd },
-  );
-  if (!created.ok) {
-    throw new Error(`Failed to initialize SDK session transcript: ${created.error}`);
-  }
-  return await SessionManager.openAsync(target, cwd);
+  return { session };
 }

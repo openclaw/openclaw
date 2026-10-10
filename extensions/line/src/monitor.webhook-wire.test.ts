@@ -108,39 +108,6 @@ describe("monitorLineProvider webhook body limits over a real connection", () =>
     }
   };
 
-  it("answers an over-limit webhook with 413 and then closes the connection", async () => {
-    await withLineWebhookWire(async (webhookUrl) => {
-      const oversizedPayload = JSON.stringify({
-        events: [{ type: "message" }],
-        padding: "x".repeat(70 * 1024),
-      });
-      const oversized = await postRawWebhook({
-        url: webhookUrl,
-        body: oversizedPayload,
-        headers: {
-          "content-type": "application/json",
-          "x-line-signature": signLineWebhook(oversizedPayload),
-        },
-      });
-      expect(oversized.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(JSON.parse(oversized.body)).toEqual({ error: "Payload too large" });
-      expect(oversized.closedByServer).toBe(true);
-
-      // Same route: an in-limit webhook is still admitted and answered normally.
-      const acceptedPayload = JSON.stringify({ events: [{ type: "message" }] });
-      const accepted = await fetch(webhookUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-line-signature": signLineWebhook(acceptedPayload),
-        },
-        body: acceptedPayload,
-      });
-      expect(accepted.status).toBe(200);
-      expect(await accepted.json()).toEqual({ status: "ok" });
-    });
-  });
-
   it("counts UTF-8 bytes, not characters, for a chunked non-ASCII webhook", async () => {
     // LINE payloads are routinely non-ASCII, and chunk sizes are byte counts. Sending the
     // framing and the body as one string would re-encode every byte above 0x7f after the

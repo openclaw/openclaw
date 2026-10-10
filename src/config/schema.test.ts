@@ -957,7 +957,6 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             tools: {
               exec: {
                 commandHighlighting: false,
@@ -993,7 +992,6 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             tools: {
               exec: {
                 reviewer: {
@@ -1244,13 +1242,6 @@ describe("config schema", () => {
     expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
     const schema = lookup?.schema as { properties?: unknown } | undefined;
     expect(schema?.properties).toBeUndefined();
-  });
-
-  it("lists Matrix in messages.queue.byChannel schema lookup", () => {
-    const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
-    expect(lookup?.path).toBe("messages.queue.byChannel");
-    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
-    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
   });
 
   it("includes reload metadata when a resolver is provided", () => {

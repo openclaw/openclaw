@@ -287,7 +287,7 @@ describe("installSkill before_install hooks", () => {
         plugins: { enabled: false },
         agents: {
           ownership: "explicit",
-          list: [{ id: "ops", workspace: workspaceDir, skills: [] }],
+          entries: { ops: { workspace: workspaceDir, skills: [] } },
         },
       };
       try {
@@ -493,7 +493,7 @@ describe("installSkill before_install hooks", () => {
         formula: "vendor/tap/tool",
       });
       const config: OpenClawConfig = {
-        agents: { ownership: "explicit", list: [{ id: "ops", workspace: workspaceDir }] },
+        agents: { ownership: "explicit", entries: { ops: { workspace: workspaceDir } } },
       };
       vi.mocked(hasBinary).mockReturnValue(false);
       vi.mocked(resolveBrewExecutable).mockReturnValue(undefined);
@@ -532,10 +532,10 @@ describe("installSkill before_install hooks", () => {
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
-          list: [
-            { id: "ops", workspace: workspaceDir, skills: [] },
-            { id: "research", workspace: workspaceDir },
-          ],
+          entries: {
+            ops: { workspace: workspaceDir, skills: [] },
+            research: { workspace: workspaceDir },
+          },
         },
       };
       const skillName = "shared-workshop-recipe";

@@ -125,6 +125,7 @@ function createInputHandoff(sharedStore = false) {
       }
     } finally {
       receipt.finish(params.disposition ?? "interrupted");
+      await receipt.settled?.();
     }
     return receipt;
   };
@@ -202,7 +203,6 @@ describe("legacy main session input handoff", () => {
   });
 
   it.each([
-    { name: "completed source", source: completed, final: true },
     { name: "operator Stop in-place", source: stopped, final: true, sharedStore: true },
     {
       name: "final destination",

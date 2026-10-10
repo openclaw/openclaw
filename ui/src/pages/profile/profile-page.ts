@@ -85,7 +85,9 @@ export class ProfilePage extends OpenClawLightDomElement {
   private subscriptions: Array<() => void> = [];
   constructor() {
     super();
-    new SubscriptionsController(this).watchStore(() => this.context?.config);
+    new SubscriptionsController(this)
+      .watchStore(() => this.context?.config)
+      .watchStore(() => this.context?.theme);
   }
   override connectedCallback() {
     super.connectedCallback();
@@ -430,20 +432,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     </div>`;
   }
 
-  private renderModelAccounts() {
-    return html`<openclaw-model-accounts
-      .identityId=${this.selfUser?.id ?? null}
-      .profileId=${this.ownProfile?.id ?? null}
-      .personLabel=${
-        this.ownProfile
-          ? this.ownProfile.displayName?.trim() ||
-            this.ownProfile.emails[0] ||
-            t("profilePage.modelAccounts.currentPerson")
-          : null
-      }
-    ></openclaw-model-accounts>`;
-  }
-
   private refreshManually() {
     if (this.connected && !this.identityBusy && !this.identityLoading) {
       if (this.client) {
@@ -489,7 +477,17 @@ export class ProfilePage extends OpenClawLightDomElement {
       ${
         connected
           ? html`
-              ${this.renderModelAccounts()}
+              <openclaw-model-accounts
+                .identityId=${this.selfUser?.id ?? null}
+                .profileId=${this.ownProfile?.id ?? null}
+                .personLabel=${
+                  this.ownProfile
+                    ? this.ownProfile.displayName?.trim() ||
+                      this.ownProfile.emails[0] ||
+                      t("profilePage.modelAccounts.currentPerson")
+                    : null
+                }
+              ></openclaw-model-accounts>
               <openclaw-github-connections></openclaw-github-connections>
               ${renderSettingsGroup(
                 renderSettingsNavRow({
@@ -505,32 +503,30 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   override render() {
-    return this.heroAvatarLoader.withActiveRoutes(() => this.renderContent());
-  }
-
-  private renderContent() {
-    return html`
-      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
-        <div>
-          <h1 class="page-title">${titleForRoute("profile")}</h1>
-          <div class="page-subtitle">
-            ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
+    return this.heroAvatarLoader.withActiveRoutes(
+      () => html`
+        <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
+          <div>
+            <h1 class="page-title">${titleForRoute("profile")}</h1>
+            <div class="page-subtitle">
+              ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
+            </div>
           </div>
-        </div>
-        ${
-          this.connected
-            ? html`<button
-                class="btn profile-refresh"
-                ?disabled=${this.identityLoading || this.identityBusy !== null}
-                @click=${() => this.refreshManually()}
-              >
-                ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
-              </button>`
-            : nothing
-        }
-      </section>
-      ${renderSettingsWorkspace(this.renderBody())}
-    `;
+          ${
+            this.connected
+              ? html`<button
+                  class="btn profile-refresh"
+                  ?disabled=${this.identityLoading || this.identityBusy !== null}
+                  @click=${() => this.refreshManually()}
+                >
+                  ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
+                </button>`
+              : nothing
+          }
+        </section>
+        ${renderSettingsWorkspace(this.renderBody())}
+      `,
+    );
   }
 }
 

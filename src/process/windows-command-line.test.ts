@@ -1,29 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { parseWindowsNativeCommandLine } from "./windows-command-line.js";
 
-describe("Windows native command lines", () => {
-  it.each([
-    [String.raw`"Office \"A\""`, ['Office "A"']],
-    [String.raw`"Office ""A"""`, ['Office "A"']],
-    [String.raw`"C:\Team Notes\\"`, ["C:\\Team Notes\\"]],
-    [String.raw`"a\\\"b" "a\\\\"`, ['a\\"b', "a\\\\"]],
-    [String.raw`"" middle ""`, ["", "middle", ""]],
-    [String.raw`"%%PATH%% ^!value!"`, ["%%PATH%% ^!value!"]],
-    ['"first\r\nsecond"', ["first\r\nsecond"]],
-    ["tail\r\n", ["tail\r\n"]],
-  ] as const)("decodes native arguments %s without batch expansion", (raw, expected) => {
-    expect(parseWindowsNativeCommandLine(`node.exe ${raw}`)).toEqual(["node.exe", ...expected]);
-  });
-
-  it("uses executable-token rules only for a full command line", () => {
-    expect(parseWindowsNativeCommandLine(String.raw`"C:\tool path\" --flag`)).toEqual([
-      "C:\\tool path\\",
-      "--flag",
-    ]);
-    expect(parseWindowsNativeCommandLine('"unterminated.exe')).toBeNull();
-  });
-
-  it("refuses NUL in native command text", () => {
-    expect(parseWindowsNativeCommandLine("bad\0value")).toBeNull();
-  });
+it.each([
+  [String.raw`node.exe "Office \"A\""`, ["node.exe", 'Office "A"']],
+  [String.raw`node.exe "Office ""A"""`, ["node.exe", 'Office "A"']],
+  [String.raw`node.exe "C:\Team Notes\\"`, ["node.exe", "C:\\Team Notes\\"]],
+  [String.raw`node.exe "a\\\"b" "a\\\\"`, ["node.exe", 'a\\"b', "a\\\\"]],
+  [String.raw`node.exe "" middle ""`, ["node.exe", "", "middle", ""]],
+  [String.raw`node.exe "%%PATH%% ^!value!"`, ["node.exe", "%%PATH%% ^!value!"]],
+  ['node.exe "first\r\nsecond"', ["node.exe", "first\r\nsecond"]],
+  ["node.exe tail\r\n", ["node.exe", "tail\r\n"]],
+  [String.raw`"C:\tool path\" --flag`, ["C:\\tool path\\", "--flag"]],
+  ['"unterminated.exe', null],
+  ["bad\0value", null],
+] as const)("parses Windows native command line %s without batch expansion", (raw, expected) => {
+  expect(parseWindowsNativeCommandLine(raw)).toEqual(expected);
 });

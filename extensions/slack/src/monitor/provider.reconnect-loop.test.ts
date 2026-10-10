@@ -1,3 +1,4 @@
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { getSlackClient, getSlackTestState, resetSlackTestState } from "../monitor.test-helpers.js";
@@ -11,6 +12,7 @@ describe("slack socket reconnect loop", () => {
   const setStatus = vi.fn<(next: Record<string, unknown>) => void>();
   const start = () =>
     monitorSlackProvider({
+      scheduler: createTestPluginServiceScheduler(),
       botToken: "bot-token",
       appToken: "app-token",
       abortSignal: controller.signal,

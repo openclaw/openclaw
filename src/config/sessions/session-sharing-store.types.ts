@@ -1,9 +1,15 @@
+import type { SqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
+
+export type SessionCollaborationMutation = Exclude<
+  keyof SessionSharingWorkerOperations,
+  "category.prepare" | "category.apply" | "involvement"
+>;
 
 export type SessionSharingExpectedEntry = Pick<
   SessionEntry,
@@ -47,7 +53,6 @@ export type SessionSuggestionClaimParams = {
   expectedSessionId?: string;
   resolution: StoredSessionSuggestionResolution;
   now?: number;
-  claimTtlMs?: number;
   expectedEntry?: SessionMetadataExpectedEntry;
 };
 export type SessionSuggestionReleaseParams = {
@@ -80,7 +85,24 @@ type ParticipantPublication = {
   participants: Pick<SessionEntry, "participants" | "participantCount">;
 };
 
+export type SessionInvolvementMutation = {
+  expectedSessionId: string;
+  expectedEntry?: SessionMetadataExpectedEntry;
+  profileIds: readonly string[];
+  change:
+    | { kind: "visibility"; hidden: boolean }
+    | { kind: "mention"; source: NonNullable<SessionProfileInvolvement["lastMention"]> };
+};
+
 export type SessionSharingWorkerOperations = {
+  involvement: {
+    input: {
+      scope: SessionAccessScope;
+      params: SessionInvolvementMutation;
+      profiles: { profileId: string; aliases: string[] }[];
+    };
+    output: { accepted: boolean; changed: boolean };
+  };
   "owner.assign": {
     input: { scope: SessionAccessScope; params: SessionOwnerAssignParams };
     output: { value: SessionOwnerAssignment | null } & OwnerPublication;
@@ -124,4 +146,19 @@ export type SessionSharingWorkerOperations = {
     input: { scope: SessionAccessScope; params: SessionParticipantRecordInput };
     output: { value: RecordSessionParticipantResult | null } & ParticipantPublication;
   };
+};
+
+export type SessionCollaborationFact = Extract<
+  SessionRowFacts,
+  { kind: "member" | "owner" | "participants" | "category" | "unchanged" }
+>;
+
+export type SessionSharingCommitReceipt = {
+  kind: "session-collaboration-committed";
+  type: Exclude<keyof SessionSharingWorkerOperations, "category.prepare">;
+  result: SessionSharingWorkerOperations[Exclude<
+    keyof SessionSharingWorkerOperations,
+    "category.prepare"
+  >]["output"];
+  publication: SqliteCommitReceipt<readonly SessionCollaborationFact[]>;
 };

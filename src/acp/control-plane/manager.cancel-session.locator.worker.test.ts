@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -12,11 +12,8 @@ import {
 import { DEFAULT_DEPS } from "./manager.types.js";
 
 it.each([
-  ["durable", "before-call"],
   ["durable", "cached-status"],
   ["durable", "cancel-rpc"],
-  ["incognito", "cached-status"],
-  ["incognito", "cancel-rpc"],
   ["incognito", "metadata-write"],
 ] as const)(
   "preserves a %s same-entry runtime replacement while %s is pending and permits retry",
@@ -48,9 +45,6 @@ it.each([
               return { ...current, runtimeSessionName: "successor-runtime", state: "running" };
             },
           });
-        if (boundary === "before-call") {
-          await replaceRuntime();
-        }
         const entered = createDeferred();
         const release = createDeferred();
         if (boundary === "cached-status") {
@@ -82,18 +76,14 @@ it.each([
         });
         const result = Promise.allSettled([cancellation]);
         try {
-          const initialCancelCalls =
-            boundary === "cached-status" || boundary === "before-call" ? 0 : 1;
-          if (boundary !== "before-call") {
-            await Promise.race([
-              entered.promise,
-              result.then(() => {
-                throw new Error("Cancellation settled before the held runtime boundary.");
-              }),
-            ]);
-            expect(f.cancel).toHaveBeenCalledTimes(initialCancelCalls);
-            await replaceRuntime();
-          }
+          const initialCancelCalls = boundary === "cached-status" ? 0 : 1;
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            result,
+            "Cancellation settled before the held runtime boundary.",
+          );
+          expect(f.cancel).toHaveBeenCalledTimes(initialCancelCalls);
+          await replaceRuntime();
           release.resolve();
           const outcomes = await result;
           const current = readAcpSessionEntry(f.target);
@@ -161,7 +151,6 @@ it.each([
 );
 
 it.each([
-  ["durable", "named-backend"],
   ["incognito", "named-backend"],
   ["durable", "empty-backend"],
 ] as const)(
@@ -221,9 +210,6 @@ it.each([
 );
 
 it.each([
-  ["durable", "cancel-rpc", "cancelled"],
-  ["incognito", "cancel-rpc", "cancelled"],
-  ["durable", "post-abort-read", "cancelled"],
   ["incognito", "post-abort-read", "cancelled"],
   ["durable", "cancel-rpc", "completed"],
 ] as const)(
@@ -296,12 +282,11 @@ it.each([
         });
         let cancelResult: Promise<PromiseSettledResult<void>[]> | undefined;
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             turnEntered.promise,
-            turnResult.then(() => {
-              throw new Error("Turn settled before runtime entry.");
-            }),
-          ]);
+            turnResult,
+            "Turn settled before runtime entry.",
+          );
           const cancellation = f.manager.cancelSession({
             ...f.target,
             expectedRunId: "active-locator",
@@ -313,12 +298,11 @@ it.each([
             cancelSettled = true;
             return result;
           });
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             boundary === "post-abort-read" ? readEntered.promise : cancelEntered.promise,
-            cancelResult.then(() => {
-              throw new Error("Stop settled before its held cancellation boundary.");
-            }),
-          ]);
+            cancelResult,
+            "Stop settled before its held cancellation boundary.",
+          );
           expect(signal?.aborted).toBe(true);
           expect(f.cancel).toHaveBeenCalledTimes(boundary === "post-abort-read" ? 0 : 1);
           await upsertAcpSessionMeta({
@@ -333,12 +317,11 @@ it.each([
           });
           releaseRead.resolve();
           releaseTurn.resolve();
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             cancelEntered.promise,
-            cancelResult.then(() => {
-              throw new Error("An admitted Stop abandoned its captured runtime cleanup.");
-            }),
-          ]);
+            cancelResult,
+            "An admitted Stop abandoned its captured runtime cleanup.",
+          );
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });

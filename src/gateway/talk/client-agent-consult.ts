@@ -1,4 +1,3 @@
-import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { EmbeddedRunCompletionRegistration } from "../../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../../agents/embedded-agent-runner/runs.js";
 import { registerRequesterFinalAttachment } from "../../agents/subagents/requester-final-attachment.js";
@@ -8,28 +7,23 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
-import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import type { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
   runOutsideGatewayRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import {
-  buildRunUserTurnIdempotencyKey,
-  createUserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   consultRealtimeVoiceAgent,
   prepareRealtimeVoiceAgentExecutionContext,
 } from "../../talk/agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
-import {
-  assertClientVoiceSessionOpen,
-  registerClientVoiceConsultRun,
-} from "../../talk/client-voice-session.js";
+import { assertClientVoiceSessionOpen } from "../../talk/client-voice-session-read.js";
+import type { ClientVoiceSessionSource } from "../../talk/client-voice-session-source.js";
+import { registerClientVoiceConsultRun } from "../../talk/client-voice-session.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import type { GatewayRequestContext } from "../server-methods/shared-types.js";
 import type {
@@ -37,6 +31,7 @@ import type {
   TalkAgentConsultSource,
   TalkRequesterFinalBinding,
 } from "./client-agent-consult.types.js";
+import { createTalkClientAgentRuntime } from "./client-agent-runtime.js";
 import {
   resolveTalkAgentConsultAuthority,
   type TalkAgentConsultAuthority,
@@ -45,115 +40,7 @@ import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import { prepareTalkClientToolContext } from "./client-tool-authority.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
-const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
-  const [embeddedAgent, admission] = await Promise.all([
-    import("../../agents/embedded-agent.js"),
-    import("../../agents/admitted-run-context.js"),
-  ]);
-  return {
-    runEmbeddedAgent: embeddedAgent.runEmbeddedAgent,
-    createOperationalRunInstanceRef: admission.createOperationalRunInstanceRef,
-    prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
-  };
-});
-
 type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
-
-function createTalkClientAgentRuntime(params: {
-  config: OpenClawConfig;
-  rawSourceRef?: string;
-  runAuthority?: TalkClientRunAuthority;
-  assertCurrent?: () => void;
-  bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
-}) {
-  const agentRuntime = createPluginRuntime().agent;
-  const runEmbeddedAgent: typeof agentRuntime.runEmbeddedAgent = async (runParams) => {
-    const config = runParams.config ?? params.config;
-    runParams.abortSignal?.throwIfAborted();
-    const { agentId, sessionId, sessionKey, storePath } = runParams.sessionTarget ?? {};
-    if (!agentId || !sessionId || !sessionKey || !storePath) {
-      throw new Error("Talk consult requires its prepared transcript target");
-    }
-    // Accept under the live voice owner, then retain the run before lazy loading.
-    // Transport detachment releases that owner, not this accepted execution.
-    params.assertCurrent?.();
-    const retained = await params.runAuthority?.retainRun(runParams.runId);
-    try {
-      runParams.abortSignal?.throwIfAborted();
-      const execution = await loadTalkAgentExecution();
-      runParams.abortSignal?.throwIfAborted();
-      const operationalRunInstance = execution.createOperationalRunInstanceRef(runParams.runId);
-      params.bindOperationalRunInstance?.(operationalRunInstance);
-      const preparedRunAdmission = execution.prepareAgentRunAdmission({
-        cfg: config,
-        operationalRunInstance,
-        assertSourceCurrent: retained?.assertSourceCurrent,
-        operatorAuthority: retained?.authority,
-        facts: {
-          runId: runParams.runId,
-          agentId,
-          ingress: {
-            kind: "gateway-client",
-            boundary: "talk-agent-consult",
-            state: "present",
-            ...(params.rawSourceRef ? { rawSourceRef: params.rawSourceRef } : {}),
-          },
-        },
-      });
-      let closed = false;
-      const close = () => {
-        if (!closed) {
-          closed = true;
-          preparedRunAdmission.close();
-        }
-      };
-      // Abort owns authority revocation independently of core completion; the
-      // post-registration check closes the prepare-to-listener race.
-      runParams.abortSignal?.addEventListener("abort", close, { once: true });
-      try {
-        runParams.abortSignal?.throwIfAborted();
-        // Provider-owned work can outlive or replace its audio transport. Unlike
-        // chat-backed Talk, it has no independent Chat terminal delivery; hiding
-        // its final transcript would lose the answer when no spoken replacement arrives.
-        return await execution.runEmbeddedAgent({
-          ...runParams,
-          preparedRunAdmission,
-          // Speech is mirrored separately. Keep generated input in current-turn custody,
-          // but never display it or replay it as a later user request.
-          userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-            input: {
-              text: runParams.prompt,
-              display: false,
-              excludeFromContext: true,
-              idempotencyKey: buildRunUserTurnIdempotencyKey(runParams.runId),
-            },
-            target: {
-              agentId,
-              sessionId,
-              sessionKey,
-              storePath,
-              expectedSessionId: sessionId,
-              sessionEntry: undefined,
-              config,
-              cwd: runParams.workspaceDir,
-            },
-          }),
-        });
-      } finally {
-        runParams.abortSignal?.removeEventListener("abort", close);
-        close();
-      }
-    } finally {
-      retained?.release();
-    }
-  };
-  Object.defineProperty(agentRuntime, "runEmbeddedAgent", {
-    configurable: true,
-    enumerable: true,
-    value: runEmbeddedAgent,
-  });
-  return agentRuntime;
-}
 
 export function prepareTalkClientControlAuthority(params: {
   config: OpenClawConfig;
@@ -195,11 +82,14 @@ export function createTalkClientAgentConsultRunner(params: {
   authority?: TalkAgentConsultAuthority;
   runAuthority?: TalkClientRunAuthority;
   getVoiceSessionId: () => string | undefined;
+  getVoiceSessionSource?: () => ClientVoiceSessionSource | undefined;
   initialItems: Array<{ role: "user" | "assistant"; text: string }>;
   runIdPrefix?: string;
   surface?: string;
-  registerRun?: (params: { runId: string }) => void;
-  isRunCurrent?: (runId: string) => boolean;
+  registerRun?: (params: {
+    runId: string;
+    assertCurrent: () => void;
+  }) => Promise<{ release: () => void; isCurrent: () => boolean }>;
 }) {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const getConfig = () => params.context.getRuntimeConfig?.() ?? params.config;
@@ -270,22 +160,32 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     await ready?.();
     signal?.throwIfAborted();
+    const physicalSource = params.getVoiceSessionSource?.();
+    if (params.getVoiceSessionSource && !physicalSource) {
+      throw new Error("Realtime browser voice session is not ready for agent consult");
+    }
+    let assertRunRegistrationCurrent: (() => void) | undefined;
+    const assertConsultCurrent = () => {
+      assertCurrent?.();
+      physicalSource?.assertCurrent();
+      assertRunRegistrationCurrent?.();
+    };
     // Readiness can outlive its physical browser owner. Recheck after that
     // suspension and keep this path synchronous until backend admission.
-    assertCurrent?.();
+    assertConsultCurrent();
     // Relays own admission before their lazy record registration. Browser callbacks
     // must validate the durable call before accepting a new run.
     if (!params.registerRun) {
-      assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId });
+      assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId }, physicalSource);
     }
     const runtime = owner
-      ? createOwnedAgentRuntime(owner, assertCurrent)
-      : assertCurrent
+      ? createOwnedAgentRuntime(owner, assertConsultCurrent)
+      : assertCurrent || physicalSource || params.ownerConnId || params.registerRun
         ? createTalkClientAgentRuntime({
             config: getConfig(),
             runAuthority: params.runAuthority,
             ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
-            assertCurrent,
+            assertCurrent: assertConsultCurrent,
           })
         : getAgentRuntime();
     const talkConfig = normalizeTalkSection(config.talk);
@@ -343,48 +243,25 @@ export function createTalkClientAgentConsultRunner(params: {
             };
           },
           abortSignal: signal,
-          onRunStarted: ({ runId, sessionId, timeoutMs }) => {
-            if (owner) {
+          onRunStarted: async ({ runId, sessionId, timeoutMs }) => {
+            let registeredRun: { release: () => void; isCurrent: () => boolean } | undefined;
+            const assertRunCurrent = () => {
+              signal?.throwIfAborted();
+              if (registeredRun && !registeredRun.isCurrent()) {
+                throw new Error("The active Talk consult admission is no longer current");
+              }
               if (
-                promptOwner !== owner ||
-                owner.requestSignal?.aborted === true ||
-                !isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) ||
-                params.getVoiceSessionId() !== voiceSessionId
+                owner &&
+                (promptOwner !== owner ||
+                  owner.requestSignal?.aborted === true ||
+                  !isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) ||
+                  params.getVoiceSessionId() !== voiceSessionId)
               ) {
                 throw new Error("The active Talk consult admission is no longer current");
               }
-            }
-            if (params.registerRun) {
-              params.registerRun({ runId });
-            } else {
-              registerClientVoiceConsultRun({
-                agentId,
-                sessionKey,
-                voiceSessionId,
-                runId,
-                config: getConfig(),
-              });
-            }
-            if (owner) {
-              assertCurrent?.();
-              owner.identity = { runId, sessionId };
-              owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
-              if (owner.requesterFinal) {
-                const requesterFinal = owner.requesterFinal;
-                const registration = registerRequesterFinalAttachment({
-                  requesterAgentId: agentId,
-                  requesterSessionKey: canonicalKey,
-                  requesterSessionId: sessionId,
-                  requesterTurnRunId: runId,
-                  lifecycleGeneration: owner.lifecycleGeneration,
-                  timeoutMs,
-                  append: (text) => requesterFinal.append(text),
-                });
-                owner.requesterFinalRegistration = registration;
-                requesterFinalRegistration = registration;
-              }
-              void owner.completionClaim.registered.then(owner.resolveRegistration);
-            }
+            };
+            assertConsultCurrent();
+            assertRunCurrent();
             const registration = params.ownerConnId
               ? registerChatAbortController({
                   chatAbortControllers: params.context.chatAbortControllers,
@@ -398,32 +275,92 @@ export function createTalkClientAgentConsultRunner(params: {
                   kind: "chat-send",
                 })
               : undefined;
-            if (owner) {
-              const entry = registration?.entry;
-              const generation = entry?.lifecycleGeneration;
-              owner.cleanup = registration?.cleanup;
-              owner.signal = entry?.controller.signal;
-              owner.isCurrent = (resolvedSessionId) =>
-                params.getVoiceSessionId() === voiceSessionId &&
-                (!params.ownerConnId ||
-                  (params.context.chatAbortControllers.get(runId) === entry &&
-                    entry?.controller.signal.aborted === false &&
-                    entry.ownerConnId === params.ownerConnId &&
-                    entry.sessionId === sessionId &&
-                    entry.sessionKey === canonicalKey &&
-                    entry.registrationCleanupRequested !== true &&
-                    generation !== undefined &&
-                    entry.lifecycleGeneration === generation &&
-                    isAgentEventLifecycleGenerationCurrent(generation))) &&
-                (resolvedSessionId === undefined || resolvedSessionId === sessionId) &&
-                (params.isRunCurrent?.(runId) ?? true);
-            }
-            return registration
-              ? {
-                  abortSignal: registration.controller.signal,
-                  cleanup: owner ? undefined : registration.cleanup,
+            const entry = registration?.entry;
+            const generation = entry?.lifecycleGeneration;
+            const isChatRegistrationCurrent = () =>
+              !params.ownerConnId ||
+              (params.context.chatAbortControllers.get(runId) === entry &&
+                entry?.controller.signal.aborted === false &&
+                entry.ownerConnId === params.ownerConnId &&
+                entry.sessionId === sessionId &&
+                entry.sessionKey === canonicalKey &&
+                entry.registrationCleanupRequested !== true &&
+                generation !== undefined &&
+                entry.lifecycleGeneration === generation &&
+                isAgentEventLifecycleGenerationCurrent(generation));
+            assertRunRegistrationCurrent = () => {
+              assertRunCurrent();
+              if (!isChatRegistrationCurrent()) {
+                throw new Error("The active Talk consult admission is no longer current");
+              }
+            };
+            let releaseVoice: void | (() => void) = undefined;
+            try {
+              assertRunRegistrationCurrent();
+              if (params.registerRun) {
+                registeredRun = await params.registerRun({
+                  runId,
+                  assertCurrent: assertConsultCurrent,
+                });
+                releaseVoice = registeredRun.release;
+              } else {
+                releaseVoice = await registerClientVoiceConsultRun({
+                  agentId,
+                  sessionKey,
+                  voiceSessionId,
+                  runId,
+                  config: getConfig(),
+                  physicalSource,
+                  assertCurrent: assertConsultCurrent,
+                });
+              }
+              assertConsultCurrent();
+              if (owner) {
+                assertConsultCurrent();
+                owner.identity = { runId, sessionId };
+                owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
+                if (owner.requesterFinal) {
+                  const requesterFinal = owner.requesterFinal;
+                  const finalRegistration = registerRequesterFinalAttachment({
+                    requesterAgentId: agentId,
+                    requesterSessionKey: canonicalKey,
+                    requesterSessionId: sessionId,
+                    requesterTurnRunId: runId,
+                    lifecycleGeneration: owner.lifecycleGeneration,
+                    timeoutMs,
+                    append: (text) => requesterFinal.append(text),
+                  });
+                  owner.requesterFinalRegistration = finalRegistration;
+                  requesterFinalRegistration = finalRegistration;
                 }
-              : undefined;
+                void owner.completionClaim.registered.then(owner.resolveRegistration);
+              }
+              if (owner) {
+                owner.cleanup = registration?.cleanup;
+                owner.signal = entry?.controller.signal;
+                owner.isCurrent = (resolvedSessionId) =>
+                  params.getVoiceSessionId() === voiceSessionId &&
+                  isChatRegistrationCurrent() &&
+                  (resolvedSessionId === undefined || resolvedSessionId === sessionId) &&
+                  (registeredRun?.isCurrent() ?? true);
+              }
+              return {
+                cleanupBeforeRun: releaseVoice || undefined,
+                ...(registration
+                  ? {
+                      abortSignal: registration.controller.signal,
+                      cleanup: owner ? undefined : registration.cleanup,
+                    }
+                  : {}),
+              };
+            } catch (error) {
+              try {
+                releaseVoice?.();
+              } finally {
+                registration?.cleanup();
+              }
+              throw error;
+            }
           },
         }),
       )
@@ -520,7 +457,9 @@ export function createTalkClientAgentConsultRunner(params: {
       runTarget: {
         runId: identity.runId,
         signal: ownerSignal,
-        isCurrent: (sessionId) => isOwnerCurrent(owner, sessionId),
+        isCurrent: (sessionId) =>
+          isOwnerCurrent(owner, sessionId) &&
+          completionClaim.resolveCurrentRegistration() !== undefined,
       },
       getToolAuthorityOverlay: () => {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
@@ -530,21 +469,27 @@ export function createTalkClientAgentConsultRunner(params: {
         if (!registration) {
           throw new Error("The active Talk consult backend is no longer current");
         }
-        const overlay = prepareTalkClientControlAuthority({
+        return prepareTalkClientControlAuthority({
           config: getConfig(),
           sessionTarget: params.sessionTarget,
           authority,
           source: registration.toolAuthority.source,
           agentRuntime: getAgentRuntime(),
         });
-        const projected = registration.toolAuthority.project(overlay);
+      },
+      prepareToolAuthorityOverlay: async (overlay) => {
+        const registration = completionClaim.resolveCurrentRegistration();
+        if (!registration) {
+          throw new Error("The active Talk consult backend is no longer current");
+        }
+        const projected = await registration.toolAuthority.projectAsync(overlay);
         if (
           !projected ||
+          !isOwnerCurrent(owner, identity.sessionId) ||
           completionClaim.resolveCurrentRegistration()?.toolAuthority !== registration.toolAuthority
         ) {
           throw new Error("The active Talk consult caller authority no longer matches");
         }
-        return overlay;
       },
       text: prompt,
       createUserTurnTranscriptRecorder:

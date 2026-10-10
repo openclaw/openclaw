@@ -145,52 +145,70 @@ it("converts legacy stores once, preserves canonical rowids/search, and enables 
   });
 });
 
-it.each([1, 2])("does not rewrite an existing auto-vacuum=%s store", async (mode) => {
-  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
-    const { shared } = await seed(state);
-    const db = openNodeSqliteDatabase(shared);
-    db.exec(`PRAGMA auto_vacuum=${mode}; VACUUM;`);
-    db.close();
-    const before = fs.readFileSync(shared);
-    await expect(convert(state)).resolves.toEqual({ warnings: [] });
-    expect(fs.readFileSync(shared)).toEqual(before);
-    expect(inspect(shared).mode).toBe(mode);
-  });
-});
-
-it.each([1, 2])("defers a replaced auto-vacuum=%s path after the read-only close", async (mode) => {
-  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
-    const { shared } = await seed(state);
-    const replacement = state.path("legacy-replacement.sqlite");
-    const original = state.path("enabled-original.sqlite");
-    fs.copyFileSync(shared, replacement);
-    const replacementBytes = fs.readFileSync(replacement);
-    const enabled = openNodeSqliteDatabase(shared);
-    enabled.exec(`PRAGMA auto_vacuum=${mode}; VACUUM;`);
-    enabled.close();
-    const open = nodeSqlite.openNodeSqliteDatabase;
-    let replaced = false;
-    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-      const database = open(pathname, options);
-      if (options?.readOnly && pathname === shared && !replaced) {
-        const close = database.close.bind(database);
-        vi.spyOn(database, "close").mockImplementation(() => {
-          close();
-          fs.renameSync(shared, original);
-          fs.renameSync(replacement, shared);
-          replaced = true;
+it.each([
+  { mode: 1, replaceAfter: "none" },
+  { mode: 1, replaceAfter: "read" },
+  { mode: 0, replaceAfter: "write" },
+])(
+  "preserves auto-vacuum=$mode data across $replaceAfter path replacement",
+  async ({ mode, replaceAfter }) => {
+    await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+      const { shared } = await seed(state);
+      const replacement = state.path("replacement.sqlite");
+      const original = state.path("original.sqlite");
+      fs.copyFileSync(shared, replacement);
+      const replacementBytes = fs.readFileSync(replacement);
+      if (mode !== 0) {
+        const enabled = openNodeSqliteDatabase(shared);
+        enabled.exec(`PRAGMA auto_vacuum=${mode}; VACUUM;`);
+        enabled.close();
+      }
+      const before = fs.readFileSync(shared);
+      if (replaceAfter === "none") {
+        await expect(convert(state)).resolves.toEqual({ warnings: [] });
+        expect(fs.readFileSync(shared)).toEqual(before);
+        expect(inspect(shared).mode).toBe(mode);
+        return;
+      }
+      const open = nodeSqlite.openNodeSqliteDatabase;
+      let replaced = false;
+      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
+        const database = open(pathname, options);
+        const replace =
+          replaceAfter === "read"
+            ? options?.readOnly && pathname === shared
+            : replaceAfter === "write" && !options?.readOnly && pathname.startsWith("file:");
+        if (replace && !replaced) {
+          const close = database.close.bind(database);
+          vi.spyOn(database, "close").mockImplementation(() => {
+            close();
+            fs.renameSync(shared, original);
+            fs.renameSync(replacement, shared);
+            replaced = true;
+          });
+        }
+        return database;
+      });
+      const result = await convert(state).catch((error: unknown) => error);
+      expect(replaced).toBe(true);
+      expect(fs.readFileSync(shared)).toEqual(replacementBytes);
+      expect(inspect(shared).mode).toBe(0);
+      if (replaceAfter === "read") {
+        expect(inspect(original).mode).toBe(mode);
+        expect(result).toEqual({
+          warnings: [expect.stringContaining("database file identity changed")],
+        });
+      } else {
+        expect(inspect(original)).toMatchObject({ mode: 2, integrity: "ok" });
+        expect(result).toBeInstanceOf(DoctorMaintenanceRefusalError);
+        expect(classifyDoctorMaintenanceRefusal(result)).toEqual({
+          kind: "data-at-risk",
+          reason: "incomplete-migration",
         });
       }
-      return database;
     });
-    const result = await convert(state);
-    expect(replaced).toBe(true);
-    expect(inspect(original).mode).toBe(mode);
-    expect(fs.readFileSync(shared)).toEqual(replacementBytes);
-    expect(inspect(shared).mode).toBe(0);
-    expect(result.warnings).toEqual([expect.stringContaining("database file identity changed")]);
-  });
-});
+  },
+);
 
 it.each(["low", "unknown"])(
   "defers optional conversion with %s capacity without rewriting data",
@@ -280,41 +298,6 @@ it("preserves real integrity failure as unsafe when cancellation arrives with it
       interruption,
     ]);
     expect(inspect(shared).mode).toBe(0);
-  });
-});
-
-it("rejects a pathname replacement after the native compactor closes", async () => {
-  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
-    const { shared } = await seed(state);
-    const replacement = state.path("replacement.sqlite");
-    const converted = state.path("converted.sqlite");
-    fs.copyFileSync(shared, replacement);
-    const replacementBytes = fs.readFileSync(replacement);
-    const open = nodeSqlite.openNodeSqliteDatabase;
-    let replaced = false;
-    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-      const database = open(pathname, options);
-      if (!options?.readOnly && pathname.startsWith("file:")) {
-        const close = database.close.bind(database);
-        vi.spyOn(database, "close").mockImplementation(() => {
-          close();
-          fs.renameSync(shared, converted);
-          fs.renameSync(replacement, shared);
-          replaced = true;
-        });
-      }
-      return database;
-    });
-    const result = await convert(state).catch((error: unknown) => error);
-    expect(replaced).toBe(true);
-    expect(inspect(converted)).toMatchObject({ mode: 2, integrity: "ok" });
-    expect(fs.readFileSync(shared)).toEqual(replacementBytes);
-    expect(inspect(shared).mode).toBe(0);
-    expect(result).toBeInstanceOf(DoctorMaintenanceRefusalError);
-    expect(classifyDoctorMaintenanceRefusal(result)).toEqual({
-      kind: "data-at-risk",
-      reason: "incomplete-migration",
-    });
   });
 });
 

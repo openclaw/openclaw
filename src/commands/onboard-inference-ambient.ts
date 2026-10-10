@@ -30,21 +30,19 @@ export function detectAmbientInferenceBackends(
   env: NodeJS.ProcessEnv = process.env,
 ): InferenceBackendCandidate[] {
   const candidates: InferenceBackendCandidate[] = [];
-  if (env.OPENAI_API_KEY?.trim()) {
+  for (const [provider, label, modelRef] of [
+    ["openai", "OpenAI", OPENAI_API_DEFAULT_MODEL_REF],
+    ["anthropic", "Anthropic", ANTHROPIC_API_DEFAULT_MODEL_REF],
+  ] as const) {
+    const envVar = `${provider.toUpperCase()}_API_KEY`;
+    if (!env[envVar]?.trim()) {
+      continue;
+    }
     candidates.push({
-      kind: "openai-api-key",
-      modelRef: OPENAI_API_DEFAULT_MODEL_REF,
-      label: "OpenAI API key",
-      detail: "OPENAI_API_KEY set",
-      credentials: true,
-    });
-  }
-  if (env.ANTHROPIC_API_KEY?.trim()) {
-    candidates.push({
-      kind: "anthropic-api-key",
-      modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
-      label: "Anthropic API key",
-      detail: "ANTHROPIC_API_KEY set",
+      kind: `${provider}-api-key`,
+      modelRef,
+      label: `${label} API key`,
+      detail: `${envVar} set`,
       credentials: true,
     });
   }
