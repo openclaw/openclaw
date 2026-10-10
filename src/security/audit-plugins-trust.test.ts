@@ -121,6 +121,7 @@ vi.mock("../config/commands.js", () => ({
   }) => providerSetting === true || (providerSetting === undefined && globalSetting === true),
 }));
 
+// mock-isolation: Trust findings use fixture channels without loading installed channel runtimes.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: async () => mockChannelPlugins,
 }));
