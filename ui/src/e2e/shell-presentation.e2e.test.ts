@@ -82,7 +82,7 @@ suite.define(() => {
             .click();
           if (width < 900) {
             await page.locator(".shell--nav-drawer-open").waitFor();
-            await saveFrame(page, `${prefix}-drawer-open`, [shell, sidebar]);
+            await saveFrame(page, `${prefix}-drawer-open`, [shell, sidebar.locator(".sidebar")]);
             await page.keyboard.press("Escape");
             await expect
               .poll(() => shell.getAttribute("class"))
