@@ -1,5 +1,4 @@
 import { initialState, Task } from "@lit/task";
-import type { ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -26,7 +25,9 @@ export class ConfigStatusController<Result> {
   readonly task;
 
   constructor(
-    private readonly host: ReactiveControllerHost & { isConnected: boolean },
+    private readonly host: ConstructorParameters<typeof GatewayPageController>[0] & {
+      isConnected: boolean;
+    },
     private readonly options: ConfigStatusOptions<Result>,
   ) {
     this.gateway = new GatewayPageController(host, {
