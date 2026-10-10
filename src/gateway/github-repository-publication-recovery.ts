@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
+import { readGitHubPublicationInWorker } from "../state/github-publication-worker.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -301,7 +302,6 @@ export function createRepositoryGitHubPublicationRecovery(params: {
             { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
             async (assertCurrent) => {
               row = await requireRepositoryGitHubPublicationInWorker(row.request_id);
-              assertCurrent();
               if (terminalRepositoryGitHubPublication(row)) {
                 return;
               }
@@ -309,7 +309,6 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               // observation is recorded. Only then may recovery retire its authority.
               const workspaceId = row.workspace_id;
               const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-              assertCurrent();
               row = await requireRepositoryGitHubPublicationInWorker(row.request_id);
               assertCurrent();
               if (terminalRepositoryGitHubPublication(row)) {
@@ -322,11 +321,8 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               }
               const owner = resolveReceiptOwner(row, preparedOwner);
               if (!owner) {
-                const assertRecovery = () => {
-                  params.assertCurrent();
-                  assertCurrent();
-                };
-                await failStaleRepositoryGitHubPublicationAsync(row, assertRecovery);
+                // Keep the reservation through settlement; retirement needs only owner custody.
+                await failStaleRepositoryGitHubPublicationAsync(row, params.assertCurrent);
                 return;
               }
               await params.execute(row, assertCurrent);
@@ -372,12 +368,11 @@ export function createRepositoryGitHubPublicationRecovery(params: {
 async function readRepositoryGitHubPublicationInWorker(
   requestId: string,
 ): Promise<RepositoryGitHubPublicationRow | undefined> {
-  const result = await executeExistingOpenClawStateRead(
-    {},
-    { type: "githubRepository.request", requestId },
-    { current: true },
-  );
-  if (!result?.ok || result.type !== "githubRepository.request") {
+  const result = await readGitHubPublicationInWorker({
+    type: "githubPublications.repositoryRead",
+    input: { requestId },
+  });
+  if (result?.type !== "githubPublications.repositoryRead") {
     throw new Error("GitHub repository publication receipt is unavailable.");
   }
   return result.row;

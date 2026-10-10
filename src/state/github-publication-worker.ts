@@ -10,8 +10,12 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
-import type { PublicationMutationReceipt } from "./github-publication-worker.types.js";
+import type {
+  PublicationMutationReceipt,
+  PublicationReadOperations,
+} from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
+import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
@@ -24,6 +28,20 @@ type MutationCommand = SqliteWorkerCommand<
     | "githubPublications.insert"
   >
 >;
+
+export async function readGitHubPublicationInWorker(
+  command: SqliteWorkerCommand<PublicationReadOperations>,
+) {
+  const context = captureOpenClawStateReadWorkerContext();
+  const captured = structuredClone(command);
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute(captured),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  return result;
+}
 
 /** A publication execution retains FIFO writes through native settlement. */
 export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerContext) {
