@@ -11,6 +11,7 @@ import {
   prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { migrateLegacyCronRunLogsToTaskRuns } from "./state-migrations.cron-run-logs.js";
 
 const CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID = "state:cron-run-logs-to-task-runs:v1";
 
@@ -211,5 +212,132 @@ describe("cron run-log task import", () => {
         ).toEqual({ report_json: report.report_json });
       },
     );
+  });
+
+  it("imports legacy cron history when task_runs predates detail_json", () => {
+    const database = new DatabaseSync(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE task_runs (
+          task_id TEXT NOT NULL PRIMARY KEY,
+          runtime TEXT NOT NULL,
+          task_kind TEXT,
+          source_id TEXT,
+          requester_session_key TEXT,
+          owner_key TEXT NOT NULL,
+          scope_kind TEXT NOT NULL,
+          child_session_key TEXT,
+          parent_flow_id TEXT,
+          parent_task_id TEXT,
+          agent_id TEXT,
+          requester_agent_id TEXT,
+          run_id TEXT,
+          label TEXT,
+          task TEXT NOT NULL,
+          status TEXT NOT NULL,
+          delivery_status TEXT NOT NULL,
+          notify_policy TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          started_at INTEGER,
+          ended_at INTEGER,
+          last_event_at INTEGER,
+          cleanup_after INTEGER,
+          error TEXT,
+          progress_summary TEXT,
+          terminal_summary TEXT,
+          terminal_outcome TEXT
+        );
+        CREATE TABLE cron_run_logs (
+          store_key TEXT NOT NULL,
+          job_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          ts INTEGER NOT NULL,
+          entry_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (store_key, job_id, seq)
+        );
+        CREATE TABLE migration_runs (
+          id TEXT NOT NULL PRIMARY KEY,
+          started_at INTEGER NOT NULL,
+          finished_at INTEGER,
+          status TEXT NOT NULL,
+          report_json TEXT NOT NULL
+        );
+      `);
+      database
+        .prepare(
+          `INSERT INTO task_runs (
+             task_id, runtime, owner_key, scope_kind, task, status, delivery_status,
+             notify_policy, created_at, error
+           ) VALUES (?, 'subagent', 'owner', 'session', 'kept', 'succeeded', 'pending', 'silent', 10, ?)`,
+        )
+        .run("kept-subagent", "do-not-drop");
+      database
+        .prepare(
+          `INSERT INTO task_runs (
+             task_id, runtime, source_id, owner_key, scope_kind, task, status,
+             delivery_status, notify_policy, created_at, ended_at
+           ) VALUES (?, 'cron', 'legacy-job', '', 'system', 'legacy-job', 'succeeded',
+             'not_applicable', 'silent', 1000, 1100)`,
+        )
+        .run("preexisting-cron");
+      database
+        .prepare(
+          `INSERT INTO cron_run_logs (store_key, job_id, seq, ts, entry_json, created_at)
+           VALUES ('store', 'legacy-job', 1, 2100, ?, 2100)`,
+        )
+        .run(
+          JSON.stringify({
+            action: "finished",
+            jobId: "legacy-job",
+            ts: 2100,
+            status: "ok",
+            summary: "legacy one",
+            runAtMs: 2000,
+            durationMs: 100,
+          }),
+        );
+
+      database.exec("BEGIN IMMEDIATE");
+      expect(migrateLegacyCronRunLogsToTaskRuns(database)).toEqual({
+        imported: 1,
+        alreadyMirrored: 0,
+        malformed: 0,
+        skipped: false,
+      });
+      database.exec("COMMIT");
+
+      const columns = database.prepare("PRAGMA table_info(task_runs)").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.map((column) => column.name)).toContain("detail_json");
+      expect(
+        database.prepare("SELECT error FROM task_runs WHERE task_id = 'kept-subagent'").get(),
+      ).toEqual({ error: "do-not-drop" });
+      expect(
+        database.prepare("SELECT task_id FROM task_runs WHERE task_id = 'preexisting-cron'").get(),
+      ).toEqual({ task_id: "preexisting-cron" });
+      const imported = database
+        .prepare(
+          "SELECT source_id, detail_json FROM task_runs WHERE task_id = 'cron-runlog-import:legacy-job:2100:1'",
+        )
+        .get() as { source_id: string; detail_json: string };
+      expect(imported.source_id).toBe("legacy-job");
+      expect(JSON.parse(imported.detail_json)).toMatchObject({
+        kind: "cron-run",
+        summary: "legacy one",
+        storeKey: "store",
+      });
+      expect(
+        database
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs'")
+          .get(),
+      ).toBeUndefined();
+      expect(database.prepare("SELECT COUNT(*) AS count FROM task_runs").get()).toEqual({
+        count: 3,
+      });
+    } finally {
+      database.close();
+    }
   });
 });

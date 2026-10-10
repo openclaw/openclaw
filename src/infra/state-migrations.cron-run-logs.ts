@@ -63,6 +63,23 @@ export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
   );
 }
 
+/** Nullable detail_json for pre-2026.9.8 task_runs. Physical probe; do not create the table. */
+function ensureTaskRunDetailJsonColumn(db: DatabaseSync): void {
+  const table = db
+    .prepare(
+      "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'task_runs' LIMIT 1",
+    )
+    .get() as { ok?: number } | undefined;
+  if (!table) {
+    return;
+  }
+  const columns = db.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name?: string }>;
+  if (columns.some((column) => column.name === "detail_json")) {
+    return;
+  }
+  db.exec("ALTER TABLE task_runs ADD COLUMN detail_json TEXT");
+}
+
 function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]> {
   const rows = db
     .prepare(
@@ -141,6 +158,7 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
     return { imported: 0, alreadyMirrored: 0, malformed: 0, skipped: true };
   }
 
+  ensureTaskRunDetailJsonColumn(db);
   const mirrored = collectMirroredTasks(db);
   const ordinals = new Map<string, number>();
   const insert = db.prepare(`
