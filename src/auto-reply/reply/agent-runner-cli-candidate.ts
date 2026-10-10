@@ -393,6 +393,17 @@ export async function runCliFallbackCandidate(
             timeoutMs: turn.followupRun.run.timeoutMs,
             runTimeoutOverrideMs: turn.followupRun.run.runTimeoutOverrideMs,
             runId: params.runId,
+            // requireExplicitMessageTarget for heartbeat turns is already applied by
+            // buildFallbackCandidateTurnParams above; heartbeat one-shot CLI runs also
+            // force live-session and bundle-MCP cleanup and run as a single shot so an
+            // isolated heartbeat run can't leak a child process until Gateway restart.
+            ...(turn.isHeartbeat
+              ? {
+                  cleanupCliLiveSessionOnRunEnd: true,
+                  cleanupBundleMcpOnRunEnd: true,
+                  oneShotCliRun: true,
+                }
+              : {}),
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,
             cliSessionBindingFacts: turn.followupRun.run.cliSessionBindingFacts,
             cliSessionId: cliSessionBinding?.sessionId,

@@ -760,35 +760,56 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("requires explicit message targets on heartbeat CLI runs", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "sonnet-4.6";
-    const params = createMinimalRunAgentTurnParams({
-      followupRun,
-      opts: { isHeartbeat: true },
-    });
-    params.isHeartbeat = true;
+  it.each(["completed", "failed", "cancelled"] as const)(
+    "closes %s heartbeat CLI resources and requires explicit message targets",
+    async (outcome) => {
+      state.isCliProviderMock.mockReturnValue(true);
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run(
+            "claude-cli",
+            "sonnet-4.6",
+            initialFallbackAttemptOptions(params),
+          ),
+          provider: "claude-cli",
+          model: "sonnet-4.6",
+          attempts: [],
+        }),
+      );
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "final" }],
+        meta: {},
+      });
+      if (outcome !== "completed") {
+        state.runCliAgentMock
+          .mockReset()
+          .mockRejectedValueOnce(
+            outcome === "cancelled"
+              ? createAgentRunDirectAbortError()
+              : new Error("CLI attempt failed"),
+          );
+      }
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "claude-cli";
+      followupRun.run.model = "sonnet-4.6";
+      const params = createMinimalRunAgentTurnParams({
+        followupRun,
+        opts: { isHeartbeat: true },
+      });
+      params.isHeartbeat = true;
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(params);
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn(params);
 
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      trigger: "heartbeat",
-      requireExplicitMessageTarget: true,
-    });
-  });
+      expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+        cleanupCliLiveSessionOnRunEnd: true,
+        trigger: "heartbeat",
+        requireExplicitMessageTarget: true,
+        oneShotCliRun: true,
+        cleanupBundleMcpOnRunEnd: true,
+      });
+    },
+  );
 
   it("requires explicit message targets on heartbeat embedded runs", async () => {
     // Heartbeat ambient From/To must not become implicit message-tool recipients.
@@ -814,6 +835,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "heartbeat embedded run params", {
       trigger: "heartbeat",
       requireExplicitMessageTarget: true,
+      oneShotCliRun: true,
+      cleanupBundleMcpOnRunEnd: true,
     });
   });
 
@@ -896,6 +919,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       "ordinary embedded run params",
     )[0] as Record<string, unknown>;
     expect(embeddedParams).not.toHaveProperty("requireExplicitMessageTarget");
+    expect(embeddedParams.oneShotCliRun).not.toBe(true);
+    expect(embeddedParams.cleanupBundleMcpOnRunEnd).not.toBe(true);
   });
 
   it("registers run ownership before asynchronous image preflight", async () => {

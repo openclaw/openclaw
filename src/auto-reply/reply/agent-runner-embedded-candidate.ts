@@ -141,6 +141,11 @@ export async function runEmbeddedFallbackCandidate(
         sandboxSessionKey: turn.runtimePolicySessionKey,
         explicitSkillSelections: turn.followupRun.explicitSkillSelections,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        // requireExplicitMessageTarget for heartbeat turns is already applied by
+        // buildFallbackCandidateTurnParams above; heartbeat one-shot embedded runs
+        // also force bundle-MCP cleanup and run as a single shot so an isolated
+        // heartbeat run can't leak a child process until Gateway restart.
+        ...(turn.isHeartbeat ? { cleanupBundleMcpOnRunEnd: true, oneShotCliRun: true } : {}),
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
