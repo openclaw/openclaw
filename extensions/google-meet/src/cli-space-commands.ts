@@ -199,7 +199,7 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
     addGoogleMeetMeetingOption(
       root
         .command("resolve-space")
-        .description("Resolve a Meet URL, meeting code, or spaces/{id} to its canonical space"),
+        .description("Resolve a Meet URL, meeting code, or spaces/{id} to the matching space"),
     ),
   )
     .option("--json", "Print JSON output", false)

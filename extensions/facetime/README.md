@@ -79,7 +79,7 @@ tools, or modify TCC during automated validation.
 The privileged driver script pins BlackHole v0.7.1 and its SHA-256, builds the
 renamed `OpenClawBridge.driver` in a root-only temporary directory, and accepts
 no caller-built artifact, digest, or compiler path. Before compilation it
-requires the canonical Xcode bundle and its selected build tools to be
+requires the Xcode bundle at its actual filesystem path and its selected build tools to be
 Apple-signed, root-owned, and not group/world writable, then performs a
 transactional swap. Generated BlackHole/driver artifacts are GPL-3.0 and are
 excluded from the package. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
