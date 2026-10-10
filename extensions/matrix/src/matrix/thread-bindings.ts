@@ -594,7 +594,7 @@ export async function createMatrixThreadBindingManager(params: {
           const result = await store.compareAndApply(key, observation.comparison, {
             operation: "update",
             action: "set",
-            value: updated,
+            value: toPluginJsonValue(updated),
           });
           if (result.status === "conflict") {
             observation = result.current;
