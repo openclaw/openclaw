@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import fs from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializeSystemdEnvironmentFile } from "../../src/daemon/systemd-environment-files.js";
@@ -649,12 +650,28 @@ raise SystemExit(code if code >= 0 else 128 - code)
           busAddress: env.DBUS_SESSION_BUS_ADDRESS,
           invocationId: expect.stringMatching(/^[a-f0-9]{32}$/),
         });
-        const stopPolicy = (invocationId: string) =>
-          readSystemdStopTimeout({
-            ...env,
-            INVOCATION_ID: invocationId,
-            OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-          });
+        const stopPolicy = async (invocationId: string) => {
+          const readFile = fs.readFile;
+          // The reader runs in Vitest's cgroup, not the copied service's.
+          const membership = vi
+            .spyOn(fs, "readFile")
+            .mockImplementation((...args) =>
+              args[0] === "/proc/self/cgroup"
+                ? Promise.resolve(
+                    "0::/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway.service\n",
+                  )
+                : readFile(...args),
+            );
+          try {
+            return await readSystemdStopTimeout({
+              ...env,
+              INVOCATION_ID: invocationId,
+              OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+            });
+          } finally {
+            membership.mockRestore();
+          }
+        };
         const expectedStopPolicy = {
           timeoutMs: 330_000,
           source: "systemd user openclaw-gateway.service TimeoutStopUSec",
