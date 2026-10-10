@@ -4,6 +4,7 @@ packages:
   - packages/*
   - extensions/*
   - examples/*
+  - tools/solid-lint
 
 minimumReleaseAge: 10080
 minimumReleaseAgeStrict: true
