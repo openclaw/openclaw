@@ -262,6 +262,24 @@ remain preparation-only. Native activation requires explicit
 control database. No `openclaw.json` option enables it. `--no-restart` keeps an
 enabled installation preparation-only for that invocation.
 
+Immutable preparation requires a separately adopted build account and toolchain.
+The build account must differ from the runtime account, have no supplementary
+groups, and match the recorded numeric identity. The updater runs dependency
+installation and builds in a restricted systemd service with a private home,
+temporary directory, memory limit, and task limit. Its environment excludes the
+runtime account's credentials and its filesystem view protects runtime state,
+service definitions, and existing releases. The updater waits for the entire
+build cgroup to stop before copying and sealing the new generation as root.
+
+Build storage admission and the runtime account's write/quota probe run
+separately. A failed admission, installation, build, or process-settlement check
+leaves the existing service and `current` pointer unchanged. Uncertain process
+settlement retains the build scratch for inspection. Installations without an
+adopted build identity can still inspect status, reuse an already prepared
+generation, and detect an already-current target; preparing a new target reports
+the missing adoption. Build-identity adoption is staged for the native immutable
+update rollout and is not exposed as an `openclaw.json` setting or CLI flag yet.
+
 `--drain-timeout <seconds>` sets the immutable drain budget independently of
 `--timeout`, which retains the canary/readiness phase budget. The default drain
 budget comes from the existing restart deferral policy (300 seconds). Drain

@@ -9,6 +9,7 @@ import { inspectSystemdProcessMembershipSync } from "../daemon/service-process-m
 import { fingerprintGatewayServiceDefinition } from "../daemon/service-rebind.js";
 import type { GatewayServiceState, SystemdServiceIdentity } from "../daemon/service-types.js";
 import { withGatewayServiceUpdateAuthority } from "../daemon/service-update-authority.js";
+import { isSystemdControlGroupEmpty } from "../daemon/systemd-cgroup.js";
 import { execSystemctl } from "../daemon/systemd-exec.js";
 import { startSystemdService, stopSystemdService } from "../daemon/systemd-lifecycle.js";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../daemon/systemd-service-files.js";
 import { captureSystemdServiceIdentity } from "../daemon/systemd-service-identity.js";
 import { getProcessStartTime } from "../shared/pid-alive.js";
-import { hasErrnoCode } from "./errno.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 function showImmutableService(unit: string, properties: string) {
@@ -189,38 +189,6 @@ function assertOutsideService(controlGroup: string): void {
   }
 }
 
-function immutableCgroupEventsPath(controlGroup: string): string {
-  if (
-    !controlGroup.startsWith("/") ||
-    controlGroup === "/" ||
-    controlGroup
-      .split("/")
-      .slice(1)
-      .some((part) => !part || part === ".." || part === ".")
-  ) {
-    throw new Error("The immutable Gateway cgroup cannot be verified.");
-  }
-  return path.join("/sys/fs/cgroup", controlGroup, "cgroup.events");
-}
-
-function cgroupEmpty(controlGroup: string): boolean {
-  const file = immutableCgroupEventsPath(controlGroup);
-  try {
-    // cgroup v2 populated includes descendants, unlike MainPID or cgroup.procs.
-    const events = fsSync.readFileSync(file, "utf8");
-    const populated = /^populated ([01])$/mu.exec(events)?.[1];
-    if (populated === undefined) {
-      throw new Error("The immutable Gateway cgroup population is unavailable.");
-    }
-    return populated === "0";
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return true;
-    }
-    throw error;
-  }
-}
-
 /** Recorded process facts are evidence only; the executor supplies live authority. */
 export function assertImmutableServiceStoppedCurrent(
   observed: Pick<ImmutableServiceObservation, "pid" | "processStartTicks" | "controlGroup">,
@@ -234,7 +202,7 @@ export function assertImmutableServiceStoppedCurrent(
       throw new Error("The original immutable Gateway process is still alive.");
     }
   }
-  if (!cgroupEmpty(observed.controlGroup)) {
+  if (!isSystemdControlGroupEmpty(observed.controlGroup)) {
     throw new Error("The immutable Gateway cgroup is populated; pointer publication is refused.");
   }
   assertOutsideService(observed.controlGroup);
@@ -300,7 +268,7 @@ export async function inspectImmutableActivationService(params: {
       );
     }
     assertOutsideService(controlGroup);
-    if (cgroupEmpty(controlGroup)) {
+    if (isSystemdControlGroupEmpty(controlGroup)) {
       throw new Error("The running immutable Gateway requires an observable populated cgroup v2.");
     }
     assertCurrent();
@@ -314,7 +282,7 @@ export async function inspectImmutableActivationService(params: {
     !/^(?:0|)$/.test(properties.job ?? "missing")
   ) {
     throw new Error("The immutable Gateway is neither running nor fully stopped.");
-  } else if (controlGroup && !cgroupEmpty(controlGroup)) {
+  } else if (controlGroup && !isSystemdControlGroupEmpty(controlGroup)) {
     throw new Error("The stopped immutable Gateway still has processes in its cgroup.");
   }
   const phase = starting ? "starting" : pid === null ? "stopped" : "running";
@@ -481,7 +449,7 @@ export async function controlImmutableService(
             );
             assertCurrent();
             const current = parseKeyValueOutput(result.stdout, "=");
-            const empty = cgroupEmpty(expected.controlGroup);
+            const empty = isSystemdControlGroupEmpty(expected.controlGroup);
             assertCurrent();
             if (
               result.code === 0 &&

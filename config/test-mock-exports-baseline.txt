@@ -8714,7 +8714,6 @@
 ["src/infra/update-immutable-install.test.ts","./update-immutable-install-record.js","eb509461b62be1d63e0f9cfacabaa337864fa514f18c6fb6f750aad20a221eaf",1]
 ["src/infra/update-immutable-install.test.ts","./update-immutable-owner.js","51eccecb1a5de1c08486d1dcd0e446174a0bd9da4e7260653dc95dce12adf9d4",1]
 ["src/infra/update-immutable-install.test.ts","./update-immutable-service.js","2c3aae69ca67b6be7241c683f9a69ce7e9431470d6823305abf55c32dedd54a7",1]
-["src/infra/update-immutable-install.test.ts","./update-runner-git-preflight.js","036fc2a571c31ab14a1ffc04519a87b7594ba5082f7206677e30908ed91c9f01",1]
 ["src/infra/update-immutable-install.test.ts","./update-runner-git-target.js","2ee67527d7a4bfb22ebc067fad72bc3b4e521cb914092cd92410d0629ad655d1",1]
 ["src/infra/update-immutable-owner.test.ts","../cli/update-cli/update-command-executor.js","85edcbd3956baf7dd5eec281f98775e33f3f199555595f3869efbe79daa8fa57",1]
 ["src/infra/update-immutable-service.test.ts","../daemon/service-operation-lock.js","3d62879c34e2fc6bbffef8fc28e04ee574d9974b629e9e358b0eb459d163ca44",1]

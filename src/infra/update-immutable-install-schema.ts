@@ -16,6 +16,22 @@ const generation = z.strictObject({
   buildDigest: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
+const buildIdentity = z.strictObject({
+  account: z
+    .string()
+    .regex(/^[a-z_][a-z0-9_-]{0,31}$/u)
+    .refine((value) => value !== "root"),
+  uid: z.number().int().positive().max(2147483647),
+  gid: z.number().int().positive().max(2147483647),
+  toolchainPath: absolutePath,
+  resources: z.strictObject({
+    memoryMaxBytes: z.number().int().positive().safe(),
+    tasksMax: z.number().int().positive().max(65536),
+    buildFreeBytes: z.number().int().positive().safe(),
+    runtimeFreeBytes: z.number().int().positive().safe(),
+  }),
+});
+
 export const ImmutableInstallDescriptorSchema = z
   .strictObject({
     version: z.union([z.literal(1), z.literal(2)]),
@@ -38,6 +54,7 @@ export const ImmutableInstallDescriptorSchema = z
       identity: z.string().min(1).max(256),
     }),
     source: z.literal("https://github.com/openclaw/openclaw.git"),
+    build: buildIdentity.optional(),
   })
   .refine((value) => (value.version === 2) === (value.activationEnabled === true), {
     message: "Immutable activation requires an explicitly enabled version-2 adoption.",
