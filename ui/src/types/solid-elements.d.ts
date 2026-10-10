@@ -1,9 +1,10 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
+// Importing the module keeps this file a module, so the block below augments it.
+import "@solidjs/web";
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-tooltip": SolidJSX.HTMLAttributes<HTMLElement> & { "prop:content": string };
+      "openclaw-tooltip": HTMLAttributes<HTMLElement> & { "prop:content": string };
     }
   }
 }
