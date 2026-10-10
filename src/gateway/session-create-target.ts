@@ -51,13 +51,13 @@ export function prepareSessionCreateSource(
       : undefined;
   const source =
     incognitoSource && ("kind" in incognitoSource ? incognitoSource : incognitoSource.actor);
+  let assertCommitAllowed = commitGuard;
   if (incognitoSource && source) {
     if (source.agentId !== agentId) {
       return invalidSessionRequest("session creation belongs to another incognito actor");
     }
-    const assertCallerCurrent = commitGuard;
-    commitGuard = () => {
-      assertCallerCurrent?.();
+    assertCommitAllowed = () => {
+      commitGuard?.();
       incognitoSource.admissionSignal?.throwIfAborted();
       source.assertCurrent();
     };
@@ -95,13 +95,17 @@ export function prepareSessionCreateSource(
     }
     return {
       ok: true,
-      value: { incognitoStorePath: source?.path, boundInitialEntry, commitGuard },
+      value: {
+        incognitoStorePath: source?.path,
+        boundInitialEntry,
+        commitGuard: assertCommitAllowed,
+      },
     };
   };
   return incognitoSource && explicitTargetKey
     ? readSessionEntryReadOnlyInWorker(
         { agentId, sessionKey: explicitTargetKey },
-        commitGuard,
+        assertCommitAllowed,
       ).then(finish)
     : finish(undefined);
 }
