@@ -4,6 +4,7 @@ import path from "node:path";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
+import { captureScopes } from "../infra/update-recovery-backup-reader.js";
 import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
@@ -72,11 +73,25 @@ function classifyCapture(
   };
 }
 
-/** Lists every capture-root entry; anything not attributable to a finished run stays protected. */
+/** Lists every selected capture scope, including originals retained before state relocation. */
 export function collectUpdateCaptureInventory(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
 }) {
+  const artifacts: RecoveryCleanupArtifact[] = [];
+  const identities = new Map<string, CaptureIdentity>();
+  const scopes = new Set([params.stateDir, ...captureScopes(params.env).keys()]);
+  for (const stateDir of scopes) {
+    const inventory = collectCaptureRootInventory({ stateDir, env: params.env });
+    artifacts.push(...inventory.artifacts);
+    for (const [directory, identity] of inventory.identities) {
+      identities.set(directory, identity);
+    }
+  }
+  return { artifacts, identities };
+}
+
+function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.ProcessEnv }) {
   const root = resolveUpdateCaptureRoot(params.stateDir);
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();

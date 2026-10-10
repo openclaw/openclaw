@@ -27,6 +27,7 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   collectUpdateCaptureInventory,
   readCompletedUpdateHistory,
@@ -465,20 +466,25 @@ export function collectUpdateCleanupInventory(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }) {
-  const inventory = collectRecoveryInventory(params);
-  const captures = collectUpdateCaptureInventory({
-    stateDir: inventory.report.stateDir,
-    env: params.env,
-  });
-  return {
-    ...inventory,
-    captureIdentities: captures.identities,
-    report: summarizeRecoveryCleanup(
-      inventory.report.stateDir,
-      [...inventory.report.artifacts, ...captures.artifacts],
-      "preview",
-    ),
-  };
+  return withSynchronousArtifactPreservingStateSnapshot(
+    () => {
+      const inventory = collectRecoveryInventory(params);
+      const captures = collectUpdateCaptureInventory({
+        stateDir: inventory.report.stateDir,
+        env: params.env,
+      });
+      return {
+        ...inventory,
+        captureIdentities: captures.identities,
+        report: summarizeRecoveryCleanup(
+          inventory.report.stateDir,
+          [...inventory.report.artifacts, ...captures.artifacts],
+          "preview",
+        ),
+      };
+    },
+    { current: { env: params.env } },
+  );
 }
 
 export function inspectSessionSqliteRecovery(params: {

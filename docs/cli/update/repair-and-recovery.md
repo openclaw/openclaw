@@ -813,7 +813,8 @@ transaction and are outside this migration cleanup. An interrupted entry in upda
 history does not block cleanup of otherwise eligible migration archives.
 
 Original-state update captures in `<state-directory>.update-captures/` are listed
-as well, one artifact per capture directory with its logical bytes. The text
+as well, including captures retained beside the previous default state directory
+after migration. Each capture directory reports its logical bytes. The text
 summary adds an `Update captures:` line with their total, candidate, and protected
 bytes. Cleanup attributes a capture only through its run id in update history and
 never reads the captured payload:

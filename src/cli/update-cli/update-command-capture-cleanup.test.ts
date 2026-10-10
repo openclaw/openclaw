@@ -41,46 +41,53 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
 /** Finished updates, one failed baseline, the latest update, a live run, and unattributed entries. */
 async function withCaptureHistory(
   run: (captures: Record<string, string>, root: string) => Promise<void>,
+  location: "current" | "pre-migration",
 ) {
-  // The capture root is a sibling of the state directory; keep both under one tracked parent.
-  const stateDir = path.join(fs.realpathSync(dirs.make("update-capture-cleanup-")), "state");
+  // Both current and pre-migration captures are siblings of their state directories.
+  const home = fs.realpathSync(dirs.make("update-capture-cleanup-"));
+  const stateDir = path.join(home, ".openclaw");
   fs.mkdirSync(stateDir);
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  await withEnvAsync(
-    { ...env, OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json") },
-    async () => {
-      const root = resolveUpdateCaptureRoot(stateDir);
-      fs.mkdirSync(root);
-      fs.writeFileSync(
-        path.join(root, UPDATE_CAPTURE_PRIVACY_MARKER),
-        UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
-      );
-      const clock = vi.spyOn(Date, "now");
-      const captures: Record<string, string> = {};
-      let now = Date.UTC(2026, 8, 30);
-      for (const [label, status, sealed] of [
-        ["superseded", "succeeded", true],
-        ["unsealed", "failed", false],
-        ["alreadyCurrent", "skipped", true],
-        ["failedBaseline", "failed", true],
-        ["latest", "succeeded", false],
-        ["unfinished", undefined, true],
-      ] as const) {
+  const env = {
+    HOME: home,
+    OPENCLAW_HOME: undefined,
+    OPENCLAW_PROFILE: undefined,
+    OPENCLAW_STATE_DIR: undefined,
+    OPENCLAW_CONFIG_PATH: undefined,
+  };
+  await withEnvAsync(env, async () => {
+    const root = resolveUpdateCaptureRoot(
+      location === "pre-migration" ? path.join(home, ".clawdbot") : stateDir,
+    );
+    fs.mkdirSync(root);
+    fs.writeFileSync(
+      path.join(root, UPDATE_CAPTURE_PRIVACY_MARKER),
+      UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+    );
+    const clock = vi.spyOn(Date, "now");
+    const captures: Record<string, string> = {};
+    let now = Date.UTC(2026, 8, 30);
+    for (const [label, status, sealed] of [
+      ["superseded", "succeeded", true],
+      ["unsealed", "failed", false],
+      ["alreadyCurrent", "skipped", true],
+      ["failedBaseline", "failed", true],
+      ["latest", "succeeded", false],
+      ["unfinished", undefined, true],
+    ] as const) {
+      clock.mockReturnValue((now += 60_000));
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+      if (status) {
         clock.mockReturnValue((now += 60_000));
-        const { runId } = createUpdateRun({ trigger: "cli" }, { env });
-        if (status) {
-          clock.mockReturnValue((now += 60_000));
-          finishUpdateRun(runId, { status }, { env });
-        }
-        captures[label] = writeCapture(root, runId, sealed);
+        finishUpdateRun(runId, { status }, { env });
       }
-      clock.mockRestore();
-      captures.unattributed = writeCapture(root, "doctor-unrecorded", true);
-      captures.unmarked = writeCapture(root, "c0ffee00-0000-4000-8000-000000000000", true, false);
-      closeOpenClawStateDatabaseForTest();
-      await run(captures, root);
-    },
-  );
+      captures[label] = writeCapture(root, runId, sealed);
+    }
+    clock.mockRestore();
+    captures.unattributed = writeCapture(root, "doctor-unrecorded", true);
+    captures.unmarked = writeCapture(root, "c0ffee00-0000-4000-8000-000000000000", true, false);
+    closeOpenClawStateDatabaseForTest();
+    await run(captures, root);
+  });
 }
 
 async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
@@ -146,29 +153,35 @@ const expectedPreview = (captures: Record<string, string>) => ({
   },
 });
 
-it("previews update captures with their classification and bytes without removing them", async () => {
-  await withCaptureHistory(async (captures) => {
-    const preview = await runCleanup({ dryRun: true });
-    expect(preview).toEqual({ status: "preview", captures: expectedPreview(captures) });
-    for (const directory of Object.values(captures)) {
-      expect(fs.existsSync(directory)).toBe(true);
-    }
-  });
-});
+it.each(["current", "pre-migration"] as const)(
+  "previews %s update captures with their classification and bytes without removing them",
+  async (location) => {
+    await withCaptureHistory(async (captures) => {
+      const preview = await runCleanup({ dryRun: true });
+      expect(preview).toEqual({ status: "preview", captures: expectedPreview(captures) });
+      for (const directory of Object.values(captures)) {
+        expect(fs.existsSync(directory)).toBe(true);
+      }
+    }, location);
+  },
+);
 
-it("removes only candidate captures and keeps latest, unfinished, and unattributed ones", async () => {
-  await withCaptureHistory(async (captures, root) => {
-    const result = await runCleanup({ yes: true });
-    expect(result.status).toBe("complete");
-    const preview = expectedPreview(captures);
-    for (const [directory, item] of Object.entries(preview)) {
-      expect(result.captures[directory]).toEqual(
-        item.outcome === "candidate"
-          ? { outcome: "removed", reason: "update-capture-retired", bytes: item.bytes }
-          : item,
-      );
-      expect(fs.existsSync(directory)).toBe(item.outcome !== "candidate");
-    }
-    expect(fs.existsSync(path.join(root, UPDATE_CAPTURE_PRIVACY_MARKER))).toBe(true);
-  });
-});
+it.each(["current", "pre-migration"] as const)(
+  "removes only %s candidate captures and keeps protected captures",
+  async (location) => {
+    await withCaptureHistory(async (captures, root) => {
+      const result = await runCleanup({ yes: true });
+      expect(result.status).toBe("complete");
+      const preview = expectedPreview(captures);
+      for (const [directory, item] of Object.entries(preview)) {
+        expect(result.captures[directory]).toEqual(
+          item.outcome === "candidate"
+            ? { outcome: "removed", reason: "update-capture-retired", bytes: item.bytes }
+            : item,
+        );
+        expect(fs.existsSync(directory)).toBe(item.outcome !== "candidate");
+      }
+      expect(fs.existsSync(path.join(root, UPDATE_CAPTURE_PRIVACY_MARKER))).toBe(true);
+    }, location);
+  },
+);

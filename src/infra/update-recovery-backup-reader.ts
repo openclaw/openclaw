@@ -83,7 +83,7 @@ async function fileDigest(pathname: string): Promise<{ size: number; sha256: str
 
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 
-function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
+export function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
   const selectedStateDir = resolvePathViaExistingAncestorSync(resolveStateDir(env));
   const selectedConfigPath = canonicalEntryPath(resolveConfigPath(env));
   const scopes = new Map([[selectedStateDir, new Set([selectedConfigPath])]]);
