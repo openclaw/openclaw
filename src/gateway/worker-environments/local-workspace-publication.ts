@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Selectable } from "kysely";
 import { hasSqliteCommitReceiptCoverage } from "../../infra/sqlite-commit-receipt.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { createStateDomainPublication } from "../../state/state-domain-publication.js";
-import type { LocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
+
+type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]>;
 
 function isRow(value: unknown): value is LocalWorkspaceProjection {
   return (

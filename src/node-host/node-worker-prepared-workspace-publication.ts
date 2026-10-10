@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Selectable } from "kysely";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { createStateDomainPublication } from "../state/state-domain-publication.js";
-import type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.kernel.js";
+
+type NodeWorkerPreparedWorkspaceRow = Selectable<DB["node_worker_prepared_workspaces"]>;
 
 export const nodePreparedWorkspacePublication =
   createStateDomainPublication<NodeWorkerPreparedWorkspaceRow>({
