@@ -25,9 +25,12 @@ const participants = createTranscriptMemo<{
 const forwardedGroups = createTranscriptMemo<boolean>();
 
 export function resolveTranscriptParticipants(
-  props: Pick<ChatThreadProps, "selectedSession" | "userId" | "messages" | "pendingInputs">,
+  props: Pick<
+    ChatThreadProps,
+    "selectedSession" | "transcriptMetadata" | "userId" | "messages" | "pendingInputs"
+  >,
 ) {
-  const activeSession = props.selectedSession;
+  const activeSession = props.transcriptMetadata ?? props.selectedSession;
   const sessionParticipants = activeSession?.expandedParticipants ?? activeSession?.participants;
   // Pending-input lists are freshly filtered by renderChat; their immutable
   // records, not that temporary array, identify the unfiltered inputs.
@@ -92,11 +95,11 @@ export function isTranscriptGlobalAlias(
 }
 
 export function resolveTranscriptAvatarPlacement(
-  props: Pick<ChatThreadProps, "selectedSession" | "sessionKey" | "userId">,
+  props: Pick<ChatThreadProps, "selectedSession" | "transcriptMetadata" | "sessionKey" | "userId">,
   chatItems: ReturnType<typeof buildCachedChatItems>,
   isGlobalAliasKey: boolean,
 ): { isDirectThread: boolean; avatarPlacement: "none" | "footer" | "gutter" } {
-  const activeSession = props.selectedSession;
+  const activeSession = props.transcriptMetadata ?? props.selectedSession;
   // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
   // multiple voices. The capped sessions list may omit the selected row, so absent
   // or unknown rows classify by key, with global aliases taking precedence.
