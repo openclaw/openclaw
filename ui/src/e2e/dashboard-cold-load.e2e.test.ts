@@ -89,6 +89,14 @@ suite.define(() => {
           .frameLocator("iframe")
           .getByText("All systems ready")
           .waitFor();
+        await page.locator(".chat-panel-swap").click();
+        await expect
+          .poll(() =>
+            page
+              .locator("openclaw-board-view")
+              .evaluate((view) => view.closest("[data-region]")?.getAttribute("data-region")),
+          )
+          .toBe("main");
         // Observe the browser cache owner's completed write before exercising reload.
         await expect
           .poll(() =>
