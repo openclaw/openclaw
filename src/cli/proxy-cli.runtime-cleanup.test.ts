@@ -204,7 +204,7 @@ describe("proxy command cleanup errors", () => {
       await command;
       throw new Error("Proxy child has no parent signal handler");
     }
-    onSigterm();
+    onSigterm("SIGTERM");
     await command;
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(order).toEqual(["signal", "stop", "session", "release"]);

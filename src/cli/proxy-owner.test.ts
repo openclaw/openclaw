@@ -174,21 +174,21 @@ describe("standalone proxy owner routing", () => {
               distWorkerPath: "proxy-capture/child-transport.process.test-support.js",
             }),
           );
-          const childEnv = {
-            PATH: process.env.PATH,
-            HOME: childRoot,
-            USERPROFILE: childRoot,
-            SystemRoot: process.env.SystemRoot,
-            ...applyDebugProxyEnv(
-              { OPENCLAW_STATE_DIR: childRoot },
-              {
-                proxyUrl: server.proxyUrl,
-                sessionId: settings.sessionId,
-                certDir: settings.certDir,
-              },
-            ),
-            ...server.captureEnv,
-          };
+          const childEnv = applyDebugProxyEnv(
+            {
+              PATH: process.env.PATH,
+              HOME: childRoot,
+              USERPROFILE: childRoot,
+              SystemRoot: process.env.SystemRoot,
+              OPENCLAW_STATE_DIR: childRoot,
+            },
+            {
+              proxyUrl: server.proxyUrl,
+              sessionId: settings.sessionId,
+              certDir: settings.certDir,
+            },
+          );
+          Object.assign(childEnv, server.captureEnv);
           expect(resolveDebugProxySettings(childEnv).proxyUrl).toBe(server.proxyUrl);
           expect(childEnv.HTTP_PROXY).toBe(server.proxyUrl);
           expect(childEnv.HTTPS_PROXY).toBe(server.proxyUrl);
