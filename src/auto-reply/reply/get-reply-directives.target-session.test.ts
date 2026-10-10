@@ -225,7 +225,7 @@ vi.mock("./groups.js", () => ({
   resolveGroupRequireMention: (params: unknown) => mocks.resolveGroupRequireMention(params),
 }));
 
-// mock-isolation: Keep catalog loading and session persistence outside directive routing tests.
+// mock-isolation: Directive routing uses prepared model state, not live catalog/auth discovery.
 vi.mock("./model-selection.js", () => ({
   createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
 }));

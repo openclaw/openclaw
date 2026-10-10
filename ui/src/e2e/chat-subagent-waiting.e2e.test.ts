@@ -146,6 +146,23 @@ suite.define(() => {
           .waitFor();
         expect(await indicator.textContent()).not.toContain("Waiting on");
         // Its launch row reads as the subagent: its name, not its assignment, and its state.
+        const activityRow = activePane.locator(`[data-subagent-session-key="${child.key}"]`);
+        await activityRow.getByText("Backend implementation", { exact: true }).waitFor();
+        const childHistoryReads = () =>
+          gateway.getRequests("chat.history", { sessionKey: child.key });
+        expect(await childHistoryReads()).toHaveLength(0);
+        await gateway.emitGatewayEvent("session.observer", {
+          sessionKey: child.key,
+          agentId: "main",
+          sessionId: child.sessionId,
+          runId: "backend-run",
+          revision: 1,
+          updatedAt: now + 1,
+          health: "on-track",
+          headline: "Verifying the API response",
+        });
+        await activityRow.getByText("Verifying the API response", { exact: true }).waitFor();
+        expect(await childHistoryReads()).toHaveLength(0);
         const launchRow = activePane.locator(".chat-tool-row--subagent");
         const launchName = launchRow.locator(".chat-tool-row__subagent-link");
         const launchState = launchRow.locator(".chat-tool-row__subagent-state");
@@ -332,7 +349,7 @@ suite.define(() => {
           ".chat-pane-cache__pane--active .chat-pane__session-title-text",
         );
         const detailTitle = panel.locator(".chat-subagent-detail__title");
-        await childLink.click();
+        await activityRow.getByRole("button").click();
         await expect.poll(() => detailTitle.textContent()).toBe("Backend implementation");
         expect(await selectedTitle.textContent()).toBe("Build the implementation");
         await childLink.waitFor();

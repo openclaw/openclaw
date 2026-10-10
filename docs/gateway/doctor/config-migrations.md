@@ -28,6 +28,20 @@ the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
 
+## Claude CLI model routing
+
+Claude CLI sign-in now writes `agents.defaults.models["anthropic/*"]` with the
+`claude-cli` runtime. Configs from earlier sign-ins pinned only the Claude models
+that sign-in added, so other Claude models fell back to the API route and failed
+without an Anthropic credential. The Anthropic plugin's Doctor repair adds the
+wildcard when the default model is an Anthropic model whose entry pins
+`claude-cli`, no `anthropic/*` entry exists, no provider-level Anthropic runtime
+is set, and no Anthropic credential is configured (auth profile, provider API
+key, `ANTHROPIC_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`). An API default model with
+a Claude CLI fallback is left unchanged, and an existing `anthropic/*` entry is
+never replaced. Updates run the same repair through the backed-up Doctor config
+write; `openclaw doctor` without `--fix` reports it.
+
 ## Command-owner target kinds
 
 Doctor preserves `commands.ownerAllowFrom` target kinds declared by channel plugins.

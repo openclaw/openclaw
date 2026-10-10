@@ -89,7 +89,7 @@ configurations and cached custom models remain supported.
 
 The chat download also includes your configured local embedding model, or
 EmbeddingGemma by default (about 0.3 GB). Leave additional disk space for the
-runtime and download staging. Setup checks this before offering a new model.
+runtime and download staging. Setup checks this before offering a recommended model.
 When the cache and runtime use independent volumes, setup checks each volume's
 free space separately. Shared storage pools and volumes whose independence cannot
 be established use a combined reserve.
@@ -200,6 +200,13 @@ Add a model under `models.providers.llama-cpp.models`, select its
 URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
+
+Setup keeps the selected authored model even when it is not cached. It shows
+the download size from the pinned recipe or source metadata when available and
+asks before downloading. Invalid sources produce a model-specific error instead
+of a different recommendation. Declining leaves the configured routes unchanged.
+The hardware recommendation applies when no managed chat models are configured;
+custom models remain subject to the source's checksum and runtime verification.
 
 ## Existing llama-server
 

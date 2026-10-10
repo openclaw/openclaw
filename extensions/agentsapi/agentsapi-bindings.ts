@@ -2,7 +2,11 @@ import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionDeletionParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingLifecycle } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import {
+  createNativeSessionBindingLifecycle,
+  isNativeSessionDeletionUnresolved,
+  wrapNativeSessionDeletionMutation,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   bindingSchema,
@@ -16,11 +20,12 @@ export type { AgentsApiBinding } from "./agentsapi-binding-record.js";
 /** Native identity is plugin-owned; shared runtime owns mutation and lease coordination. */
 export function createAgentsApiBindings(
   runtime: PluginRuntime,
-  executorCleanup?: {
+  nativeCleanup?: {
     settle: (
       localSessionId: string,
       binding: AgentsApiBinding,
       assertCurrent: () => void,
+      agentId?: string,
     ) => Promise<void>;
     retire: (
       localSessionId: string,
@@ -134,7 +139,11 @@ export function createAgentsApiBindings(
         ),
       );
     },
-    async reset(localSessionId: string, assertCurrent: () => void): Promise<void> {
+    async reset(
+      localSessionId: string,
+      assertCurrent: () => void,
+      agentId?: string,
+    ): Promise<void> {
       await lifecycle.withMutation(() =>
         lifecycle.withLease(
           localSessionId,
@@ -145,14 +154,16 @@ export function createAgentsApiBindings(
               assertLeaseCurrent();
             };
             const binding = nativeBinding(readRecord(state.lookup(localSessionId)));
-            if (binding?.executor) {
-              if (!executorCleanup) {
-                throw new Error("Agents API self-hosted executor cleanup is unavailable");
+            if (binding) {
+              if (!nativeCleanup) {
+                throw new Error("Agents API native session cleanup is unavailable");
               }
-              await executorCleanup.settle(localSessionId, binding, assertResetCurrent);
+              await nativeCleanup.settle(localSessionId, binding, assertResetCurrent, agentId);
               assertResetCurrent();
-              await executorCleanup.retire(localSessionId, binding, assertResetCurrent);
-              assertResetCurrent();
+              if (binding.executor) {
+                await nativeCleanup.retire(localSessionId, binding, assertResetCurrent);
+                assertResetCurrent();
+              }
             }
             await lifecycle.transact(
               localSessionId,
@@ -168,9 +179,19 @@ export function createAgentsApiBindings(
         ),
       );
     },
+    resolveContextResetSessionId(sessionId: string, previousSessionId?: string): string {
+      // Only the host-recorded predecessor can retain a binding across a history cut.
+      const raw = state.lookup(sessionId);
+      const current = readRecord(raw);
+      if (raw !== undefined && !current) {
+        throw new Error(`Invalid Agents API binding row: ${sessionId}`);
+      }
+      return current?.sessionId || !previousSessionId ? sessionId : previousSessionId;
+    },
     async withSessionDeletion<T>(
       params: AgentHarnessSessionDeletionParams,
       run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+      retireAfterCommit = false,
     ): Promise<T> {
       return await lifecycle.withDeletion(
         params.sessionId,
@@ -180,23 +201,50 @@ export function createAgentsApiBindings(
         },
         async (stored, mutation) => {
           const binding = nativeBinding(stored);
-          if (binding?.executor) {
+          if (binding) {
             const assertLeaseCurrent = lifecycle.captureLeaseAssertion(params.sessionId);
             const assertDeletionCurrent = () => {
               params.assertCurrent();
               assertLeaseCurrent();
             };
-            const cleanup = executorCleanup;
+            const cleanup = nativeCleanup;
             if (!cleanup) {
-              throw new Error("Agents API self-hosted executor cleanup is unavailable");
+              throw new Error("Agents API native session cleanup is unavailable");
             }
-            await cleanup.settle(params.sessionId, binding, assertDeletionCurrent);
+            await cleanup.settle(params.sessionId, binding, assertDeletionCurrent, params.agentId);
             assertDeletionCurrent();
-            // Give the controller a chance to stop its executor before deleting the binding.
-            await cleanup.retire(params.sessionId, binding, assertDeletionCurrent);
-            assertDeletionCurrent();
+            if (binding.executor && !retireAfterCommit) {
+              // Give the controller a chance to stop its executor before deleting the binding.
+              await cleanup.retire(params.sessionId, binding, assertDeletionCurrent);
+              assertDeletionCurrent();
+            }
           }
-          return await run(mutation);
+          if (!retireAfterCommit || !binding?.executor) {
+            return await run(mutation);
+          }
+          let committed = false;
+          try {
+            return await run(
+              wrapNativeSessionDeletionMutation(mutation, {
+                assertCurrent: params.assertCurrent,
+                committed: () => {
+                  committed = true;
+                },
+                rolledBack: () => {
+                  committed = false;
+                },
+              }),
+            );
+          } finally {
+            // A rejected/rolled-back cut keeps its executor. After confirmed commit
+            // the removed binding is captured here; its deleted lease cannot authorize
+            // cleanup, so only this still-active host mutation retains that custody.
+            if (committed && !isNativeSessionDeletionUnresolved(mutation)) {
+              params.assertCurrent();
+              await nativeCleanup!.retire(params.sessionId, binding, params.assertCurrent);
+              params.assertCurrent();
+            }
+          }
         },
       );
     },
