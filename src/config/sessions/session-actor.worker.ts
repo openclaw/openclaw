@@ -9,6 +9,7 @@ import {
   withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -175,10 +176,17 @@ export function createSessionActorWorker(
           return structuredClone(before.hot);
         }
         const outcome = context.writeTransaction(`session.actor.${phase}`, "Session actor", () => {
+          const admit = (stage: "transaction" | "commit", publication: unknown) => {
+            const revision = readSqliteNativeMutationRevision(opened.db);
+            withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
+            if (readSqliteNativeMutationRevision(opened.db) !== revision) {
+              throw new Error("Session actor database changed during authority admission");
+            }
+          };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
           const before = read(opened, target);
-          context.admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
+          admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
           if (
             command.input.expected !== undefined &&
             !isDeepStrictEqual(before.hot.version, command.input.expected)
@@ -204,13 +212,11 @@ export function createSessionActorWorker(
               return operation(opened);
             },
             admit(stage, publication) {
-              withoutSqliteDatabaseWriteScope(opened.db, () =>
-                context.admit(stage, {
-                  kind: "session-actor-admission",
-                  snapshot: projectSessionActorHotState(working),
-                  publication,
-                }),
-              );
+              admit(stage, {
+                kind: "session-actor-admission",
+                snapshot: projectSessionActorHotState(working),
+                publication,
+              });
             },
           };
           return withSessionActorTransactionState(opened, working, () => {
@@ -299,13 +305,11 @@ export function createSessionActorWorker(
             } else {
               deferSqliteWorkerCommitReceipt(opened.db, accepted);
             }
-            withoutSqliteDatabaseWriteScope(opened.db, () =>
-              context.admit("commit", {
-                kind: "session-actor-admission",
-                snapshot: projectSessionActorHotState(working),
-                final: true,
-              }),
-            );
+            admit("commit", {
+              kind: "session-actor-admission",
+              snapshot: projectSessionActorHotState(working),
+              final: true,
+            });
             return accepted;
           });
         });
