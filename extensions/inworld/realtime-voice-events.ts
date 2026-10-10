@@ -149,15 +149,7 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
           );
         }
         const audio = Buffer.from(canonicalAudio, "base64");
-        if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
-          this.assistantAudioItem = {
-            itemId: event.item_id,
-            bytes: audio.byteLength,
-            startTimestamp: this.latestMediaTimestamp,
-          };
-        } else if (this.assistantAudioItem) {
-          this.assistantAudioItem.bytes += audio.byteLength;
-        }
+        this.recordAssistantAudio(event.item_id, audio.byteLength);
         this.responseActive = true;
         const markName = this.createPlaybackMark();
         this.config.onAudio(audio, event.item_id ? { itemId: event.item_id } : undefined);

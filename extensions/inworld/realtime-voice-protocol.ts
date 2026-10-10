@@ -47,6 +47,7 @@ export abstract class InworldRealtimeVoiceProtocol {
   protected outputAudioGeneration = 0;
   private interruptingPlayback = false;
   protected assistantAudioItem: InworldAssistantAudioItem | null = null;
+  private readonly producedAudioItems = new Map<string, { bytes: number; generation: number }>();
   protected toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   protected deliveredToolCallKeys = new Set<string>();
   protected pendingToolResultAcks = new Set<string>();
@@ -126,6 +127,31 @@ export abstract class InworldRealtimeVoiceProtocol {
     return Math.min(producedAudioMs, playbackAudioMs);
   }
 
+  protected recordAssistantAudio(itemId: string | undefined, bytes: number): void {
+    if (itemId && this.config.getPlaybackState) {
+      const previous = this.producedAudioItems.get(itemId);
+      if (previous?.generation !== this.outputAudioGeneration) {
+        // Keep completed items only while the sink still has their playback. A
+        // reused ID in a successor response starts a new provider audio bound.
+        const pendingIds = new Set(this.config.getPlaybackState().map((item) => item.itemId));
+        for (const id of this.producedAudioItems.keys()) {
+          if (!pendingIds.has(id)) {
+            this.producedAudioItems.delete(id);
+          }
+        }
+      }
+      this.producedAudioItems.set(itemId, {
+        bytes: (previous?.generation === this.outputAudioGeneration ? previous.bytes : 0) + bytes,
+        generation: this.outputAudioGeneration,
+      });
+    }
+    if (itemId && itemId !== this.assistantAudioItem?.itemId) {
+      this.assistantAudioItem = { itemId, bytes, startTimestamp: this.latestMediaTimestamp };
+    } else if (this.assistantAudioItem) {
+      this.assistantAudioItem.bytes += bytes;
+    }
+  }
+
   private interruptPlayback(
     reason: "barge-in" | "server-vad-barge-in",
     options?: RealtimeVoiceBargeInOptions,
@@ -147,7 +173,23 @@ export abstract class InworldRealtimeVoiceProtocol {
         : item && hasLegacyPlayback
           ? [{ itemId: item.itemId, audioEndMs: this.audioEndMs(item) }]
           : [];
-      const playbackItems = playbackState.map(({ itemId, audioEndMs }) => ({ itemId, audioEndMs }));
+      const playbackItems = playbackState.map(({ itemId, audioEndMs }) => ({
+        itemId,
+        audioEndMs: this.config.getPlaybackState
+          ? Math.max(
+              0,
+              Math.min(
+                Number.isFinite(audioEndMs) ? Math.floor(audioEndMs) : 0,
+                Math.floor(
+                  realtimeVoiceAudioDurationMs(
+                    this.audioFormat,
+                    this.producedAudioItems.get(itemId)?.bytes ?? 0,
+                  ),
+                ),
+              ),
+            )
+          : audioEndMs,
+      }));
       const cancelResponse =
         reason === "barge-in" &&
         (this.responseActive || this.responseCreateInFlight || playbackItems.length > 0) &&
@@ -155,6 +197,7 @@ export abstract class InworldRealtimeVoiceProtocol {
       this.outputAudioGeneration += 1;
       this.markQueue = [];
       this.assistantAudioItem = null;
+      this.producedAudioItems.clear();
       if (this.responseActive || this.responseCreateInFlight) {
         this.responseCancelInFlight = true;
       }
@@ -361,6 +404,7 @@ export abstract class InworldRealtimeVoiceProtocol {
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
     this.assistantAudioItem = null;
+    this.producedAudioItems.clear();
     this.resetInputTranscripts();
     if (!options.preserveToolCallState) {
       this.pendingToolCallIds.clear();

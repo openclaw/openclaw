@@ -464,6 +464,63 @@ describe("buildInworldRealtimeVoiceProvider", () => {
     expect(onClearAudio).toHaveBeenCalledWith("barge-in");
   });
 
+  it.each([
+    { format: undefined, bytesPerMs: 8 },
+    { format: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, bytesPerMs: 48 },
+  ])(
+    "clamps native playback to each item's produced audio ($bytesPerMs bytes/ms)",
+    async ({ format, bytesPerMs }) => {
+      const playback = [
+        { itemId: "older-item", audioEndMs: 9000 },
+        { itemId: "current-item", audioEndMs: 6177 },
+      ];
+      const { bridge, socket } = await connect({
+        audioFormat: format,
+        getPlaybackState: () => playback,
+      });
+      socket.emitServer({ type: "response.created", response: { id: "r1" } });
+      audio(socket, "older-item", Buffer.alloc(1000 * bytesPerMs).toString("base64"));
+      responseDone(socket, "r1");
+      socket.emitServer({ type: "response.created", response: { id: "r2" } });
+      audio(socket, "current-item", Buffer.alloc(1000 * bytesPerMs).toString("base64"));
+      audio(socket, "current-item", Buffer.alloc(1619 * bytesPerMs).toString("base64"));
+      bridge.handleBargeIn?.({ audioPlaybackActive: true });
+      expect(sent(socket, "conversation.item.truncate")).toEqual([
+        {
+          type: "conversation.item.truncate",
+          item_id: "older-item",
+          content_index: 0,
+          audio_end_ms: 1000,
+        },
+        {
+          type: "conversation.item.truncate",
+          item_id: "current-item",
+          content_index: 0,
+          audio_end_ms: 2619,
+        },
+      ]);
+    },
+  );
+
+  it("resets the produced bound when a successor response reuses an item ID", async () => {
+    const playback = [{ itemId: "reused-item", audioEndMs: 6177 }];
+    const { socket } = await connect({ getPlaybackState: () => playback });
+    socket.emitServer({ type: "response.created", response: { id: "r1" } });
+    audio(socket, "reused-item", Buffer.alloc(8000 * 8).toString("base64"));
+    responseDone(socket, "r1");
+    socket.emitServer({ type: "response.created", response: { id: "r2" } });
+    audio(socket, "reused-item", Buffer.alloc(2619 * 8).toString("base64"));
+    socket.emitServer({ type: "input_audio_buffer.speech_started" });
+    expect(sent(socket, "conversation.item.truncate")).toEqual([
+      {
+        type: "conversation.item.truncate",
+        item_id: "reused-item",
+        content_index: 0,
+        audio_end_ms: 2619,
+      },
+    ]);
+  });
+
   it("reports the response outcome and an unexpected close as terminal", async () => {
     const onResponseDone = vi.fn();
     const onClose = vi.fn();
