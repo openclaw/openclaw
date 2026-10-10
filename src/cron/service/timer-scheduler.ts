@@ -3,7 +3,7 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
-import { SqliteWorkerAdmissionTimeoutError } from "../../infra/sqlite-worker-operation-decision.js";
+import { SqliteWorkerAdmissionTimeoutError } from "../../infra/sqlite-worker-contract.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,

@@ -1,5 +1,5 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { SqliteWorkerAdmissionTimeoutError } from "../../infra/sqlite-worker-operation-decision.js";
+import { SqliteWorkerAdmissionTimeoutError } from "../../infra/sqlite-worker-contract.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,

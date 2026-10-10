@@ -16,6 +16,43 @@ import { settleSqliteWorkerOperationContext } from "./sqlite-worker-operation-se
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["transaction", "commit"] as const)(
+  "keeps a non-cron $stage write waiting past one second without an explicit deadline",
+  (stage) => {
+    const database = new DatabaseSync(":memory:");
+    database.exec("CREATE TABLE proof (value INTEGER)");
+    const admitted = vi.fn((_request, grant: () => boolean) => grant());
+    const admission = createSqliteWorkerOperationAdmission(admitted);
+    let now = process.hrtime.bigint();
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+    const wait = vi
+      .spyOn(Atomics, "wait")
+      .mockImplementationOnce(() => {
+        now += 2_000_000_000n;
+        return "timed-out";
+      })
+      .mockImplementationOnce(() => {
+        admission.service();
+        return "ok";
+      });
+    try {
+      withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+        runSqliteImmediateTransactionSync(database, () => {
+          database.exec("INSERT INTO proof VALUES (1)");
+          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+        }),
+      );
+      expect(wait).toHaveBeenCalledTimes(2);
+      expect(admitted).toHaveBeenCalledOnce();
+      expect(admission.failure).toBeUndefined();
+      expect(database.prepare("SELECT value FROM proof").all()).toEqual([{ value: 1 }]);
+    } finally {
+      admission.finish();
+      database.close();
+    }
+  },
+);
+
 it.each([
   { stage: "transaction", priorCommit: false },
   { stage: "commit", priorCommit: false },
@@ -52,7 +89,7 @@ it.each([
             writer.prepare("INSERT INTO proof VALUES (?)").run(value);
             deferSqliteWorkerCommitReceipt(writer, { value });
             if (requestAdmission) {
-              requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+              requestSqliteWorkerOperationAdmission({ stage, facts: undefined, deadlineMs: 1_000 });
             }
           }),
         ),
@@ -106,7 +143,11 @@ it("refuses a host grant whose policy preparation crosses the deadline", () => {
   try {
     expect(() =>
       withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined }),
+        requestSqliteWorkerOperationAdmission({
+          stage: "commit",
+          facts: undefined,
+          deadlineMs: 1_000,
+        }),
       ),
     ).toThrow(expect.objectContaining({ name: "SqliteWorkerAdmissionTimeoutError" }));
     expect(beforeRelease).not.toHaveBeenCalled();

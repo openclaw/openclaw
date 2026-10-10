@@ -34,11 +34,11 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
+import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
 import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
 import {
   withSqliteWorkerOperationAdmission,
   requestSqliteWorkerOperationAdmission,
-  exchangeSqliteDatabaseAdmissions,
 } from "./sqlite-worker-operation-admission.js";
 import {
   settleSqliteWorkerOperationContext,

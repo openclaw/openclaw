@@ -2560,13 +2560,14 @@ Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 Existing worker-local maintenance and synchronous offline/close checkpoints retain
 their owners; durability, schemas, retention, and update behavior are unchanged.
 
-Worker transaction and commit authority requests wait at most 1,000 ms for the
-retained host owner's grant. Cron's two handshakes therefore leave 3,000 ms of
+Worker authority requests retain their unbounded live-owner wait unless the caller
+explicitly supplies a `deadlineMs` budget. Only cron's runtime mutation preparation
+and outcome-retention calls opt in to 1,000 ms. Its two handshakes leave 3,000 ms of
 other writers' 5,000 ms busy budget for SQL and rollback. A timeout atomically
 cancels the request and throws a retryable admission error; the synchronous
 transaction rolls back before native settlement releases custody. The host ignores
-late requests and cannot grant a canceled request. Open and preparation requests
-keep their retained-owner wait because they do not hold the transaction writer.
+late requests and cannot grant a canceled request. Other transaction and commit
+callers, as well as open and preparation requests, keep their existing unbounded wait.
 The host still checks current authority before granting, and broker failure joins
 worker exit before releasing custody. Cron warns and retries through its scheduler,
 preserving startup recovery mode and durable reservation markers. Unknown outcomes

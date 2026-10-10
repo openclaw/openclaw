@@ -19,18 +19,14 @@ import {
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
   withSqliteDatabaseAdmissionExchange,
-  type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
+import { SqliteWorkerAdmissionTimeoutError, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import {
-  expireSqliteWorkerAdmissionDecision,
-  GRANTED,
-  isSqliteWorkerAdmissionMessage,
-  REFUSED,
-  REQUESTED,
-  requestSqliteWorkerAdmissionDecision,
-  type SqliteWorkerAdmissionRequest,
-} from "./sqlite-worker-operation-decision.js";
+  exchangeDatabaseAdmissions,
+  exchangeSqliteDatabaseAdmissions,
+  getSqliteDatabaseAdmissionUpstream,
+} from "./sqlite-worker-database-admission-relay.js";
 import {
   deferSqliteWorkerNativeCommitReceipt,
   readNativeCommitReceipt,
@@ -41,28 +37,17 @@ import {
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
 
-const admissionUpstream = resolveGlobalSingleton<{
-  connection?: { port: MessagePort; closed: boolean };
-}>(Symbol.for("openclaw.sqliteDatabaseAdmissionUpstream"), () => ({}));
+const REQUESTED = 0;
+const GRANTED = 1;
+const REFUSED = 2;
+const TIMED_OUT = 3;
 
-/** A served worker relays descendant facts through its existing lifetime channel. */
-export function bindSqliteDatabaseAdmissionUpstream(port: MessagePort): void {
-  const current = admissionUpstream.connection;
-  if (current) {
-    if (current.port !== port) {
-      throw new SqliteWorkerError("SQLite admission upstream changed owner", "closed");
-    }
-    return;
-  }
-  const connection = { port, closed: false };
-  admissionUpstream.connection = connection;
-  port.once("close", () => {
-    connection.closed = true;
-  });
-  port.unref();
-}
-
-export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-operation-decision.js";
+export type SqliteWorkerAdmissionRequest = {
+  stage: "open" | "prepare" | "transaction" | "commit";
+  facts: unknown;
+  /** Opt-in wait budget in milliseconds; omission retains the live-owner wait. */
+  deadlineMs?: number;
+};
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
 type DatabaseAuthority = {
@@ -283,7 +268,7 @@ function createOperationAdmission(
         if (closed) {
           throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
         }
-        const upstream = admissionUpstream.connection;
+        const upstream = getSqliteDatabaseAdmissionUpstream();
         if (upstream) {
           if (upstream.closed) {
             throw new SqliteWorkerError("SQLite admission upstream is closed", "closed");
@@ -355,12 +340,37 @@ function createOperationAdmission(
       };
       return;
     }
-    if (!isSqliteWorkerAdmissionMessage(message)) {
+    if (
+      !isRecord(message) ||
+      !(message.decision instanceof SharedArrayBuffer) ||
+      message.decision.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
+      (message.stage !== "open" &&
+        message.stage !== "prepare" &&
+        message.stage !== "transaction" &&
+        message.stage !== "commit")
+    ) {
       invalidProtocol("admission request", "unavailable");
       return;
     }
     const decision = new Int32Array(message.decision);
-    const expired = () => expireSqliteWorkerAdmissionDecision(decision, message);
+    const expired = () => {
+      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+        if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
+          Atomics.notify(decision, 0);
+        }
+      }
+      if (Atomics.load(decision, 0) !== TIMED_OUT) {
+        return false;
+      }
+      if (Array.isArray(message.ports)) {
+        for (const port of message.ports) {
+          if (port instanceof MessagePort) {
+            port.close();
+          }
+        }
+      }
+      return true;
+    };
     if (expired()) {
       // The worker has abandoned this request; even policy preparation must not run late.
       return;
@@ -597,55 +607,6 @@ export function withSqliteWorkerOperationAdmission<T>(
   }
 }
 
-/** Format facts use this private channel independently of transaction authority. */
-export function exchangeSqliteDatabaseAdmissions(
-  port: MessagePort,
-  admissions: SqliteDatabaseAdmissions,
-  location?: string,
-  create?: boolean,
-): SqliteDatabaseAdmissions {
-  return exchangeDatabaseAdmissions(port, admissions, location, create);
-}
-
-// Only a broker's live captured authority can originate an admitted creation relay.
-function exchangeDatabaseAdmissions(
-  port: MessagePort,
-  admissions: SqliteDatabaseAdmissions,
-  location?: string,
-  create?: boolean | "admitted",
-): SqliteDatabaseAdmissions {
-  const { port1, port2 } = new MessageChannel();
-  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  try {
-    port.postMessage(
-      {
-        kind: "sqlite-database-admissions",
-        admissions,
-        location,
-        create,
-        port: port2,
-        decision: decision.buffer,
-      },
-      [port2],
-    );
-    while (Atomics.load(decision, 0) === REQUESTED) {
-      Atomics.wait(decision, 0, REQUESTED);
-    }
-    if (Atomics.load(decision, 0) !== GRANTED) {
-      throw new SqliteWorkerError("SQLite admission facts exchange failed", "unavailable");
-    }
-    // The host posts the registry before publishing the shared completion flag.
-    const reply = readSqliteDatabaseAdmissions(receiveMessageOnPort(port1)?.message);
-    if (!reply) {
-      throw new SqliteWorkerError("SQLite admission facts reply is unavailable", "unavailable");
-    }
-    return reply;
-  } finally {
-    port1.close();
-    port2.close();
-  }
-}
-
 /** Record facts only after the real transaction commits, before native settlement is announced. */
 export function deferSqliteWorkerCommitReceipt(
   database: DatabaseSync,
@@ -682,8 +643,41 @@ export function requestSqliteWorkerOperationAdmission(
   if (scope.owner.sourceReservations) {
     throw new SqliteWorkerError("SQLite source reservations prohibit host admission", "closed");
   }
-  const refusal = requestSqliteWorkerAdmissionDecision(scope.port, request, transferList);
-  if (refusal) {
+  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const startedAt = Date.now();
+  const deadlineNs =
+    request.deadlineMs === undefined
+      ? undefined
+      : process.hrtime.bigint() + BigInt(request.deadlineMs) * 1_000_000n;
+  scope.port.postMessage(
+    {
+      ...request,
+      decision: decision.buffer,
+      deadlineNs,
+      ports: transferList.filter((value) => value instanceof MessagePort),
+    },
+    transferList,
+  );
+  // Cancellation revokes this request, never grants authority. Settlement still
+  // joins native rollback before the broker releases operation custody.
+  while (Atomics.load(decision, 0) === REQUESTED) {
+    const remainingMs =
+      deadlineNs === undefined ? undefined : Number(deadlineNs - process.hrtime.bigint()) / 1e6;
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT);
+    } else {
+      Atomics.wait(decision, 0, REQUESTED, remainingMs);
+    }
+  }
+  const timing = currentSqliteOperationTiming();
+  if (timing) {
+    timing.hostAdmissionWaitMs += Date.now() - startedAt;
+  }
+  if (Atomics.load(decision, 0) !== GRANTED) {
+    const refusal =
+      Atomics.load(decision, 0) === TIMED_OUT
+        ? new SqliteWorkerAdmissionTimeoutError()
+        : new SqliteWorkerError("SQLite transaction admission was refused", "closed");
     scope.owner.refusal = refusal;
     throw refusal;
   }
