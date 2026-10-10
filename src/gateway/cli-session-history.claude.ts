@@ -315,7 +315,7 @@ const SYSTEM_EVENT_BLOCK =
     .source;
 // At the very start, or right after OpenClaw's own fenced context block.
 const LEADING_SYSTEM_EVENTS = new RegExp(
-  `(^|${/⟦openclaw:ctx⟧\n```json\n[^\n]*\n```\n\n/u.source})${SYSTEM_EVENT_BLOCK}(?=\\S)`,
+  `^((?:${/(?:Conversation info: )?⟦openclaw:ctx⟧\n```json\n[^\n]*\n```\n\n/u.source})?)${SYSTEM_EVENT_BLOCK}(?=\\S)`,
   "u",
 );
 const INTERNAL_PROMPT_PREFIX = new RegExp(

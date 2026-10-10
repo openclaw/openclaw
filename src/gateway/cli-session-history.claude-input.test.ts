@@ -194,6 +194,7 @@ describe("Claude imported internal inputs", () => {
     "System: Please preserve this log\n\nExplain it",
     "System: Please explain this log\n\n[System] This is the line I am asking about.",
     "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
+    'Explain this log:\nConversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?',
   ])("leaves the look-alike human message %j untouched", (text) => {
     const message = importUnmatched(text);
     expect(message).toMatchObject({ content: text });
