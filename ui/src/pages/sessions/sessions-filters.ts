@@ -12,7 +12,6 @@ import {
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
-import type { SessionsProps } from "./view.ts";
 
 export type SessionsAdvancedFiltersProps = {
   activeMinutes: string;
@@ -187,7 +186,10 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
 
 export function handleSessionsSearchKeydown(
   event: KeyboardEvent,
-  props: Pick<SessionsProps, "sessionMenu" | "onSearchChange">,
+  props: {
+    sessionMenu: { key: string } | null;
+    onSearchChange: (query: string) => void;
+  },
 ) {
   // SAFETY: This listener is bound directly to the search input.
   const input = event.currentTarget as HTMLInputElement;
@@ -233,7 +235,12 @@ function setDropTargetActive(event: DragEvent, active: boolean) {
   );
 }
 
-export function categoryDropHandlers(props: SessionsProps, category: string | null) {
+export function categoryDropHandlers(
+  props: Pick<SessionsAdvancedFiltersProps, "groupBy" | "groupWriteDisabledReason"> & {
+    onAssignCategory: (key: string, category: string | null) => void;
+  },
+  category: string | null,
+) {
   if (props.groupBy !== "category" || props.groupWriteDisabledReason) {
     return { dragover: nothing, dragleave: nothing, drop: nothing } as const;
   }
