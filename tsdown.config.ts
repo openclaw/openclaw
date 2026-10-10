@@ -378,6 +378,7 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@openclaw/ai",
     // Its native loader resolves optional platform packages from the package scope.
     "@openclaw/fs-safe",
+    "@openclaw/proc-safe",
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",

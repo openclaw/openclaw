@@ -109,7 +109,9 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
     id !== "@openclaw/fs-safe" &&
-    !id.startsWith("@openclaw/fs-safe/");
+    !id.startsWith("@openclaw/fs-safe/") &&
+    id !== "@openclaw/proc-safe" &&
+    !id.startsWith("@openclaw/proc-safe/");
   const createInputPlugins = (outputPrefix: string) => {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
