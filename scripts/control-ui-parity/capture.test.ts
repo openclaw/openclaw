@@ -35,6 +35,8 @@ const suite = createControlUiE2eSuite({
       "--enable-features=CDPScreenshotNewSurface",
       "--force-color-profile=srgb",
       "--font-render-hinting=none",
+      "--disable-gpu",
+      "--num-raster-threads=1",
       "--disable-threaded-animation",
       "--run-all-compositor-stages-before-draw",
     ],
