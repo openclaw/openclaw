@@ -20,7 +20,10 @@ import {
   beginPluginStateMutation,
   capturePluginStateMutationSettlement,
 } from "./plugin-state-operation-epochs.js";
-import { withPluginStatePublication } from "./plugin-state-publication.js";
+import {
+  recordPluginStateReadDependency,
+  withPluginStatePublication,
+} from "./plugin-state-publication.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
 import type { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
@@ -47,6 +50,7 @@ type Input<Key extends keyof PluginStateWorkerOperations> =
 type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
   result: PluginStateWorkerRequests[Key]["output"],
 ) => boolean;
+type ReadDependency = { pluginId: string; namespace: string; keys: readonly string[] };
 
 type PluginStateCommandOrder = { ready: Promise<void> | undefined; finish?: () => void };
 
@@ -95,6 +99,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     assertCurrent?: () => void;
     isObservation?: ObservationCheck<Key>;
     existingOnly?: { missing: () => PluginStateWorkerRequests[Key]["output"] };
+    readDependency?: ReadDependency;
     onCommitted?: (facts: unknown) => void;
   } = {},
 ): Promise<PluginStateWorkerRequests[Key]["output"]> {
@@ -121,6 +126,14 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
+    if (checks.readDependency) {
+      const identity = context.admission.identity.key;
+      recordPluginStateReadDependency({
+        ...checks.readDependency,
+        identity: identity.startsWith("file:") ? identity : undefined,
+        assertCurrent: context.admission.assertCurrent,
+      });
+    }
     order = prepareCommandOrder(
       context.admission.coordinationKey,
       // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
@@ -255,6 +268,7 @@ function createOperation<
   type: Key,
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   isObservation?: ObservationCheck<Key>,
+  readDependency?: (params: Input<Key>) => ReadDependency,
 ) {
   return (params: Input<Key>): Promise<PluginStateWorkerRequests[Key]["output"]> => {
     // Host authority stays in the broker admission; only data crosses to the worker.
@@ -273,6 +287,7 @@ function createOperation<
       {
         assertCurrent,
         isObservation,
+        readDependency: readDependency?.(params),
       },
     );
   };
@@ -286,6 +301,7 @@ export const observePluginStateInWorker = createOperation(
   "pluginState.observe",
   undefined,
   () => true,
+  ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
 );
 export const comparePluginStateUpdateInWorker = createOperation(
   "pluginState.compareUpdate",
@@ -299,7 +315,13 @@ export const comparePluginStateDeleteInWorker = createOperation(
 );
 export const registerPluginStateIfAbsentInWorker = createOperation("pluginState.registerIfAbsent");
 export const deletePluginStateIfEqualInWorker = createOperation("pluginState.deleteIfEqual");
-export const lookupPluginStateInWorker = createOperation("pluginState.lookup", () => undefined);
+export const lookupPluginStateInWorker = createOperation(
+  "pluginState.lookup",
+  () => undefined,
+  undefined,
+  ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
+);
+
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
 ): Promise<Array<Result<unknown, PluginStateStoreError>>> {
@@ -312,6 +334,7 @@ export async function lookupManyPluginStateInWorker(
     { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
+    { readDependency: { pluginId: input.pluginId, namespace: input.namespace, keys: input.keys } },
   );
   return results.map((result) =>
     result.ok ? result : err(restorePluginStateWorkerFailure(result.error)),

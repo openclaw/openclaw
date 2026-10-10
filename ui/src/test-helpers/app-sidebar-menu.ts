@@ -3,6 +3,11 @@ import { expect } from "vitest";
 import type { SidebarLifecycleState } from "./app-sidebar.ts";
 import { waitForFast } from "./wait-for.ts";
 
+type SessionMenuHost = Pick<
+  SidebarLifecycleState,
+  "querySelector" | "updateComplete" | "sessionData"
+>;
+
 export function sessionMenuChoice(menu: Element, value: string) {
   const [kind, option] = value.split(":");
   const ids: Record<string, string> = {
@@ -21,7 +26,7 @@ export function sessionMenuChoice(menu: Element, value: string) {
   );
 }
 
-export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<HTMLElement> {
+export async function openSessionMenu(sidebar: SessionMenuHost): Promise<HTMLElement> {
   if (!sidebar.querySelector(".sidebar-session-sort-menu")) {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
     await sidebar.updateComplete;
@@ -33,7 +38,7 @@ export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<H
   return menu;
 }
 
-export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
+export async function activateSessionMenuValue(sidebar: SessionMenuHost, value: string) {
   const menu = await openSessionMenu(sidebar);
   if (
     value === "involving-me" ||
@@ -82,14 +87,15 @@ export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, v
     }
     // Lit's Node export disables Web Awesome's click listener in jsdom.
     // Browser tests cover that listener; this harness drives its change boundary.
-    group.value = input.getAttribute("value");
     await group.updateComplete;
+    // Author the value and its change event together; an intervening render can restore the old value.
+    group.value = input.getAttribute("value");
     group.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   }
   await sidebar.updateComplete;
 }
 
-export async function selectSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
+export async function selectSessionMenuValue(sidebar: SessionMenuHost, value: string) {
   await activateSessionMenuValue(sidebar, value);
   await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
   await sidebar.updateComplete;

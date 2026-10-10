@@ -458,6 +458,32 @@ suite.define(() => {
         const card = tray.locator(".task-suggestion:visible");
         await card.getByText("Show instructions", { exact: true }).click();
         const start = card.getByRole("button", { name: "Start in a new session", exact: true });
+        await expect
+          .poll(() =>
+            card.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              const conversation = element
+                .closest(".chat-main__conversation")!
+                .getBoundingClientRect();
+              const details = element
+                .closest(".chat-gutter-stack")!
+                .querySelector(".chat-details-toggle")!
+                .getBoundingClientRect();
+              const clearOfDetails =
+                box.left >= details.right ||
+                box.right <= details.left ||
+                box.top >= details.bottom ||
+                box.bottom <= details.top;
+              return (
+                clearOfDetails &&
+                box.top >= conversation.top &&
+                box.bottom <= conversation.bottom &&
+                box.left >= conversation.left &&
+                box.right <= conversation.right
+              );
+            }),
+          )
+          .toBe(true);
         await captureUiProof(suite, page, "task-suggestions", `verbose-${width}x${height}.png`);
         for (const control of [card.getByRole("button", { name: "Copy prompt" }), start]) {
           expect(

@@ -339,14 +339,9 @@ function applyAnthropicCacheControlToMessages(
     stableEnd = Math.min(stableEnd, index);
   }
   let marked = 0;
-  for (let i = messages.length - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
+  for (let i = stableEnd - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
     const record = messages[i];
-    if (
-      !isRecord(record) ||
-      record.role !== "user" ||
-      cacheBreakpointOptOutMessageIndexes.has(i) ||
-      (marked > 0 && i >= stableEnd)
-    ) {
+    if (!isRecord(record) || record.role !== "user") {
       continue;
     }
 

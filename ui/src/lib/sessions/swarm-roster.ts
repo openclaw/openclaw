@@ -90,6 +90,8 @@ export class SwarmRosterHydrator {
   rows: GatewaySessionRow[] = [];
   /** True once the child query has filled `rows`; the seed can hold only some children. */
   hydrated = false;
+  /** A parent-named child still needs a read that started after its announcement. */
+  pendingChildRead = false;
   /**
    * True once the first child read has answered. Unlike `hydrated`, a launch's
    * re-read keeps it, so it marks when seeded ancestry has been replaced.
@@ -112,6 +114,9 @@ export class SwarmRosterHydrator {
   private children: ReturnType<SessionCapability["observeList"]> | null = null;
   private childResult: SessionsListResult | null = null;
   private childRows: GatewaySessionRow[] = [];
+  private childrenLoading = false;
+  private childReadVersion = 0;
+  private requiredChildReadVersion = 0;
   private parentRequest: Promise<void> | null = null;
   private parentRefreshQueued = false;
   private parentRefreshForced = false;
@@ -200,8 +205,8 @@ export class SwarmRosterHydrator {
 
   /**
    * A launch reaches the parent row at once, but the child query only re-reads
-   * on its paced schedule. Read it now, and report the roster incomplete until
-   * that read answers, so nothing counts children it has not seen. Each named
+   * on its paced schedule. Read it now, and keep the wait generic until that
+   * read answers, so it cannot count children it has not seen. Each named
    * child is asked for once: one the list never returns, such as an archived
    * child, must not hide the count again or keep the list re-reading.
    */
@@ -221,6 +226,9 @@ export class SwarmRosterHydrator {
       this.requestedChildren.add(key);
     }
     this.hydrated = false;
+    // An already-running read cannot cover children named after it started.
+    this.requiredChildReadVersion = this.childReadVersion + 1;
+    this.pendingChildRead = true;
     this.refreshChildren();
   }
 
@@ -350,6 +358,10 @@ export class SwarmRosterHydrator {
   }
 
   private applyChildren(snapshot: SessionListSnapshot): void {
+    if (snapshot.loading && !this.childrenLoading) {
+      this.childReadVersion += 1;
+    }
+    this.childrenLoading = snapshot.loading;
     const params = this.params;
     const result = snapshot.result;
     if (snapshot.error && !snapshot.loading) {
@@ -390,6 +402,7 @@ export class SwarmRosterHydrator {
       void this.readParent(true);
     }
     const generation = this.generation;
+    const childReadVersion = this.childReadVersion;
     const isCurrent = () => generation === this.generation && this.childResult === result;
     void hydrateSwarmSessionRows({
       sessions: params.sessions,
@@ -406,7 +419,10 @@ export class SwarmRosterHydrator {
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
         this.childrenRead = true;
         this.hydrated = true;
-        this.recovered("children");
+        this.pendingChildRead = childReadVersion < this.requiredChildReadVersion;
+        if (!this.pendingChildRead) {
+          this.recovered("children");
+        }
         // A child launched during this read is still missing from it.
         this.refreshNewChildren();
         params.onRows(this.rows);
@@ -431,6 +447,9 @@ export class SwarmRosterHydrator {
     this.children = null;
     this.childResult = null;
     this.childRows = [];
+    this.childrenLoading = false;
+    this.childReadVersion = 0;
+    this.requiredChildReadVersion = 0;
     this.parentRequest = null;
     this.parentRefreshQueued = false;
     this.parentRefreshForced = false;
@@ -438,6 +457,7 @@ export class SwarmRosterHydrator {
     this.requestedChildren.clear();
     this.rows = [];
     this.hydrated = false;
+    this.pendingChildRead = false;
     this.key = key;
     this.generation += 1;
     this.recovered("parent");
