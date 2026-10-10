@@ -23,7 +23,6 @@ import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.type
 import type {
   ReadSessionUpdatedAt,
   RecordSessionMetaFromInbound,
-  UpdateLastRoute,
 } from "../../config/sessions/runtime-types.js";
 import type {
   ReadChannelAllowFromStoreForAccount,
@@ -126,7 +125,8 @@ export type PluginRuntimeChannel = {
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     recordInboundSession: RecordInboundSession;
-    updateLastRoute: UpdateLastRoute;
+    updateLastRoute: typeof import("../../plugin-sdk/session-store-runtime.js").updateLastRoute;
+    updateLastRouteWithAuthority: typeof import("../../plugin-sdk/session-store-runtime.js").updateLastRouteWithAuthority;
   };
   mentions: {
     buildMentionRegexes: BuildMentionRegexes;

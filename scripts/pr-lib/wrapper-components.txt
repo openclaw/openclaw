@@ -824,6 +824,7 @@ src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.ts
+src/infra/delivery-queue-cache.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
@@ -1278,6 +1279,7 @@ src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
+src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
@@ -1958,6 +1960,7 @@ src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.types.ts
+src/config/sessions/session-accessor.sqlite-entry-facts.worker.ts
 src/config/sessions/session-accessor.sqlite-entry-receipt.ts
 src/config/sessions/session-accessor.sqlite-entry-worker-publication.ts
 src/config/sessions/session-transcript-authority.ts
@@ -1975,6 +1978,7 @@ src/config/sessions/session-accessor.sqlite-transcript-watermark.ts
 src/config/sessions/session-canonical-validation.ts
 src/config/sessions/session-entry-capability-facts.ts
 src/config/sessions/session-entry-navigation.ts
+src/config/sessions/session-entry-publication-source.ts
 src/config/sessions/session-pin-policy.ts
 src/config/sessions/session-sharing-store.kernel.ts
 src/config/sessions/session-transcript-anchor-read.kernel.ts

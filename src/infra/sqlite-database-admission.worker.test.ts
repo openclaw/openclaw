@@ -16,6 +16,7 @@ import {
 } from "./sqlite-database-admission-record.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
+  captureSqliteDatabaseAdmissions,
   hasPendingSqliteDatabaseSchemaMutation,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
@@ -400,6 +401,29 @@ it("shares admission published after dispatch with existing isolates and revalid
     const sharedReplacement = await first!.execute({ type: "read", input: { path: location } });
     expect(sharedReplacement.values).toEqual([43]);
     expect(sharedReplacement.sql).toEqual([]);
+
+    const replacementRecord = captureSqliteDatabaseAdmissions().findLast(
+      (record) => record.location === location,
+    )!;
+    await second!.execute({ type: "retirePath", input: { path: location } });
+    const readmitted = openNodeSqliteDatabase(location, { readOnly: true });
+    const sibling = openNodeSqliteDatabase(location, { readOnly: true });
+    try {
+      admitSqliteSchema(readmitted);
+      admitSqliteSchema(sibling);
+      expect(getAdmittedSqliteSchemaFacts(sibling)?.admissionId).toBe(
+        getAdmittedSqliteSchemaFacts(readmitted)?.admissionId,
+      );
+    } finally {
+      readmitted.close();
+      sibling.close();
+    }
+    await second!.execute({ type: "retirePath", input: { path: location } });
+    expect(
+      captureSqliteDatabaseAdmissions().some(
+        (record) => record.identity === replacementRecord.identity,
+      ),
+    ).toBe(false);
   } finally {
     await Promise.all(brokers.map((broker) => broker.close()));
   }

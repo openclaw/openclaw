@@ -160,6 +160,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
               persistedAuthState: {
                 specifier: "./auth-presence",
                 exportName: "hasAuth",
+                exportNameAsync: "hasAuthAsync",
                 backingStore,
               },
             },
@@ -179,6 +180,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       expect(registry.plugins[0]?.packageChannel?.persistedAuthState).toEqual({
         specifier: "./auth-presence",
         exportName: "hasAuth",
+        exportNameAsync: "hasAuthAsync",
         ...(backingStore === "plugin-state" ? { backingStore: "plugin-state" } : {}),
       });
     },

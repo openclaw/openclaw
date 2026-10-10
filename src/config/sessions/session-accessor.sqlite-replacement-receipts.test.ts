@@ -2,12 +2,18 @@ import { DatabaseSync } from "node:sqlite";
 import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { expect, it } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
-import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  captureSessionRowChanges,
+  sessionChanges,
+  type SessionRowChange,
+} from "../../sessions/session-row-changes.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -21,6 +27,7 @@ import {
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -28,16 +35,198 @@ import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import type { SessionEntry } from "./types.js";
 
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+it("sheds aggregate optional snapshots while committing every required receipt row", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const keys = ["agent:main:large-first", "agent:main:large-second"];
+    const result = runOpenClawAgentWriteTransaction(
+      (current) => {
+        const entries = new Map<string, SessionEntry>();
+        const captured = captureSessionRowChanges(current.db, () => {
+          for (const key of keys) {
+            entries.set(
+              key,
+              writeSessionEntry(current, key, {
+                sessionId: key,
+                updatedAt: 1,
+                label: key,
+                skillsSnapshot: { prompt: `${key}:${"x".repeat(5 * 1024 * 1024)}`, skills: [] },
+              }),
+            );
+          }
+        });
+        return {
+          metadata: captureSessionEntryMetadataReceipts(captured.changes),
+          replacement: prepareSessionEntryReplacementPublication(
+            {
+              previous: new Map(),
+              current: entries,
+              pendingArchiveRecovery: false,
+              maintenancePlans: [],
+              membershipInvalidatedKeys: [],
+            },
+            current,
+            { captureFullFacts: true },
+          ),
+        };
+      },
+      { agentId: "main", path: database.path },
+    );
+    expect(result.replacement.fullEntries).toBeUndefined();
+    expect(result.replacement.source?.writeToken).toBeUndefined();
+    expect([...result.replacement.current.keys()]).toEqual(keys);
+    expect(result.metadata).toHaveLength(keys.length);
+    for (const [index, key] of keys.entries()) {
+      expect(readExactSessionEntryRow(database, key, "list")?.entry.label).toBe(key);
+      const metadata = result.metadata[index]!;
+      const fact = metadata.facts.get(key);
+      expect(fact).toMatchObject({ kind: "postimage", value: { entry: { label: key } } });
+      if (fact?.kind !== "postimage") {
+        throw new Error("Expected committed metadata after optional snapshot shedding");
+      }
+      expect(fact.value.fullEntry).toBeUndefined();
+      expect(metadata.source.writeToken).toBeUndefined();
+      const replacement = result.replacement.receipt?.facts.get(key);
+      expect(replacement).toMatchObject({ kind: "postimage", value: { entry: { label: key } } });
+      if (replacement?.kind !== "postimage") {
+        throw new Error("Expected committed replacement after optional snapshot shedding");
+      }
+      expect(replacement.value.fullEntry).toBeUndefined();
+    }
+  });
+});
+
+it("withholds metadata certification after a later write in its native transaction", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const sessionKey = "agent:main:metadata-receipt";
+    for (const rawWrite of [false, true]) {
+      const receipts = runOpenClawAgentWriteTransaction(
+        (current) => {
+          const captured = captureSessionRowChanges(current.db, () =>
+            writeSessionEntry(current, sessionKey, {
+              sessionId: "metadata-receipt",
+              updatedAt: 1,
+              label: "selected",
+              skillsSnapshot: { prompt: "Persisted metadata prompt", skills: [] },
+            }),
+          );
+          if (rawWrite) {
+            current.db
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
+              )
+              .run("later raw value", sessionKey);
+          }
+          return captureSessionEntryMetadataReceipts(captured.changes);
+        },
+        { agentId: "main", path: database.path },
+      );
+      const receipt = receipts[0];
+      expect(receipt).toBeDefined();
+      const fact = receipt!.facts.get(sessionKey);
+      expect(fact?.kind).toBe("postimage");
+      if (fact?.kind !== "postimage") {
+        throw new Error("Expected the native writer's metadata receipt");
+      }
+      expect(fact.value.entry.skillsSnapshot).toBeUndefined();
+      expect(fact.value.fullEntry?.skillsSnapshot?.prompt).toBe("Persisted metadata prompt");
+      if (rawWrite) {
+        expect(receipt!.source.writeToken).toBeUndefined();
+      } else {
+        expect(receipt!.source.writeToken).toBeTypeOf("string");
+        expect(receipt!.source.writeToken).toBe(readSqliteDatabaseWriteTokenForPath(database.path));
+      }
+    }
+  });
+});
+
+it.each([false, true])(
+  "seals full replacement facts without retaining prompts in display rows (later raw write=%s)",
+  async (rawWrite) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:full-receipt",
+      };
+      const snapshots = {
+        sessionDiffBaseline: {
+          version: 1,
+          sessionId: "full-receipt",
+          root: "/synthetic",
+          files: [],
+        },
+        skillsSnapshot: { prompt: "Persisted skill prompt", skills: [] },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: 1,
+          systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 0, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
+        },
+      } satisfies Partial<SessionEntry>;
+      replaceSessionEntrySync(scope, { sessionId: "full-receipt", updatedAt: 1, ...snapshots });
+      let published: ReturnType<typeof readPreparedSessionEntryChange>;
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          published = readPreparedSessionEntryChange(change, scope.sessionKey) ?? published;
+        }
+      });
+      delivery.afterResult = () => {
+        if (rawWrite) {
+          database.db
+            .prepare(
+              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
+            )
+            .run("later raw value", scope.sessionKey);
+        }
+      };
+      try {
+        await applySessionEntryExactReplacements({
+          storePath: database.path,
+          sessionKeys: [scope.sessionKey],
+          update: ([row]) => ({
+            result: undefined,
+            replacements: [
+              { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "committed" } },
+            ],
+          }),
+        });
+        expect(published?.entry?.label).toBe("committed");
+        expect(published?.entry?.skillsSnapshot).toBeUndefined();
+        expect(published?.entry?.systemPromptReport).toBeUndefined();
+        expect(published?.entry?.sessionDiffBaseline).toBeUndefined();
+        expect(published?.fullEntry).toMatchObject({ label: "committed", ...snapshots });
+        expect(published?.source.writeToken).toBeTypeOf("string");
+        const currentToken = readSqliteDatabaseWriteTokenForPath(database.path);
+        expect(published?.source.writeToken === currentToken).toBe(!rawWrite);
+        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label).toBe(
+          rawWrite ? "later raw value" : "committed",
+        );
+      } finally {
+        delivery.afterResult = undefined;
+        stop();
+      }
+    });
+  },
+);
 
 it.each(["native", "worker"] as const)(
   "publishes %s category changes to retained authority before observers",
@@ -494,6 +683,7 @@ it.each([
   "malformed rows",
   "malformed postimage",
   "mismatched postimage",
+  "mismatched full postimage",
   "unbound unavailable projection",
 ] as const)(
   "keeps replacement receipt coverage and ordering through %s delivery",
@@ -589,6 +779,7 @@ it.each([
             "malformed rows",
             "malformed postimage",
             "mismatched postimage",
+            "mismatched full postimage",
             "unbound unavailable projection",
           ].includes(boundary)
         ) {
@@ -623,6 +814,13 @@ it.each([
             };
           } else if (boundary === "malformed rows") {
             Reflect.set(receipt!, "current", null);
+          } else if (boundary === "mismatched full postimage") {
+            receipt = {
+              ...receipt!,
+              fullEntries: new Map([
+                [scope.sessionKey, { sessionId: "different-incarnation", updatedAt: 1 }],
+              ]),
+            };
           } else if (boundary === "unbound unavailable projection") {
             const fact = receipt!.receipt!.facts.get(scope.sessionKey);
             if (fact?.kind !== "postimage") {

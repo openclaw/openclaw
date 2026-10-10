@@ -86,6 +86,19 @@ function createProviderAuthPersistenceReceipt(
   };
 }
 
+async function failProviderAuthPersistence(
+  error: unknown,
+  cleanup: () => Promise<void>,
+  message: string,
+): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cause) {
+    throw new ProviderAuthPersistenceError(message, error, { cause });
+  }
+  throw error;
+}
+
 function resolveProfileDigest(profile: ProviderAuthProfile): string {
   return createHash("sha256")
     .update(profile.credential.provider)
@@ -224,16 +237,11 @@ async function materializeProviderAuthProfiles(params: {
     }
     return { profiles, rollback };
   } catch (error) {
-    try {
-      await rollback();
-    } catch (rollbackError) {
-      throw new ProviderAuthPersistenceError(
-        "Provider credential persistence failed and protected-store rollback could not be confirmed.",
-        error,
-        { cause: rollbackError },
-      );
-    }
-    throw error;
+    return await failProviderAuthPersistence(
+      error,
+      rollback,
+      "Provider credential persistence failed and protected-store rollback could not be confirmed.",
+    );
   }
 }
 
@@ -326,16 +334,11 @@ async function stageProviderAuthProfilesForPersistence(params: {
       beforeWrite: params.beforeWrite,
     });
   } catch (error) {
-    try {
-      await releaseProviderAuthLocks(locks);
-    } catch (releaseError) {
-      throw new ProviderAuthPersistenceError(
-        "Provider auth persistence failed and staged state could not be fully released.",
-        error,
-        { cause: releaseError },
-      );
-    }
-    throw error;
+    return await failProviderAuthPersistence(
+      error,
+      () => releaseProviderAuthLocks(locks),
+      "Provider auth persistence failed and staged state could not be fully released.",
+    );
   }
 
   let releasePromise: Promise<void> | undefined;
@@ -386,16 +389,11 @@ async function stageProviderAuthProfileBatchCore(
       validateCurrentCredential: params.validateCurrentCredential,
     });
   } catch (error) {
-    try {
-      await prepared.rollback();
-    } catch (rollbackError) {
-      throw new ProviderAuthPersistenceError(
-        "Provider auth persistence failed and staged state could not be fully released.",
-        error,
-        { cause: rollbackError },
-      );
-    }
-    throw error;
+    return await failProviderAuthPersistence(
+      error,
+      prepared.rollback,
+      "Provider auth persistence failed and staged state could not be fully released.",
+    );
   }
 
   return createProviderAuthPersistenceReceipt(prepared.profiles, prepared.commit, async () => {

@@ -193,7 +193,7 @@ export type OpenClawStateReadCommand =
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
   | { type: "claws.packageOwnership"; agentId?: string; includeInstalls: boolean }
-  | { type: "doctor.gatewayOwnerLease.read" }
+  | { type: "gatewayOwnerLease.read"; schemaMaintenance: boolean }
   | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
   | { type: "conversationBindings.inspect"; conversation: ConversationRef }
@@ -336,7 +336,7 @@ export type OpenClawStateReadResult =
       packageRefs: PersistedClawPackageRef[];
       orphanWorkspace: ClawOrphanWorkspace | undefined;
     }
-  | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
+  | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | { type: "preparedPoolPresence.read"; demand: PreparedPoolPresenceDemand | undefined }
   | {
       type: "tui.lastSession.read";
