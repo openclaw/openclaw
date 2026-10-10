@@ -19,10 +19,7 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
-import {
-  githubPublicationEffectFacts,
-  type GitHubPublicationEffectTransition,
-} from "./github-publication-execution-effects.js";
+import type { GitHubPublicationEffectTransition } from "./github-publication-execution-effects.js";
 import type { GitHubPublicationSourceCapability } from "./github-publication-source.js";
 import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 
@@ -125,6 +122,7 @@ function withMutationAuthority<T>(
 }
 
 function effects<Row>(apply: (transition: GitHubPublicationEffectTransition) => Promise<Row>) {
+  // A dispatched marker may survive beforeRun refusal; it never proves an observed effect.
   return {
     updateHead: (headCommit: string) => apply({ operation: "updateHead", headCommit }),
     complete: (result: SessionGitHubPublicationResult) => apply({ operation: "complete", result }),
@@ -165,12 +163,9 @@ export async function claimPersonalGitHubPublicationAsync(
       );
     },
     ...effects(async (transition) => {
-      const { requireAction } = githubPublicationEffectFacts(transition, "needs_confirmation");
       return requireRow(
-        await personalMutation(
-          scope,
-          { ...identity, ...transition },
-          requireAction ? authority : () => authority.assertCustody(),
+        await personalMutation(scope, { ...identity, ...transition }, () =>
+          authority.assertCustody(),
         ),
       );
     }),
@@ -203,15 +198,9 @@ export async function claimRepositoryGitHubPublicationAsync(
       );
     },
     ...effects(async (transition) => {
-      const { requireAction } = githubPublicationEffectFacts(
-        transition,
-        row.owner_profile_id === null ? "requested" : "needs_confirmation",
-      );
       return requireRow(
-        await repositoryMutation(
-          scope,
-          { ...identity, ...transition },
-          requireAction ? authority : () => authority.assertCustody(),
+        await repositoryMutation(scope, { ...identity, ...transition }, () =>
+          authority.assertCustody(),
         ),
       );
     }),
