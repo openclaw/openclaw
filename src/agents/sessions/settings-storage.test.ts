@@ -494,4 +494,51 @@ describe("FileSettingsStorage", () => {
         }
       }),
   );
+  it("refuses to rewrite a settings file that is not valid UTF-8", async () => {
+    const root = fixtures.createTempDir("openclaw-settings-utf8-");
+    const agentDir = join(root, "agent");
+    const settingsPath = join(agentDir, "settings.json");
+    mkdirSync(agentDir);
+    const malformed = Buffer.concat([
+      Buffer.from('{\n  "sessionDir": "/tmp/caf', "utf8"),
+      Buffer.from([0xff]),
+      Buffer.from('",\n  "theme": "dark"\n}\n', "utf8"),
+    ]);
+    fs.writeFileSync(settingsPath, malformed);
+
+    const manager = SettingsManager.create(root, agentDir);
+    // The read path keeps its lossy contract: settings still load.
+    expect(manager.getGlobalSettings().sessionDir).toBeDefined();
+
+    manager.setTheme("light");
+    await manager.flush();
+
+    const errors = manager.drainErrors();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error.name).toBe("SettingsFileNotUtf8Error");
+    expect(errors[0]?.error.message).toContain("not valid UTF-8");
+    expect(errors[0]?.error.message).toContain("left unchanged");
+    expect(readFileSync(settingsPath)).toEqual(malformed);
+  });
+
+  it("persists valid non-ASCII settings including a literal replacement character", async () => {
+    const root = fixtures.createTempDir("openclaw-settings-unicode-");
+    const agentDir = join(root, "agent");
+    const settingsPath = join(agentDir, "settings.json");
+    mkdirSync(agentDir);
+    fs.writeFileSync(
+      settingsPath,
+      '{\n  "sessionDir": "/tmp/\u4e2d\u6587 \uD83E\uDD80 \uFFFD",\n  "theme": "dark"\n}\n',
+      "utf8",
+    );
+
+    const manager = SettingsManager.create(root, agentDir);
+    manager.setTheme("light");
+    await manager.flush();
+
+    expect(manager.drainErrors()).toEqual([]);
+    const stored = readFileSync(settingsPath, "utf8");
+    expect(stored).toContain('"theme": "light"');
+    expect(stored).toContain("\u4e2d\u6587 \uD83E\uDD80 \uFFFD");
+  });
 });

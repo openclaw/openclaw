@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
@@ -124,6 +125,16 @@ export interface SettingsError {
   error: Error;
 }
 
+export class SettingsFileNotUtf8Error extends Error {
+  constructor(filePath: string) {
+    super(
+      `Settings file is not valid UTF-8 and cannot be rewritten safely: ${filePath}. ` +
+        "The file was left unchanged. Keep a byte-for-byte backup, convert a copy to UTF-8 with its original encoding, then retry.",
+    );
+    this.name = "SettingsFileNotUtf8Error";
+  }
+}
+
 export class FileSettingsStorage implements SettingsStorage {
   private paths: Record<SettingsScope, string>;
 
@@ -159,9 +170,16 @@ export class FileSettingsStorage implements SettingsStorage {
     // read and derive their updates only after that shared ownership is established.
     const release = acquireFileLockSyncWithRetry(path);
     try {
-      const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+      const rawBytes = existsSync(path) ? readFileSync(path) : undefined;
+      const current = rawBytes?.toString("utf-8");
       const next = fn(current);
       if (next !== undefined) {
+        // A write rebuilds the whole file from decoded text; refuse when the
+        // bytes on disk do not decode cleanly so U+FFFD is never persisted over
+        // settings the update never touched. Reads keep the lossy contract.
+        if (rawBytes && !isUtf8(rawBytes)) {
+          throw new SettingsFileNotUtf8Error(path);
+        }
         const savePath = resolveJsonSaveTarget(path);
         const saveDir = realpathSync(dirname(savePath));
         const canonicalSavePath = join(saveDir, basename(savePath));
