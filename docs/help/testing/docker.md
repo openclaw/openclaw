@@ -38,7 +38,7 @@ without mutating the host auth store:
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Observability smokes: `pnpm qa:otel:smoke`, `pnpm qa:prometheus:smoke`, and `pnpm qa:observability:smoke` are private QA source-checkout lanes. They are intentionally not part of package Docker release lanes because the npm tarball omits QA Lab.
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
-- Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
+- Onboarding wizard (TTY, full workspace setup): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Npm tarball onboarding/channel/agent smoke: `pnpm test:docker:npm-onboard-channel-agent` installs the packed OpenClaw tarball globally in Docker, configures OpenAI via env-ref onboarding plus Telegram by default, runs doctor, and runs one mocked OpenAI agent turn. Reuse a prebuilt tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host rebuild with `OPENCLAW_NPM_ONBOARD_HOST_BUILD=0`, or switch channel with `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` or `OPENCLAW_NPM_ONBOARD_CHANNEL=slack`.
 
 - Release user journey smoke: `pnpm test:docker:release-user-journey` installs the packed OpenClaw tarball globally in a clean Docker home, runs onboarding, configures a mocked OpenAI provider, runs an agent turn, installs/uninstalls external plugins, configures ClickClack against a local fixture, verifies outbound/inbound messaging, restarts Gateway, and runs doctor.
@@ -124,7 +124,7 @@ the process environment, staged auth profiles, or an explicit
 `OPENCLAW_PROFILE_FILE`. Successful runs print a small JSON payload like
 `{ "ok": true, "model": "openclaw/default", ... }`.
 
-`test:docker:mcp-channels` is intentionally deterministic and does not need a
+`test:docker:mcp-channels` uses fixed responses and does not need a
 real Telegram, Discord, or iMessage account. It boots a seeded Gateway
 container, starts a second container that spawns `openclaw mcp serve`, then
 verifies routed conversation discovery, transcript reads, attachment
@@ -134,14 +134,14 @@ notification check inspects the raw stdio MCP frames directly so the smoke
 validates what the bridge actually emits, not just what a specific client SDK
 happens to surface.
 
-`test:docker:agent-bundle-mcp-tools` is deterministic and does not need a
+`test:docker:agent-bundle-mcp-tools` uses fixed responses and does not need a
 live model key. It builds the repo Docker image, starts a real stdio MCP
 check server inside the container, materializes that server through the
 embedded OpenClaw bundle MCP runtime, executes the tool, then verifies
 `coding` and `messaging` keep `bundle-mcp` tools while `minimal` and
 `tools.deny: ["bundle-mcp"]` filter them.
 
-`test:docker:cron-mcp-cleanup` is deterministic and does not need a live
+`test:docker:cron-mcp-cleanup` uses fixed responses and does not need a live
 model key. It starts a seeded Gateway with a real stdio MCP check server,
 runs an isolated cron turn and a `sessions_spawn` one-shot child turn, then
 verifies the MCP child process exits after each run.
@@ -166,7 +166,7 @@ Useful env vars:
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
 - `OPENCLAW_SKIP_DOCKER_BUILD=1` to reuse an existing `openclaw:local-live` image for reruns that do not need a rebuild
-- `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
+- `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to require credentials to come from the profile store (not env)
 - `OPENCLAW_OPENWEBUI_MODEL=...` to choose the model exposed by the gateway for the Open WebUI smoke
 - `OPENCLAW_OPENWEBUI_PROMPT=...` to override the nonce-check prompt used by the Open WebUI smoke
 - `OPENWEBUI_IMAGE=...` to override the pinned Open WebUI image tag
