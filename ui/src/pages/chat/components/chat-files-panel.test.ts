@@ -19,7 +19,7 @@ import {
   loadSessionWorkspace,
 } from "./chat-session-workspace-state.ts";
 import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
-import "./chat-files-panel.ts";
+import "./chat-files-panel.tsx";
 
 function host(): SessionWorkspaceHost {
   return {
@@ -378,7 +378,7 @@ describe("workspace file tabs", () => {
       const tab = tabs[index]!;
       const content = panel.querySelector(".chat-files-panel__content")!;
       expect(document.getElementById(tab.getAttribute("aria-controls")!)).toBe(content);
-      panel.requestUpdate();
+      panel.previews = [...panel.previews];
       await panel.updateComplete;
       expect(panel.querySelector("wa-tab")?.id).toBe(ids[index]);
     }
@@ -392,7 +392,7 @@ describe("workspace file tabs", () => {
     const siblingTab = panels[1]!.querySelector<HTMLElement>("wa-tab")!;
     firstTab.focus();
     expect(document.activeElement).toBe(firstTab);
-    panels[1]!.requestUpdate();
+    panels[1]!.previews = [...panels[1]!.previews];
     // Mirror the shared strip's keyed-movement focus-loss window after render
     // records the active element but before its queued recovery executes.
     queueMicrotask(() => firstTab.blur());
@@ -552,12 +552,12 @@ describe("workspace file tabs", () => {
     expect(panel.hostedTabs[0]?.className).toBeUndefined();
 
     file.content = "Updated contents";
-    panel.requestUpdate();
+    panel.previews = [...panel.previews];
     await panel.updateComplete;
     expect(changed).toHaveBeenCalledTimes(2);
 
     file.path = "docs/notes.md";
-    panel.requestUpdate();
+    panel.previews = [...panel.previews];
     await panel.updateComplete;
     expect(changed).toHaveBeenCalledTimes(3);
     expect(panel.hostedTabs[0]?.title).toBe("docs/notes.md");

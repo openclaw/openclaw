@@ -1,14 +1,6 @@
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
-import {
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-} from "../../../app/lazy-custom-element.ts";
 import type { QuestionDraft, QuestionPrompt } from "../../../app/question-prompt.ts";
-import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
-import { renderLoadingState } from "../../../components/loading-state.ts";
 import { t } from "../../../i18n/index.ts";
-import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 
 type QuestionPanelQuestion = QuestionPrompt["questions"][number];
 
@@ -143,57 +135,4 @@ export function renderChatQuestionSummary(prompt: QuestionPrompt) {
   `;
 }
 
-// Summaries and panel props are needed during chat boot; interactive controls are not.
-const questionPanelElement = {
-  tagName: "openclaw-chat-question-panel",
-  get label() {
-    return t("chat.questions.eyebrow");
-  },
-  loadModule: () => import("./chat-question-panel.ts"),
-};
-
-export class ChatQuestionCard extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) props?: QuestionPanelProps;
-  private readonly panelLoader = new LazyCustomElementRequestController(this);
-
-  override willUpdate(): void {
-    this.panelLoader.requestWhileActive(
-      questionPanelElement,
-      this.isConnected && Boolean(this.props),
-    );
-  }
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.requestUpdate();
-  }
-
-  override disconnectedCallback(): void {
-    this.panelLoader.requestWhileActive(questionPanelElement, false);
-    super.disconnectedCallback();
-  }
-
-  override render() {
-    if (!this.props) {
-      return nothing;
-    }
-    if (isOptionalElementDefined(questionPanelElement)) {
-      return html`<openclaw-chat-question-panel
-        .props=${this.props}
-      ></openclaw-chat-question-panel>`;
-    }
-    const state = this.panelLoader.visibleState;
-    return state?.status === "error"
-      ? renderLazyViewError({
-          error: state.error,
-          stale: state.stale,
-          subtitle: questionPanelElement.label,
-          onRetry: () => this.panelLoader.retry(),
-        })
-      : renderLoadingState();
-  }
-}
-
-if (!customElements.get("openclaw-chat-question-card")) {
-  customElements.define("openclaw-chat-question-card", ChatQuestionCard);
-}
+export { ChatQuestionCard } from "./chat-question-card-view.tsx";

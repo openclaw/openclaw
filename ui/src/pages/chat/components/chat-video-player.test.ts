@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import "./chat-video-player.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import "./chat-video-player.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -27,7 +29,7 @@ describe("ChatVideoPlayer", () => {
     player.src = "https://example.com/clip.mp4";
     player.sourceIdentity = "media:clip-metadata";
     player.label = "clip.mp4";
-    document.body.append(player);
+    mountSolid(() => player);
     await player.updateComplete;
 
     const video = player.querySelector("video");
@@ -50,7 +52,7 @@ describe("ChatVideoPlayer", () => {
     player.label = "portrait.mp4";
     player.mediaWidth = 9;
     player.mediaHeight = 16;
-    document.body.append(player);
+    mountSolid(() => player);
     await player.updateComplete;
 
     expect(player.querySelector("video")?.style.aspectRatio).toBe("9 / 16");
@@ -62,7 +64,7 @@ describe("ChatVideoPlayer", () => {
     player.src = "/media/clip.mp4?mediaTicket=A";
     player.sourceIdentity = "media:renewing-clip";
     player.label = "clip.mp4";
-    document.body.append(player);
+    mountSolid(() => player);
     await player.updateComplete;
     const video = player.querySelector("video")!;
     let readyState = 2;
@@ -104,7 +106,7 @@ describe("ChatVideoPlayer", () => {
     player.preview = true;
     player.src = "https://example.com/deferred.mp4";
     player.label = "deferred.mp4";
-    document.body.append(player);
+    mountSolid(() => player);
     await player.updateComplete;
 
     expect(player.querySelector("a[download]")?.getAttribute("href")).toBe(player.src);
@@ -128,7 +130,7 @@ describe("ChatVideoPlayer", () => {
     player.playback = "transcode";
     const onExpand = vi.fn();
     player.onExpand = onExpand;
-    document.body.append(player);
+    mountSolid(() => player);
     await player.updateComplete;
     const video = player.querySelector("video");
     await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
@@ -160,11 +162,10 @@ describe("ChatVideoPlayer", () => {
     const onFallbackExpand = vi.fn();
     player.onExpand = onExpand;
     player.onFallbackExpand = onFallbackExpand;
-    document.body.append(player);
+    mountSolid(() => player);
     await player.updateComplete;
-    expect(player.querySelector("video")?.getAttribute("src")).toBe(
-      "https://example.com/first.mp4",
-    );
+    const failedMedia = player.querySelector("video")!;
+    expect(failedMedia.getAttribute("src")).toBe("https://example.com/first.mp4");
 
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -179,9 +180,19 @@ describe("ChatVideoPlayer", () => {
     );
     expect(player.querySelector(".chat-assistant-attachment-card__reason")).toBeNull();
     expect(player.querySelector("video")).toBeNull();
+    expect(failedMedia.isConnected).toBe(false);
     player.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
     expect(onFallbackExpand).toHaveBeenCalledOnce();
     expect(onExpand).not.toHaveBeenCalled();
+
+    player.label = "renamed-second.caf";
+    player.onMediaLoaded = vi.fn();
+    player.mediaWidth = 1920;
+    player.mediaHeight = 1080;
+    await player.updateComplete;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(player.querySelector("video")).toBeNull();
+    expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
 
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     player.src = "/__openclaw__/assistant-media?source=second.caf&mediaTicket=recovered";
@@ -191,6 +202,8 @@ describe("ChatVideoPlayer", () => {
         "mediaTicket=recovered&playback=1",
       ),
     );
+    expect(player.querySelector("video")).not.toBe(failedMedia);
+    expect(player.querySelector("video")?.isConnected).toBe(true);
     expect(player.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
   });
 
@@ -199,7 +212,7 @@ describe("ChatVideoPlayer", () => {
     player.src = "https://example.com/playing.mp4";
     player.sourceIdentity = "media:playing";
     player.label = "playing.mp4";
-    document.body.append(player);
+    mountSolid(() => player);
     await player.updateComplete;
     const video = player.querySelector("video")!;
     let paused = false;
@@ -209,14 +222,18 @@ describe("ChatVideoPlayer", () => {
     });
 
     player.remove();
+    await Promise.resolve();
+    flush();
 
     expect(pause).toHaveBeenCalledOnce();
     expect(paused).toBe(true);
     expect(video.hasAttribute("src")).toBe(false);
 
-    document.body.append(player);
+    mountSolid(() => player);
     await vi.waitFor(() =>
-      expect(video.getAttribute("src")).toBe("https://example.com/playing.mp4"),
+      expect(player.querySelector("video")?.getAttribute("src")).toBe(
+        "https://example.com/playing.mp4",
+      ),
     );
   });
 });

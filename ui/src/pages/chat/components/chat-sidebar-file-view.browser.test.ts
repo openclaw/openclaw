@@ -5,7 +5,7 @@ import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
 // needs a real DOM, so this suite only runs in the checks-ui Chromium project.

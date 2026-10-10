@@ -38,7 +38,7 @@ import {
   type TestMessage,
   type TestMessageEntry,
 } from "./chat-message.test-support.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 let view: HTMLDivElement;
 const localStorageValues = new Map<string, string>();

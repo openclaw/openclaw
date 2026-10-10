@@ -1,0 +1,135 @@
+openclaw-youtube-video {
+  display: block;
+  min-width: 0;
+  margin: 12px 0;
+  color: var(--text);
+  font: inherit;
+
+  .card {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg, 12px);
+    background: var(--card);
+  }
+  .stage {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    min-height: 200px;
+    aspect-ratio: 16 / 9;
+    background: var(--panel);
+  }
+  .preview,
+  iframe {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+  .preview {
+    padding: 0;
+    color: var(--text-strong);
+    background: linear-gradient(145deg, var(--bg-elevated), var(--panel));
+    cursor: default;
+  }
+  a.preview {
+    cursor: pointer;
+  }
+  .preview img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    width: 64px;
+    height: 64px;
+    place-items: center;
+    transform: translate(-50%, -50%);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--card) 92%, transparent);
+    box-shadow: var(--shadow-md);
+  }
+  .play svg {
+    width: 28px;
+    height: 28px;
+  }
+  .preview:hover .play {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .preview:focus-visible,
+  .close:focus-visible,
+  .watch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -3px;
+  }
+  .footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    flex-wrap: wrap;
+  }
+  .caption {
+    flex: 1;
+    min-width: 100px;
+  }
+  .provider {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.5;
+    letter-spacing: 0.04em;
+  }
+  .title {
+    margin: 2px 0 0;
+    color: var(--text-strong);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  a.watch {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 12px;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .watch:hover {
+    color: var(--accent);
+  }
+  .watch svg,
+  .close svg {
+    width: 16px;
+    height: 16px;
+  }
+  .close {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    background: transparent;
+    cursor: default;
+  }
+  .notice {
+    margin: 0;
+    padding: 0 14px 12px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}

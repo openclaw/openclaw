@@ -1,0 +1,195 @@
+openclaw-browser-tab-card {
+  display: block;
+  max-width: 480px;
+  margin-block: 6px;
+  .card {
+    box-sizing: border-box;
+    max-width: 320px;
+    overflow: hidden;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .shot {
+    display: block;
+    width: 100%;
+    padding: 0;
+    background: none;
+    border: 0;
+    cursor: default;
+  }
+  .shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 240px;
+    object-fit: cover;
+    object-position: top;
+  }
+  .shot.social img {
+    aspect-ratio: 1.91;
+    object-fit: contain;
+    object-position: center;
+  }
+  .bar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 7px 8px 7px 10px;
+  }
+  .shot + .bar {
+    border-top: 1px solid var(--border);
+  }
+  .icon {
+    display: flex;
+    flex: 0 0 20px;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+  }
+  .icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .icon img {
+    box-sizing: border-box;
+    width: 20px;
+    height: 20px;
+    padding: 2px;
+    object-fit: contain;
+    /* Site icons are often dark on transparent; retain their colors on a light plate. */
+    background: var(--button-icon-bg);
+    border-radius: 4px;
+  }
+  .identity {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    gap: 1px;
+  }
+  .title,
+  .url {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .title {
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+  .url {
+    color: var(--muted);
+    font-size: 0.72rem;
+  }
+  .actions {
+    display: flex;
+    flex: none;
+    gap: 2px;
+    align-items: center;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .card:hover .actions,
+  .card:focus-within .actions,
+  .actions:has(wa-dropdown[open]) {
+    opacity: 1;
+  }
+  .actions button {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.75rem;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-sm);
+    cursor: default;
+  }
+  .actions button:hover {
+    background: var(--panel-hover);
+  }
+  .actions button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .actions .more svg {
+    width: 16px;
+    height: 16px;
+  }
+  .tweet {
+    max-width: none;
+    border-radius: var(--radius-lg);
+  }
+  .tweet-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px 16px 12px;
+  }
+  .tweet-mark {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    color: var(--text);
+    background: var(--panel-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .tweet-mark svg {
+    width: 20px;
+    height: 20px;
+  }
+  .tweet-author {
+    color: var(--text);
+    font-size: 0.9rem;
+    font-weight: 650;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  .tweet-handle {
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
+  .tweet-text {
+    margin: 0;
+    padding: 0 16px 16px;
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .tweet .shot {
+    border-top: 1px solid var(--border);
+  }
+  .tweet .shot.social img {
+    max-height: 320px;
+    aspect-ratio: auto;
+  }
+  .tweet .bar {
+    justify-content: space-between;
+    padding: 8px 12px 8px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .tweet-source {
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+  .tweet .actions {
+    opacity: 1;
+  }
+  .tweet .actions button {
+    min-height: 32px;
+  }
+  .shot[data-new-tab-action],
+  .actions button[data-new-tab-action] {
+    cursor: pointer;
+  }
+}

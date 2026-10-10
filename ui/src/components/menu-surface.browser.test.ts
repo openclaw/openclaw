@@ -4,7 +4,7 @@ import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderComposerLibraryMenu } from "../pages/chat/components/chat-composer-library-menu.ts";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.ts";
-import "../pages/chat/components/browser-tab-card.ts";
+import "../pages/chat/components/browser-tab-card.tsx";
 import { renderComposerMenuOption } from "./composer-menu.ts";
 import "../test-helpers/load-styles.ts";
 import "./menu-surface.ts";

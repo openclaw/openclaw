@@ -1,5 +1,5 @@
 import "../../../styles/chat/side-panel.css";
-import "./chat-files-panel.ts";
+import "./chat-files-panel.tsx";
 import {
   html,
   nothing,

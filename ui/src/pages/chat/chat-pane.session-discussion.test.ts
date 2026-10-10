@@ -9,8 +9,8 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
-import "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
+import "./components/session-discussion-panel.tsx";
 import { openSlot } from "./sidebar-layout.ts";
 
 type DiscussionTestPane = TestChatPane & {

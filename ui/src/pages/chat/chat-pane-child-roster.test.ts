@@ -10,7 +10,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { SubagentRoster } from "./chat-spawned-subagent.ts";
 import { renderChatComposerNotices } from "./chat-view-notices.ts";
-import type { ChatChildAttention } from "./components/chat-child-attention.ts";
+import type { ChatChildAttention } from "./components/chat-child-attention.tsx";
 
 type ChildRosterPane = TestChatPane & {
   resolveChatReadTarget: () => { sessionKey: string; agentId?: string } | undefined;
