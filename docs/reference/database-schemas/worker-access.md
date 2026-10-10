@@ -319,6 +319,12 @@ Selected listings retain their internal-row filtering and pending-row validation
 Case-folded lookups validate their sibling candidates in the fused worker query;
 a receipt for one key does not certify those sibling guards.
 
+Reads inside an active session writer borrow that writer's execution instead of
+reentering FIFO admission or consuming a potentially unsettled cached postimage.
+Transcript callbacks retain their existing append and preparation queues, and
+the writer settles accepted reads before releasing its reservation. The plain
+reader keeps its projection and error contracts on the supplied database handle.
+
 Each database retains at most 128 keys and 8 MiB of serialized fact data, including
 saved prompt snapshots; the process retains at most 32 such databases. Least
 recently used entries are evicted when either bound is reached. Eviction, worker
