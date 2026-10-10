@@ -13,12 +13,14 @@ import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { seedMcpOAuthStoreForTest } from "../agents/mcp-oauth.test-support.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
@@ -222,7 +224,7 @@ describe("mcp login OAuth integration", () => {
       const json: unknown[] = [];
       vi.spyOn(defaultRuntime, "log").mockImplementation((line) => logs.push(String(line)));
       vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => json.push(value));
-      vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
       const program = new Command().exitOverride();
       registerMcpCli(program);
       await program.parseAsync(
@@ -251,7 +253,9 @@ describe("mcp login OAuth integration", () => {
       json.length = 0;
       await expect(
         program.parseAsync(["mcp", "doctor", "--probe", "--json"], { from: "user" }),
-      ).rejects.toThrow("MCP doctor found errors");
+      ).rejects.toMatchObject({ code: 1 });
+      expect(exit).not.toHaveBeenCalled();
+      expect(captureGatewayStateOwner(resolveOpenClawStateSqlitePath())).toBeUndefined();
       expect(json.at(-1)).toMatchObject({ servers: [{ name: "fixture" }] });
       withOpenClawStateDatabaseReadOnly(({ db }) => {
         expect(db.prepare("SELECT count(*) AS count FROM mcp_oauth_stores").get()).toEqual({

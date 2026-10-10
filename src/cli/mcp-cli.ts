@@ -38,12 +38,12 @@ import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { loginMcpServer } from "./mcp-cli-oauth.js";
 import {
   offlineMcpAction,
-  setConfiguredMcpServer,
-  unsetConfiguredMcpServer,
-  updateConfiguredMcpServer,
-  updateConfiguredMcpServerTools,
+  setMcpServerOffline,
+  unsetMcpServerOffline,
+  configureMcpServerOffline,
+  updateMcpToolsOffline,
 } from "./mcp-cli-state-owner.js";
-import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -62,8 +62,7 @@ function fail(message: string, json?: boolean): never {
   } else {
     defaultRuntime.error(message);
   }
-  defaultRuntime.exit(1);
-  throw new Error(message);
+  exitCliAfterOutput(defaultRuntime, 1);
 }
 
 async function loadMcpConfig(opts?: { json?: boolean }) {
@@ -714,7 +713,7 @@ export function registerMcpCli(program: Command) {
         defaultRuntime.error(
           `MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
         );
-        defaultRuntime.exit(1);
+        exitCliAfterOutput(defaultRuntime, 1);
       }
     });
 
@@ -873,7 +872,7 @@ export function registerMcpCli(program: Command) {
             if (probeIssue) {
               defaultRuntime.error(probeIssue);
               if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
-                defaultRuntime.exit(1);
+                exitCliAfterOutput(defaultRuntime, 1);
               }
             }
           } finally {
@@ -1045,7 +1044,7 @@ export function registerMcpCli(program: Command) {
             servers: { [name]: server },
           });
         }
-        const result = await setConfiguredMcpServer({ name, server, createOnly: true });
+        const result = await setMcpServerOffline({ name, server, createOnly: true });
         if (!result.ok) {
           fail(result.error);
         }
@@ -1068,7 +1067,7 @@ export function registerMcpCli(program: Command) {
       if (parsed.error) {
         fail(parsed.error);
       }
-      const result = await setConfiguredMcpServer({ name, server: parsed.value });
+      const result = await setMcpServerOffline({ name, server: parsed.value });
       if (!result.ok) {
         fail(result.error);
       }
@@ -1086,7 +1085,7 @@ export function registerMcpCli(program: Command) {
       if (!opts.clear && opts.include === undefined && opts.exclude === undefined) {
         fail("Specify --include, --exclude, or --clear.");
       }
-      const result = await updateConfiguredMcpServerTools({
+      const result = await updateMcpToolsOffline({
         name,
         tools: opts.clear
           ? null
@@ -1198,14 +1197,14 @@ export function registerMcpCli(program: Command) {
           });
         }
         if (opts.enable && Object.keys(next).length === 0) {
-          const result = await unsetConfiguredMcpServer({ name });
+          const result = await unsetMcpServerOffline({ name });
           if (!result.ok) {
             fail(result.error);
           }
           defaultRuntime.log(`Removed disabled MCP override for "${name}" in ${result.path}.`);
           return;
         }
-        const result = await updateConfiguredMcpServer({
+        const result = await configureMcpServerOffline({
           name,
           update: () => next,
         });
@@ -1269,7 +1268,7 @@ export function registerMcpCli(program: Command) {
     .description("Remove one OpenClaw-managed MCP server")
     .argument("<name>", "MCP server name")
     .action(async (name: string) => {
-      const result = await unsetConfiguredMcpServer({ name });
+      const result = await unsetMcpServerOffline({ name });
       if (!result.ok) {
         fail(result.error);
       }

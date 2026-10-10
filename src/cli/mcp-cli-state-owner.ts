@@ -21,22 +21,22 @@ export function offlineMcpAction<Args extends unknown[], T>(
     });
 }
 
-export const setConfiguredMcpServer = offlineMcpAction(
+export const setMcpServerOffline = offlineMcpAction(
   "set",
   (_owner, params: Parameters<typeof setConfiguredMcpServerLocally>[0]) =>
     setConfiguredMcpServerLocally(params),
 );
-export const unsetConfiguredMcpServer = offlineMcpAction(
+export const unsetMcpServerOffline = offlineMcpAction(
   "unset",
   (_owner, params: Parameters<typeof unsetConfiguredMcpServerLocally>[0]) =>
     unsetConfiguredMcpServerLocally(params),
 );
-export const updateConfiguredMcpServer = offlineMcpAction(
+export const configureMcpServerOffline = offlineMcpAction(
   "configure",
   (_owner, params: Parameters<typeof updateConfiguredMcpServerLocally>[0]) =>
     updateConfiguredMcpServerLocally(params),
 );
-export const updateConfiguredMcpServerTools = offlineMcpAction(
+export const updateMcpToolsOffline = offlineMcpAction(
   "tools",
   (_owner, params: Parameters<typeof updateConfiguredMcpServerToolsLocally>[0]) =>
     updateConfiguredMcpServerToolsLocally(params),
