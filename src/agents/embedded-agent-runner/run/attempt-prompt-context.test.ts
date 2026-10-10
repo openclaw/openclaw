@@ -13,6 +13,7 @@ import {
 } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { redactTranscriptText } from "../../transcript-redact-text.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -365,6 +366,35 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       kind: "conversation-data",
       text: "prepend part\n\nappend part",
     });
+  });
+
+  it("applies the transcript redaction policy to hook context stored in the carrier", async () => {
+    const hookPrepend = "Remember token=sk-TEST-HOOK-SECRET-9f2 before answering";
+    const config = {
+      agents: { defaults: { userTimezone: "UTC" } },
+      logging: { redactPatterns: ["sk-TEST-HOOK-SECRET-[a-z0-9]+"] },
+    };
+    const fixture = createInput({
+      attempt: createAttempt({ config } as Partial<EmbeddedRunAttemptParams>),
+      prompt: createPrompt({
+        routePromptBuildContextThroughRuntimeCarrier: true,
+        promptBuildPrependContext: hookPrepend,
+      }),
+    });
+    const result = await prepareEmbeddedAttemptPromptContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+    });
+    // The carrier bypasses the canonical prompt-projection redaction, so it must
+    // sanitize hook text itself; dispatch and replay see identical sanitized bytes.
+    const fragment = result.runtimeContextMessageForCurrentTurn?.details.fragments.find(
+      (candidate) =>
+        candidate.kind === "conversation-data" && candidate.text.includes("Remember token="),
+    );
+    expect(fragment).toBeDefined();
+    expect(fragment?.text).not.toContain("sk-TEST-HOOK-SECRET-9f2");
+    expect(fragment?.text).toBe(redactTranscriptText(hookPrepend, config));
+    expect(result.promptForModel).not.toContain("sk-TEST-HOOK-SECRET-9f2");
   });
 
   it("routes hook prompt context through the carrier when the transcript prompt is empty", async () => {

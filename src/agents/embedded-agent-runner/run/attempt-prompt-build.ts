@@ -34,6 +34,7 @@ import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
+import { redactTranscriptText } from "../../transcript-redact-text.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
@@ -548,10 +549,17 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   // next replay includes it byte-identically instead of rewriting earlier history.
   // The published assembly decision applies even when the transcript prompt is
   // empty: the runtime-only submission path delivers the carrier to the model.
+  // The carrier reaches both the provider dispatch and the durable custom-message
+  // append, bypassing the canonical prompt-projection redaction, so hook context
+  // carries the transcript redaction policy here; dispatch and replay must see
+  // identical sanitized bytes.
   const promptBuildContext = input.prompt.routePromptBuildContextThroughRuntimeCarrier
-    ? [input.prompt.promptBuildPrependContext, input.prompt.promptBuildAppendContext]
-        .filter((value): value is string => Boolean(value?.trim()))
-        .join("\n\n") || undefined
+    ? redactTranscriptText(
+        [input.prompt.promptBuildPrependContext, input.prompt.promptBuildAppendContext]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n"),
+        attempt.config,
+      ) || undefined
     : undefined;
   const eventFragments: RuntimeContextFragment[] = [
     ...(promptBuildContext
