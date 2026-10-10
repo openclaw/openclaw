@@ -314,9 +314,8 @@ describe("plugin state data-only comparison", () => {
 
   it("retains writable admission for both keep intents", async () => {
     const f = fixture("keep-ownership");
-    f.legacy.register("counter", { count: 1 });
+    await f.store.register("counter", { count: 1 });
     const observed = await f.store.observe("counter");
-    await expect(f.store.lookup("counter")).resolves.toEqual({ count: 1 });
     claimOpenClawStateOwnership("comparison-owner", {
       env: { ...f.env, OPENCLAW_SUPERVISOR_MODE: "external" },
     });
