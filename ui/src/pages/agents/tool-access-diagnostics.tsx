@@ -1,9 +1,9 @@
-import { html, nothing } from "lit";
+import { For, Show } from "solid-js";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import { registerToolDiagnosticsEnglish } from "../../i18n/locales/en-tool-diagnostics.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { renderAgentPanelFacts } from "./panel-ui.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { renderAgentPanelFacts } from "./panel-ui.tsx";
 
 type ToolAccessDiagnostics = NonNullable<ToolsEffectiveResult["toolAccess"]>;
 type ToolAccessEntry = ToolAccessDiagnostics["tools"][number];
@@ -13,48 +13,68 @@ function renderProfileInheritance(profiles: ToolAccessDiagnostics["profiles"]) {
     (entry) => entry.source === "tools.profile" || entry.source.endsWith(".tools.profile"),
   );
   const providerProfiles = profiles.filter((entry) => !baseProfiles.includes(entry));
-  const renderEntry = (entry: ToolAccessDiagnostics["profiles"][number], label: string) => html`
-    <div class="agent-profile-tree__label">${label}</div>
-    <div class="agent-profile-tree__details">
-      <div class="agent-profile-tree__value">
-        <code>${entry.profile}</code>
-        ${entry.active ? html`<span class="chip">${t("agentTools.activeProfile")}</span>` : nothing}
+  const branches = [baseProfiles, providerProfiles].flatMap((entries, index) => {
+    const global = entries.find((entry) => entry.source.startsWith("tools."));
+    const agent = entries.find((entry) => !entry.source.startsWith("tools."));
+    const root = global ?? agent;
+    if (!root) {
+      return [];
+    }
+    const suffix = index === 0 ? "" : "Provider";
+    return [
+      {
+        root,
+        label: t(`agentTools.profile${global ? "Global" : "Agent"}${suffix}`),
+        child: global ? agent : undefined,
+        childLabel: t(`agentTools.profileAgent${suffix}Override`),
+      },
+    ];
+  });
+  const renderEntry = (entry: ToolAccessDiagnostics["profiles"][number], label: string) => (
+    <>
+      <div class="agent-profile-tree__label">{label}</div>
+      <div class="agent-profile-tree__details">
+        <div class="agent-profile-tree__value">
+          <code>{entry.profile}</code>
+          {entry.active ? <span class="chip">{t("agentTools.activeProfile")}</span> : undefined}
+        </div>
+        <div class="agent-profile-tree__source">
+          <code>
+            <For each={entry.source.split(".")}>
+              {(segment, index) => (
+                <>
+                  {index() > 0 ? (
+                    <>
+                      .<wbr />
+                    </>
+                  ) : undefined}
+                  {segment}
+                </>
+              )}
+            </For>
+          </code>
+        </div>
       </div>
-      <div class="agent-profile-tree__source">
-        <code
-          >${entry.source.split(".").map((segment, index) => html`${index > 0 ? html`.<wbr />` : nothing}${segment}`)}</code
-        >
-      </div>
-    </div>
-  `;
-  return html`
+    </>
+  );
+  return (
     <ul class="agent-profile-tree" role="list">
-      ${[baseProfiles, providerProfiles].map((entries, index) => {
-        const global = entries.find((entry) => entry.source.startsWith("tools."));
-        const agent = entries.find((entry) => !entry.source.startsWith("tools."));
-        const root = global ?? agent;
-        if (!root) {
-          return nothing;
-        }
-        const suffix = index === 0 ? "" : "Provider";
-        const globalLabel = t(`agentTools.profileGlobal${suffix}`);
-        const agentLabel = t(`agentTools.profileAgent${suffix}`);
-        const overrideLabel = t(`agentTools.profileAgent${suffix}Override`);
-        return html`
-          <li class=${global && agent ? "agent-profile-tree__branch" : ""}>
-            ${renderEntry(root, global ? globalLabel : agentLabel)}
-            ${
-              global && agent
-                ? html`<ul role="list">
-                    <li>${renderEntry(agent, overrideLabel)}</li>
-                  </ul>`
-                : nothing
-            }
+      <For each={branches}>
+        {(branch) => (
+          <li class={branch.child ? "agent-profile-tree__branch" : ""}>
+            {renderEntry(branch.root, branch.label)}
+            <Show when={branch.child} keyed>
+              {(child) => (
+                <ul role="list">
+                  <li>{renderEntry(child, branch.childLabel)}</li>
+                </ul>
+              )}
+            </Show>
           </li>
-        `;
-      })}
+        )}
+      </For>
     </ul>
-  `;
+  );
 }
 
 const TOOL_STATUS_LABELS = new Map([
@@ -95,11 +115,11 @@ export function renderToolPolicyDetails(
   toolAccess: ToolAccessDiagnostics | null,
 ) {
   if (!diagnostic || !toolAccess) {
-    return nothing;
+    return undefined;
   }
-  return html`
+  return (
     <div class="agent-tool-policy">
-      ${renderAgentPanelFacts([
+      {renderAgentPanelFacts([
         [
           "agentTools.checked",
           t(
@@ -111,13 +131,20 @@ export function renderToolPolicyDetails(
         diagnostic.reasons.length > 0
           ? [
               "agentTools.policySources",
-              html`${diagnostic.reasons.map(
-                (reason) => html`
+
+              <For each={diagnostic.reasons}>
+                {(reason) => (
                   <div>
-                    ${formatUiExternalText(reason.label)}${reason.source ? html` · <code>${reason.source}</code>` : nothing}
+                    {formatUiExternalText(reason.label)}
+                    {reason.source ? (
+                      <>
+                        {" "}
+                        · <code>{reason.source}</code>
+                      </>
+                    ) : undefined}
                   </div>
-                `,
-              )}`,
+                )}
+              </For>,
             ]
           : null,
         toolAccess.profiles.length > 0
@@ -125,7 +152,7 @@ export function renderToolPolicyDetails(
           : null,
       ])}
     </div>
-  `;
+  );
 }
 
 registerToolDiagnosticsEnglish();

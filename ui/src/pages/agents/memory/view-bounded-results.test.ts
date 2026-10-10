@@ -1,12 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { cleanup } from "@solidjs/testing-library";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  renderDreamingView,
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
-import { createDreamingViewState, renderDreaming } from "./view.ts";
+import { createDreamingViewState, renderDreaming } from "./view.tsx";
+
+afterEach(() => cleanup());
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
@@ -134,7 +137,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
 describe("bounded Memory Wiki dashboard results", () => {
   it.each(["insights", "wiki"] as const)("discloses returned and total %s item counts", (tab) => {
     const container = document.createElement("div");
-    render(renderDreaming(buildBoundedDashboardProps(tab)), container);
+    renderDreamingView(buildBoundedDashboardProps(tab), container);
 
     expect(container.querySelector(".dreams-diary__bounded-result")?.textContent?.trim()).toBe(
       "Showing the newest 2,500 of 2,501 items.",
