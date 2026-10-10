@@ -1,6 +1,7 @@
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
+  applyModelCompatPatch,
   buildProviderReplayFamilyHooks,
   resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -13,6 +14,7 @@ import {
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
   isFireworksCatalogModelId,
+  isFireworksNativeModel,
 } from "./provider-catalog.js";
 import { wrapFireworksProviderStream } from "./stream.js";
 import { resolveFireworksThinkingProfile } from "./thinking-policy.js";
@@ -75,6 +77,13 @@ export default defineSingleProviderPluginEntry({
       liveModelDiscovery: true,
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
+    normalizeResolvedModel: ({ model }) =>
+      isFireworksNativeModel(model)
+        ? applyModelCompatPatch(model, {
+            supportsPromptCacheKey: model.compat?.supportsPromptCacheKey ?? true,
+            supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? false,
+          })
+        : model,
     wrapStreamFn: wrapFireworksProviderStream,
     resolveThinkingProfile: ({ modelId }) => resolveFireworksThinkingProfile(modelId),
     resolveDynamicModel: resolveFireworksDynamicModel,

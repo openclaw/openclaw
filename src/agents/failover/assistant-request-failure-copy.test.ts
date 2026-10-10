@@ -82,6 +82,57 @@ describe("renderAssistantRequestFailureCopy", () => {
     },
   );
 
+  it("renders loading facts consistently in live replies and saved history without provider prose", () => {
+    const assistant = makeAssistantMessageFixture({
+      model: "local/model",
+      errorCode: "model_load_failed",
+      errorMessage: "PRIVATE_PROVIDER_DETAIL",
+      errorBody: JSON.stringify({
+        requestedContextLength: 49152,
+        message: "PRIVATE_PROVIDER_DETAIL",
+        nextStep: "PRIVATE_INJECTION",
+      }),
+    });
+    const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it("bounds, redacts, and escapes loading model labels", () => {
+    const assistant = makeAssistantMessageFixture({
+      model: `local/[model]\nAuthorization: Bearer sk-test ${"x".repeat(800)}`,
+      errorCode: "model_load_failed",
+      errorMessage: "PRIVATE_DETAIL",
+      errorBody: '{"requestedContextLength":49152}',
+    });
+    const live = formatUserFacingAssistantErrorText(assistant);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(live);
+    expect(live).toContain(String.raw`local\/\[model\]`);
+    expect(live).not.toContain("sk-test");
+    expect(live).not.toContain("PRIVATE_DETAIL");
+    expect(live).not.toContain("\n");
+    expect(live.length).toBeLessThan(500);
+  });
+
+  it.each([
+    { errorCode: "unknown", errorBody: '{"requestedContextLength":49152}' },
+    { errorCode: "model_load_failed", errorBody: "not json" },
+    ...[undefined, 0, -1, 1.5, "49152", Number.MAX_SAFE_INTEGER + 1].map(
+      (requestedContextLength) => ({
+        errorCode: "model_load_failed",
+        errorBody: JSON.stringify({ requestedContextLength }),
+      }),
+    ),
+  ])("keeps malformed or unrecognized loading facts private: %j", (error) => {
+    const assistant = makeAssistantMessageFixture({
+      ...target,
+      ...error,
+      errorMessage: "PRIVATE_DETAIL",
+    });
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(runFailure);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBeUndefined();
+  });
+
   it("preserves an incomplete tool-call diagnosis without exposing provider text", () => {
     const error = makeAssistantMessageFixture({
       ...target,

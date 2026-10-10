@@ -1,16 +1,22 @@
 import { threadId, type MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { assertStateDatabaseAccessAllowed } from "../../infra/gateway-state-owner.js";
+import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
+  exchangeSqliteDatabaseAdmissions,
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   sqliteMutationWorkerThreadId,
@@ -22,6 +28,7 @@ export type SqliteMutationWorkerCoordination = {
   actorId: string;
   databasePath: string;
   stateContext: SqliteWorkerStateContext;
+  databaseAdmission?: MessagePort;
   reconciliation?: { identity: string; admission: MessagePort };
 };
 
@@ -31,15 +38,23 @@ export async function withSqliteMutationWorkerCoordination<T>(
   transport: SqliteMutationWorkerTransport,
   operationId: number,
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
+  assertRequestCurrent?: () => void,
 ): Promise<T> {
   const worker = transport.channel;
   const actorId = `${sqliteMutationWorkerThreadId(transport)}:${operationId}`;
   const preparingError = () => {};
   worker.on("error", preparingError);
   try {
-    return await withSqliteWorkerLifecycleCoordination(context, actorId, run, async () => {
-      await terminateSqliteMutationWorker(transport);
-    });
+    return await withSqliteWorkerLifecycleCoordination(
+      context,
+      actorId,
+      run,
+      async () => {
+        await terminateSqliteMutationWorker(transport);
+      },
+      "retained",
+      assertRequestCurrent,
+    );
   } finally {
     worker.off("error", preparingError);
   }
@@ -52,6 +67,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
   settleFailure: () => Promise<void>,
   mode: "retained" | "reconciliation" = "retained",
+  assertRequestCurrent?: () => void,
 ): Promise<T> {
   const identity = context.admission.identity.key;
   let opened = false;
@@ -79,7 +95,45 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
           }
           opened ||= facts.phase === "open";
         })
-      : undefined;
+      : assertRequestCurrent
+        ? createSqliteWorkerOperationAdmission(() => {
+            throw new Error("SQLite mutation file admission does not grant transaction authority");
+          })
+        : undefined;
+  if (admission && assertRequestCurrent) {
+    admission.bindDatabaseAuthority({
+      databasePath: context.admission.databasePath,
+      assertRequest: assertRequestCurrent,
+      assertAccess() {
+        context.admission.assertCurrent();
+        // First creation stays path-bound until the native lease publishes its file identity.
+        const current = context.admission.identity;
+        if (current.key.startsWith("file:")) {
+          assertExistingDatabaseIdentity(
+            context.admission.databasePath,
+            current.key,
+            current.birthtime,
+          );
+        }
+        context.maintenanceScope?.assertAdmission();
+      },
+      assertCreate(location) {
+        // Raw agent admission may create shared state and its first integrity receipt.
+        if (
+          location !== resolveIdentityPathViaExistingAncestorSync(context.admission.databasePath) &&
+          location !==
+            resolveIdentityPathViaExistingAncestorSync(
+              resolveQuarantineStorePath(context.environment),
+            )
+        ) {
+          throw new Error("SQLite mutation creation target differs from its captured companions");
+        }
+      },
+      acquireSchema() {
+        throw new Error("SQLite mutation file admission does not grant schema maintenance");
+      },
+    });
+  }
   const releaseService = admission
     ? retainSqliteWriteAdmissionService([context.admission.databasePath], () => admission.service())
     : undefined;
@@ -88,7 +142,11 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
       actorId,
       databasePath: context.admission.databasePath,
       stateContext: { environment: context.environment },
-      ...(admission ? { reconciliation: { identity, admission: admission.port } } : {}),
+      ...(admission
+        ? mode === "reconciliation"
+          ? { reconciliation: { identity, admission: admission.port } }
+          : { databaseAdmission: admission.port }
+        : {}),
     });
   } catch (error) {
     try {
@@ -124,10 +182,31 @@ export async function runWithSqliteMutationWorkerCoordination<
   ) {
     throw new Error("SQLite mutation Worker shared-state owner changed");
   }
-  return await run({
-    ...options,
-    env: { ...options.env, ...coordination.stateContext.environment },
-  });
+  const execute = () =>
+    run({
+      ...options,
+      env: { ...options.env, ...coordination.stateContext.environment },
+    });
+  const admission = coordination.databaseAdmission;
+  if (!admission) {
+    return await execute();
+  }
+  let active = true;
+  try {
+    return await withSqliteDatabaseAdmissionExchange((facts, location, create) => {
+      if (!active) {
+        throw new Error("SQLite mutation file admission outlived its request");
+      }
+      if (create) {
+        // First-open creation can run inside this worker's live schema lease.
+        assertStateDatabaseAccessAllowed(coordination.databasePath);
+      }
+      return exchangeSqliteDatabaseAdmissions(admission, facts, location, create);
+    }, execute);
+  } finally {
+    active = false;
+    admission.close();
+  }
 }
 
 /** Reconciliation retains its native handles and durable agent lease between grants. */
