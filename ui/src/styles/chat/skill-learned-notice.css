@@ -1,3 +1,10 @@
+.chat-notice.chat-notice--skill {
+  display: block;
+  margin: 0;
+  padding: 0;
+  text-align: start;
+}
+
 /* Background skill review result, in the Carapace turn-recap anatomy: hairline rules around
    one muted line of text. Square radii and quiet text actions; no pills, no card. */
 .chat-skill-notice {
