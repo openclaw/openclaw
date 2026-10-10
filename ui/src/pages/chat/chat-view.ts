@@ -496,7 +496,7 @@ export function renderChat(props: ChatProps) {
       : html`<div
           class="chat-gutter-stack ${props.detailsEnabled ? "chat-gutter-stack--details" : ""}"
         >
-          ${props.detailsEnabled ? html`<openclaw-chat-details .props=${props} .presented=${livePresentation(props.transcriptVisible ?? props.progressCardVisibility ?? props.presented ?? true)}></openclaw-chat-details>` : nothing}
+          ${props.detailsEnabled ? html`<div class="chat-gutter-header">${renderChatTopbarNotices(props)}<openclaw-chat-details .props=${props} .presented=${livePresentation(props.transcriptVisible ?? props.progressCardVisibility ?? props.presented ?? true)}></openclaw-chat-details></div>` : nothing}
           ${taskSuggestionTray}
         </div>`;
   // Keep the affordance mounted so visibility changes can finish their exit transition.
@@ -617,7 +617,8 @@ export function renderChat(props: ChatProps) {
           <div class="chat-split-container">
             <div class="chat-main">
               <div class="chat-main__conversation-column">
-                ${renderChatTopbarNotices(props)} ${renderContributions("header")}
+                ${props.detailsEnabled ? nothing : renderChatTopbarNotices(props)}
+                ${renderContributions("header")}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation-frame">
                   <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->
