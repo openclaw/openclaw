@@ -141,7 +141,7 @@ current policy, pending canonical validation, and current-row reads remain
 with the reader. When physical admission is already known, the first canonical
 read enters its snapshot before policy reads, avoiding discarded probes.
 
-### SDK session writer migration
+## SDK session writer migration
 
 Session entry SDK callers use `prepareSessionEntryPatch` for one host preparation
 followed by the existing exact-snapshot worker commit, or `applySessionEntryPatch`
