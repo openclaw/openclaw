@@ -8,9 +8,9 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import {
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import {

@@ -73,6 +73,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/session-store-history-boundary.test.ts",
   "src/plugin-sdk/session-store-runtime.recovery.test.ts",
   "src/plugin-sdk/session-store-runtime.async.test.ts",
+  "src/plugin-sdk/session-store-runtime.worker-patch.test.ts",
   "src/plugin-sdk/session-store-runtime.writer-claim.test.ts",
   "src/talk/client-voice-session.digest-retry.test.ts",
   "src/talk/voice-consult-transcript-race.test.ts",

@@ -5,9 +5,9 @@ description: Port or review OpenClaw Control UI code moving from Lit 3 and Web A
 
 # Control UI on Solid 2
 
-The Control UI is migrating from Lit 3 + Web Awesome to Solid 2 in one cutover; the plan and lane assignments live with the migration coordinator. Read [ui/AGENTS.md](../../../ui/AGENTS.md) and the assigned work order first. Renderer-neutral and additive foundations land before the integration-branch port; remove Lit and Web Awesome at cutover.
+The Control UI is migrating from Lit 3 + Web Awesome to Solid 2. Each lane lands its own focused PR on `main`; the plan and lane assignments live with the migration coordinator. Read [ui/AGENTS.md](../../../ui/AGENTS.md) and the assigned work order first. Ported Solid code runs next to unported Lit at every commit; Lit and Web Awesome are removed once the last caller is ported.
 
-Use the exact installed Solid 2 pins and APIs in the owning package manifests. Add dependencies only within the work order; keep the seven-day release-age gate and coordinated package upgrades. The helpers, lint rules, and codemod below describe the migration target: verify that the prerequisite lane has landed before using them. A missing prerequisite or a fix outside the assigned paths goes back to the coordinator.
+Use the exact installed Solid 2 pins and APIs in the owning package manifests. Add dependencies only within the work order; keep the seven-day release-age gate and coordinated package upgrades. The helpers, lint rules, and codemod below describe the migration target: check that the owning lane has landed before using them. If a prerequisite is still in flight, keep porting what doesn't need it, poll `origin/main`, and merge it when it lands; don't end your session to wait. A fix in another lane's files is the smallest named interface change, recorded in your PR.
 
 ## Architecture you must keep
 
@@ -71,7 +71,7 @@ Render light DOM under the existing host tag. Scope former shadow styles to that
 
 ## Overlays (Web Awesome replacements)
 
-Target floor: Safari/WebKit 26.2, Chrome/Edge and Firefox from the last ~6 months. The floor and capability enforcement ship with cutover, not with additive foundations. Linux WebKitGTK qualification remains a coordinator prerequisite.
+Target floor: Safari/WebKit 26.2, Chrome/Edge and Firefox from the last ~6 months. The floor and capability enforcement land before the native-first overlays that depend on them. Linux WebKitGTK qualification remains a coordinator prerequisite.
 
 - **Positioning:** CSS anchor positioning (`anchor-name`, `position-area`, `position-try-fallbacks`). No Floating UI. Caret popups anchor to an invisible element placed at the measured caret.
 - **Top layer and light dismiss:** use popovers for nonmodal overlay surfaces so they stay usable inside `<dialog>.showModal()`. `auto` supplies native light dismissal; `manual` needs the owning dismissal policy. Do not create competing native and library dismissal owners.
@@ -104,4 +104,4 @@ Use the work order's scoped proof for additive foundations or docs-only lanes. F
 - no `TODO(solid2)`
 - the inventory shrinks and the ratchet passes
 
-Run [Codex autoreview](../autoreview/SKILL.md), resolve actionable findings, and follow the work order's publication boundary. Phase 1 lanes open ready PRs against `main`; integration-port lanes hand off tested commits to the coordinator without opening CI-triggering PRs. Do not merge without a landing order. Report branch/HEAD, grouped files, exact proof commands/results and lease/run IDs, requested calibration, open questions, and stopped lease status.
+Run [Codex autoreview](../autoreview/SKILL.md), resolve actionable findings, and follow the work order's publication boundary. Open a ready PR against `main` and land it through the native `scripts/pr` workflow once exact-head CI and ClawSweeper are green or every remaining failure is attributed to the base; never arm auto-merge. Report branch/HEAD, grouped files, exact proof commands/results and lease/run IDs, requested calibration, open questions, and stopped lease status.

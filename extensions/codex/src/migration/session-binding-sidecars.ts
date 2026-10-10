@@ -629,7 +629,7 @@ async function recordSessionOwner(
     readEvidence: MigrationParams["context"]["readSessionIdentityEvidenceBatch"];
   },
 ): Promise<string | { deleted: true } | undefined> {
-  const { patchSessionEntry } = await import("openclaw/plugin-sdk/session-store-runtime");
+  const { prepareSessionEntryPatch } = await import("openclaw/plugin-sdk/session-store-runtime");
   const currentIndex = await readLegacySessionIndex(owner.storePath);
   if ("failure" in currentIndex) {
     return "its legacy session owner could not be revalidated";
@@ -667,7 +667,7 @@ async function recordSessionOwner(
 
   let observedForeignHarness: string | undefined;
   let observedCanonicalEntry = false;
-  const updated = await patchSessionEntry({
+  const updated = await prepareSessionEntryPatch({
     agentId: owner.agentId,
     env,
     ...(options.canCreateOwner
@@ -684,7 +684,7 @@ async function recordSessionOwner(
     skipMaintenance: true,
     storePath: owner.storePath,
     sessionKey: owner.sessionKey,
-    update: (entry, { existingEntry }) => {
+    prepare: (entry, { existingEntry }) => {
       observedCanonicalEntry = existingEntry !== undefined;
       if (
         entry.sessionId.trim() !== owner.sessionId ||

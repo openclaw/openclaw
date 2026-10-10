@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveStoredCredentialReadOnlyAvailability } from "./read-only-availability.js";
+import {
+  resolveAuthStoreReadOnlyValidUntil,
+  resolveStoredCredentialReadOnlyAvailability,
+} from "./read-only-availability.js";
+import type { AuthProfileStore } from "./types.js";
 
 const cfg = {
   secrets: {
@@ -9,6 +13,42 @@ const cfg = {
     },
   },
 } satisfies OpenClawConfig;
+
+describe("resolveAuthStoreReadOnlyValidUntil", () => {
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      token: { type: "token", provider: "test", token: "synthetic-token", expires: 150 },
+      oauth: {
+        type: "oauth",
+        provider: "test",
+        access: "synthetic-access",
+        refresh: "synthetic-refresh",
+        expires: 125,
+      },
+      undated: { type: "token", provider: "test", token: "synthetic-undated" },
+    },
+    usageStats: {
+      blocked: { blockedUntil: 200 },
+      cooling: { cooldownUntil: 250 },
+      disabled: { disabledUntil: 300 },
+    },
+  };
+
+  it.each([
+    [100, 150],
+    [150, 200],
+    [200, 250],
+    [250, 300],
+    [300, Infinity],
+  ])("selects the next static-token or failure-window expiry after %s", (now, expected) => {
+    expect(resolveAuthStoreReadOnlyValidUntil(store, now)).toBe(expected);
+  });
+
+  it("keeps an empty store valid without an expiry", () => {
+    expect(resolveAuthStoreReadOnlyValidUntil({ version: 1, profiles: {} }, 100)).toBe(Infinity);
+  });
+});
 
 describe("resolveStoredCredentialReadOnlyAvailability", () => {
   it.each([

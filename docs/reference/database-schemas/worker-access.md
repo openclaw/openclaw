@@ -141,6 +141,43 @@ current policy, pending canonical validation, and current-row reads remain
 with the reader. When physical admission is already known, the first canonical
 read enters its snapshot before policy reads, avoiding discarded probes.
 
+## SDK session writer migration
+
+Session entry SDK callers use `prepareSessionEntryPatch` for one host preparation
+followed by the existing exact-snapshot worker commit, or `applySessionEntryPatch`
+for a single data-only conditional mutation. Public upserts and ambient transcript
+watermarks reduce against authoritative rows inside that same writer. The
+plugin runtime binds session ownership and live plugin authority to preparation
+and commit. Released opaque transaction guards retain their explicit native
+adapter; no worker failure falls back to it.
+
+Bundled extension actions and provider replay use the existing awaited
+SessionManager methods and versioned types. A queued session-name write retains
+its original runtime and manager authority through admission and commit. The
+shared deprecation helper warns on actual legacy use once per plugin identity
+and capability family, including across plugin reloads. Unknown direct SDK
+consumers share a bounded family warning. Legacy synchronous calls commit and
+publish their facts before returning; async completion also includes fact
+installation.
+
+Correlated channel replies commit the replayable delivery first, then append the
+optional side audit event through the transcript worker. That transaction checks
+the captured session ID and lifecycle and reports whether the event was inserted
+before completing the waiter. A refused or failed audit does not undo a committed
+reply.
+
+Native incognito ownership remains until the separate actor activation. Cross-store
+conversation predicates retain the existing native entry adapter until their typed
+source-fence cutover. Those routes, released compatibility methods, worker kernels,
+and offline tools are explicitly retained; they are not evidence of worker-only
+runtime access. No schema, stored bytes, retention, or update behavior changes.
+
+The released synchronous `listSessionEntries` default still joins writable database
+admission. Bundled runtime readers use `readOnly: true` or the awaited
+`api.runtime.agent.session.createSessionEntryListReader`; the remaining bundled
+default calls belong to Doctor. Test-only full-transcript replacement and raw
+event append wrappers live in test support, outside the core accessor exports.
+
 ## Committed facts and completeness
 
 Synchronous compatibility writers and workers share the existing postcommit
