@@ -1,5 +1,6 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import photon from "@silvia-odwyer/photon-node";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
@@ -70,6 +71,30 @@ it("compares decoded pixels and reports the exact changed-pixel count", async ()
       .map((report) => report.results[0].changedPixels)
       .toSorted((left, right) => left - right),
   ).toEqual([0, 1]);
+});
+
+it("links comparison images in directories with URL delimiters", async () => {
+  const a = await fixture(0),
+    b = await fixture(0);
+  const parent = temporary.make("parity-paths-");
+  const before = path.join(parent, "before #1"),
+    after = path.join(parent, "after?2%");
+  await rename(a.directory, before);
+  await rename(b.directory, after);
+  const output = temporary.make("parity-output-");
+  expect(await compareCaptures(before, after, output)).toBe(0);
+  const [name] = await readdir(output);
+  const index = path.join(output, name!, "index.html");
+  const html = await readFile(index, "utf8");
+  for (const [alt, directory] of [
+    ["Before", before],
+    ["After", after],
+  ]) {
+    const src = new RegExp(`<img alt="${alt}" src="([^"]+)">`, "u").exec(html)![1]!;
+    expect(fileURLToPath(new URL(src, pathToFileURL(index)))).toBe(
+      path.join(directory!, "scene--profile.png"),
+    );
+  }
 });
 
 it.each([0, 1, 2, 3])(

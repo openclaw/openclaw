@@ -245,7 +245,13 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
   );
   const href = (base: string, shot: Shot | undefined) =>
     shot
-      ? escape(path.relative(directory, path.resolve(base, shot.file)).split(path.sep).join("/"))
+      ? escape(
+          path
+            .relative(directory, path.resolve(base, shot.file))
+            .split(path.sep)
+            .map(encodeURIComponent)
+            .join("/"),
+        )
       : "";
   await writeFile(
     path.join(directory, "index.html"),
