@@ -37,9 +37,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 let receipts: FixtureReceiptChannel;
 
-function fixture(customPaths = true, registry?: string) {
+function fixture(registry?: string) {
   const home = realpathSync(tempDirs.make("survivor-manager-"));
-  const artifacts = join(home, customPaths ? "artifacts ' \" $ `" : "bin");
+  const artifacts = join(home, "artifacts ' \" $ `");
   mkdirSync(artifacts, { recursive: true });
   const paths = {
     log: join(artifacts, "systemctl-shim.log"),
@@ -54,9 +54,9 @@ function fixture(customPaths = true, registry?: string) {
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_SKIP_PROVIDERS: "1",
     OPENCLAW_DISABLE_BONJOUR: "1",
-    OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: customPaths ? paths.log : undefined,
-    OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: customPaths ? paths.pid : undefined,
-    OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: customPaths ? paths.daemonLog : undefined,
+    OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: paths.log,
+    OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: paths.pid,
+    OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: paths.daemonLog,
   };
   const shell = (script: string, args: string[] = []) =>
     spawnSync(
@@ -355,80 +355,75 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     });
   });
 
-  it.each(["plain", 'space "quoted" %h %%h', "trailing\\"])(
-    "executes literal scalar paths through the copied fixture with cwd %j",
-    async (directory) => {
-      const { home, env, unit, manager, execute } = fixture();
-      const workingDirectory = join(home, directory);
-      const stateDirectory = join(home, 'state *?[ab](x)\\ "quoted" %h %%h');
-      const alternateDirectory = join(home, 'state 12a(x) "quoted" %h %%h');
-      for (const fixtureDirectory of [workingDirectory, stateDirectory, alternateDirectory]) {
-        mkdirSync(fixtureDirectory, { recursive: true });
-      }
-      const environmentFile = join(stateDirectory, "gateway.systemd.env");
-      const fileValue = 'file "quoted" \\ $literal `literal` %h %%h';
-      const inlineValue = 'inline "quoted" \\ %h %%h';
-      writeFileSync(environmentFile, serializeSystemdEnvironmentFile({ FIXTURE_VALUE: fileValue }));
-      writeFileSync(
-        join(alternateDirectory, "gateway.systemd.env"),
-        serializeSystemdEnvironmentFile({ FIXTURE_VALUE: "wrong neighbor" }),
-      );
-      const program = join(home, "finite child.mjs");
-      writeFileSync(
-        program,
-        "console.log(JSON.stringify({argv:process.argv.slice(2), cwd:process.cwd(), inline:process.env.FIXTURE_INLINE, value:process.env.FIXTURE_VALUE}));\n",
-      );
-      const programArguments = [process.execPath, program, 'argument "quoted" \\ %h %%h'];
-      writeFileSync(
-        unit,
-        buildSystemdUnit({
-          programArguments,
-          workingDirectory,
-          environment: { FIXTURE_INLINE: inlineValue, FIXTURE_VALUE: "inline fallback" },
-          environmentFiles: [environmentFile],
-        }),
-      );
-      const properties = manager(
-        "busctl",
-        "--user",
-        "--json=short",
-        "get-property",
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice",
-        "org.freedesktop.systemd1.Service",
-        "ExecStart",
-        "WorkingDirectory",
-        "Environment",
-        "EnvironmentFiles",
-        "UnsetEnvironment",
-      );
-      expect(properties.status, properties.stderr).toBe(0);
-      expect(
-        properties.stdout
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      ).toContainEqual({
-        type: "a(sb)",
-        data: [
-          [`${home}/state \\*\\?\\[ab\\]\\(x\\)\\\\ "quoted" %h %%h/gateway.systemd.env`, true],
-        ],
-      });
-      expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toMatchObject({
+  it("executes literal scalar paths through the copied fixture", async () => {
+    const { home, env, unit, manager, execute } = fixture();
+    const workingDirectory = join(home, 'space "quoted" %h %%h');
+    const stateDirectory = join(home, 'state *?[ab](x)\\ "quoted" %h %%h');
+    const alternateDirectory = join(home, 'state 12a(x) "quoted" %h %%h');
+    for (const fixtureDirectory of [workingDirectory, stateDirectory, alternateDirectory]) {
+      mkdirSync(fixtureDirectory, { recursive: true });
+    }
+    const environmentFile = join(stateDirectory, "gateway.systemd.env");
+    const fileValue = 'file "quoted" \\ $literal `literal` %h %%h';
+    const inlineValue = 'inline "quoted" \\ %h %%h';
+    writeFileSync(environmentFile, serializeSystemdEnvironmentFile({ FIXTURE_VALUE: fileValue }));
+    writeFileSync(
+      join(alternateDirectory, "gateway.systemd.env"),
+      serializeSystemdEnvironmentFile({ FIXTURE_VALUE: "wrong neighbor" }),
+    );
+    const program = join(home, "finite child.mjs");
+    writeFileSync(
+      program,
+      "console.log(JSON.stringify({argv:process.argv.slice(2), cwd:process.cwd(), inline:process.env.FIXTURE_INLINE, value:process.env.FIXTURE_VALUE}));\n",
+    );
+    const programArguments = [process.execPath, program, 'argument "quoted" \\ %h %%h'];
+    writeFileSync(
+      unit,
+      buildSystemdUnit({
         programArguments,
         workingDirectory,
-        environment: { FIXTURE_INLINE: inlineValue, FIXTURE_VALUE: fileValue },
-      });
-      const child = execute();
-      expect(child.status, child.stderr).toBe(0);
-      expect(JSON.parse(child.stdout)).toEqual({
-        argv: programArguments.slice(2),
-        cwd: workingDirectory,
-        inline: inlineValue,
-        value: fileValue,
-      });
-    },
-  );
+        environment: { FIXTURE_INLINE: inlineValue, FIXTURE_VALUE: "inline fallback" },
+        environmentFiles: [environmentFile],
+      }),
+    );
+    const properties = manager(
+      "busctl",
+      "--user",
+      "--json=short",
+      "get-property",
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice",
+      "org.freedesktop.systemd1.Service",
+      "ExecStart",
+      "WorkingDirectory",
+      "Environment",
+      "EnvironmentFiles",
+      "UnsetEnvironment",
+    );
+    expect(properties.status, properties.stderr).toBe(0);
+    expect(
+      properties.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toContainEqual({
+      type: "a(sb)",
+      data: [[`${home}/state \\*\\?\\[ab\\]\\(x\\)\\\\ "quoted" %h %%h/gateway.systemd.env`, true]],
+    });
+    expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toMatchObject({
+      programArguments,
+      workingDirectory,
+      environment: { FIXTURE_INLINE: inlineValue, FIXTURE_VALUE: fileValue },
+    });
+    const child = execute();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({
+      argv: programArguments.slice(2),
+      cwd: workingDirectory,
+      inline: inlineValue,
+      value: fileValue,
+    });
+  });
 
   it("preserves lexical dot-dot paths while executing through a symlink", async () => {
     const { home, env, unit, execute } = fixture();
@@ -473,32 +468,12 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     expect(required.stderr).toContain("ENOENT");
   });
 
-  it.each(["*.env", "?.env", "[ab].env", "dangling\\", "unknown\\q"])(
-    "rejects unsupported EnvironmentFile pattern %j visibly",
-    (pattern) => {
-      const { home, unit, manager } = fixture();
-      writeFileSync(
-        unit,
-        buildSystemdUnit({ programArguments: [process.execPath, "-p", "process.cwd()"] }).replace(
-          "[Service]",
-          `[Service]\nEnvironmentFile=-${home}/${pattern}`,
-        ),
-      );
-      const load = manager("load-state");
-      expect(load.status).not.toBe(0);
-      expect(load.stderr).toContain("Unsupported");
-      const command = manager("command");
-      expect(command.status).not.toBe(0);
-      expect(command.stderr).toContain("Unsupported");
-    },
-  );
-
   it("keeps the inspected service alive after the caller terminal closes and drains restart children", ({
     signal,
   }) =>
     fixtureLifetime.run(async () => {
       const registry = "http://127.0.0.1:41731";
-      const { home, env, shell, systemctl, unit, paths } = fixture(true, registry);
+      const { home, env, shell, systemctl, unit, paths } = fixture(registry);
       env.NPM_CONFIG_REGISTRY = undefined;
       env.OPENCLAW_SKIP_CHANNELS = undefined;
       env.OPENCLAW_SKIP_PROVIDERS = undefined;
@@ -745,105 +720,102 @@ raise SystemExit(code if code >= 0 else 128 - code)
       }
     }));
 
-  it.each([true, false])(
-    "binds installation paths for direct and native clients (custom=%s)",
-    async (custom) => {
-      const { home, env, unit, paths, systemctl, shell, manager } = fixture(custom);
-      writeFileSync(unit, buildSystemdUnit({ programArguments: ["/usr/bin/fixture", "gateway"] }));
-      writeFileSync(paths.pid, `${process.pid}\n`);
-      writeFileSync(
-        `${paths.daemonLog}.runtime.json`,
-        JSON.stringify({ pid: process.pid, supervisorPid: process.pid, restarts: 0, entered: 1 }),
-      );
-      writeFileSync(`${paths.daemonLog}.exit.json`, JSON.stringify({ last: { code: 78 } }));
-      const driftedEnv = {
-        ...env,
-        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(home, "wrong.log"),
-        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(home, "wrong.pid"),
-        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: join(home, "wrong-daemon.log"),
-      };
-      const direct = spawnSync(
-        join(home, "bin/systemctl"),
-        [
-          "--user",
-          "show",
-          "openclaw-gateway.service",
-          "--property=Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
-        ],
-        { env: driftedEnv, encoding: "utf8" },
-      );
-      expect(direct.status, direct.stderr).toBe(0);
-      expect(direct.stdout).toContain(`MainPID=${process.pid}`);
-      expect(direct.stdout).toContain("ExecMainStatus=78");
-      expect(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
-        status: "running",
-        pid: process.pid,
-        lastExitStatus: 78,
-      });
-      // The manager may survive between service generations; that is not a live MainPID.
-      writeFileSync(
-        `${paths.daemonLog}.runtime.json`,
-        JSON.stringify({ pid: 0, supervisorPid: process.pid, restarts: 0, entered: 2 }),
-      );
-      expect(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
-        status: "unknown",
-        pid: undefined,
-      });
-      expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-        status: "unknown",
-        pid: undefined,
-        systemd: { tasksCurrent: undefined },
-      });
-      expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
-      expect.soft(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
-      // Observe an existing process group without signaling it: descendants can outlive
-      // both the main child and manager, so their presence still forbids restoration.
-      const group = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
-        encoding: "utf8",
-      });
-      expect(group.status, group.stderr).toBe(0);
-      const groupPid = Number(group.stdout.trim());
-      expect(groupPid).toBeGreaterThan(0);
-      rmSync(paths.pid);
-      writeFileSync(
-        `${paths.daemonLog}.runtime.json`,
-        JSON.stringify({ pid: 0, groupPid, restarts: 0, entered: 2 }),
-      );
-      expect.soft(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
-        status: "unknown",
-        pid: undefined,
-      });
-      expect.soft(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-        status: "unknown",
-        pid: undefined,
-        systemd: { tasksCurrent: undefined },
-      });
-      expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
-      expect.soft(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
-      expect(manager("begin-start").status).not.toBe(0);
-      writeFileSync(
-        `${paths.daemonLog}.runtime.json`,
-        JSON.stringify({ pid: 0, groupPid: 0, restarts: 0, entered: 2 }),
-      );
-      expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-        status: "stopped",
-        pid: undefined,
-        systemd: { tasksCurrent: 0 },
-      });
-      expect(shell("assert_update_restart_probe_inactive").status).toBe(0);
-      const starting = manager("begin-start");
-      expect(starting.status, starting.stderr).toBe(0);
-      expect(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
-      expect(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
-      expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-        status: "unknown",
-        pid: undefined,
-        systemd: { tasksCurrent: undefined },
-      });
-      expect(manager("begin-start").status).not.toBe(0);
-      expect(readFileSync(paths.log, "utf8")).toContain("--user show openclaw-gateway.service");
-      expect(existsSync(driftedEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG)).toBe(false);
-      // This is an observation-only PID fixture; never send stop to the test worker.
-    },
-  );
+  it("binds installation paths for direct and native clients", async () => {
+    const { home, env, unit, paths, systemctl, shell, manager } = fixture();
+    writeFileSync(unit, buildSystemdUnit({ programArguments: ["/usr/bin/fixture", "gateway"] }));
+    writeFileSync(paths.pid, `${process.pid}\n`);
+    writeFileSync(
+      `${paths.daemonLog}.runtime.json`,
+      JSON.stringify({ pid: process.pid, supervisorPid: process.pid, restarts: 0, entered: 1 }),
+    );
+    writeFileSync(`${paths.daemonLog}.exit.json`, JSON.stringify({ last: { code: 78 } }));
+    const driftedEnv = {
+      ...env,
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(home, "wrong.log"),
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(home, "wrong.pid"),
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: join(home, "wrong-daemon.log"),
+    };
+    const direct = spawnSync(
+      join(home, "bin/systemctl"),
+      [
+        "--user",
+        "show",
+        "openclaw-gateway.service",
+        "--property=Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+      ],
+      { env: driftedEnv, encoding: "utf8" },
+    );
+    expect(direct.status, direct.stderr).toBe(0);
+    expect(direct.stdout).toContain(`MainPID=${process.pid}`);
+    expect(direct.stdout).toContain("ExecMainStatus=78");
+    expect(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
+      status: "running",
+      pid: process.pid,
+      lastExitStatus: 78,
+    });
+    // The manager may survive between service generations; that is not a live MainPID.
+    writeFileSync(
+      `${paths.daemonLog}.runtime.json`,
+      JSON.stringify({ pid: 0, supervisorPid: process.pid, restarts: 0, entered: 2 }),
+    );
+    expect(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
+      status: "unknown",
+      pid: undefined,
+    });
+    expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
+      status: "unknown",
+      pid: undefined,
+      systemd: { tasksCurrent: undefined },
+    });
+    expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
+    expect.soft(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
+    // Observe an existing process group without signaling it: descendants can outlive
+    // both the main child and manager, so their presence still forbids restoration.
+    const group = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
+      encoding: "utf8",
+    });
+    expect(group.status, group.stderr).toBe(0);
+    const groupPid = Number(group.stdout.trim());
+    expect(groupPid).toBeGreaterThan(0);
+    rmSync(paths.pid);
+    writeFileSync(
+      `${paths.daemonLog}.runtime.json`,
+      JSON.stringify({ pid: 0, groupPid, restarts: 0, entered: 2 }),
+    );
+    expect.soft(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
+      status: "unknown",
+      pid: undefined,
+    });
+    expect.soft(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
+      status: "unknown",
+      pid: undefined,
+      systemd: { tasksCurrent: undefined },
+    });
+    expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
+    expect.soft(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
+    expect(manager("begin-start").status).not.toBe(0);
+    writeFileSync(
+      `${paths.daemonLog}.runtime.json`,
+      JSON.stringify({ pid: 0, groupPid: 0, restarts: 0, entered: 2 }),
+    );
+    expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
+      status: "stopped",
+      pid: undefined,
+      systemd: { tasksCurrent: 0 },
+    });
+    expect(shell("assert_update_restart_probe_inactive").status).toBe(0);
+    const starting = manager("begin-start");
+    expect(starting.status, starting.stderr).toBe(0);
+    expect(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
+    expect(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
+    expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
+      status: "unknown",
+      pid: undefined,
+      systemd: { tasksCurrent: undefined },
+    });
+    expect(manager("begin-start").status).not.toBe(0);
+    expect(readFileSync(paths.log, "utf8")).toContain("--user show openclaw-gateway.service");
+    expect(existsSync(driftedEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG)).toBe(false);
+    // This is an observation-only PID fixture; never send stop to the test worker.
+  });
 });

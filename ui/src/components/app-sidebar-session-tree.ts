@@ -200,7 +200,7 @@ export function projectSessionTree(params: {
     };
   };
 
-  const rootKeys = new Set(roots.map((row) => row.key));
+  const rootKeys = new Set(roots.filter((row) => row.archived !== true).map((row) => row.key));
   const reattachedRoots = new Set<string>();
   const projectedRoots = roots
     .filter((row) => {

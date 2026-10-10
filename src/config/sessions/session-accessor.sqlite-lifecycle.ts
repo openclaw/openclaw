@@ -10,7 +10,6 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import { preparePersonalGitHubSessionReceiptDeletion } from "../../state/github-personal-publication-lifecycle.js";
 import {
   createOpenClawAgentDatabaseClaim,
   readOpenClawAgentDatabaseIdentity,
@@ -346,32 +345,11 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       return await withSqliteSessionDeletions(
         resolved,
         prepared.targetSnapshot,
-        async (assertCurrent) => {
+        async (assertCurrent, _capture, settleReceipts) => {
           const assertDeletionCurrent = () => {
             assertSourceCurrent();
             assertCurrent();
           };
-          const deleteReceipts = await preparePersonalGitHubSessionReceiptDeletion({
-            agentId: resolved.agentId,
-            env: resolved.env,
-            generations: [
-              ...new Set([
-                params.target.canonicalKey,
-                ...params.target.storeKeys,
-                ...prepared.targetSnapshot.map((row) => row.sessionKey),
-              ]),
-            ].map((sessionKey) => {
-              const entry =
-                prepared.targetSnapshot.find((row) => row.sessionKey === sessionKey)?.entry ??
-                prepared.current.entry;
-              return {
-                sessionKey,
-                sessionId: entry.sessionId,
-                lifecycleRevision: entry.lifecycleRevision ?? null,
-              };
-            }),
-            assertCurrent: assertDeletionCurrent,
-          });
           const validation = {
             deleteParams: params,
             preparedTargetSnapshot: prepared.targetSnapshot,
@@ -543,9 +521,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               prepared.current.entry.sessionId,
               prepared.targetSnapshot.map((row) => row.sessionKey),
             );
-            await deleteReceipts({
-              assertCurrent: execution ? () => execution.assertCurrent() : undefined,
-            });
+            await settleReceipts(execution ? () => execution.assertCurrent() : undefined);
           }
           result.archivedTranscripts = await publishSessionStateArchives(
             resolved,
@@ -557,7 +533,28 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           result.archivedTranscripts.push(...historicalArchivedTranscripts);
           return result;
         },
-        { additionalIdentities: prepared.historicalGenerationIds, callerSettlesReceipts: true },
+        {
+          additionalIdentities: prepared.historicalGenerationIds,
+          receiptsOnCommit: {
+            generations: [
+              ...new Set([
+                params.target.canonicalKey,
+                ...params.target.storeKeys,
+                ...prepared.targetSnapshot.map((row) => row.sessionKey),
+              ]),
+            ].map((sessionKey) => {
+              const entry =
+                prepared.targetSnapshot.find((row) => row.sessionKey === sessionKey)?.entry ??
+                prepared.current.entry;
+              return {
+                agentId: resolved.agentId,
+                sessionKey,
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision ?? null,
+              };
+            }),
+          },
+        },
       );
     });
   } finally {

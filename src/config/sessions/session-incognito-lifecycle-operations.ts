@@ -70,18 +70,16 @@ export function deleteIncognitoSessionLifecycle(
     const [
       { withSqliteSessionDeletions },
       { collectActiveSessionWorkAdmissions },
-      { preparePersonalGitHubSessionReceiptDeletion },
       { publishCommittedSessionEntryRemoval },
     ] = await Promise.all([
       import("./session-accessor.sqlite-deletion.js"),
       import("../../sessions/session-lifecycle-admission.js"),
-      import("../../state/github-personal-publication-lifecycle.js"),
       import("./session-accessor.sqlite-identity.js"),
     ]);
     return withSqliteSessionDeletions(
       scope,
       [target],
-      async (assertDeletionCurrent, capture) => {
+      async (assertDeletionCurrent, capture, settleReceipts) => {
         const current: IncognitoSessionAuthority = {
           assertCurrent() {
             authority.assertCurrent();
@@ -90,18 +88,6 @@ export function deleteIncognitoSessionLifecycle(
           },
           authorize: (stage, facts) => authority.authorize?.(stage, facts),
         };
-        const deleteReceipts = await preparePersonalGitHubSessionReceiptDeletion({
-          agentId: actor.agentId,
-          env: scope.env,
-          generations: [
-            {
-              sessionKey: target.sessionKey,
-              sessionId: target.entry.sessionId,
-              lifecycleRevision: target.entry.lifecycleRevision ?? null,
-            },
-          ],
-          assertCurrent: () => current.assertCurrent(),
-        });
         const result = await actor.sessions.lifecycle(
           current,
           {
@@ -141,16 +127,26 @@ export function deleteIncognitoSessionLifecycle(
         );
         if (result.deleted) {
           const absent = actor.sessions.captureSnapshot(target.sessionKey);
-          await deleteReceipts({
-            assertCurrent: () => {
-              actor.assertCurrent();
-              absent.assertCurrent();
-            },
+          await settleReceipts(() => {
+            actor.assertCurrent();
+            absent.assertCurrent();
           });
         }
         return result;
       },
-      { incognito: actor, callerSettlesReceipts: true },
+      {
+        incognito: actor,
+        receiptsOnCommit: {
+          generations: [
+            {
+              agentId: actor.agentId,
+              sessionKey: target.sessionKey,
+              sessionId: target.entry.sessionId,
+              lifecycleRevision: target.entry.lifecycleRevision ?? null,
+            },
+          ],
+        },
+      },
     );
   });
 }

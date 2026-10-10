@@ -37,6 +37,10 @@ export function projectIncognitoSessionRuntimeFacts(
           permissionMode: entry.permissionMode,
           execHost: entry.execHost,
           execNode: entry.execNode,
+          execCwd: entry.execCwd,
+          skillLibrarySelections: entry.skillLibrarySelections,
+          pluginOwnerId: entry.pluginOwnerId,
+          agentHarnessId: entry.agentHarnessId,
         }
       : undefined,
     steering: entry

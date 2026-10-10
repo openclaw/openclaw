@@ -476,8 +476,9 @@ pricing context.
 
 Catalog reads and refresh writes run through the shared-state worker. If a
 background refresh fails, the Gateway records the error and keeps serving its
-accepted catalog. The next scheduled check runs six hours later; run
-`openclaw models refresh` to retry the download immediately.
+accepted catalog. The next scheduled check runs six hours later. To retry the
+download immediately, stop the Gateway through its service owner, run
+`openclaw models refresh`, then start it again.
 
 Remote data can update or add models only for providers declared by installed
 plugin manifests. It cannot supply API base URLs or request headers, and a
@@ -485,12 +486,12 @@ catalog older than the installed release's build stamp is ignored. Hosted
 metadata does not override a provider's account-discovery or model-admission
 rules.
 
-The background check also notices bundles downloaded by another process.
-An explicit Gateway model-list refresh triggers adoption after returning the
-current rows; it does not wait for adoption or another agent's discovery.
-A corrupt saved bundle leaves the accepted generation serving.
-`openclaw models refresh` reports the download result, not whether a running
-Gateway has finished publishing it.
+The Gateway owns catalog writes while it is running. `openclaw models refresh`
+requires exclusive offline ownership and reports the saved download; the next
+Gateway start loads compatible metadata. An explicit Gateway model-list refresh
+triggers adoption after returning the current rows; it does not wait for adoption
+or another agent's discovery. A corrupt saved bundle leaves the accepted
+generation serving.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
@@ -534,7 +535,8 @@ except for Novita, whose list mixes letter case, so only a case-insensitive miss
 counts. If a list is unreachable, malformed, or empty, that provider's rows
 publish as authored.
 
-Run `openclaw models refresh` for an immediate metadata and pricing check, or
+With the Gateway stopped, run `openclaw models refresh` for an immediate metadata
+and pricing check, or
 disable every hosted catalog request with `models.catalogRefresh.enabled:
 false`. When disabled, pricing stays at bundled and explicitly configured
 values. A self-hosted mirror can be selected with an HTTPS

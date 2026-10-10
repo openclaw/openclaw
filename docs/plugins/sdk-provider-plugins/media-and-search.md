@@ -61,6 +61,13 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
+    that reports usage calls it once per successful upstream request, before
+    resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
+    response has no valid counts. Callers can sum these reports and treat any
+    unavailable response as incomplete usage. The shared remote factory reports
+    OpenAI-style usage; vector return values and existing plugins stay unchanged.
+
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
     both creation options and cold index identity checks. Keep it configuration-only:

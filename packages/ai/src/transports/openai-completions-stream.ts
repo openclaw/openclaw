@@ -329,8 +329,9 @@ export async function processCompletionsStream(
     }
     appendContentDelta({ kind: "thinking", text: "" });
   };
-  const flushReasoningTagTextPartitioner = () => {
+  const flushReasoningTagTextPartitioner = (allowRecovery = true) => {
     const recoverUnclosed =
+      allowRecovery &&
       output.stopReason !== "length" &&
       output.stopReason !== "error" &&
       output.stopReason !== "aborted";
@@ -501,7 +502,7 @@ export async function processCompletionsStream(
         // Native calls own mixed streams; emit pending raw text in its original position.
         flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
-        flushReasoningTagTextPartitioner();
+        flushReasoningTagTextPartitioner(false);
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
           tagPendingCommentaryText(output.content),
