@@ -28,6 +28,15 @@
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.chat-reading-indicator--brand {
+  animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
+}
+
+.chat-reading-indicator--brand > openclaw-theme-brand-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .chat-reading-indicator--neutral {
   gap: 3px;
 }
@@ -122,6 +131,8 @@ button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is
 }
 
 .chat-turn-recap__claw {
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   color: var(--accent);
@@ -767,6 +778,7 @@ button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is
      not the svg, and must stay still under reduced motion too. */
   .chat-working-indicator,
   .chat-reading-indicator,
+  .chat-reading-indicator--brand,
   .chat-reading-indicator--neutral > span,
   .chat-reading-indicator svg,
   .chat-reading-indicator svg .claw-icon__jaw {

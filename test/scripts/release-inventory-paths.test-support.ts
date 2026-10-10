@@ -83,6 +83,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "scripts/full-release-candidate-contract.mjs",
   "scripts/full-release-validation-state.mjs",
   "scripts/full-release-validation-policy.mjs",
+  "scripts/pr-lib/gh-api-preflight.mjs",
   "scripts/release-ci-summary.mjs",
   "scripts/lib/full-release-candidate-reuse.mjs",
   "scripts/lib/full-release-child-request.mjs",

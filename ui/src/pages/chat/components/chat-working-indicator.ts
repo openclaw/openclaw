@@ -1,9 +1,13 @@
 import { html, nothing } from "lit";
-import type { ThemeMascot } from "../../../../../packages/gateway-protocol/src/theme.ts";
+import type {
+  ThemeMascot,
+  ThemeWorkingIndicator,
+} from "../../../../../packages/gateway-protocol/src/theme.ts";
+import { icons } from "../../../components/icons.ts";
 import "../../../components/elapsed-time.ts";
 import "../../../components/working-phrase.ts";
-import { icons } from "../../../components/icons.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
+import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
@@ -23,6 +27,7 @@ export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
     mascot?: ThemeMascot;
+    workingIndicator?: ThemeWorkingIndicator;
     workingPhrases?: readonly string[];
     waitingApproval?: boolean;
     waitingSubagents?: ChatSubagentWait;
@@ -45,7 +50,14 @@ export function renderChatWorkingIndicator(
   // Child sessions that are not subagents get a count and nothing else.
   const waitingSessions =
     waitingSubagents?.runningCount === 0 ? (waitingSubagents.sessionCount ?? 0) : 0;
-  const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
+  const indicator =
+    options.workingIndicator ??
+    (options.mascot !== undefined
+      ? options.mascot === "none"
+        ? "dots"
+        : "claw"
+      : currentThemeBranding().workingIndicator);
+  const neutral = indicator === "dots";
   const continuation = options.presentation === "continuation";
   // Without loaded child rows the pane only knows that some are still running.
   const statusLabel = waitingSubagents
@@ -111,20 +123,22 @@ export function renderChatWorkingIndicator(
       aria-live="off"
     >
       ${
-        continuation
+        continuation || indicator === "none"
           ? nothing
           : html`
               <div
                 class="chat-bubble chat-reading-indicator ${
                   neutral
                     ? "chat-reading-indicator--neutral"
-                    : selectWorkingClawSurprise(part.key, {
-                        eligible: !waitingApproval && !waitingSubagents,
-                      })
+                    : indicator === "brand"
+                      ? "chat-reading-indicator--brand"
+                      : selectWorkingClawSurprise(part.key, {
+                          eligible: !waitingApproval && !waitingSubagents,
+                        })
                 }"
                 aria-hidden="true"
               >
-                ${neutral ? html`<span></span><span></span><span></span>` : icons.claw}
+                ${neutral ? html`<span></span><span></span><span></span>` : indicator === "brand" ? renderThemeBrandIcon() : icons.claw}
               </div>
             `
       }
@@ -134,7 +148,10 @@ export function renderChatWorkingIndicator(
             ? html`${sentencePart(beforeChild)}${childName}${sentencePart(afterChild.join(""))}`
             : waitingOnCount
               ? renderSubagentsButton(statusLabel)
-              : html`<span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>`
+              : html`<span
+                  class=${working && !continuation && indicator !== "none" ? "sr-only" : ""}
+                  >${statusLabel}</span
+                >`
         }
         ${
           waitingApproval || startedAt === null
@@ -204,7 +221,7 @@ export function renderTurnRecapRow(
         continuation
           ? nothing
           : html`<span class="chat-turn-recap__claw" aria-hidden="true"
-              >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
+              >${renderThemeBrandIcon(icons.claw)}</span
             >`
       }
       <span>${t("chat.turnRecap.doneIn", { duration })}</span>

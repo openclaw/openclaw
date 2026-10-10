@@ -26,8 +26,8 @@ requests. On Discord and Telegram, it also keeps the current operation and
 delegated task status visible without a detailed tool log or utility model.
 Intermediate tool failures and nonzero command exits stay out of the draft.
 Set `streaming.progress.toolProgress: true` to add a rolling tool log,
-including tool failures, with rows such as `Bash: run tests`. Telegram
-prefixes each tool row with a text glyph for its tool, such as
+including tool failures, with rows such as `Bash: run tests`. Discord and
+Telegram prefix each tool row with a text glyph for its tool, such as
 `📖 Read: from docs/index.md`; other channels keep plain rows. Channel plugins opt in
 through the `toolIcons` option of `createChannelProgressDraftCompositor`.
 
