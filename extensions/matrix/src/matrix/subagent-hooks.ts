@@ -70,8 +70,8 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
       pendingByAccount.set(binding.accountId, pending);
     }
   }
-  for (const [accountId, pending] of pendingByAccount) {
-    await getMatrixThreadBindingManager(accountId)?.removeBindingsAsync(pending);
+  for (const [bindingAccountId, pending] of pendingByAccount) {
+    await getMatrixThreadBindingManager(bindingAccountId)?.removeBindingsAsync(pending);
   }
 }
 

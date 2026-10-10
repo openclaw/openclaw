@@ -265,6 +265,7 @@ export async function createMatrixThreadBindingManager(params: {
         throw new AggregateError(
           [error, reconciliationError],
           "Matrix thread binding persistence could not be reconciled; restart the account",
+          { cause: reconciliationError },
         );
       }
       throw error;
