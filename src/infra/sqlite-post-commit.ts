@@ -99,8 +99,14 @@ function installCommittedState(
 }
 
 /** Use the same phase ordering for an already committed worker receipt. */
-export function publishSqliteCommittedState(publication: SqliteCommittedPublication): void {
-  installCommittedState([committedPublicationState(publication)], [publication.notify]);
+export function publishSqliteCommittedState(
+  publication: SqliteCommittedPublication | readonly SqliteCommittedPublication[],
+): void {
+  const publications = "installFacts" in publication ? [publication] : publication;
+  installCommittedState(
+    publications.map(committedPublicationState),
+    publications.map((entry) => entry.notify),
+  );
 }
 
 /** Stage a complete owner publication; native savepoints share the outer commit. */

@@ -1751,25 +1751,6 @@ function installControlUiMockGateway(
     sessionMessageEventTimer = window.setInterval(emitRepeatingSessionEvent, intervalMs);
   }
 
-  function updateSessionMessageSubscription(
-    socket: MockWebSocket,
-    method: string,
-    params: unknown,
-  ): void {
-    if (socket.readyState !== MockWebSocket.OPEN) {
-      return;
-    }
-    socket.sessionMessageSubscriptions.recordRequest(method, params);
-    if (method === "sessions.messages.subscribe") {
-      startRepeatingSessionEvents();
-    } else if (
-      method === "sessions.messages.unsubscribe" &&
-      socket.sessionMessageSubscriptions.size === 0
-    ) {
-      stopRepeatingSessionEvents();
-    }
-  }
-
   function parseMockConfig(raw: string, fallback: unknown): { value: unknown; parsed: boolean } {
     try {
       return { value: parseJson5(raw), parsed: true };
@@ -2439,7 +2420,11 @@ function installControlUiMockGateway(
     readyState = MockWebSocket.CONNECTING;
     readonly url: string;
     private tickTimer: number | null = null;
-    readonly sessionMessageSubscriptions = subscriptionRouting.createClient();
+    readonly sessionMessageSubscriptions = subscriptionRouting.createClient({
+      isOpen: () => this.readyState === MockWebSocket.OPEN,
+      startRepeatingEvents: startRepeatingSessionEvents,
+      stopRepeatingEvents: stopRepeatingSessionEvents,
+    });
 
     constructor(url: string | URL) {
       super();
@@ -2516,7 +2501,7 @@ function installControlUiMockGateway(
         const mockError =
           isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
         if (!mockError) {
-          updateSessionMessageSubscription(this, method, frame.params);
+          this.sessionMessageSubscriptions.recordRequest(method, frame.params, payload);
         }
         this.deliver(
           mockError
@@ -2649,7 +2634,11 @@ function installControlUiMockGateway(
         );
         const mockError = isRecord(resolvedPayload) ? resolvedPayload["__mockError"] : undefined;
         if (!mockError) {
-          updateSessionMessageSubscription(response.socket, response.method, response.params);
+          response.socket.sessionMessageSubscriptions.recordRequest(
+            response.method,
+            response.params,
+            resolvedPayload,
+          );
         }
         response.socket.deliver({
           id: response.id,
