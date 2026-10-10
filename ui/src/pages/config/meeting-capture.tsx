@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { shellLayoutTraitsRef } from "../../app/shell-layout-traits-solid.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -23,6 +23,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 registerEnglishCatalog(registerTranscriptsEnglish);
 
@@ -39,9 +40,9 @@ function supportsAutoStartSetup(provider: SourceProvider | undefined): boolean {
 }
 
 type SettingsProps = {
-  mutationDisabled?: boolean;
-  buildEditor?: () => JSX.Element;
-  advancedExpanded?: boolean;
+  mutationDisabled: boolean;
+  buildEditor: (() => JSX.Element) | undefined;
+  advancedExpanded: boolean;
 };
 export function MeetingCaptureSettingsContent(props: SettingsProps) {
   const context = useApplication();
@@ -383,7 +384,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
               }
             />
             {editedProviderId() && !supportsAutoStartSetup(selectedProvider()) ? (
-              <SettingsEmpty>{t("meetingCapture.autoStartUnavailable")}</SettingsEmpty>
+              <SettingsEmpty message={t("meetingCapture.autoStartUnavailable")} />
             ) : undefined}
             <For each={fields()}>
               {(key) => (
@@ -444,9 +445,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
               }
             />
             {editError() ? (
-              <SettingsEmpty>
-                <span role="alert">{editError()}</span>
-              </SettingsEmpty>
+              <SettingsEmpty message={<span role="alert">{editError()}</span>} />
             ) : undefined}
           </>
         </SettingsSection>
@@ -554,24 +553,28 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
                     : t(status() ? "meetingCapture.noSaved" : "transcripts.unknown")
                 }
                 control={
-                  <SettingsValue>
-                    {saved()
-                      ? t("transcripts.savedCount", {
-                          count: String(saved()!.utteranceCount),
-                        })
-                      : t("transcripts.unknown")}
-                  </SettingsValue>
+                  <SettingsValue
+                    value={
+                      saved()
+                        ? t("transcripts.savedCount", {
+                            count: String(saved()!.utteranceCount),
+                          })
+                        : t("transcripts.unknown")
+                    }
+                  />
                 }
               />
               {saved() ? (
                 <SettingsRow
                   title={t("meetingCapture.lastUtterance")}
                   control={
-                    <SettingsValue>
-                      {saved()!.lastUtteranceAt
-                        ? new Date(saved()!.lastUtteranceAt).toLocaleString()
-                        : t("transcripts.unknown")}
-                    </SettingsValue>
+                    <SettingsValue
+                      value={
+                        saved()!.lastUtteranceAt
+                          ? new Date(saved()!.lastUtteranceAt).toLocaleString()
+                          : t("transcripts.unknown")
+                      }
+                    />
                   }
                 />
               ) : undefined}
@@ -589,22 +592,22 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
                 }
               />
               {error() ? (
-                <SettingsEmpty>
-                  <span role="alert">
-                    {t("meetingCapture.healthError")} {error()}
-                  </span>
-                </SettingsEmpty>
+                <SettingsEmpty
+                  message={
+                    <span role="alert">
+                      {t("meetingCapture.healthError")} {error()}
+                    </span>
+                  }
+                />
               ) : undefined}
               {requestStatus() === "pending" ? (
-                <SettingsEmpty>
-                  <span role="status">{t("common.loading")}</span>
-                </SettingsEmpty>
+                <SettingsEmpty message={<span role="status">{t("common.loading")}</span>} />
               ) : undefined}
               {!hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null) ? (
-                <SettingsEmpty>{t("configView.adminRequired")}</SettingsEmpty>
+                <SettingsEmpty message={t("configView.adminRequired")} />
               ) : undefined}
               {rawDraftPending() ? (
-                <SettingsEmpty>{t("meetingCapture.rawDraftPending")}</SettingsEmpty>
+                <SettingsEmpty message={t("meetingCapture.rawDraftPending")} />
               ) : undefined}
             </>
           </SettingsSection>
@@ -625,14 +628,14 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
             {sources().length ? (
               sourceRows()
             ) : (
-              <SettingsEmpty>{t("meetingCapture.noSources")}</SettingsEmpty>
+              <SettingsEmpty message={t("meetingCapture.noSources")} />
             )}
           </SettingsSection>
           <Show when={editing() !== null ? { index: editing() } : undefined} keyed>
             {(selection) => <SourceEditor index={selection.index!} />}
           </Show>
           {status() && !status()!.providers.some(supportsAutoStartSetup) ? (
-            <SettingsEmpty>{t("meetingCapture.noAutoStartProviders")}</SettingsEmpty>
+            <SettingsEmpty message={t("meetingCapture.noAutoStartProviders")} />
           ) : undefined}
           {status()?.configuredSources.length ? (
             <SettingsSection
@@ -676,22 +679,26 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
           <p class="settings-page__intro">{t("meetingCapture.sttHint")}</p>
         </div>
       </SettingsPage>
-      <details
-        class="settings-page"
-        open={props.advancedExpanded}
-        ref={shellLayoutTraitsRef({ settingsPage: true })}
-      >
-        <summary class="settings-section__heading">{t("meetingCapture.advancedSettings")}</summary>
-        {props.buildEditor?.()}
-      </details>
+      <ShellLayoutBoundary traits={{ settingsPage: true }}>
+        <details class="settings-page" open={props.advancedExpanded}>
+          <summary class="settings-section__heading">
+            {t("meetingCapture.advancedSettings")}
+          </summary>
+          {props.buildEditor?.()}
+        </details>
+      </ShellLayoutBoundary>
     </>
   );
 }
 
-export function MeetingCaptureSettings(props: SettingsProps) {
-  return (
-    <openclaw-meeting-capture-settings>
-      <MeetingCaptureSettingsContent {...props} />
-    </openclaw-meeting-capture-settings>
-  );
-}
+export const MeetingCaptureSettings = defineSolidBridge<SettingsProps>(
+  "openclaw-meeting-capture-settings",
+  (props) => <MeetingCaptureSettingsContent {...props} />,
+  {
+    properties: {
+      mutationDisabled: { default: false, type: Boolean },
+      buildEditor: { default: undefined, attribute: false },
+      advancedExpanded: { default: false, type: Boolean },
+    },
+  },
+);

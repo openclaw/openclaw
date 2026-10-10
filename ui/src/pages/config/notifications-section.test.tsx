@@ -1,19 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createSignal, flush } from "@solidjs/signals";
-import { render, type JSX } from "@solidjs/web";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderNotificationsSection } from "./notifications-section.tsx";
-const disposers: Array<() => void> = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
-function mount(view: () => JSX.Element, container: HTMLElement) {
-  disposers.push(render(view, container));
-}
 
 const userPreferences = {
   categories: {
@@ -33,14 +25,14 @@ describe("native notification test outcome", () => {
     const onSend = vi.fn();
     const container = document.createElement("div");
 
-    mount(
+    mountSolid(
       () =>
         renderNotificationsSection({
           connected: true,
           nativeNotifications: { permission: "granted", test: { state: "pending" } },
           onNativeNotificationsSendTest: onSend,
         }),
-      container,
+      { container },
     );
 
     const button = container.querySelector<HTMLButtonElement>("button");
@@ -53,7 +45,7 @@ describe("native notification test outcome", () => {
   it("renders an actionable error without replacing granted permission", () => {
     const container = document.createElement("div");
 
-    mount(
+    mountSolid(
       () =>
         renderNotificationsSection({
           connected: true,
@@ -62,7 +54,7 @@ describe("native notification test outcome", () => {
             test: { state: "error", message: "Open System Settings and try again." },
           },
         }),
-      container,
+      { container },
     );
 
     expect(container.textContent).toContain("Granted");
@@ -72,13 +64,13 @@ describe("native notification test outcome", () => {
 
   it("renders queued success independently from permission", () => {
     const container = document.createElement("div");
-    mount(
+    mountSolid(
       () =>
         renderNotificationsSection({
           connected: true,
           nativeNotifications: { permission: "granted", test: { state: "sent" } },
         }),
-      container,
+      { container },
     );
 
     expect(container.textContent).toContain("Granted");
@@ -88,37 +80,32 @@ describe("native notification test outcome", () => {
 
 describe("Web Push preference saves", () => {
   it("lets recipients opt in to mentions and override them for one browser", () => {
-    const container = document.createElement("div");
     const onUserPreferences = vi.fn();
     const onDevicePreferences = vi.fn();
-    mount(
-      () =>
-        renderNotificationsSection({
-          connected: true,
-          webPush: {
-            supported: true,
-            permission: "granted",
-            subscription: "registered",
-            loading: false,
-            preferences: {
-              durableIdentity: true,
-              user: userPreferences,
-              device: { enabled: true, label: "phone" },
-              effective: { ...userPreferences, enabled: true, label: "phone" },
-            },
+    const { container, getByRole } = mountSolid(() =>
+      renderNotificationsSection({
+        connected: true,
+        webPush: {
+          supported: true,
+          permission: "granted",
+          subscription: "registered",
+          loading: false,
+          preferences: {
+            durableIdentity: true,
+            user: userPreferences,
+            device: { enabled: true, label: "phone" },
+            effective: { ...userPreferences, enabled: true, label: "phone" },
           },
-          onWebPushSetUserPreferences: onUserPreferences,
-          onWebPushSetDevicePreferences: onDevicePreferences,
-        }),
-      container,
+        },
+        onWebPushSetUserPreferences: onUserPreferences,
+        onWebPushSetDevicePreferences: onDevicePreferences,
+      }),
     );
 
-    const accountToggle = expectDefined(
-      [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(
-        (toggle) => toggle.getAttribute("aria-label")?.trim() === "Someone mentions me",
-      ),
-      "mention account preference",
-    );
+    const accountToggle = getByRole("switch", { name: "Someone mentions me" });
+    if (!(accountToggle instanceof HTMLInputElement)) {
+      throw new Error("Expected the mention account preference switch");
+    }
     expect(accountToggle.checked).toBe(false);
     accountToggle.checked = true;
     accountToggle.dispatchEvent(new Event("change"));
@@ -144,7 +131,7 @@ describe("Web Push preference saves", () => {
   it("disables every preference control while a save is in flight", () => {
     const container = document.createElement("div");
 
-    mount(
+    mountSolid(
       () =>
         renderNotificationsSection({
           connected: true,
@@ -161,7 +148,7 @@ describe("Web Push preference saves", () => {
             },
           },
         }),
-      container,
+      { container },
     );
 
     // Preference sections stack inside the page column; a nested .settings-page
@@ -186,7 +173,6 @@ describe("Web Push preference controls", () => {
       timeZone?: string;
     } = {},
   ) {
-    const container = document.createElement("div");
     const [timeZone, setTimeZone] = createSignal(options.timeZone ?? "UTC");
     const user = () => ({
       ...userPreferences,
@@ -197,37 +183,38 @@ describe("Web Push preference controls", () => {
       },
     });
     const device = { enabled: true, label: "phone", agentIds: ["main"] };
-    mount(
-      () =>
-        renderNotificationsSection({
-          connected: true,
-          onWebPushSetDevicePreferences: options.onDevice,
-          onWebPushSetUserPreferences: options.onUser,
-          get webPush() {
-            return {
-              supported: true,
-              permission: "granted",
-              subscription: "registered",
-              loading: false,
-              preferences: {
-                durableIdentity: true,
-                user: user(),
-                device,
-                effective: { ...user(), ...device },
-              },
-            };
-          },
-        }),
-      container,
+    const mounted = mountSolid(() =>
+      renderNotificationsSection({
+        connected: true,
+        onWebPushSetDevicePreferences: options.onDevice,
+        onWebPushSetUserPreferences: options.onUser,
+        get webPush() {
+          return {
+            supported: true,
+            permission: "granted",
+            subscription: "registered",
+            loading: false,
+            preferences: {
+              durableIdentity: true,
+              user: user(),
+              device,
+              effective: { ...user(), ...device },
+            },
+          };
+        },
+      }),
     );
-    return { container, setTimeZone };
+    return { ...mounted, setTimeZone };
   }
 
   it("renders every preference control through the shared settings control set", () => {
-    const { container } = renderPreferences();
+    const { container, getAllByRole } = renderPreferences();
 
-    // Boolean settings retain the shared native toggle presentation.
-    expect(container.querySelectorAll('input[type="checkbox"].settings-toggle')).toHaveLength(7);
+    // Every boolean control keeps a nonempty accessible name and the shared presentation.
+    expect(getAllByRole("switch", { name: /\S/ })).toHaveLength(7);
+    expect(
+      container.querySelectorAll('input[type="checkbox"].settings-toggle__input'),
+    ).toHaveLength(7);
     expect(container.textContent).not.toContain("Background task failed");
 
     const unstyled = Array.from(container.querySelectorAll<HTMLElement>("select, input"))
@@ -236,9 +223,12 @@ describe("Web Push preference controls", () => {
           control.tagName === "SELECT"
             ? "settings-select"
             : control.getAttribute("type") === "checkbox"
-              ? "settings-toggle"
+              ? "settings-toggle__input"
               : "settings-input";
-        return !control.classList.contains(expectedClass) || !control.getAttribute("aria-label");
+        return (
+          !control.classList.contains(expectedClass) ||
+          (control.getAttribute("type") !== "checkbox" && !control.getAttribute("aria-label"))
+        );
       })
       .map((control) => control.outerHTML.slice(0, 60));
     expect(container.querySelectorAll("select")).toHaveLength(10);

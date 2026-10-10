@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { For, createMemo } from "solid-js";
-import { ProviderIcon } from "../../components/solid/provider-icon.tsx";
+import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { pluginConfigSchema, pluginEntryValue } from "../plugins/settings-model.ts";
@@ -83,7 +83,7 @@ export function SessionSources(props: ConfigProps) {
                 )?.enabled;
               return (
                 <SettingsToggleRow
-                  icon={<ProviderIcon provider={source().icon} class="session-source__icon" />}
+                  icon={<ProviderBrandIcon provider={source().icon} class="session-source__icon" />}
                   title={t(source().labelKey)}
                   description={
                     source().enabledSchema

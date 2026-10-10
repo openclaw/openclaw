@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "@solidjs/signals";
-import { render } from "@solidjs/web";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebPushNotificationPreferences } from "../../../packages/gateway-protocol/src/schema/push.ts";
 import {
@@ -11,6 +10,8 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { NotificationsSection } from "../pages/config/notifications-section.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -677,7 +678,7 @@ describe("web push Gateway reconciliation", () => {
       const capability = createWebPushCapability(harness.gateway);
       const container = document.createElement("div");
       const [snapshot, setSnapshot] = createSignal(capability.snapshot);
-      const dispose = render(
+      const { unmount: dispose } = mountSolid(
         () => (
           <NotificationsSection
             connected={true}
@@ -686,7 +687,7 @@ describe("web push Gateway reconciliation", () => {
             onWebPushUnsubscribe={() => void capability.run({ kind: "disable" })}
           />
         ),
-        container,
+        { container },
       );
       const stop = capability.subscribe(() => {
         setSnapshot({ ...capability.snapshot });

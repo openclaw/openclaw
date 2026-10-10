@@ -1,15 +1,15 @@
-// Control UI tests cover config behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { ConfigForm as renderConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
-import "../../styles.css";
 import type { SelectPicker } from "../../components/select-picker.ts";
+import "../../styles.css";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+// Control UI tests cover config behavior.
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { BrowserLinkPreferencesRow } from "./browser-link-preferences.tsx";
 import {
   baseProps,
-  mountSolid,
   renderAppearance,
   renderConfigInto,
   renderConfigView,
@@ -381,7 +381,7 @@ describe("config view", () => {
           onShowAdvanced: vi.fn(),
           onPatch: vi.fn(),
         }),
-      nested,
+      { container: nested },
     );
     expect(required(nested, "details.config-advanced-disclosure", HTMLDetailsElement).open).toBe(
       true,

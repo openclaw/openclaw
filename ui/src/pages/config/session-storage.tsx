@@ -3,7 +3,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { For, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { shellLayoutTraitsRef } from "../../app/shell-layout-traits-solid.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -22,6 +22,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -40,9 +41,9 @@ function externalizedTranscripts(count: number): string {
 }
 
 type SettingsProps = {
-  mutationDisabled?: boolean;
-  buildEditor?: () => JSX.Element;
-  advancedExpanded?: boolean;
+  mutationDisabled: boolean;
+  buildEditor: (() => JSX.Element) | undefined;
+  advancedExpanded: boolean;
 };
 export function SessionStorageSettingsContent(props: SettingsProps) {
   const context = useApplication();
@@ -347,21 +348,21 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
             hot: String(totals.transcripts - totals.cold),
             cold: String(totals.cold),
           })}
-          control={<SettingsValue>{String(totals.transcripts)}</SettingsValue>}
+          control={<SettingsValue value={String(totals.transcripts)} />}
         />
         <SettingsRow
           title={t("configView.sessionStorage.database")}
           description={t("configView.sessionStorage.walSize", { size: storageSize(totals.wal) })}
-          control={<SettingsValue>{storageSize(totals.database)}</SettingsValue>}
+          control={<SettingsValue value={storageSize(totals.database)} />}
         />
         <SettingsRow
           title={t("configView.sessionStorage.archives")}
-          control={<SettingsValue>{storageSize(totals.archives)}</SettingsValue>}
+          control={<SettingsValue value={storageSize(totals.archives)} />}
         />
         <SettingsRow
           title={t("configView.sessionStorage.embeddedArchives")}
           description={t("configView.sessionStorage.embeddedArchivesHint")}
-          control={<SettingsValue>{storageSize(totals.embedded)}</SettingsValue>}
+          control={<SettingsValue value={storageSize(totals.embedded)} />}
         />
         {status.agents.length > 1 ? (
           <details class="settings-row settings-row--stacked">
@@ -423,9 +424,7 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
           }
         />
         {status.maintenance.lastError ? (
-          <SettingsEmpty>
-            <span role="alert">{status.maintenance.lastError}</span>
-          </SettingsEmpty>
+          <SettingsEmpty message={<span role="alert">{status.maintenance.lastError}</span>} />
         ) : undefined}
       </>
     );
@@ -455,22 +454,24 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
             {status() ? (
               renderInventory(status())
             ) : (
-              <SettingsEmpty>
-                {requestStatus() === "error" ? (
-                  <span role="alert">
-                    {formatUiError(requestError())}
-                    {t("configView.sessionStorage.refreshAfterError")}
-                  </span>
-                ) : (
-                  t(
-                    client()
-                      ? "common.loading"
-                      : context.gateway.snapshot.phase === "connected"
-                        ? "configView.sessionStorage.adminRequired"
-                        : "configView.sessionStorage.disconnected",
+              <SettingsEmpty
+                message={
+                  requestStatus() === "error" ? (
+                    <span role="alert">
+                      {formatUiError(requestError())}
+                      {t("configView.sessionStorage.refreshAfterError")}
+                    </span>
+                  ) : (
+                    t(
+                      client()
+                        ? "common.loading"
+                        : context.gateway.snapshot.phase === "connected"
+                          ? "configView.sessionStorage.adminRequired"
+                          : "configView.sessionStorage.disconnected",
+                    )
                   )
-                )}
-              </SettingsEmpty>
+                }
+              />
             )}
           </SettingsSection>
           <SettingsSection title={t("configView.sessionStorage.automatic")}>
@@ -532,13 +533,9 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
                 }
               />
               {runError() && runError() !== status()?.maintenance.lastError ? (
-                <SettingsEmpty>
-                  <span role="alert">{runError()}</span>
-                </SettingsEmpty>
+                <SettingsEmpty message={<span role="alert">{runError()}</span>} />
               ) : runOutcome() ? (
-                <SettingsEmpty>
-                  <span role="status">{runOutcome()}</span>
-                </SettingsEmpty>
+                <SettingsEmpty message={<span role="status">{runOutcome()}</span>} />
               ) : undefined}
             </>
           </SettingsSection>
@@ -548,24 +545,26 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
           />
         </div>
       </SettingsPage>
-      <details
-        class="settings-page"
-        open={props.advancedExpanded}
-        ref={shellLayoutTraitsRef({ settingsPage: true })}
-      >
-        <summary class="settings-section__heading">
-          {t("configView.sessionStorage.advanced")}
-        </summary>
-        {props.buildEditor?.()}
-      </details>
+      <ShellLayoutBoundary traits={{ settingsPage: true }}>
+        <details class="settings-page" open={props.advancedExpanded}>
+          <summary class="settings-section__heading">
+            {t("configView.sessionStorage.advanced")}
+          </summary>
+          {props.buildEditor?.()}
+        </details>
+      </ShellLayoutBoundary>
     </>
   );
 }
 
-export function SessionStorageSettings(props: SettingsProps) {
-  return (
-    <openclaw-session-storage-settings>
-      <SessionStorageSettingsContent {...props} />
-    </openclaw-session-storage-settings>
-  );
-}
+export const SessionStorageSettings = defineSolidBridge<SettingsProps>(
+  "openclaw-session-storage-settings",
+  (props) => <SessionStorageSettingsContent {...props} />,
+  {
+    properties: {
+      mutationDisabled: { default: false, type: Boolean },
+      buildEditor: { default: undefined, attribute: false },
+      advancedExpanded: { default: false, type: Boolean },
+    },
+  },
+);

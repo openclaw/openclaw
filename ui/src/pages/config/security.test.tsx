@@ -1,17 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { render, type JSX } from "@solidjs/web";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { renderSecurity } from "./security.tsx";
-const disposers: Array<() => void> = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
-function mount(view: () => JSX.Element, container: HTMLElement) {
-  disposers.push(render(view, container));
-}
 
 type SecurityViewProps = Parameters<typeof renderSecurity>[0];
 
@@ -71,7 +62,7 @@ describe("renderSecurity", () => {
     const onToolProfileChange = vi.fn();
     const container = document.createElement("div");
 
-    mount(
+    mountSolid(
       () =>
         renderSecurity(
           createProps({
@@ -87,7 +78,7 @@ describe("renderSecurity", () => {
             onToolProfileChange,
           }),
         ),
-      container,
+      { container },
     );
 
     const browserRow = expectRowByTitle(container, "Browser enabled");
@@ -111,7 +102,9 @@ describe("renderSecurity", () => {
     const onToolProfileChange = vi.fn();
     const container = document.createElement("div");
 
-    mount(() => renderSecurity(createProps({ configBusy: true, onToolProfileChange })), container);
+    mountSolid(() => renderSecurity(createProps({ configBusy: true, onToolProfileChange })), {
+      container,
+    });
 
     const profileButton = expectButtonByText(
       expectRowByTitle(container, "Available tools"),
@@ -129,7 +122,7 @@ describe("renderSecurity", () => {
   it("shows gateway auth as a dot status, not a pill", () => {
     const container = document.createElement("div");
 
-    mount(
+    mountSolid(
       () =>
         renderSecurity(
           createProps({
@@ -143,7 +136,7 @@ describe("renderSecurity", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
 
     const authRow = expectRowByTitle(container, "Gateway auth");
@@ -156,7 +149,7 @@ describe("renderSecurity", () => {
     const onPairMobile = vi.fn();
     const container = document.createElement("div");
 
-    mount(() => renderSecurity(createProps({ onPairMobile })), container);
+    mountSolid(() => renderSecurity(createProps({ onPairMobile })), { container });
 
     expectRowByTitle(container, "Pair a device");
     const button = expectButtonByText(container, "Pair device");
@@ -168,9 +161,9 @@ describe("renderSecurity", () => {
   it("embeds the schema editor below the curated overview", () => {
     const container = document.createElement("div");
 
-    mount(
+    mountSolid(
       () => renderSecurity(createProps({ editor: <div data-testid="security-editor" /> })),
-      container,
+      { container },
     );
 
     const page = container.querySelector(".security-page");
@@ -181,7 +174,7 @@ describe("renderSecurity", () => {
   it("shows inherited default descriptions", () => {
     const container = document.createElement("div");
 
-    mount(
+    mountSolid(
       () =>
         renderSecurity(
           createProps({
@@ -195,7 +188,7 @@ describe("renderSecurity", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
 
     expect(expectRowByTitle(container, "Browser enabled").textContent).not.toContain(
@@ -216,7 +209,7 @@ describe("renderSecurity", () => {
       const props = createProps();
       const onToolProfileChange = vi.fn();
       const container = document.createElement("div");
-      mount(
+      mountSolid(
         () =>
           renderSecurity({
             ...props,
@@ -228,7 +221,7 @@ describe("renderSecurity", () => {
             configBusy: busy,
             onToolProfileChange,
           }),
-        container,
+        { container },
       );
 
       expect(onToolProfileChange).not.toHaveBeenCalled();

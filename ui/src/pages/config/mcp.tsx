@@ -26,7 +26,7 @@ export type McpViewProps = {
 export function McpIntro() {
   return (
     <>
-      {t("mcpPage.intro")} <LearnMoreLink href={MCP_DOCS_URL} />
+      {t("mcpPage.intro")} <LearnMoreLink url={MCP_DOCS_URL} />
     </>
   );
 }
@@ -41,23 +41,21 @@ export function Mcp(props: McpViewProps) {
           <div class="settings-group">
             <SettingsRow
               title={t("mcpPage.servers")}
-              control={<SettingsValue>{rows().length}</SettingsValue>}
+              control={<SettingsValue value={rows().length} />}
             />
             <SettingsRow
               title={t("common.enabled")}
-              control={<SettingsValue>{rows().filter((row) => row.enabled).length}</SettingsValue>}
+              control={<SettingsValue value={rows().filter((row) => row.enabled).length} />}
             />
             <SettingsRow
               title={t("mcpPage.oauth")}
               control={
-                <SettingsValue>{rows().filter((row) => row.auth === "oauth").length}</SettingsValue>
+                <SettingsValue value={rows().filter((row) => row.auth === "oauth").length} />
               }
             />
             <SettingsRow
               title={t("mcpPage.filtered")}
-              control={
-                <SettingsValue>{rows().filter((row) => row.toolFilter).length}</SettingsValue>
-              }
+              control={<SettingsValue value={rows().filter((row) => row.toolFilter).length} />}
             />
           </div>
         </section>

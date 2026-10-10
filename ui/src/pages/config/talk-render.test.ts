@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/web";
-import { createComponent, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createComponent } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
 import { Talk, type TalkRealtimeProviderOption } from "./talk.tsx";
 
@@ -19,58 +20,46 @@ function renderFixture(
 ) {
   const { selection, provider, ...props } = overrides;
   const model = selection?.model ?? "gpt-live";
-  const container = document.createElement("div");
-  const stop = mountSolid(
-    () =>
-      createComponent(Talk, {
-        selection: {
-          provider: "openai",
-          model,
-          speakerVoice: null,
-          transport: "webrtc",
-          consultRouting: null,
-          providerEntries: {},
-          ...selection,
-        },
-        catalog: {
-          kind: "ready",
-          ready: true,
-          activeProvider: "openai",
-          providers: [
-            {
-              id: "openai",
-              label: "OpenAI",
-              configured: true,
-              aliases: [],
-              models: [model],
-              voices: [],
-              transports: ["webrtc", "gateway-relay"],
-              defaultModel: model,
-              ...provider,
-            },
-          ],
-        },
-        configBusy: false,
-        onProviderChange: vi.fn(),
-        onModelChange: vi.fn(),
-        onVoiceChange: vi.fn(),
-        editor: null,
-        ...props,
-      }),
-    container,
+  const view = mountSolid(() =>
+    createComponent(Talk, {
+      selection: {
+        provider: "openai",
+        model,
+        speakerVoice: null,
+        transport: "webrtc",
+        consultRouting: null,
+        providerEntries: {},
+        ...selection,
+      },
+      catalog: {
+        kind: "ready",
+        ready: true,
+        activeProvider: "openai",
+        providers: [
+          {
+            id: "openai",
+            label: "OpenAI",
+            configured: true,
+            aliases: [],
+            models: [model],
+            voices: [],
+            transports: ["webrtc", "gateway-relay"],
+            defaultModel: model,
+            ...provider,
+          },
+        ],
+      },
+      configBusy: false,
+      onProviderChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onVoiceChange: vi.fn(),
+      editor: null,
+      ...props,
+    }),
   );
-  mounted.add(stop);
   flush();
-  return container;
+  return view.container;
 }
-
-const mounted = new Set<() => void>();
-afterEach(() => {
-  for (const stop of mounted) {
-    stop();
-  }
-  mounted.clear();
-});
 
 describe("isTalkGptLiveModel", () => {
   it.each(["gpt-live", " Gpt-Live-1-Codex "])("accepts the GPT-Live family: %s", (model) => {

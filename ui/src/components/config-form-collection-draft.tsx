@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show, createEffect, createMemo, createSignal } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import { schemaMayAcceptString, schemaType, type JsonSchema } from "./config-form.shared.ts";
@@ -35,11 +36,14 @@ export function openCollectionDraft(event: Event, draftId: string): void {
   draft?.openDraft?.();
 }
 
-export type ConfigFormCollectionDraft = HTMLElement & {
+export type ConfigFormCollectionDraftProperties = {
   props?: ConfigFormCollectionDraftProps;
-  openDraft(): void;
-  updateComplete?: Promise<void>;
+  draftOpen: boolean;
 };
+export type ConfigFormCollectionDraft = SolidBridgeElement<
+  ConfigFormCollectionDraftProperties,
+  { openDraft(): void }
+>;
 
 function parseValue(
   schema: JsonSchema,
@@ -86,16 +90,18 @@ function parseValue(
 
 export function ConfigFormCollectionDraftContent(props: {
   props?: ConfigFormCollectionDraftProps;
-  host: HTMLElement;
+  host: ConfigFormCollectionDraft;
+  draftOpen: boolean;
 }): SolidJSX.Element {
-  const [draftOpen, setDraftOpen] = createSignal(false);
   const [draftKey, setDraftKey] = createSignal("");
   const [draftValue, setDraftValue] = createSignal("");
   const [draftIsNull, setDraftIsNull] = createSignal(false);
   const [error, setError] = createSignal("");
   const [invalidTarget, setInvalidTarget] = createSignal<"key" | "value" | null>(null);
   const [focusRequest, setFocusRequest] = createSignal<{ target: "key" | "value" }>();
-  const visible = createMemo(() => Boolean(props.props && draftOpen() && !props.props.disabled));
+  const visible = createMemo(() =>
+    Boolean(props.props && props.draftOpen && !props.props.disabled),
+  );
   const valueType = createMemo(() => props.props && schemaType(props.props.schema));
   const canUseNull = createMemo(
     () => props.props && isSupportedConfigValueValid(props.props.schema, null),
@@ -112,20 +118,12 @@ export function ConfigFormCollectionDraftContent(props: {
   }
 
   function closeDraft() {
-    setDraftOpen(false);
+    props.host.draftOpen = false;
     setDraftKey("");
     setDraftValue("");
     setDraftIsNull(false);
     setFocusRequest(undefined);
     clearError();
-  }
-
-  function openDraft() {
-    if (props.props?.disabled) {
-      return;
-    }
-    setDraftOpen(true);
-    setFocusRequest({ target: "value" });
   }
 
   function fail(target: "key" | "value", message: string) {
@@ -188,18 +186,6 @@ export function ConfigFormCollectionDraftContent(props: {
   }
 
   createEffect(
-    () => props.host,
-    (host) => {
-      Object.assign(host, { openDraft });
-      return () => {
-        if (Reflect.get(host, "openDraft") === openDraft) {
-          Reflect.deleteProperty(host, "openDraft");
-        }
-      };
-    },
-  );
-
-  createEffect(
     () => props.props,
     (next, previous) => {
       if (
@@ -234,6 +220,8 @@ export function ConfigFormCollectionDraftContent(props: {
       valueInput?.setCustomValidity(next.invalidTarget === "value" ? next.error : "");
       if (next.request && next.request !== previous?.request) {
         (next.request.target === "key" ? keyInput : valueInput)?.focus();
+      } else if (!previous?.visible) {
+        valueInput?.focus();
       }
     },
   );
@@ -329,18 +317,5 @@ export function ConfigFormCollectionDraftContent(props: {
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-config-form-collection-draft": ConfigFormCollectionDraft;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-config-form-collection-draft": SolidJSX.HTMLAttributes<ConfigFormCollectionDraft> & {
-        "prop:props"?: ConfigFormCollectionDraftProps;
-        "onConfig-collection-draft-commit"?: (
-          event: CustomEvent<ConfigFormCollectionDraftCommit>,
-        ) => void;
-      };
-    }
   }
 }

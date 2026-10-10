@@ -11,6 +11,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   isTalkGptLiveModel,
@@ -656,10 +657,14 @@ export function TalkSettingsContent(props: TalkSettingsPageProps) {
   );
 }
 
-export function TalkSettingsPage(props: TalkSettingsPageProps) {
-  return (
-    <openclaw-talk-settings>
-      <TalkSettingsContent {...props} />
-    </openclaw-talk-settings>
-  );
-}
+export const TalkSettingsPage = defineSolidBridge<TalkSettingsPageProps>(
+  "openclaw-talk-settings",
+  (props) => <TalkSettingsContent {...props} />,
+  {
+    properties: {
+      configObject: { default: {}, attribute: false },
+      mutationDisabled: { default: false, type: Boolean },
+      buildEditor: { default: () => null, attribute: false },
+    },
+  },
+);

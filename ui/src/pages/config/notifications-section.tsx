@@ -394,7 +394,7 @@ function NativeNotificationSection(props: {
     >
       <SettingsRow
         title={t("configView.notifications.permission")}
-        control={<SettingsValue>{status().label}</SettingsValue>}
+        control={<SettingsValue value={status().label} />}
       />
       <Show
         when={
@@ -515,18 +515,18 @@ function WebPushSection(props: {
         <SettingsRow
           title={t("configView.notifications.browserSupport")}
           control={
-            <SettingsValue>
-              {t(
+            <SettingsValue
+              value={t(
                 props.push.supported
                   ? "configView.notifications.available"
                   : "configView.notifications.notSupported",
               )}
-            </SettingsValue>
+            />
           }
         />
         <SettingsRow
           title={t("configView.notifications.permission")}
-          control={<SettingsValue>{permissionLabel()}</SettingsValue>}
+          control={<SettingsValue value={permissionLabel()} />}
         />
         <SettingsRow
           title={t("configView.notifications.status")}

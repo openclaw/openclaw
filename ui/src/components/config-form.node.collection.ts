@@ -1,7 +1,5 @@
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { html } from "lit";
 import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
-import type { LegacyNodeRenderer } from "./config-form.compat.tsx";
 import {
   canApplyObjectCandidate,
   isObjectPropertyNameValid,
@@ -19,21 +17,6 @@ import {
 import { hintForPath } from "./config-form.shared.ts";
 
 const UNSET_MAP_SOURCE_IDENTITY = Symbol("unset-map-source");
-export function renderArray(params: ConfigNodeRenderParams, renderNode?: LegacyNodeRenderer) {
-  return html`<openclaw-config-array
-    style="display:contents"
-    .params=${params}
-    .renderNode=${renderNode}
-  ></openclaw-config-array>`;
-}
-export function renderObject(params: ConfigNodeRenderParams, renderNode?: LegacyNodeRenderer) {
-  return html`<openclaw-config-object
-    style="display:contents"
-    .params=${params}
-    .renderNode=${renderNode}
-  ></openclaw-config-object>`;
-}
-
 export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   const { schema, value, path, hints, onPatch, onRemove, searchCriteria } = params;
   const selfMatched =

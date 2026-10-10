@@ -6,7 +6,8 @@ import {
   openCollectionDraft,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
-} from "./config-form-collection-draft.ts";
+} from "./config-form-collection-draft.tsx";
+import { ConfigCollectionDraftHost } from "./config-form.bridge.tsx";
 import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
   configChildRenderOptions,
@@ -213,9 +214,9 @@ export function ConfigMapField(props: MapProps): JSX.Element {
             </button>
           </div>
         </div>
-        <openclaw-config-form-collection-draft
+        <ConfigCollectionDraftHost
           id={content().draftId}
-          prop:props={content().draftProps}
+          props={content().draftProps}
           onConfig-collection-draft-commit={(
             event: CustomEvent<ConfigFormCollectionDraftCommit>,
           ) => {

@@ -1,11 +1,12 @@
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { shellLayoutTraitsRef } from "../../app/shell-layout-traits-solid.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/memory-memories.css";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -45,7 +46,7 @@ function isExpandableWorkspaceResult(result: SearchResult): boolean {
 }
 
 function FileContent(props: { content: string; result: SearchResult }) {
-  const lines = () => props.content.split(/\r?\n/);
+  const lines = createMemo(() => props.content.split(/\r?\n/));
   const start = () => Math.max(0, props.result.startLine - 1);
   const end = () => Math.min(lines().length, props.result.endLine);
   return (
@@ -323,54 +324,63 @@ export function MemoryMemoriesContent(props: MemoryMemoriesProps) {
   }
 
   return (
-    <div class="settings-page memory-memories" ref={shellLayoutTraitsRef({ settingsPage: true })}>
-      {!props.methodAdvertised ? (
-        <p class="memory-memories__unavailable">{t("memoryPage.memories.gatewayUpdateRequired")}</p>
-      ) : (
-        <>
-          <form
-            class="memory-memories__search"
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void search(query());
-            }}
-          >
-            <label class="settings-control__sr-label" for="memory-search-input">
-              {t("memoryPage.memories.searchLabel")}
-            </label>
-            <input
-              id="memory-search-input"
-              type="search"
-              class="settings-input"
-              prop:value={query()}
-              placeholder={t("memoryPage.memories.searchPlaceholder")}
-              onInput={(event) => setQuery(event.currentTarget.value)}
-            />
-            <button
-              class="btn btn--sm primary"
-              type="submit"
-              disabled={
-                !props.connected ||
-                !props.agentId ||
-                !query().trim() ||
-                searchState().kind === "loading"
-              }
+    <ShellLayoutBoundary traits={{ settingsPage: true }}>
+      <div class="settings-page memory-memories">
+        {!props.methodAdvertised ? (
+          <p class="memory-memories__unavailable">
+            {t("memoryPage.memories.gatewayUpdateRequired")}
+          </p>
+        ) : (
+          <>
+            <form
+              class="memory-memories__search"
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void search(query());
+              }}
             >
-              {t("memoryPage.memories.searchButton")}
-            </button>
-          </form>
-          <SearchStatus />
-        </>
-      )}
-    </div>
+              <label class="settings-control__sr-label" for="memory-search-input">
+                {t("memoryPage.memories.searchLabel")}
+              </label>
+              <input
+                id="memory-search-input"
+                type="search"
+                class="settings-input"
+                prop:value={query()}
+                placeholder={t("memoryPage.memories.searchPlaceholder")}
+                onInput={(event) => setQuery(event.currentTarget.value)}
+              />
+              <button
+                class="btn btn--sm primary"
+                type="submit"
+                disabled={
+                  !props.connected ||
+                  !props.agentId ||
+                  !query().trim() ||
+                  searchState().kind === "loading"
+                }
+              >
+                {t("memoryPage.memories.searchButton")}
+              </button>
+            </form>
+            <SearchStatus />
+          </>
+        )}
+      </div>
+    </ShellLayoutBoundary>
   );
 }
 
-export function MemoryMemories(props: MemoryMemoriesProps) {
-  return (
-    <openclaw-memory-memories>
-      <MemoryMemoriesContent {...props} />
-    </openclaw-memory-memories>
-  );
-}
+export const MemoryMemories = defineSolidBridge<MemoryMemoriesProps>(
+  "openclaw-memory-memories",
+  (props) => <MemoryMemoriesContent {...props} />,
+  {
+    properties: {
+      client: { default: null, attribute: false },
+      connected: { default: false, type: Boolean },
+      methodAdvertised: { default: true, type: Boolean },
+      agentId: { default: null },
+    },
+  },
+);

@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import type { ConfigFormStructuredDraftProps as SolidDraftProps } from "./config-form-structured-draft.tsx";
 import type { LegacyNodeRenderer } from "./config-form.compat.tsx";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
@@ -18,16 +17,6 @@ declare global {
     };
   }
 }
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-config-form-structured-draft": SolidJSX.HTMLAttributes<HTMLElement> & {
-        "prop:props"?: ConfigFormStructuredDraftProps;
-      };
-    }
-  }
-}
-
 export function resolveStructuredDraftInitialValue(
   params: ConfigNodeRenderParams,
 ): Record<string, unknown> | unknown[] | undefined {

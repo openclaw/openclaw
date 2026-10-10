@@ -1,15 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
 import { ConfigForm } from "../../components/config-form.render.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { memoryTabForRoute, memorySettingsSchema } from "./memory-schema.ts";
 import { Memory, renderMemory } from "./memory.tsx";
 
 /** The view is the only public surface, so its props type comes from its signature. */
-afterEach(cleanup);
-
 type MemoryViewProps = Parameters<typeof renderMemory>[0];
 
 function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps {
@@ -60,8 +59,8 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
 }
 
 function renderInto(props: MemoryViewProps): HTMLElement {
-  const container = document.createElement("div");
-  render(() => renderMemory(props), { container });
+  const { container } = mountSolid(() => renderMemory(props));
+  flush();
   return container;
 }
 
@@ -85,7 +84,7 @@ describe("renderMemory", () => {
 
   it("retains engine and add-on controls when their owner publishes new state", () => {
     const [props, setProps] = createSignal(createProps());
-    const { container } = render(() => <Memory {...props()} />);
+    const { container } = mountSolid(() => <Memory {...props()} />);
     flush();
     const engine = container.querySelector<HTMLInputElement>(
       'input[type="radio"][value="memory-core"]',
@@ -151,7 +150,8 @@ describe("renderMemory", () => {
   });
 
   it("renders enabled and disabled add-ons as accessible toggles", () => {
-    const container = renderInto(createProps());
+    const { container, getByRole } = mountSolid(() => renderMemory(createProps()));
+    flush();
 
     const switches = [
       ...container.querySelectorAll<HTMLElement & { checked: boolean }>('input[role="switch"]'),
@@ -159,8 +159,8 @@ describe("renderMemory", () => {
     expect(switches).toHaveLength(2);
     expect(switches[0]?.checked).toBe(true);
     expect(switches[1]?.checked).toBe(false);
-    expect(switches[0]?.getAttribute("aria-label")).toBe("Enable or disable Active memory");
-    expect(switches[1]?.getAttribute("aria-label")).toBe("Enable or disable Memory wiki");
+    expect(getByRole("switch", { name: "Enable or disable Active memory" })).toBe(switches[0]);
+    expect(getByRole("switch", { name: "Enable or disable Memory wiki" })).toBe(switches[1]);
     const link = container.querySelector<HTMLAnchorElement>("a.memory-page__link");
     expect(link?.getAttribute("href")).toBe("/settings/plugins");
   });

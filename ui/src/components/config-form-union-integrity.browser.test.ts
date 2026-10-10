@@ -3,7 +3,7 @@ import {
   renderAnalyzedFormFixture,
   renderTextInputFixture,
   renderNodeFixture,
-} from "../test-helpers/config-form-fixtures.ts";
+} from "../test-helpers/config-form-fixtures.tsx";
 import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {

@@ -1,11 +1,11 @@
-import type { ReactiveElement } from "lit";
 import { describe, expect, it } from "vitest";
 import { updateConfigFormValue } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import {
   renderAnalyzedFormFixture,
   disposeConfigFormFixture,
-} from "../test-helpers/config-form-fixtures.ts";
+} from "../test-helpers/config-form-fixtures.tsx";
 import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 import baseStyles from "../styles/base.css?inline";
 
@@ -70,7 +70,10 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
         { enabled: false, values: initial },
       );
       try {
-        const inputs = () => Array.from(container.querySelectorAll<HTMLInputElement>("input"));
+        const inputs = () =>
+          Array.from(
+            container.querySelectorAll<HTMLInputElement>(".cfg-array input.settings-input"),
+          );
         const second = inputs()[1]!;
         await page.elementLocator(second).fill("x");
         expect(second.getAttribute("aria-invalid")).toBe("true");
@@ -78,7 +81,9 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
           second.addEventListener("blur", () => resolve(), { once: true });
         });
         const action = container.querySelector<HTMLElement>(
-          scenario === "unrelated edit" ? "wa-switch" : "button[aria-label='Remove item']",
+          scenario === "unrelated edit"
+            ? '.settings-toggle__input[role="switch"]'
+            : "button[aria-label='Remove item']",
         )!;
         await page.elementLocator(action).click();
         await blurred;
@@ -145,7 +150,9 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
           kind === "object"
             ? "openclaw-config-form-structured-draft"
             : "openclaw-config-form-collection-draft";
-        const draft = Array.from(container.querySelectorAll<ReactiveElement>(hostSelector)).at(-1)!;
+        const draft = Array.from(
+          container.querySelectorAll<SolidBridgeElement<object>>(hostSelector),
+        ).at(-1)!;
         await draft.updateComplete;
         const details = draft.querySelector("details") ?? draft.closest("details");
         if (details && !details.open) {

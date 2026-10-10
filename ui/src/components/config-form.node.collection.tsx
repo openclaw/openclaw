@@ -6,9 +6,10 @@ import {
   openCollectionDraft,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
-} from "./config-form-collection-draft.ts";
+} from "./config-form-collection-draft.tsx";
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import { arrayItemSchema } from "./config-form.array-items.ts";
+import { ConfigCollectionDraftHost } from "./config-form.bridge.tsx";
 import {
   arrayConstraintCandidates,
   arrayInputConstraints,
@@ -421,9 +422,9 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
               </button>
             </div>
           </div>
-          <openclaw-config-form-collection-draft
+          <ConfigCollectionDraftHost
             id={current().draftId}
-            prop:props={current().draftProps}
+            props={current().draftProps}
             onConfig-collection-draft-commit={(
               event: CustomEvent<ConfigFormCollectionDraftCommit>,
             ) => current().commitDraft(event)}
@@ -432,7 +433,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
             when={entries().length > 0}
             fallback={
               <Show when={!props.params.compact}>
-                <SettingsEmpty>{t("configForm.noItems")}</SettingsEmpty>
+                <SettingsEmpty message={t("configForm.noItems")} />
               </Show>
             }
           >

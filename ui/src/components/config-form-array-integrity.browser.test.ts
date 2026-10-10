@@ -1,7 +1,7 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
 import { describe, expect, it, vi } from "vitest";
-import { renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
+import { renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import type { ConfigFormCollectionDraft } from "./config-form-collection-draft.tsx";
 import type { JsonSchema } from "./config-form.shared.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
@@ -354,13 +354,12 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const switches = Array.from(
-      container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelectorAll<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
     );
     expect(switches).toHaveLength(2);
     const second = expectElement(switches[1], "second unique boolean item");
 
-    second.checked = false;
-    second.dispatchEvent(new Event("change", { bubbles: true }));
+    second.click();
 
     expect(onPatch).not.toHaveBeenCalled();
     expect(second.checked).toBe(true);

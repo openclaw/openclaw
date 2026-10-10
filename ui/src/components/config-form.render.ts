@@ -1,3 +1,4 @@
+import "./config-form.bridge.tsx";
 import { html } from "lit";
 import type { LegacyConfigFormProps, LegacyConfigTierGroupsProps } from "./config-form.compat.tsx";
 

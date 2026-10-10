@@ -282,6 +282,7 @@ export class ConfigPageController {
     this.abortRequests();
     if (this.scrollFrame !== null) {
       cancelAnimationFrame(this.scrollFrame);
+      this.scrollFrame = null;
     }
     this.host = null;
     this.runtimeConfigSource = null;
@@ -304,6 +305,10 @@ export class ConfigPageController {
       ? normalizeConfigSelection(pageId, routeData.section, null)
       : configSelectionFromSearch(pageId, globalThis.location?.search ?? "");
     this.selections = { ...this.selections, [pageId]: selection };
+    if (this.scrollFrame !== null) {
+      cancelAnimationFrame(this.scrollFrame);
+      this.scrollFrame = null;
+    }
     this.targetBlockId =
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     this.synchronize();

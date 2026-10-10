@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import { locale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
+import { ConfigStructuredDraftHost } from "./config-form.bridge.tsx";
 import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
 import { JsonTextarea } from "./config-form.node.json.tsx";
 import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.tsx";
@@ -154,9 +155,9 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
           when={initialDraft() !== undefined}
           fallback={<ResolvedNode params={params()} node={node()} />}
         >
-          <openclaw-config-form-structured-draft
+          <ConfigStructuredDraftHost
             class="cfg-structured-draft"
-            prop:props={{
+            props={{
               identity: JSON.stringify(
                 params().path.filter((segment) => typeof segment === "string"),
               ),

@@ -66,7 +66,7 @@ function SecurityOverviewSection(props: SecurityViewProps) {
       />
       <SettingsRow
         title={t("quickSettings.security.execPolicy")}
-        control={<SettingsValue>{props.security.execPolicy}</SettingsValue>}
+        control={<SettingsValue value={props.security.execPolicy} />}
       />
       <SettingsToggleRow
         title={t("quickSettings.security.browserEnabled")}

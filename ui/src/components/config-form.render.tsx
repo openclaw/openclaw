@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { locale, t } from "../lib/reactive/i18n.ts";
@@ -21,6 +21,17 @@ import {
 } from "./solid/settings-ui.tsx";
 import { syncPopoverLabel } from "./web-awesome-popover.ts";
 
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "wa-popover": SolidJSX.HTMLAttributes<HTMLElement> & {
+        for?: string;
+        placement?: string;
+      };
+    }
+  }
+}
+
 export type ConfigFormProps = {
   schema: JsonSchema | null;
   uiHints: ConfigUiHints;
@@ -35,9 +46,9 @@ export type ConfigFormProps = {
   forceAdvancedSection?: string | null;
   onShowAdvanced: () => void;
   onHideAdvanced?: () => void;
-  sectionActions?: JSX.Element;
+  sectionActions?: SolidJSX.Element;
   showSectionDocs?: boolean;
-  sectionPrelude?: JSX.Element;
+  sectionPrelude?: SolidJSX.Element;
   embedded?: boolean;
   revealSensitive?: boolean;
   maskSensitive?: boolean;
@@ -54,11 +65,11 @@ export type ConfigTierGroupsProps = {
   revealAdvanced: boolean;
   onShowAdvanced: () => void;
   onHideAdvanced?: () => void;
-  renderTier: (node: () => JsonSchema) => JSX.Element;
-  commonPrelude?: JSX.Element;
+  renderTier: (node: () => JsonSchema) => SolidJSX.Element;
+  commonPrelude?: SolidJSX.Element;
 };
 
-export function ConfigTierGroups(props: ConfigTierGroupsProps): JSX.Element {
+export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
   const split = createMemo(() =>
     splitConfigSchemaByTier({
       schema: props.schema,
@@ -115,7 +126,7 @@ type Section = {
   path: Array<string | number>;
 };
 
-function ConfigSection(props: { section: Section; form: ConfigFormProps }): JSX.Element {
+function ConfigSection(props: { section: Section; form: ConfigFormProps }): SolidJSX.Element {
   const docsUrl = () =>
     props.form.showSectionDocs === false
       ? undefined
@@ -153,7 +164,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): JSX.
                       <Show when={props.section.description}>
                         <p>{props.section.description}</p>
                       </Show>
-                      <LearnMoreLink href={url()} />
+                      <LearnMoreLink url={url()} />
                     </div>
                   </wa-popover>
                 </span>
@@ -206,7 +217,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): JSX.
   );
 }
 
-export function ConfigForm(props: ConfigFormProps): JSX.Element {
+export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
   const sections = createMemo((): Section[] => {
     locale();
     const schema = props.schema;
@@ -295,11 +306,13 @@ export function ConfigForm(props: ConfigFormProps): JSX.Element {
           fallback={
             <Show when={!props.embedded || props.searchQuery}>
               <SettingsPage>
-                <SettingsEmpty>
-                  {props.searchQuery
-                    ? t("configForm.noSettingsMatch", { query: props.searchQuery })
-                    : t("configForm.noSettingsInSection")}
-                </SettingsEmpty>
+                <SettingsEmpty
+                  message={
+                    props.searchQuery
+                      ? t("configForm.noSettingsMatch", { query: props.searchQuery })
+                      : t("configForm.noSettingsInSection")
+                  }
+                />
               </SettingsPage>
             </Show>
           }

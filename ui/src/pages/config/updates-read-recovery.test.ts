@@ -1,23 +1,20 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
-  cleanupUpdates,
-  mountUpdates,
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
 } from "./updates.test-support.ts";
 
-let container: HTMLDivElement;
+let container: ReturnType<typeof createUpdatesViewDom>["container"];
+let mountUpdates: ReturnType<typeof createUpdatesViewDom>["mountUpdates"];
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  ({ container, row } = createUpdatesViewDom());
+  ({ container, row, mountUpdates } = createUpdatesViewDom());
 });
-
-afterEach(cleanupUpdates);
 
 describe("update status read recovery", () => {
   it.each([true, false])(
@@ -45,7 +42,6 @@ describe("update status read recovery", () => {
           onCheckStatus,
           onUpdateNow,
         }),
-        container,
       );
 
       expect(row("Status").textContent).toContain("update.runs.get timed out");

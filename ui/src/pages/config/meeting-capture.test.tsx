@@ -1,6 +1,4 @@
 import type { TranscriptsStatusResult } from "@openclaw/gateway-protocol";
-import { render } from "@solidjs/web";
-import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -10,16 +8,13 @@ import {
   createRuntimeConfigCapability,
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
 import { MeetingCaptureSettings } from "./meeting-capture.tsx";
 
-type CaptureElement = HTMLElement & {
-  context: ApplicationContext;
-  mutationDisabled: boolean;
-};
 const configs: RuntimeConfigCapability[] = [];
-const disposers: Array<() => void> = [];
 const requiredProviders: TranscriptsStatusResult["providers"] = meetingStatus.providers.map(
   (provider) => ({
     ...provider,
@@ -90,30 +85,23 @@ async function mount(
   configs.push(runtimeConfig);
   await runtimeConfig.ensureLoaded();
   const navigate = vi.fn();
-  const page = document.createElement("div") as CaptureElement;
-  page.context = {
+  const context = {
     gateway,
     runtimeConfig,
     navigate,
     basePath: "",
   } as unknown as ApplicationContext;
-  page.mutationDisabled = options.disabled ?? false;
-  document.body.append(page);
-  const dispose = render(
-    () => (
-      <ApplicationProvider value={page.context}>
-        <MeetingCaptureSettings mutationDisabled={page.mutationDisabled} />
-      </ApplicationProvider>
-    ),
-    page,
+  const provider = createSolidApplicationContextProvider(context);
+  const { container: page } = mountSolid(
+    () => <MeetingCaptureSettings mutationDisabled={options.disabled ?? false} />,
+    { wrapper: provider.wrapper },
   );
-  disposers.push(dispose);
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(page.textContent).toContain(
       options.failStatus ? "Capture health is unknown" : "Not active",
     ),
   );
-  return { page, runtimeConfig, request, respond, original, publish, navigate };
+  return { page, context, runtimeConfig, request, respond, original, publish, navigate };
 }
 
 function click(page: Element, label: string) {
@@ -139,10 +127,7 @@ function input(page: Element, name: string, value: string) {
 }
 
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-  document.body.replaceChildren();
+  cleanupSolid();
   for (const config of configs.splice(0)) {
     config.dispose();
   }
@@ -173,7 +158,7 @@ describe("curated meeting capture", () => {
       request.mockImplementationOnce(() => pending.promise);
       const beginRefresh = async () => {
         const refresh = click(page, "Refresh");
-        await vi.waitFor(() => expect(refresh.disabled).toBe(true));
+        await waitForSolid(() => expect(refresh.disabled).toBe(true));
         return refresh;
       };
       const startedRefresh = openDuringRefresh ? await beginRefresh() : undefined;
@@ -199,7 +184,7 @@ describe("curated meeting capture", () => {
           });
         }
         if (health !== "pending") {
-          await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+          await waitForSolid(() => expect(refresh.disabled).toBe(false));
         }
         expect(page.querySelector<HTMLInputElement>('input[name="title"]')?.value).toBe(
           "Not yet submitted",
@@ -244,13 +229,13 @@ describe("curated meeting capture", () => {
   it.each(["client", "epoch"])(
     "does not seed an editor from another %s's retained health",
     async (change) => {
-      const { page, runtimeConfig, request, respond, publish, original } = await mount({
+      const { page, context, runtimeConfig, request, respond, publish, original } = await mount({
         providers: requiredProviders,
       });
       const previous = createDeferred<TranscriptsStatusResult>();
       request.mockImplementationOnce(() => previous.promise);
       const refresh = click(page, "Refresh");
-      await vi.waitFor(() => expect(refresh.disabled).toBe(true));
+      await waitForSolid(() => expect(refresh.disabled).toBe(true));
       const current = createDeferred<TranscriptsStatusResult>();
       const currentRequest = vi.fn(
         (method: string, params?: { raw?: string; baseHash?: string }) =>
@@ -262,12 +247,12 @@ describe("curated meeting capture", () => {
         request.mockImplementation(currentRequest);
         publish(true);
       }
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(currentRequest.mock.calls.some(([method]) => method === "transcripts.status")).toBe(
           true,
         ),
       );
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(
           page.querySelector<HTMLButtonElement>('button[aria-label="Edit source 1"]')?.disabled,
         ).toBe(false),
@@ -280,8 +265,8 @@ describe("curated meeting capture", () => {
         const statusCalls = currentRequest.mock.calls.filter(
           ([method]) => method === "transcripts.status",
         ).length;
-        publish(true, page.context.gateway.snapshot.client!);
-        await vi.waitFor(() =>
+        publish(true, context.gateway.snapshot.client!);
+        await waitForSolid(() =>
           expect(
             currentRequest.mock.calls.filter(([method]) => method === "transcripts.status"),
           ).toHaveLength(statusCalls + 1),
@@ -290,7 +275,7 @@ describe("curated meeting capture", () => {
           "Keep this draft",
         );
         current.resolve({ ...meetingStatus, providers: [] });
-        await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+        await waitForSolid(() => expect(refresh.disabled).toBe(false));
         previous.resolve({ ...meetingStatus, providers: requiredProviders });
         await previous.promise;
         flush();
@@ -323,12 +308,12 @@ describe("curated meeting capture", () => {
     input(page, "title", "Unsaved title");
     request.mockResolvedValueOnce({ ...meetingStatus, providers: requiredProviders });
     click(page, "Refresh");
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(page.querySelector<HTMLInputElement>('input[name="guildId"]')?.required).toBe(true),
     );
     request.mockRejectedValueOnce(new Error("Archive unavailable"));
     click(page, "Refresh");
-    await vi.waitFor(() => expect(page.textContent).toContain("Capture health is unknown"));
+    await waitForSolid(() => expect(page.textContent).toContain("Capture health is unknown"));
     const locators = {
       accountId: "team",
       guildId: "guild",
@@ -387,12 +372,12 @@ describe("curated meeting capture", () => {
       const pending = createDeferred<TranscriptsStatusResult>();
       request.mockImplementationOnce(() => pending.promise);
       const refresh = click(page, "Refresh");
-      await vi.waitFor(() => expect(refresh.disabled).toBe(true));
+      await waitForSolid(() => expect(refresh.disabled).toBe(true));
       const patch = vi.spyOn(runtimeConfig, "patchForm");
       try {
         if (health === "error") {
           pending.reject(new Error("Archive unavailable"));
-          await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+          await waitForSolid(() => expect(refresh.disabled).toBe(false));
           expect(page.textContent).toContain("Capture health is unknown");
         }
         page.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
@@ -424,7 +409,7 @@ describe("curated meeting capture", () => {
         flush();
         expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
         pending.resolve({ ...meetingStatus, providers: [] });
-        await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+        await waitForSolid(() => expect(refresh.disabled).toBe(false));
         click(page, "Cancel");
         flush();
         click(page, "Edit source 1");
@@ -604,7 +589,7 @@ describe("curated meeting capture", () => {
     if (refresh) {
       request.mockResolvedValueOnce({ ...meetingStatus, providers: [] });
       click(page, "Refresh");
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(
           page.querySelector<HTMLSelectElement>('select[name="providerId"]')?.options,
         ).toHaveLength(2),
@@ -726,7 +711,7 @@ describe("curated meeting capture", () => {
       if (unavailable) {
         request.mockResolvedValueOnce({ ...meetingStatus, providers: [] });
         click(page, "Refresh");
-        await vi.waitFor(() =>
+        await waitForSolid(() =>
           expect([...provider.options].map((option) => option.value)).toEqual([
             "",
             "test-voice",
@@ -746,11 +731,11 @@ describe("curated meeting capture", () => {
   );
 
   it("rejects an open editor submission after admin access is revoked", async () => {
-    const { page, runtimeConfig, original, publish } = await mount();
+    const { page, context, runtimeConfig, original, publish } = await mount();
     click(page, "Edit source 1");
     flush();
     input(page, "title", "Unauthorized edit");
-    const snapshot = page.context.gateway.snapshot;
+    const snapshot = context.gateway.snapshot;
     publish(true, snapshot.client!, {
       ...snapshot.hello!,
       auth: { ...snapshot.hello!.auth, scopes: ["operator.read"] },
@@ -902,7 +887,7 @@ describe("curated meeting capture", () => {
         ),
       ].every((button) => button.disabled),
     ).toBe(true);
-    expect(page.querySelector<HTMLInputElement>('input[type="checkbox"]')?.disabled).toBe(true);
+    expect(page.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
   });
 
@@ -925,14 +910,14 @@ describe("curated meeting capture", () => {
       return meetingStatus;
     });
     click(page, "Refresh");
-    await vi.waitFor(() => expect(page.textContent).toContain("Loading"));
+    await waitForSolid(() => expect(page.textContent).toContain("Loading"));
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')?.value).toBe(
       "new-account",
     );
     page.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     finish();
-    await vi.waitFor(() => expect(page.textContent).toContain("Not active"));
+    await waitForSolid(() => expect(page.textContent).toContain("Not active"));
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')?.value).toBe(
       "new-account",
     );

@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
-import { render as mountSolid } from "@solidjs/web";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -10,11 +9,13 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { TalkSettingsPage } from "./talk-page.tsx";
 
 const ACTIVE_VOICES = ["", "cove", "spruce", "custom-voice"];
@@ -23,7 +24,6 @@ const DEFAULT_VOICES = ["", "marin", "custom-voice"];
 type TalkPageElement = HTMLElement & {
   context: ApplicationContext;
   configObject: Record<string, unknown>;
-  updateComplete: Promise<void>;
   changeModel: (model: string | null) => void;
   changeProvider: (providerId: string | null) => void;
 };
@@ -184,45 +184,24 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
   };
 }
 
-const mounted = new Set<() => void>();
-
-async function settleTalk() {
-  flush();
-  await Promise.resolve();
-  flush();
-  await Promise.resolve();
-  flush();
-}
-
 function mountTalkPage(context: ApplicationContext, initialConfig: Record<string, unknown>) {
   const page = document.createElement("div") as TalkPageElement;
   const [config, setConfig] = createSignal(initialConfig);
   document.body.append(page);
-  const stop = mountSolid(
+  const provider = createSolidApplicationContextProvider(context);
+  const view = mountSolid(
     () =>
-      createComponent(ApplicationProvider, {
-        value: context,
-        get children() {
-          return createComponent(TalkSettingsPage, {
-            get configObject() {
-              return config();
-            },
-          });
+      createComponent(TalkSettingsPage, {
+        get configObject() {
+          return config();
         },
       }),
-    page,
+    { container: page, wrapper: provider.wrapper },
   );
   const remove = page.remove.bind(page);
-  const dispose = () => {
-    mounted.delete(dispose);
-    stop();
-    remove();
-  };
-  mounted.add(dispose);
   Object.defineProperties(page, {
     context: { value: context },
     configObject: { get: config, set: setConfig },
-    updateComplete: { get: settleTalk },
   });
   page.changeModel = (value) => {
     flush();
@@ -241,7 +220,10 @@ function mountTalkPage(context: ApplicationContext, initialConfig: Record<string
     }
     input.click();
   };
-  page.remove = dispose;
+  page.remove = () => {
+    view.unmount();
+    remove();
+  };
   flush();
   return page;
 }
@@ -263,8 +245,10 @@ function expectVoiceState(page: TalkPageElement, options: string[], unsupported:
 
 async function selectModel(model: string, options: TalkMutationHarnessOptions = {}) {
   const harness = createTalkMutationHarness(options);
-  await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
-  await harness.page.updateComplete;
+  await waitForSolid(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
+  await waitForSolid(() =>
+    expect(harness.page.querySelector("openclaw-select-picker")).not.toBeNull(),
+  );
   harness.page.changeModel(model);
   expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(
     ["talk", "realtime", "model"],
@@ -275,8 +259,10 @@ async function selectModel(model: string, options: TalkMutationHarnessOptions = 
 
 async function selectProvider(providerId: string, options: TalkMutationHarnessOptions = {}) {
   const harness = createTalkMutationHarness(options);
-  await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
-  await harness.page.updateComplete;
+  await waitForSolid(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
+  await waitForSolid(() =>
+    expect(harness.page.querySelector('input[type="radio"]')).not.toBeNull(),
+  );
   harness.page.changeProvider(providerId);
   expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(
     ["talk", "realtime", "provider"],
@@ -286,9 +272,7 @@ async function selectProvider(providerId: string, options: TalkMutationHarnessOp
 }
 
 afterEach(() => {
-  for (const dispose of mounted) {
-    dispose();
-  }
+  cleanupSolid();
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -315,8 +299,8 @@ describe("Talk device and voice wake settings", () => {
         dispose: vi.fn(),
       } satisfies NativeDeviceSettingsCapability;
       const { page, request } = createTalkMutationHarness({ nativeDeviceSettings });
-      await vi.waitFor(() => expect(request).toHaveBeenCalled());
-      await page.updateComplete;
+      await waitForSolid(() => expect(request).toHaveBeenCalled());
+      flush();
       const section = [...page.querySelectorAll<HTMLElement>(".settings-section")].find(
         (element) =>
           element.querySelector(".settings-section__heading")?.textContent?.trim() ===
@@ -342,7 +326,7 @@ describe("Talk device and voice wake settings", () => {
           throw new Error(`Missing device voice control: ${key}`);
         }
         const toggle = row.querySelector<HTMLElement & { checked: boolean }>(
-          'input[type="checkbox"]',
+          'input[role="switch"]',
         )!;
         const next = !toggle.checked;
         row.click();
@@ -358,7 +342,7 @@ describe("Talk device and voice wake settings", () => {
       triggers: method === "voicewake.get" ? ["openclaw"] : ["hello computer"],
     }));
     const { page } = createTalkMutationHarness({ voiceWakeRequest });
-    await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
     expect(page.textContent).not.toContain("This Mac");
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
@@ -367,7 +351,7 @@ describe("Talk device and voice wake settings", () => {
     await vi.advanceTimersByTimeAsync(399);
     expect(voiceWakeRequest).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    await page.updateComplete;
+    flush();
     expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
       triggers: [" hello computer ", ""],
     });
@@ -382,13 +366,13 @@ describe("Talk device and voice wake settings", () => {
       return { triggers: ["openclaw"] };
     });
     const { page } = createTalkMutationHarness({ voiceWakeRequest });
-    await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
     input.value = "hello";
     input.dispatchEvent(new Event("input"));
     await vi.advanceTimersByTimeAsync(400);
-    await page.updateComplete;
+    flush();
     expect(page.querySelector("[role='alert']")?.textContent).toContain("Permission denied");
     expect(input.value).toBe("hello");
     expect(input.disabled).toBe(false);
@@ -408,14 +392,14 @@ describe("Talk device and voice wake settings", () => {
       return writes === 1 ? first.promise : second.promise;
     });
     const { page } = createTalkMutationHarness({ voiceWakeRequest });
-    await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
     input.focus();
     input.value = "first phrase";
     input.dispatchEvent(new Event("input"));
     await vi.advanceTimersByTimeAsync(400);
-    await page.updateComplete;
+    flush();
     expect(input.disabled).toBe(false);
     expect(document.activeElement).toBe(input);
     input.value = "second phrase";
@@ -424,7 +408,7 @@ describe("Talk device and voice wake settings", () => {
     expect(writes).toBe(1);
     first.resolve({ triggers: ["first phrase"] });
     await vi.advanceTimersByTimeAsync(0);
-    await page.updateComplete;
+    flush();
     expect(input.value).toBe("second phrase");
     expect(document.activeElement).toBe(input);
     expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
@@ -432,7 +416,7 @@ describe("Talk device and voice wake settings", () => {
     });
     second.resolve({ triggers: ["second phrase"] });
     await vi.advanceTimersByTimeAsync(0);
-    await page.updateComplete;
+    flush();
     expect(input.value).toBe("second phrase");
     expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
   });
@@ -440,7 +424,7 @@ describe("Talk device and voice wake settings", () => {
   it("saves the last trigger edit when navigating away inside the debounce window", async () => {
     const voiceWakeRequest = vi.fn(async () => ({ triggers: ["openclaw"] }));
     const { page } = createTalkMutationHarness({ voiceWakeRequest });
-    await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
     input.value = "computer";
@@ -464,7 +448,7 @@ describe("Talk device and voice wake settings", () => {
         return writes === 1 ? first.promise : { triggers: [latest] };
       });
       const { page } = createTalkMutationHarness({ voiceWakeRequest });
-      await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+      await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
       vi.useFakeTimers();
       const input = page.querySelector("textarea")!;
       for (const text of ["first phrase", "intermediate phrase"]) {
@@ -498,7 +482,7 @@ describe("Talk device and voice wake settings", () => {
           : { triggers: ["hello computer"] };
       });
       const { page, setGatewayConnection } = createTalkMutationHarness({ voiceWakeRequest });
-      await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+      await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
       vi.useFakeTimers();
       const input = page.querySelector("textarea")!;
       input.value = "hello computer";
@@ -508,7 +492,7 @@ describe("Talk device and voice wake settings", () => {
       if (timing === "in-flight") {
         interrupted.reject(new Error("Connection closed"));
       }
-      await page.updateComplete;
+      flush();
       expect(page.querySelector("textarea")?.value).toBe("hello computer");
       expect(page.querySelector("[role='alert']")?.textContent).toContain("Reconnect");
       await vi.advanceTimersByTimeAsync(400);
@@ -516,11 +500,11 @@ describe("Talk device and voice wake settings", () => {
       page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
       expect(voiceWakeRequest).toHaveBeenCalledTimes(priorCalls);
       setGatewayConnection(true);
-      await page.updateComplete;
+      flush();
       expect(page.querySelector("textarea")?.value).toBe("hello computer");
       page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
       await vi.advanceTimersByTimeAsync(0);
-      await page.updateComplete;
+      flush();
       expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
         triggers: ["hello computer"],
       });
@@ -533,7 +517,7 @@ describe("Talk device and voice wake settings", () => {
     let gatewayWords = ["openclaw"];
     const voiceWakeRequest = vi.fn(async () => ({ triggers: gatewayWords }));
     const { page, setGatewayConnection } = createTalkMutationHarness({ voiceWakeRequest });
-    await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
     input.value = "old gateway words";
@@ -542,7 +526,7 @@ describe("Talk device and voice wake settings", () => {
     gatewayWords = ["new gateway words"];
     setGatewayConnection(true, "wss://other-gateway.example.test");
     await vi.advanceTimersByTimeAsync(400);
-    await page.updateComplete;
+    flush();
     expect(page.querySelector("textarea")?.value).toBe("new gateway words");
     expect(voiceWakeRequest.mock.calls).toEqual([
       ["voicewake.get", {}],
@@ -558,13 +542,13 @@ describe("Talk device and voice wake settings", () => {
         triggers: method === "voicewake.get" ? gatewayWords : ["retained phrase"],
       }));
       const { page, setGatewayConnection } = createTalkMutationHarness({ voiceWakeRequest });
-      await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+      await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
       vi.useFakeTimers();
       const input = page.querySelector("textarea")!;
       input.value = "initial phrase";
       input.dispatchEvent(new Event("input"));
       setGatewayConnection(false);
-      await page.updateComplete;
+      flush();
       input.value = "retained phrase";
       input.dispatchEvent(new Event("input"));
       await vi.advanceTimersByTimeAsync(400);
@@ -573,7 +557,7 @@ describe("Talk device and voice wake settings", () => {
       setGatewayConnection(true, switchGateway ? "wss://other-gateway.example.test" : undefined);
       const reopened = mountTalkPage(page.context, page.configObject);
       await vi.advanceTimersByTimeAsync(0);
-      await reopened.updateComplete;
+      flush();
       expect(reopened.querySelector("textarea")?.value).toBe(
         switchGateway ? "other gateway phrase" : "retained phrase",
       );
@@ -584,7 +568,7 @@ describe("Talk device and voice wake settings", () => {
         expect(reopened.querySelector("[role='alert']")?.textContent).toContain("not been saved");
         reopened.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
         await vi.advanceTimersByTimeAsync(0);
-        await reopened.updateComplete;
+        flush();
         expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
           triggers: ["retained phrase"],
         });
@@ -617,13 +601,13 @@ describe("Talk device and voice wake settings", () => {
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
     const { page, request } = createTalkMutationHarness({ nativeDeviceSettings });
-    await vi.waitFor(() => expect(request).toHaveBeenCalled());
-    await page.updateComplete;
-    const publishSnapshot = async () => {
+    await waitForSolid(() => expect(request).toHaveBeenCalled());
+    flush();
+    const publishSnapshot = () => {
       for (const notify of listeners) {
         notify();
       }
-      await page.updateComplete;
+      flush();
     };
     const rows = [...page.querySelectorAll<HTMLElement>(".settings-row")];
     const row = (title: string) =>
@@ -631,9 +615,9 @@ describe("Talk device and voice wake settings", () => {
         (element) => element.querySelector(".settings-row__title")?.textContent?.trim() === title,
       )!;
     expect(page.textContent).toContain("This Mac");
-    expect(
-      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
-    ).toBe(true);
+    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
+      true,
+    );
     expect(row("Voice Wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.pushToTalkEnabled", false);
@@ -652,25 +636,25 @@ describe("Talk device and voice wake settings", () => {
     row("Test microphone…").querySelector("button")?.click();
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
-    await publishSnapshot();
-    expect(
-      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
-    ).toBe(false);
+    publishSnapshot();
+    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
+      false,
+    );
     row("Voice Wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.wakeEnabled", false);
     snapshot.voice.wakeEnabled = false;
-    await publishSnapshot();
-    expect(
-      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
-    ).toBe(true);
+    publishSnapshot();
+    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
+      true,
+    );
     snapshot.voice.supported = true;
-    await publishSnapshot();
-    expect(
-      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
-    ).toBe(false);
+    publishSnapshot();
+    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
+      false,
+    );
   });
 
-  it("preserves pending language additions across an older native acknowledgment and the next edit", async () => {
+  it("preserves pending language additions across an older native acknowledgment and the next edit", () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     snapshot.voice.locale.available.push(
       { id: "fr-FR", name: "French" },
@@ -697,7 +681,7 @@ describe("Talk device and voice wake settings", () => {
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
     const { page } = createTalkMutationHarness({ nativeDeviceSettings });
-    await page.updateComplete;
+    flush();
     const add = (id: string) => {
       const select = page.querySelector<HTMLSelectElement>('select[aria-label="Add language…"]')!;
       select.value = id;
@@ -713,7 +697,7 @@ describe("Talk device and voice wake settings", () => {
     for (const notify of listeners) {
       notify();
     }
-    await page.updateComplete;
+    flush();
     add("es-ES");
     expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith("voice.locale.additional", [
       "de-DE",
@@ -731,7 +715,7 @@ describe("Talk device and voice wake settings", () => {
     for (const notify of listeners) {
       notify();
     }
-    await page.updateComplete;
+    flush();
     expect(primary.value).toBe("fr-FR");
     add("it-IT");
     expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith("voice.locale.additional", [
@@ -753,9 +737,9 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         activeVoiceSelectionPolicy,
         model: null,
       });
-      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      await waitForSolid(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
       setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
-      await page.updateComplete;
+      flush();
 
       const savedOption = page.querySelector<HTMLOptionElement>('option[value="custom-voice"]');
       const text = page.textContent ?? "";
@@ -776,31 +760,31 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       catalogRequest: (requestIndex, catalog) =>
         requestIndex === 3 ? hashCatalog.promise.then(() => catalog) : catalog,
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await waitForSolid(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
-    await page.updateComplete.then(() => expectVoiceState(page, ACTIVE_VOICES, true));
+    await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
 
     setTalkRealtimeConfig(page, {
       provider: "openai",
       model: "gpt-realtime-2.1",
       speakerVoice: "custom-voice",
     });
-    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
+    await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     page.changeModel(null);
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
-    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
+    await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     Object.assign(runtimeConfig.state.configSnapshot, { configRevisionHash: "revision-2" });
     setConfigHash(null);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
-    await vi.waitFor(() => expectVoiceState(page, ACTIVE_VOICES, true));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
     hashCatalog.resolve();
     await request.mock.results[2]?.value;
     expectVoiceState(page, ACTIVE_VOICES, true);
@@ -821,28 +805,29 @@ describe("TalkSettingsPage realtime transport mutation", () => {
             ? failedCatalog.promise.then(() => expect.fail("catalog refresh failed"))
             : catalog,
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
     page.changeModel(null);
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
-    await page.updateComplete;
+    flush();
 
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     expectVoiceState(page, DEFAULT_VOICES, false);
     setConfigHash("hash-2");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
     staleCatalog.resolve();
-    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
+    await request.mock.results[2]?.value;
+    await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     setGatewayConnection(false);
     setConfigHash("hash-3");
     expectVoiceState(page, DEFAULT_VOICES, false);
     failedCatalog.resolve();
     setGatewayConnection(true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(5));
-    await vi.waitFor(() => expectVoiceState(page, ACTIVE_VOICES, true));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(5));
+    await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
   });
 
   it("clears model reset intent on explicit model, provider, and Gateway changes", async () => {
@@ -854,26 +839,26 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         "gpt-realtime-alt": ["verse"],
       },
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
 
     page.changeModel(null);
     page.changeModel("gpt-realtime-alt");
     setTalkRealtimeConfig(page, { provider: "openai", model: "gpt-realtime-alt" });
-    await page.updateComplete;
+    flush();
     expect(readVoiceOptions(page)).toEqual(["", "verse"]);
 
     page.changeModel(null);
     page.changeProvider("xai");
     setTalkRealtimeConfig(page, { provider: "xai" });
-    await page.updateComplete;
+    flush();
     expect(readVoiceOptions(page)).toEqual(["", "xai-active"]);
 
     page.changeModel(null);
-    await page.updateComplete;
+    flush();
     expect(readVoiceOptions(page)).toEqual(["", "ara"]);
     setGatewayConnection(true, "wss://replacement.example.test");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(readVoiceOptions(page)).toEqual(["", "xai-active"]));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(readVoiceOptions(page)).toEqual(["", "xai-active"]));
   });
 
   it("removes forced consult routing when OpenAI GPT-Live keeps gateway relay", async () => {
@@ -961,8 +946,8 @@ describe("TalkSettingsPage realtime transport mutation", () => {
 
   it("keeps the configured model visible without offering edits when the catalog is unavailable", async () => {
     const { page, request, runtimeConfig } = createTalkMutationHarness({ unavailable: true });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
-    await page.updateComplete;
+    await waitForSolid(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    flush();
     expect(page.textContent).toContain("gpt-realtime-2.1");
     expect(page.querySelector("openclaw-select-picker")).toBeNull();
     expect(runtimeConfig.removeFormValue).not.toHaveBeenCalled();

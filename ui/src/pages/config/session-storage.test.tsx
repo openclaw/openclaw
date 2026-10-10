@@ -1,6 +1,4 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
-import { render } from "@solidjs/web";
-import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -10,14 +8,12 @@ import {
   createRuntimeConfigCapability,
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { SessionStorageSettings } from "./session-storage.tsx";
 
-type StorageElement = HTMLElement & {
-  context: ApplicationContext;
-};
 const configs: RuntimeConfigCapability[] = [];
-const disposers: Array<() => void> = [];
 function inventory(count: number): SessionsStorageStatusResult {
   return {
     agents: [
@@ -62,20 +58,13 @@ async function mount() {
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   configs.push(runtimeConfig);
   await runtimeConfig.ensureLoaded();
-  const page = document.createElement("div") as StorageElement;
-  page.context = { gateway, runtimeConfig } as unknown as ApplicationContext;
-  document.body.append(page);
-  const dispose = render(
-    () => (
-      <ApplicationProvider value={page.context}>
-        <SessionStorageSettings />
-      </ApplicationProvider>
-    ),
-    page,
-  );
-  disposers.push(dispose);
-  await vi.waitFor(() => expect(page.textContent).toContain("7 uncompressed"));
-  return { page, request, client, respond, publish, dispose };
+  const context = { gateway, runtimeConfig } as unknown as ApplicationContext;
+  const provider = createSolidApplicationContextProvider(context);
+  const { container: page, unmount } = mountSolid(() => <SessionStorageSettings />, {
+    wrapper: provider.wrapper,
+  });
+  await waitForSolid(() => expect(page.textContent).toContain("7 uncompressed"));
+  return { page, context, runtimeConfig, request, client, respond, publish, unmount };
 }
 function click(page: HTMLElement, label: string) {
   const button = [...page.querySelectorAll("button")].find(
@@ -86,10 +75,7 @@ function click(page: HTMLElement, label: string) {
   flush();
 }
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-  document.body.replaceChildren();
+  cleanupSolid();
   for (const config of configs.splice(0)) {
     config.dispose();
   }
@@ -99,13 +85,13 @@ afterEach(() => {
 it.each(["client", "handshake", "reconnect"])(
   "rejects a delayed inventory after the Gateway %s changes",
   async (change) => {
-    const { page, request, client, respond, publish } = await mount();
+    const { page, context, request, client, respond, publish } = await mount();
     const previous = createDeferred<SessionsStorageStatusResult>();
     request.mockImplementation((method) =>
       method === "sessions.storage.status" ? previous.promise : respond(method),
     );
     click(page, "Refresh");
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.storage.status"),
       ).toHaveLength(2),
@@ -119,14 +105,14 @@ it.each(["client", "handshake", "reconnect"])(
     } else {
       request.mockImplementation(currentRequest);
       if (change === "reconnect") {
-        const hello = page.context.gateway.snapshot.hello;
+        const hello = context.gateway.snapshot.hello;
         publish(false, client, hello);
         publish(true, client, hello);
       } else {
         publish(true, client);
       }
     }
-    await vi.waitFor(() => expect(page.textContent).toContain("42 uncompressed"));
+    await waitForSolid(() => expect(page.textContent).toContain("42 uncompressed"));
     previous.resolve(inventory(700));
     await previous.promise;
     flush();
@@ -142,14 +128,14 @@ it("does not publish an old Gateway's completed run after a new connection", asy
     method === "sessions.storage.run" ? previous.promise : respond(method),
   );
   click(page, "Run now");
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(request.mock.calls.some(([method]) => method === "sessions.storage.run")).toBe(true),
   );
   const currentRequest = vi.fn((method: string) =>
     method === "sessions.storage.status" ? Promise.resolve(inventory(42)) : respond(method),
   );
   publish(true, { request: currentRequest } as unknown as GatewayBrowserClient);
-  await vi.waitFor(() => expect(page.textContent).toContain("42 uncompressed"));
+  await waitForSolid(() => expect(page.textContent).toContain("42 uncompressed"));
   previous.resolve({
     ...inventory(700),
     maintenance: { ...inventory(700).maintenance, archivedTranscripts: 693 },
@@ -165,7 +151,7 @@ it("does not publish an old Gateway's completed run after a new connection", asy
 });
 
 it("keeps a days draft through inventory refresh and retires it on connection replacement", async () => {
-  const { page, request, respond, publish } = await mount();
+  const { page, runtimeConfig, request, respond, publish } = await mount();
   const input = page.querySelector<HTMLInputElement>('input[type="number"]')!;
   input.value = "14";
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -173,19 +159,19 @@ it("keeps a days draft through inventory refresh and retires it on connection re
     method === "sessions.storage.status" ? Promise.resolve(inventory(42)) : respond(method),
   );
   click(page, "Refresh");
-  await vi.waitFor(() => expect(page.textContent).toContain("42 uncompressed"));
+  await waitForSolid(() => expect(page.textContent).toContain("42 uncompressed"));
   expect(input.value).toBe("14");
-  expect(page.context.runtimeConfig.state.configFormDirty).toBe(false);
+  expect(runtimeConfig.state.configFormDirty).toBe(false);
 
   input.value = "";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  expect(page.context.runtimeConfig.state.configFormDirty).toBe(false);
+  expect(runtimeConfig.state.configFormDirty).toBe(false);
   expect(request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 
   const currentRequest = vi.fn(respond);
   publish(true, { request: currentRequest } as unknown as GatewayBrowserClient);
-  await vi.waitFor(() => expect(page.textContent).toContain("7 uncompressed"));
+  await waitForSolid(() => expect(page.textContent).toContain("7 uncompressed"));
   expect(input.value).toBe("30");
 });
 
@@ -205,8 +191,8 @@ async function startBackgroundRun() {
         : mounted.respond(method),
   );
   click(mounted.page, "Run now");
-  await vi.waitFor(() => expect(mounted.page.textContent).toContain("Background batch started."));
-  await vi.waitFor(() =>
+  await waitForSolid(() => expect(mounted.page.textContent).toContain("Background batch started."));
+  await waitForSolid(() =>
     expect(mounted.page.querySelector(".settings-status")?.textContent).toContain("Running"),
   );
   return {
@@ -236,7 +222,7 @@ it("tracks an accepted job until completion and stops polling while idle", async
     },
   }));
   await vi.advanceTimersByTimeAsync(2_000);
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(page.textContent).toContain("Batch completed. 2 transcripts archived."),
   );
   expect(page.textContent).toContain("3 compressed archives moved from the database to files.");
@@ -251,14 +237,14 @@ it("stops polling after a status failure and resumes only after an explicit refr
     throw new Error("Worker status unavailable");
   });
   await vi.advanceTimersByTimeAsync(2_000);
-  await vi.waitFor(() => expect(page.textContent).toContain("Worker status unavailable"));
+  await waitForSolid(() => expect(page.textContent).toContain("Worker status unavailable"));
   expect(page.textContent).toContain("Refresh to check the current maintenance state.");
   const failedReads = request.mock.calls.length;
   await vi.advanceTimersByTimeAsync(10_000);
   expect(request.mock.calls).toHaveLength(failedReads);
   setStatus(async () => running);
   click(page, "Refresh");
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(page.querySelector(".settings-status")?.textContent).toContain("Running"),
   );
   setStatus(async () => ({
@@ -270,7 +256,7 @@ it("stops polling after a status failure and resumes only after an explicit refr
     },
   }));
   await vi.advanceTimersByTimeAsync(2_000);
-  await vi.waitFor(() => expect(page.textContent).toContain("Archive publication failed"));
+  await waitForSolid(() => expect(page.textContent).toContain("Archive publication failed"));
   expect(page.textContent).not.toContain("Batch completed");
   const terminalReads = request.mock.calls.length;
   await vi.advanceTimersByTimeAsync(10_000);
@@ -278,10 +264,9 @@ it("stops polling after a status failure and resumes only after an explicit refr
 });
 
 it.each(["detach", "disconnect", "replace"])("retires background polling on %s", async (change) => {
-  const { page, request, respond, publish, dispose } = await startBackgroundRun();
+  const { page, request, respond, publish, unmount } = await startBackgroundRun();
   if (change === "detach") {
-    dispose();
-    page.remove();
+    unmount();
   } else if (change === "disconnect") {
     publish(false);
   } else {

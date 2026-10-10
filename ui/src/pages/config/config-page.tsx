@@ -1,14 +1,25 @@
 import "../../styles/config.css";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  Show,
+  useContext,
+  untrack,
+} from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import { shellLayoutTraitsRef } from "../../app/shell-layout-traits-solid.ts";
+import { shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../../app/shell-layout-traits-solid.tsx";
 import { subscribeLobsterdex } from "../../components/lobster-dex.ts";
 import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import {
   projectNativeDeviceSettings,
   projectNativeNotifications,
@@ -56,7 +67,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
       return (
         <>
           {t("configView.appearance.intro")}{" "}
-          <LearnMoreLink href="https://docs.openclaw.ai/web/control-ui" />
+          <LearnMoreLink url="https://docs.openclaw.ai/web/control-ui" />
         </>
       );
     case "mcp":
@@ -65,13 +76,13 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
       return (
         <>
           {t("quickSettings.security.intro")}{" "}
-          <LearnMoreLink href="https://docs.openclaw.ai/gateway/security" />
+          <LearnMoreLink url="https://docs.openclaw.ai/gateway/security" />
         </>
       );
     case "talk":
       return (
         <>
-          {t("talkPage.intro")} <LearnMoreLink href="https://docs.openclaw.ai/nodes/talk" />
+          {t("talkPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/nodes/talk" />
         </>
       );
     case "updates":
@@ -100,7 +111,7 @@ function ConfigBody(props: {
             <SessionStorageSettings
               mutationDisabled={props.controller.mutationDisabled}
               advancedExpanded={props.config.forceAdvancedSection === "session"}
-              editor={editor}
+              buildEditor={() => editor}
             />
           </Show>
         }
@@ -108,7 +119,7 @@ function ConfigBody(props: {
         <MeetingCaptureSettings
           mutationDisabled={props.controller.mutationDisabled}
           advancedExpanded={props.config.forceAdvancedSection === "transcripts"}
-          editor={editor}
+          buildEditor={() => editor}
         />
       </Show>
     </>
@@ -204,9 +215,10 @@ function ConfigBody(props: {
   );
 }
 
-export type ConfigPageProps = { pageId?: ConfigPageId; routeData?: ConfigRouteData | null };
+export type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData | null };
 
-export function ConfigPage(props: ConfigPageProps) {
+function ConfigPageContent(props: ConfigPageProps & { host: HTMLElement }) {
+  const host = untrack(() => props.host);
   const context = useApplication();
   const [revision, publish] = createSignal(0);
   const controller = new ConfigPageController(
@@ -252,7 +264,6 @@ export function ConfigPage(props: ConfigPageProps) {
     nativeNotifications,
   ].flatMap((source) => (source ? [source.subscribe(refresh)] : []));
   subscriptions.push(subscribeLobsterdex(refresh));
-  let host!: HTMLElement;
   createEffect(
     () => [props.pageId ?? "advanced", props.routeData ?? null] as const,
     ([pageId, routeData]) => controller.updateRoute(pageId, routeData),
@@ -275,31 +286,37 @@ export function ConfigPage(props: ConfigPageProps) {
     return controller.configObject;
   });
   createEffect(revision, () => controller.afterCommit());
+  const inheritedLayout = useContext(ShellLayoutProvider);
+  const layoutOwner = shellLayoutOwnerForHost(host);
+  const layout = inheritedLayout ?? (layoutOwner ? { owner: layoutOwner, host } : null);
   return (
-    <openclaw-config-page
-      ref={(element) => {
-        host = element;
-      }}
-    >
+    <ShellLayoutProvider value={layout}>
       <Show when={(props.pageId ?? "advanced") !== "memory"}>
         <SettingsPageHeader
           title={titleForRoute(props.pageId ?? "advanced")}
           subtitle={renderConfigPageSubtitle(props.pageId ?? "advanced")}
         />
       </Show>
-      <section class="settings-workspace" ref={shellLayoutTraitsRef({ settingsWorkspace: true })}>
-        <div class="settings-workspace__body">
-          <ConfigBody
-            controller={controller}
-            pageId={props.pageId ?? "advanced"}
-            config={configProps()}
-            configObject={configObject()}
-          />
-        </div>
-      </section>
-    </openclaw-config-page>
+      <SettingsWorkspace>
+        <ConfigBody
+          controller={controller}
+          pageId={props.pageId ?? "advanced"}
+          config={configProps()}
+          configObject={configObject()}
+        />
+      </SettingsWorkspace>
+    </ShellLayoutProvider>
   );
 }
 
-// Lit routes and still-unported outlets keep the established tag and properties.
-defineSolidBridge("openclaw-config-page", ConfigPage, { properties: ["pageId", "routeData"] });
+// The bridge owns the single host for both the Lit route and Solid callers.
+export const ConfigPage = defineSolidBridge<ConfigPageProps>(
+  "openclaw-config-page",
+  (props, host) => <ConfigPageContent {...props} host={host} />,
+  {
+    properties: {
+      pageId: { default: "advanced", attribute: "page-id" },
+      routeData: { default: null, attribute: false },
+    },
+  },
+);

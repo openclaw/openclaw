@@ -1,16 +1,16 @@
 import "../../styles/settings.css";
-import { render as mountSolid } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { TabIconSection, type TabIconViewProps } from "./view-tab-icon.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 const containers: HTMLElement[] = [];
-const disposers: Array<() => void> = [];
 const updates = new WeakMap<HTMLElement, (props: TabIconViewProps) => void>();
 function renderTabIcon(props: TabIconViewProps, container: HTMLElement) {
   const update = updates.get(container);
@@ -19,7 +19,7 @@ function renderTabIcon(props: TabIconViewProps, container: HTMLElement) {
   } else {
     const [current, setCurrent] = createSignal({ ...props });
     updates.set(container, setCurrent);
-    disposers.push(mountSolid(() => <TabIconSection {...current()} />, container));
+    mountSolid(() => <TabIconSection {...current()} />, { container });
   }
   flush();
 }
@@ -28,7 +28,6 @@ const radio = (container: HTMLElement, value: string) =>
 const selectedMode = (container: HTMLElement) =>
   container.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value;
 afterEach(() => {
-  disposers.splice(0).forEach((dispose) => dispose());
   containers.splice(0).forEach((container) => container.remove());
 });
 
@@ -59,7 +58,7 @@ describe("browser tab icon settings", () => {
     expect(props.tabIcon).toBe("lobster:pixel");
     expect(pixel.getAttribute("aria-pressed")).toBe("true");
     expect(choices[0]?.getAttribute("aria-pressed")).toBe("false");
-    await vi.waitFor(() => expect(pixel.querySelector(".lob-pixel-frame")).not.toBeNull());
+    await waitForSolid(() => expect(pixel.querySelector(".lob-pixel-frame")).not.toBeNull());
     expect(pixel.getAnimations({ subtree: true })).toHaveLength(0);
   });
 
@@ -103,12 +102,20 @@ describe("browser tab icon settings", () => {
     const choices = container.querySelectorAll<HTMLButtonElement>(
       ".settings-tab-icon__shapes button",
     );
+    const agentPreview = radio(container, "agent")
+      ?.closest("label")
+      ?.querySelector("openclaw-tab-icon-avatar");
+    expect(agentPreview).not.toBeNull();
     expect(choices).toHaveLength(3);
     expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
     const circle = container.querySelector<HTMLButtonElement>('button[aria-label="Circle"]')!;
     circle.focus();
     await userEvent.keyboard("{Enter}");
     expect(props.tabIcon).toBe("agent:circle");
+    expect(container.querySelector('button[aria-label="Circle"]')).toBe(circle);
+    expect(
+      radio(container, "agent")?.closest("label")?.querySelector("openclaw-tab-icon-avatar"),
+    ).toBe(agentPreview);
     expect(circle.getAttribute("aria-pressed")).toBe("true");
     expect(choices[0]?.getAttribute("aria-pressed")).toBe("false");
     expect(selectedMode(container)).toBe("agent");
@@ -154,7 +161,7 @@ describe("browser tab icon settings", () => {
     const agent = agentRadio.closest("label")!;
     await userEvent.click(agentRadio);
     expect(vi.mocked(props.setTabIconMode).mock.calls.at(-1)?.[0]).toBe("agent");
-    await vi.waitFor(() => expect(agent.querySelector(".identity-avatar__image")).not.toBeNull());
+    await waitForSolid(() => expect(agent.querySelector(".identity-avatar__image")).not.toBeNull());
     const image = agent.querySelector<HTMLImageElement>(".identity-avatar__image")!;
     expect(image.getAttribute("src")).toBe(source);
     expect(getComputedStyle(image).objectFit).toBe("contain");
@@ -165,7 +172,7 @@ describe("browser tab icon settings", () => {
     props.tabIconAgentAvatar = null;
     renderTabIcon(props, container);
     expect(selectedMode(container)).toBe("agent");
-    await vi.waitFor(() => expect(agent.querySelector(".identity-avatar__image")).toBeNull());
+    await waitForSolid(() => expect(agent.querySelector(".identity-avatar__image")).toBeNull());
     expect(agent.querySelector(".identity-avatar__fallback img")).not.toBeNull();
   });
 });

@@ -1,9 +1,10 @@
-import { render as mountSolid } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_BACKGROUND_PREFERENCE } from "../../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   AppearanceBackground,
   type AppearanceBackgroundView,
@@ -11,13 +12,12 @@ import {
 
 registerEnglishCatalog(registerSettingsEnglish);
 let host: HTMLDivElement;
-let dispose: (() => void) | undefined;
 let update: ((props: AppearanceBackgroundView) => void) | undefined;
 function renderBackground(props: AppearanceBackgroundView) {
   if (!update) {
     const [current, setCurrent] = createSignal({ ...props });
     update = setCurrent;
-    dispose = mountSolid(() => <AppearanceBackground {...current()} />, host);
+    mountSolid(() => <AppearanceBackground {...current()} />, { container: host });
   } else {
     update({ ...props });
   }
@@ -51,8 +51,6 @@ beforeEach(() => {
   document.body.append(host);
 });
 afterEach(() => {
-  dispose?.();
-  dispose = undefined;
   update = undefined;
   host.remove();
 });

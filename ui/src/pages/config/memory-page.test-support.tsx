@@ -1,6 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render as mountSolid } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { vi } from "vitest";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type {
@@ -10,10 +9,15 @@ import type {
 } from "../../app/context.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { setPluginEnabled, type PluginCatalogItem } from "../../lib/plugins/index.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { MemorySettingsPage, type MemorySettingsPageProps } from "./memory-page.tsx";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
@@ -37,12 +41,6 @@ export function mountMemoryPage(element: HTMLElement) {
     remove();
   };
   pageMounts.delete(element);
-  flush();
-}
-
-export async function settleMemoryPage() {
-  flush();
-  await Promise.resolve();
   flush();
 }
 
@@ -171,32 +169,6 @@ export function createMemoryPage(params: {
     },
   });
   const gateway = gatewayHarness.gateway;
-  const element = document.createElement("div") as MemoryPageElement;
-  const [revision, setRevision] = createSignal(0);
-  const input: MemorySettingsPageProps = {
-    configObject: params.configObject,
-    routeData: params.routeData ?? memoryTabRoute("settings"),
-    mutationDisabled: false,
-    pluginsHref: "",
-    memoryImportHref: "",
-    buildEditor: () => null,
-  };
-  Object.defineProperties(element, {
-    configObject: {
-      get: () => input.configObject,
-      set: (value: Record<string, unknown>) => {
-        input.configObject = value;
-        setRevision((n) => n + 1);
-      },
-    },
-    routeData: {
-      get: () => input.routeData,
-      set: (value: ConfigRouteData | null) => {
-        input.routeData = value;
-        setRevision((n) => n + 1);
-      },
-    },
-  });
   let mutationQueue = Promise.resolve();
   const runtimeConfig = {
     state: {
@@ -292,6 +264,32 @@ export function createMemoryPage(params: {
     settingsAgentSelection.set(params.selectedAgentId);
   }
   Object.assign(context, { settingsAgentSelection });
+  const element = createApplicationContextProvider(context) as MemoryPageElement;
+  const [revision, setRevision] = createSignal(0);
+  const input: MemorySettingsPageProps = {
+    configObject: params.configObject,
+    routeData: params.routeData ?? memoryTabRoute("settings"),
+    mutationDisabled: false,
+    pluginsHref: "",
+    memoryImportHref: "",
+    buildEditor: () => null,
+  };
+  Object.defineProperties(element, {
+    configObject: {
+      get: () => input.configObject,
+      set: (value: Record<string, unknown>) => {
+        input.configObject = value;
+        setRevision((n) => n + 1);
+      },
+    },
+    routeData: {
+      get: () => input.routeData,
+      set: (value: ConfigRouteData | null) => {
+        input.routeData = value;
+        setRevision((n) => n + 1);
+      },
+    },
+  });
   if (element.routeData) {
     element.routeData = {
       ...element.routeData,
@@ -302,23 +300,22 @@ export function createMemoryPage(params: {
     };
   }
   const connectionLifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
+  const provider = createSolidApplicationContextProvider(context);
   pageMounts.set(
     element,
     () =>
       mountSolid(
         () => (
-          <ApplicationProvider value={context}>
-            <MemorySettingsPage
-              configObject={(revision(), input.configObject)}
-              routeData={(revision(), input.routeData)}
-              mutationDisabled={input.mutationDisabled}
-              pluginsHref={input.pluginsHref}
-              memoryImportHref={input.memoryImportHref}
-              buildEditor={input.buildEditor}
-            />
-          </ApplicationProvider>
+          <MemorySettingsPage
+            configObject={(revision(), input.configObject)}
+            routeData={(revision(), input.routeData)}
+            mutationDisabled={input.mutationDisabled}
+            pluginsHref={input.pluginsHref}
+            memoryImportHref={input.memoryImportHref}
+            buildEditor={input.buildEditor}
+          />
         ),
-        { container: element },
+        { container: element, wrapper: provider.wrapper },
       ).unmount,
   );
   const publishGateway = (snapshot: ApplicationGatewaySnapshot) => {
@@ -388,7 +385,7 @@ export function addonSwitch(element: HTMLElement, label: string) {
   const row = [...element.querySelectorAll(".settings-row--toggle")].find((entry) =>
     entry.textContent?.includes(label),
   );
-  return row?.querySelector<HTMLElement & { checked: boolean }>('input[type="checkbox"]') ?? null;
+  return row?.querySelector<HTMLElement & { checked: boolean }>('input[role="switch"]') ?? null;
 }
 
 export function toggleAddon(element: HTMLElement, label: string, checked: boolean) {

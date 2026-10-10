@@ -5,8 +5,8 @@ import {
   updateConfigFormValue,
 } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
+import type { ConfigFormCollectionDraft } from "./config-form-collection-draft.tsx";
 import type { JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 
@@ -128,7 +128,7 @@ describe("config form map integrity", () => {
       const streamingRow = Array.from(container.querySelectorAll(".settings-row--toggle")).find(
         (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === "Streaming",
       );
-      expect(streamingRow?.querySelector("wa-switch")).toBeTruthy();
+      expect(streamingRow?.querySelector('.settings-toggle__input[role="switch"]')).toBeTruthy();
 
       for (const [label, value] of [
         ["On", true],

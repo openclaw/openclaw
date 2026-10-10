@@ -1,10 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
-import { shellLayoutTraitsRef } from "../../app/shell-layout-traits-solid.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
   LearnMoreLink,
-  renderSettingsDefaultDescription,
+  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
@@ -212,8 +212,12 @@ function EngineSection(props: MemoryViewProps) {
   const defaultEngine = () =>
     props.engineOptions.find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
     t("memoryPage.engine.openClawMemory");
-  const defaultDescription = () =>
-    renderSettingsDefaultDescription(defaultEngine(), props.engineSelection.kind !== "default");
+  const defaultDescription = (
+    <SettingsDefaultDescription
+      value={defaultEngine()}
+      overridden={props.engineSelection.kind !== "default"}
+    />
+  );
   const available = () => props.engineOptions.length > 0;
   const options = createMemo(() => [
     ...props.engineOptions.map((option) => ({
@@ -236,13 +240,13 @@ function EngineSection(props: MemoryViewProps) {
             available() ? (
               <>
                 {" "}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription()}{" "}
+                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
               </>
             ) : (
               <>
                 {" "}
                 {t("memoryPage.engine.catalogUnavailable")}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription()}{" "}
+                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
               </>
             )
           }
@@ -257,7 +261,7 @@ function EngineSection(props: MemoryViewProps) {
                 onChange={(value) => props.onEngineChange(value || null)}
               />
             ) : (
-              <SettingsValue mono={true}>{engineId() ?? t("memoryPage.engine.off")}</SettingsValue>
+              <SettingsValue mono={true} value={engineId() ?? t("memoryPage.engine.off")} />
             )
           }
         />
@@ -391,13 +395,13 @@ function AddonsSection(props: MemoryViewProps) {
 
 function SettingsTab(props: MemoryViewProps) {
   return (
-    <>
-      <div class="settings-page" ref={shellLayoutTraitsRef({ settingsPage: true })}>
+    <ShellLayoutBoundary traits={{ settingsPage: true }}>
+      <div class="settings-page">
         <EngineSection {...props} /> <AddonsSection {...props} />
         <p class="settings-page__intro">{t("memoryPage.search.intro")}</p>
       </div>
       {props.editor}
-      <div class="settings-page" ref={shellLayoutTraitsRef({ settingsPage: true })}>
+      <div class="settings-page">
         {props.dreamingSettings}
         <SettingsSection
           title={t("memoryPage.import.title")}
@@ -415,28 +419,25 @@ function SettingsTab(props: MemoryViewProps) {
                   </a>{" "}
                 </>
               ) : (
-                <SettingsValue>{t("memoryImport.adminRequired")}</SettingsValue>
+                <SettingsValue value={t("memoryImport.adminRequired")} />
               )
             }
           />
         </SettingsSection>
       </div>
-    </>
+    </ShellLayoutBoundary>
   );
 }
 
 export function Memory(props: MemoryViewProps) {
   return (
-    <>
-      <section class="memory-page" ref={shellLayoutTraitsRef({ memoryPage: true })}>
-        <section
-          class="content-header content-header--settings content-header--page hub-page-header"
-          ref={shellLayoutTraitsRef({ toolbarHeader: true })}
-        >
+    <ShellLayoutBoundary traits={{ memoryPage: true, toolbarHeader: true }}>
+      <section class="memory-page">
+        <section class="content-header content-header--settings content-header--page hub-page-header">
           <div class="hub-page-header__title">
             <div class="page-title">{t("tabs.memory")}</div>
             <div class="page-subtitle">
-              {t("memoryPage.intro")} <LearnMoreLink href={MEMORY_DOCS_URL} />
+              {t("memoryPage.intro")} <LearnMoreLink url={MEMORY_DOCS_URL} />
             </div>
           </div>
           <div class="hub-page-header__tabs">
@@ -467,7 +468,7 @@ export function Memory(props: MemoryViewProps) {
           )}
         </div>
       </section>
-    </>
+    </ShellLayoutBoundary>
   );
 }
 

@@ -1,3 +1,4 @@
+import "./config-form.bridge.tsx";
 import { html } from "lit";
 import type { LegacyConfigMap, LegacyNodeRenderer } from "./config-form.compat.tsx";
 export function renderMapField(

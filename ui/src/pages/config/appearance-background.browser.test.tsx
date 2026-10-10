@@ -1,5 +1,4 @@
-import { createSignal, flush } from "@solidjs/signals";
-import { render } from "@solidjs/web";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
@@ -9,7 +8,9 @@ import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/
 import type { ApplicationContext, ApplicationTheme } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { SessionBackground } from "../../components/session-background.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
 import "../../styles.css";
@@ -17,7 +18,6 @@ import "../../styles/config.css";
 import "../../styles/settings.css";
 
 let host: HTMLDivElement;
-const disposers: Array<() => void> = [];
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   host = document.createElement("div");
@@ -26,9 +26,6 @@ beforeEach(() => {
   document.body.append(host);
 });
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
   host.remove();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -78,8 +75,10 @@ async function mount(preference: BackgroundPreference = DEFAULT_BACKGROUND_PREFE
   const [currentContext, setCurrentContext] = createSignal(context);
   host.innerHTML = '<div class="config-content"><div class="settings-page"></div></div>';
   const container = host.querySelector<HTMLElement>(".settings-page")!;
-  const dispose = render(() => <AppearanceBackground context={currentContext()} />, container);
-  disposers.push(dispose);
+  const { unmount: dispose } = mountSolid(
+    () => <AppearanceBackground context={currentContext()} />,
+    { container },
+  );
   flush();
   const element = container.querySelector<HTMLElement>("openclaw-appearance-background")!;
   const range = element.querySelector<HTMLInputElement>('input[type="range"]')!;

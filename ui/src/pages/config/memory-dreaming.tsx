@@ -1,11 +1,12 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, Match, Switch } from "solid-js";
+import { createMemo, For, Match, Switch } from "solid-js";
 import { renderProviderBrandIcon, providerIdFromModelRef } from "../../components/provider-icon.ts";
 import "../../components/select-picker.ts";
 import type { PickerParams } from "../../components/select-picker.ts";
 import {
-  renderSettingsDefaultDescription,
+  LearnMoreLink,
+  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
@@ -13,6 +14,11 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import {
+  resolveConfiguredDreaming,
+  type DreamingConfigPathSupport,
+} from "../agents/memory/dreaming.ts";
+import { resolveDreamingTimezoneDefault } from "./memory-defaults.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -168,7 +174,8 @@ function DreamingField(props: { settings: DreamingSettingsProps; spec: DreamingF
   };
   const description = (
     <>
-      {t(props.spec.helpKey)} {renderSettingsDefaultDescription(defaultValue(), field().overridden)}
+      {t(props.spec.helpKey)}{" "}
+      <SettingsDefaultDescription value={defaultValue()} overridden={field().overridden} />
     </>
   );
   const row = {
@@ -339,11 +346,12 @@ function DreamingModelPicker(props: DreamingModelPickerProps) {
 export function DreamingSettings(props: DreamingSettingsProps): JSX.Element {
   const storage = () => fieldAtPath(props.dreaming, ["storage", "mode"]);
   const storageMode = () => normalizeStorageMode(storage().value);
-  const storageDefaultDescription = () =>
-    renderSettingsDefaultDescription(
-      t("memoryPage.dreaming.storage.modes.separate"),
-      storage().overridden,
-    );
+  const storageDefaultDescription = (
+    <SettingsDefaultDescription
+      value={t("memoryPage.dreaming.storage.modes.separate")}
+      overridden={storage().overridden}
+    />
+  );
   return (
     <>
       <SettingsSection
@@ -363,7 +371,7 @@ export function DreamingSettings(props: DreamingSettingsProps): JSX.Element {
             title={t("memoryPage.dreaming.storage.modeLabel")}
             description={
               <>
-                {t("memoryPage.dreaming.storage.modeHelp")} {storageDefaultDescription()}
+                {t("memoryPage.dreaming.storage.modeHelp")} {storageDefaultDescription}
               </>
             }
             stacked={true}
@@ -446,4 +454,36 @@ export function renderDreamingUnsupported(pluginId: string): JSX.Element {
 
 export function renderDreamingSettings(props: DreamingSettingsProps): JSX.Element {
   return <DreamingSettings {...props} />;
+}
+
+export function MemoryDreamingControls(props: {
+  config: Record<string, unknown> | null;
+  support: DreamingConfigPathSupport;
+  disabled: boolean;
+  onPatch: (path: readonly string[], value: unknown) => void;
+}) {
+  const configured = createMemo(() => {
+    const { pluginId } = resolveConfiguredDreaming(props.config);
+    const plugins = asConfigRecord(props.config?.plugins);
+    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[pluginId]);
+    return { pluginId, dreaming: asConfigRecord(asConfigRecord(entry?.config)?.dreaming) };
+  });
+  return (
+    <>
+      <p class="settings-page__intro">
+        {t("memoryPage.dreaming.intro", { plugin: configured().pluginId })}{" "}
+        <LearnMoreLink url="https://docs.openclaw.ai/concepts/dreaming" />
+      </p>
+      {props.support === "unsupported" ? (
+        renderDreamingUnsupported(configured().pluginId)
+      ) : (
+        <DreamingSettings
+          dreaming={configured().dreaming}
+          timezoneDefault={resolveDreamingTimezoneDefault(props.config)}
+          disabled={props.disabled}
+          onPatch={props.onPatch}
+        />
+      )}
+    </>
+  );
 }

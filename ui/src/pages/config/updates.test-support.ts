@@ -1,7 +1,8 @@
-import { render as mountSolid } from "@solidjs/web";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, createSignal, Show } from "solid-js";
 import { vi } from "vitest";
 import type { ApplicationUpdateOverlaySnapshot } from "../../app/overlays-types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { Updates, type UpdatesViewProps } from "./updates.tsx";
 
 export type UpdatesViewOverrides = Partial<Omit<UpdatesViewProps, "update">> & {
@@ -67,7 +68,23 @@ export function createUpdatesViewProps(overrides: UpdatesViewOverrides = {}): Up
 }
 
 export function createUpdatesViewDom() {
-  const container = document.createElement("div");
+  const [current, publish] = createSignal<UpdatesViewProps | undefined>(undefined, {
+    equals: false,
+  });
+  const { container } = mountSolid(() =>
+    createComponent(Show, {
+      get when() {
+        return current() !== undefined;
+      },
+      children: (_present: unknown) =>
+        createComponent(
+          Updates,
+          new Proxy(current()!, {
+            get: (_, key) => Reflect.get(current()!, key),
+          }),
+        ),
+    }),
+  );
   function row(title: string): HTMLElement {
     const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
       (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
@@ -83,39 +100,17 @@ export function createUpdatesViewDom() {
     toggle: HTMLInputElement;
   } {
     const automaticRow = row("Automatic updates");
-    const toggle = automaticRow.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const toggle = automaticRow.querySelector<HTMLInputElement>('input[role="switch"]');
     if (!toggle) {
       throw new Error("Missing automatic updates control");
     }
     return { row: automaticRow, toggle };
   }
 
-  return { container, row, automaticUpdatesControl };
-}
-
-const mounts = new Map<
-  HTMLElement,
-  { update: (props: UpdatesViewProps) => void; dispose: () => void }
->();
-
-export function mountUpdates(props: UpdatesViewProps, container: HTMLElement) {
-  const mounted = mounts.get(container);
-  if (mounted) {
-    mounted.update(props);
-  } else {
-    const [current, update] = createSignal(props, { equals: false });
-    const reactiveProps = new Proxy(props, {
-      get: (_, key) => Reflect.get(current(), key),
-    });
-    const dispose = mountSolid(() => createComponent(Updates, reactiveProps), container);
-    mounts.set(container, { update, dispose });
+  function mountUpdates(props: UpdatesViewProps) {
+    publish(props);
+    flush();
   }
-  flush();
-}
 
-export function cleanupUpdates() {
-  for (const { dispose } of mounts.values()) {
-    dispose();
-  }
-  mounts.clear();
+  return { container, row, automaticUpdatesControl, mountUpdates };
 }

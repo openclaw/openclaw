@@ -1,23 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import {
-  cleanupUpdates,
-  mountUpdates,
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
 } from "./updates.test-support.ts";
 
-let container: HTMLDivElement;
+let container: ReturnType<typeof createUpdatesViewDom>["container"];
+let mountUpdates: ReturnType<typeof createUpdatesViewDom>["mountUpdates"];
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  ({ container, row } = createUpdatesViewDom());
+  ({ container, row, mountUpdates } = createUpdatesViewDom());
 });
-
-afterEach(cleanupUpdates);
 
 it("renders bounded dev commit details only when supplied", () => {
   const props = createProps({
@@ -56,7 +53,7 @@ it("renders bounded dev commit details only when supplied", () => {
       },
     },
   });
-  mountUpdates(props, container);
+  mountUpdates(props);
 
   expect(row("Commits").querySelectorAll("[role='listitem']")).toHaveLength(2);
   expect(row("Commits").textContent).toContain("b123456");
@@ -87,7 +84,6 @@ it("renders bounded dev commit details only when supplied", () => {
         },
       },
     }),
-    container,
   );
   expect(container.querySelector(".updates-commit-list")).toBeNull();
   expect(
@@ -96,6 +92,6 @@ it("renders bounded dev commit details only when supplied", () => {
     ),
   ).toEqual(["aaaaaaaa", "cccccccc"]);
 
-  mountUpdates(createProps(), container);
+  mountUpdates(createProps());
   expect(container.querySelector(".updates-commit-list")).toBeNull();
 });

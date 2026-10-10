@@ -1,3 +1,4 @@
+import "./config-form.bridge.tsx";
 import { html } from "lit";
 import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 

@@ -156,7 +156,7 @@ function ConfiguredTalkValue(props: { field: "provider" | "model" | "voice"; val
     <SettingsRow
       title={t(`talkPage.${props.field}.title`)}
       description={t(`talkPage.${props.field}.description`)}
-      control={<SettingsValue mono>{props.value}</SettingsValue>}
+      control={<SettingsValue mono value={props.value} />}
     />
   );
 }

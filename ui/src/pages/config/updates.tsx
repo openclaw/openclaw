@@ -76,12 +76,12 @@ function DeviceUpdates(props: { capability?: NativeDeviceSettingsCapability | nu
         <SettingsRow
           title={t("updates.device.version")}
           control={
-            <SettingsValue>
-              {t("updates.device.versionBuild", {
+            <SettingsValue
+              value={t("updates.device.versionBuild", {
                 version: snapshot()!.device.appVersion,
                 build: snapshot()!.device.appBuild,
               })}
-            </SettingsValue>
+            />
           }
         />
         <Show
@@ -323,12 +323,14 @@ function Timestamp(props: { timestampMs: number; nowMs?: number }) {
   const relative = () =>
     formatTimeAgo(Math.max(0, (props.nowMs ?? Date.now()) - props.timestampMs));
   return (
-    <SettingsValue>
-      <time datetime={new Date(props.timestampMs).toISOString()} title={relative()}>
-        {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}{" "}
-        <span class="muted">· {relative()}</span>
-      </time>
-    </SettingsValue>
+    <SettingsValue
+      value={
+        <time datetime={new Date(props.timestampMs).toISOString()} title={relative()}>
+          {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}{" "}
+          <span class="muted">· {relative()}</span>
+        </time>
+      }
+    />
   );
 }
 
@@ -343,29 +345,35 @@ function BuildFacts(props: UpdatesViewProps) {
       <SettingsRow
         title={t("updates.page.gatewayVersion")}
         control={
-          <SettingsValue mono>
-            {props.gatewayVersion ? (
-              <code dir="ltr" title={props.gatewayVersion}>
-                {props.gatewayVersion}
-              </code>
-            ) : (
-              t("common.na")
-            )}
-          </SettingsValue>
+          <SettingsValue
+            mono
+            value={
+              props.gatewayVersion ? (
+                <code dir="ltr" title={props.gatewayVersion}>
+                  {props.gatewayVersion}
+                </code>
+              ) : (
+                t("common.na")
+              )
+            }
+          />
         }
       />
       <SettingsRow
         title={t("updates.page.controlUiCommit")}
         control={
-          <SettingsValue mono>
-            {props.controlUiCommit ? (
-              <code dir="ltr" title={props.controlUiCommit}>
-                {props.controlUiCommit.slice(0, 12)}
-              </code>
-            ) : (
-              t("common.na")
-            )}
-          </SettingsValue>
+          <SettingsValue
+            mono
+            value={
+              props.controlUiCommit ? (
+                <code dir="ltr" title={props.controlUiCommit}>
+                  {props.controlUiCommit.slice(0, 12)}
+                </code>
+              ) : (
+                t("common.na")
+              )
+            }
+          />
         }
       />
       <Show when={builtAtMs() !== null}>
@@ -379,7 +387,7 @@ function BuildFacts(props: UpdatesViewProps) {
           title={t("updates.page.installedAt")}
           control={
             git()?.installedAtMs === undefined ? (
-              <SettingsValue>{t("updates.page.installedAtUnknown")}</SettingsValue>
+              <SettingsValue value={t("updates.page.installedAtUnknown")} />
             ) : (
               <Timestamp timestampMs={git()!.installedAtMs!} nowMs={props.nowMs} />
             )
@@ -396,7 +404,7 @@ function BuildFacts(props: UpdatesViewProps) {
         {(kind) => (
           <SettingsRow
             title={t("updates.page.installKind")}
-            control={<SettingsValue>{t(`updates.installKind.${kind()}`)}</SettingsValue>}
+            control={<SettingsValue value={t(`updates.installKind.${kind()}`)} />}
           />
         )}
       </Show>
@@ -612,7 +620,7 @@ export function Updates(props: UpdatesViewProps) {
             {(currentStep) => (
               <SettingsRow
                 title={t("updates.page.currentStep")}
-                control={<SettingsValue>{currentStep().step}</SettingsValue>}
+                control={<SettingsValue value={currentStep().step} />}
               />
             )}
           </Show>
@@ -621,11 +629,13 @@ export function Updates(props: UpdatesViewProps) {
               <SettingsRow
                 title={t("updates.page.runTarget")}
                 control={
-                  <SettingsValue>
-                    <code dir="ltr" title={target()}>
-                      {run()?.target.sha ? target().slice(0, 12) : target()}
-                    </code>
-                  </SettingsValue>
+                  <SettingsValue
+                    value={
+                      <code dir="ltr" title={target()}>
+                        {run()?.target.sha ? target().slice(0, 12) : target()}
+                      </code>
+                    }
+                  />
                 }
               />
             )}

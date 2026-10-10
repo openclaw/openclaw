@@ -1,12 +1,12 @@
-import { render as mountSolid } from "@solidjs/web";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { ConfigPage, type ConfigPageId } from "./config-page.tsx";
 import type { ConfigRouteData } from "./route-data.ts";
 
-const mounted = new Set<() => void>();
 const publications = new WeakMap<object, Set<() => void>>();
 
 export function publishConfigSource(source: object) {
@@ -122,64 +122,34 @@ export function mountConfigPage(
   initialContext: ApplicationContext,
   initial: { pageId?: ConfigPageId; routeData?: ConfigRouteData | null } = {},
 ) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const [context, setContext] = createSignal(completeConfigContext(initialContext));
+  const provider = createSolidApplicationContextProvider(completeConfigContext(initialContext));
   const [props, setProps] = createSignal(initial);
-  const stop = mountSolid(
+  const view = mountSolid(
     () =>
-      createComponent(ApplicationProvider, {
-        get value() {
-          return context();
+      createComponent(ConfigPage, {
+        get pageId() {
+          return props().pageId ?? "advanced";
         },
-        get children() {
-          return createComponent(ConfigPage, {
-            get pageId() {
-              return props().pageId ?? "advanced";
-            },
-            get routeData() {
-              return props().routeData ?? null;
-            },
-          });
+        get routeData() {
+          return props().routeData ?? null;
         },
       }),
-    container,
+    { wrapper: provider.wrapper },
   );
-  const dispose = () => {
-    mounted.delete(dispose);
-    stop();
-    container.remove();
-  };
-  mounted.add(dispose);
   flush();
   return {
-    container,
+    container: view.container,
     get page() {
-      return container.querySelector<HTMLElement>("openclaw-config-page")!;
+      return view.container.querySelector<HTMLElement>("openclaw-config-page")!;
     },
     setContext(next: ApplicationContext) {
-      setContext(completeConfigContext(next));
+      provider.setContext(completeConfigContext(next));
       flush();
     },
     update(next: Partial<typeof initial>) {
       setProps((previous) => ({ ...previous, ...next }));
       flush();
     },
-    dispose,
+    dispose: view.unmount,
   };
-}
-
-export function cleanupConfigPages() {
-  for (const dispose of mounted) {
-    dispose();
-  }
-}
-
-export async function settleConfigPage() {
-  // Flush owners, Promise completions, and the resulting Solid commit separately.
-  flush();
-  await Promise.resolve();
-  flush();
-  await Promise.resolve();
-  flush();
 }

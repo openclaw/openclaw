@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
-import { shellLayoutTraitsRef } from "../../app/shell-layout-traits-solid.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import "../../components/lobster-illustration.ts";
 import { lobsterPetSeed } from "../../components/lobster-pet-contract.ts";
 import { createLobsterPetLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
@@ -246,7 +246,7 @@ function Activity(props: { dreaming: DreamingStatus }) {
         {(entry) => (
           <SettingsRow
             title={t(`memoryPage.overview.activity.${entry()[0]}`)}
-            control={<SettingsValue>{entry()[1]}</SettingsValue>}
+            control={<SettingsValue value={entry()[1]} />}
           />
         )}
       </For>
@@ -275,9 +275,7 @@ function EngineHealth(props: {
         <SettingsRow
           title={t("memoryPage.overview.health.provider")}
           control={
-            <SettingsValue mono={true}>
-              {props.payload.provider ?? t("common.unknown")}
-            </SettingsValue>
+            <SettingsValue mono={true} value={props.payload.provider ?? t("common.unknown")} />
           }
         />
         <SettingsRow
@@ -315,8 +313,8 @@ function EngineHealth(props: {
             title={t("memoryPage.overview.health.runtime")}
             description={props.payload.embeddingRuntime.loadError}
             control={
-              <SettingsValue>
-                {[
+              <SettingsValue
+                value={[
                   props.payload.embeddingRuntime.engine,
                   props.payload.embeddingRuntime.backend,
                   props.payload.embeddingRuntime.buildInfo,
@@ -329,7 +327,7 @@ function EngineHealth(props: {
                 ]
                   .filter(Boolean)
                   .join(" · ")}
-              </SettingsValue>
+              />
             }
           />
         ) : undefined}
@@ -384,15 +382,15 @@ function Shortcuts(props: MemoryOverviewProps) {
 
 export function MemoryOverview(props: MemoryOverviewProps) {
   return (
-    <>
-      <div class="settings-page memory-overview" ref={shellLayoutTraitsRef({ settingsPage: true })}>
+    <ShellLayoutBoundary traits={{ settingsPage: true }}>
+      <div class="settings-page memory-overview">
         <Hero {...props} />{" "}
         {props.engineSelection.kind !== "off" && !props.engineDisabled ? (
           <StatusCards {...props} />
         ) : undefined}{" "}
         <Shortcuts {...props} />
       </div>
-    </>
+    </ShellLayoutBoundary>
   );
 }
 

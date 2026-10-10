@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -10,23 +10,20 @@ import {
 } from "../../test-helpers/native-device-settings.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
-  cleanupUpdates,
-  mountUpdates,
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
   type UpdatesViewOverrides,
 } from "./updates.test-support.ts";
 
-let container: HTMLDivElement;
+let container: ReturnType<typeof createUpdatesViewDom>["container"];
+let mountUpdates: ReturnType<typeof createUpdatesViewDom>["mountUpdates"];
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
 let automaticUpdatesControl: ReturnType<typeof createUpdatesViewDom>["automaticUpdatesControl"];
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  ({ container, row, automaticUpdatesControl } = createUpdatesViewDom());
+  ({ container, row, automaticUpdatesControl, mountUpdates } = createUpdatesViewDom());
 });
-
-afterEach(cleanupUpdates);
 
 describe("renderUpdates", () => {
   it.each([
@@ -197,7 +194,7 @@ describe("renderUpdates", () => {
     title: string;
   }>)("distinguishes $name", ({ props, status, tone, label, disabled, title }) => {
     const onCheckStatus = vi.fn(async () => true);
-    mountUpdates(createProps({ ...props, onCheckStatus }), container);
+    mountUpdates(createProps({ ...props, onCheckStatus }));
     const statusRow = row("Status");
     expect(statusRow.querySelector(".settings-status")?.textContent?.trim()).toBe(status);
     expect(statusRow.querySelector(".settings-status")?.className).toBe(
@@ -230,7 +227,6 @@ describe("renderUpdates", () => {
               : { mode: "manual", tone: "warn", text: "Could not check for updates: timeout" },
           },
         }),
-        container,
       );
       expect(row("Status").textContent).toContain(
         statusChecking ? "Checking for updates…" : "Could not check for updates: timeout",
@@ -255,7 +251,7 @@ describe("renderUpdates", () => {
         dispose: vi.fn(),
       } satisfies NativeDeviceSettingsCapability;
       const props = createProps({ nativeDeviceSettings });
-      mountUpdates(props, container);
+      mountUpdates(props);
       expect(container.textContent).not.toContain("This Mac");
       expect(container.textContent).not.toContain("This iPhone");
       expect(container.textContent).not.toContain("This device");
@@ -282,12 +278,12 @@ describe("renderUpdates", () => {
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
     const props = createProps({ nativeDeviceSettings, canAdmin: false, configBusy: true });
-    mountUpdates(props, container);
+    mountUpdates(props);
     expect(container.textContent).toContain("This Mac");
     expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
     const automatic = row("Check for updates automatically").querySelector<
       HTMLElement & { checked: boolean }
-    >('input[type="checkbox"]')!;
+    >('input[role="switch"]')!;
     expect(automatic.hasAttribute("disabled")).toBe(false);
     automatic.checked = false;
     automatic.dispatchEvent(new Event("change"));
@@ -296,10 +292,10 @@ describe("renderUpdates", () => {
     expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
     nativeDeviceSettings.snapshot!.updates.available = false;
     nativeDeviceSettings.snapshot!.updates.unavailableReason = "Updater is not bundled";
-    mountUpdates(props, container);
+    mountUpdates(props);
     expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
     expect(container.textContent).not.toContain("Check for updates automatically");
-    mountUpdates(createProps(), container);
+    mountUpdates(createProps());
     expect(container.textContent).not.toContain("This Mac");
   });
 
@@ -307,10 +303,7 @@ describe("renderUpdates", () => {
     const onChannelChange = vi.fn();
     const onAutomaticUpdatesChange = vi.fn();
     const onUpdateNow = vi.fn();
-    mountUpdates(
-      createProps({ onChannelChange, onAutomaticUpdatesChange, onUpdateNow }),
-      container,
-    );
+    mountUpdates(createProps({ onChannelChange, onAutomaticUpdatesChange, onUpdateNow }));
 
     expect(row("Gateway version").textContent).toContain("2026.8.1");
     expect(row("Control UI commit").textContent).toContain("0123456789ab");
@@ -340,7 +333,7 @@ describe("renderUpdates", () => {
     expect(onChannelChange).toHaveBeenCalledWith("beta", expect.any(HTMLElement));
 
     const automatic =
-      row("Automatic updates").querySelector<HTMLInputElement>('input[type="checkbox"]');
+      row("Automatic updates").querySelector<HTMLInputElement>('input[role="switch"]');
     if (!automatic) {
       throw new Error("Missing automatic updates control");
     }
@@ -358,9 +351,8 @@ describe("renderUpdates", () => {
         onAutomaticUpdatesChange,
         onUpdateNow,
       }),
-      container,
     );
-    expect(row("Automatic updates").querySelector('input[type="checkbox"]')).toBe(automatic);
+    expect(row("Automatic updates").querySelector('input[role="switch"]')).toBe(automatic);
     expect(row("Release channel").querySelector('input[value="beta"]')).toBe(beta);
     expect(automatic.checked).toBe(true);
     expect(beta.checked).toBe(true);
@@ -377,7 +369,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
 
     expect(
@@ -387,9 +378,7 @@ describe("renderUpdates", () => {
     ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
-    expect(automaticRow.querySelector('input[type="checkbox"]')?.hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(automaticRow.querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(true);
   });
 
   it("reports a configless extended-stable package install by the Gateway channel and gates auto-apply", () => {
@@ -407,7 +396,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
 
     const channel = row("Release channel").querySelector<HTMLElement>('[role="radiogroup"]');
@@ -441,7 +429,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
 
     const channel = row("Release channel").querySelector<HTMLElement>('[role="radiogroup"]');
@@ -466,11 +453,9 @@ describe("renderUpdates", () => {
         update: { updateSchedule: { channel: "stable", autoEnabled: false } },
         onUpdateChecksChange,
       }),
-      container,
     );
 
-    const checks =
-      row("Check for updates").querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const checks = row("Check for updates").querySelector<HTMLInputElement>('input[role="switch"]');
     if (!checks) {
       throw new Error("Missing update checks control");
     }
@@ -520,7 +505,6 @@ describe("renderUpdates", () => {
           },
         },
       }),
-      container,
     );
 
     const automatic = automaticUpdatesControl();
@@ -557,7 +541,6 @@ describe("renderUpdates", () => {
         },
         onHoldUpdate,
       }),
-      container,
     );
 
     const timer = row("Status").querySelector("[role='timer']");
@@ -595,7 +578,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
 
     expect(row("Status").textContent).toContain("Update held · resumes in 1:00");
@@ -620,7 +602,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
     expect(row("Status").querySelector("button")).toBeNull();
   });
@@ -649,7 +630,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
 
     expect(row("Installed").querySelector("time")?.getAttribute("datetime")).toBe(
@@ -673,7 +653,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
     expect(row("Installed").querySelector(".settings-row__value")?.textContent).toBe("Unknown");
   });
@@ -712,7 +691,6 @@ describe("renderUpdates", () => {
           updateAvailable: null,
         },
       }),
-      container,
     );
 
     expect(row("Status").textContent).toContain(label);
@@ -729,7 +707,6 @@ describe("renderUpdates", () => {
           },
         },
       }),
-      container,
     );
 
     expect(row("Status").textContent).toContain(
@@ -782,43 +759,37 @@ describe("renderUpdates", () => {
           onUpdateNow,
           onCheckStatus,
         }),
-        container,
       );
-      document.body.append(container);
-      try {
-        const view = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-          "openclaw-update-run-view",
-        )!;
-        await view.updateComplete;
-        expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
-          reconciled
-            ? "OpenClaw abandoned update reconciled."
-            : status === "succeeded"
-              ? "OpenClaw updated to 2026.9.2"
-              : `OpenClaw update ${status}`,
+      const view = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "openclaw-update-run-view",
+      )!;
+      await view.updateComplete;
+      expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
+        reconciled
+          ? "OpenClaw abandoned update reconciled."
+          : status === "succeeded"
+            ? "OpenClaw updated to 2026.9.2"
+            : `OpenClaw update ${status}`,
+      );
+      if (recovery) {
+        const actions = row("Recovery");
+        actions.querySelector<HTMLButtonElement>("button")?.click();
+        actions.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+        expect(onCheckStatus).toHaveBeenCalledOnce();
+        expect(onUpdateNow).toHaveBeenCalledOnce();
+        expect(row("CLI fallback").querySelector("code")?.textContent).toBe("openclaw triage");
+      } else {
+        expect(container.textContent).not.toContain("Retry update");
+        expect(container.textContent).not.toContain("openclaw triage");
+      }
+      if (reconciled) {
+        expect(view.querySelector(".update-run-view__report--failed")).toBeNull();
+        expect(view.querySelector('[data-step="build"]')?.getAttribute("data-status")).toBe(
+          "failed",
         );
-        if (recovery) {
-          const actions = row("Recovery");
-          actions.querySelector<HTMLButtonElement>("button")?.click();
-          actions.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
-          expect(onCheckStatus).toHaveBeenCalledOnce();
-          expect(onUpdateNow).toHaveBeenCalledOnce();
-          expect(row("CLI fallback").querySelector("code")?.textContent).toBe("openclaw triage");
-        } else {
-          expect(container.textContent).not.toContain("Retry update");
-          expect(container.textContent).not.toContain("openclaw triage");
-        }
-        if (reconciled) {
-          expect(view.querySelector(".update-run-view__report--failed")).toBeNull();
-          expect(view.querySelector('[data-step="build"]')?.getAttribute("data-status")).toBe(
-            "failed",
-          );
-          expect(view.querySelector(".update-run-view__details")?.textContent).toContain(
-            "Build output",
-          );
-        }
-      } finally {
-        container.remove();
+        expect(view.querySelector(".update-run-view__details")?.textContent).toContain(
+          "Build output",
+        );
       }
     },
   );
@@ -843,7 +814,6 @@ describe("renderUpdates", () => {
             recordedUpdateAttempt: projected.attempt,
           },
         }),
-        container,
       );
 
       expect(row("Status").textContent).toContain(reason);
@@ -865,7 +835,6 @@ describe("renderUpdates", () => {
         update: { updateRun: run, reportableUpdateFailureId: run.runId },
         onReportFailure,
       }),
-      container,
     );
 
     const actions = [...row("Recovery").querySelectorAll<HTMLButtonElement>("button")];
@@ -899,7 +868,6 @@ describe("renderUpdates", () => {
           },
         },
       }),
-      container,
     );
 
     const report = row("Failure report");
@@ -928,7 +896,6 @@ describe("renderUpdates", () => {
           },
         },
       }),
-      container,
     );
 
     const report = row("Failure report");
@@ -956,7 +923,6 @@ describe("renderUpdates", () => {
           },
         },
       }),
-      container,
     );
 
     const report = row("Failure report");
@@ -967,7 +933,7 @@ describe("renderUpdates", () => {
   });
 
   it("keeps read-only facts visible while locking controls for non-admins", () => {
-    mountUpdates(createProps({ canAdmin: false, canUpdate: false, configBusy: true }), container);
+    mountUpdates(createProps({ canAdmin: false, canUpdate: false, configBusy: true }));
 
     expect(container.querySelector("[role='note']")?.textContent).toContain(
       "Administrator access is required",
@@ -978,10 +944,10 @@ describe("renderUpdates", () => {
       ),
     ).toBe(true);
     expect(
-      row("Automatic updates").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
+      row("Automatic updates").querySelector('input[role="switch"]')?.hasAttribute("disabled"),
     ).toBe(true);
     expect(
-      row("Check for updates").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
+      row("Check for updates").querySelector('input[role="switch"]')?.hasAttribute("disabled"),
     ).toBe(true);
     expect(row("Update now").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
     expect(row("Status").querySelector("button")).toBeNull();

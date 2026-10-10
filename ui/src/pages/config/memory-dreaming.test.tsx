@@ -1,24 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { DreamingSettings, renderDreamingSettings } from "./memory-dreaming.tsx";
-
-afterEach(cleanup);
 
 function renderInto(
   dreaming: Record<string, unknown> | null,
   onPatch: (path: readonly string[], value: unknown) => void = vi.fn(),
   disabled = false,
 ): HTMLElement {
-  const container = document.createElement("div");
-  render(
-    () =>
-      renderDreamingSettings({ dreaming, timezoneDefault: "Asia/Singapore", disabled, onPatch }),
-    { container },
+  const { container } = mountSolid(() =>
+    renderDreamingSettings({ dreaming, timezoneDefault: "Asia/Singapore", disabled, onPatch }),
   );
+  flush();
   return container;
 }
 
@@ -192,7 +189,7 @@ describe("renderDreamingSettings", () => {
 
 it("keeps the edited field mounted when the owner publishes updated config", () => {
   const [dreaming, setDreaming] = createSignal<Record<string, unknown>>({ frequency: "0 3 * * *" });
-  const view = render(() => (
+  const view = mountSolid(() => (
     <DreamingSettings
       dreaming={dreaming()}
       timezoneDefault="Asia/Singapore"
@@ -200,6 +197,7 @@ it("keeps the edited field mounted when the owner publishes updated config", () 
       onPatch={(_, value) => setDreaming({ frequency: value })}
     />
   ));
+  flush();
   const input = numberInput(view.container, "Dreaming frequency");
   editNumber(input, "0 4 * * *");
   flush();

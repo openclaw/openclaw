@@ -18,13 +18,14 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
 import {
-  cleanupConfigPages,
+  completeConfigContext,
   mountConfigPage,
   publishConfigSource,
-  settleConfigPage,
 } from "./config-page.test-support.ts";
 import { configSelectionFromSearch, type ConfigPageId } from "./config-page.tsx";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
@@ -38,7 +39,7 @@ describe("ConfigPage navigation", () => {
   });
 
   afterEach(async () => {
-    cleanupConfigPages();
+    cleanupSolid();
     document.body.replaceChildren();
     resetServerUiPrefsSync();
     vi.restoreAllMocks();
@@ -168,7 +169,7 @@ describe("ConfigPage navigation", () => {
         },
       };
       const { page } = mountConfigPage(context, { pageId: "security" });
-      await settleConfigPage();
+      flush();
 
       expect(patchForm).not.toHaveBeenCalled();
       expect(removeFormValue).not.toHaveBeenCalled();
@@ -221,16 +222,16 @@ describe("ConfigPage navigation", () => {
           throw new Error("Config route did not return section data");
         }
         const module = await route.component();
-        const provider = createApplicationContextProvider(context);
+        const provider = createApplicationContextProvider(completeConfigContext(context));
         document.body.append(provider);
         render(module.render(data as ConfigRouteData), provider);
         const page = expectDefined(
           provider.querySelector<HTMLElement>("openclaw-config-page"),
           "mounted config page",
         );
-        await settleConfigPage();
+        flush();
 
-        expect(page.querySelector(`#${visibleId}`)).not.toBeNull();
+        await waitForSolid(() => expect(page.querySelector(`#${visibleId}`)).not.toBeNull());
         expect(page.querySelector(`#${absentId}`)).toBeNull();
         if (pageId === "communications") {
           expect(page.querySelector('wa-tab[aria-selected="true"]')?.textContent?.trim()).toBe(
@@ -254,7 +255,7 @@ describe("ConfigPage navigation", () => {
           }),
         });
         const { page } = view;
-        await settleConfigPage();
+        flush();
         const frames = new Map<number, FrameRequestCallback>();
         let nextFrameId = 0;
         vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
@@ -278,7 +279,7 @@ describe("ConfigPage navigation", () => {
             hash: "#config-section-messages",
           }),
         });
-        await settleConfigPage();
+        flush();
         expect(previousScroll).not.toHaveBeenCalled();
         expect(frames.size).toBe(1);
 
@@ -292,7 +293,7 @@ describe("ConfigPage navigation", () => {
               hash: transition === "replacement" ? "#config-section-tts" : "",
             }),
           });
-          await settleConfigPage();
+          flush();
         }
         const nextScroll = vi.fn();
         if (transition === "replacement") {
@@ -323,7 +324,7 @@ describe("ConfigPage model catalog lifecycle", () => {
   });
 
   afterEach(async () => {
-    cleanupConfigPages();
+    cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -353,7 +354,11 @@ describe("ConfigPage model catalog lifecycle", () => {
       webPush: { subscribe },
     } as unknown as ApplicationContext;
     const view = mountConfigPage(context, { pageId: "appearance" });
-    await settleConfigPage();
+    await waitForSolid(() =>
+      expect(
+        view.page.querySelector("#settings-appearance-sidebar openclaw-select-picker"),
+      ).not.toBeNull(),
+    );
     return { view, source, context };
   }
 
@@ -381,21 +386,25 @@ describe("ConfigPage model catalog lifecycle", () => {
       ]);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(request).not.toHaveBeenCalled();
-      expect(observerModels(view)).toEqual([]);
+      await waitForSolid(() => expect(observerModels(view)).toEqual([]));
       source.publish({
         ...source.gateway.snapshot,
         hello: gatewayHelloForMethods(["system.info"]),
       });
-      await settleConfigPage();
-      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+      flush();
+      await waitForSolid(() =>
+        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
+      );
       source.publish({
         ...source.gateway.snapshot,
         hello: gatewayHelloForMethods(["system.info"], ["operator.sessions.read"]),
       });
-      await settleConfigPage();
+      flush();
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
-      expect(observerModels(view)).toEqual([]);
+      await waitForSolid(() =>
+        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
+      );
+      await waitForSolid(() => expect(observerModels(view)).toEqual([]));
     });
 
     it("pauses hidden status reads and resumes one ten-second poll when visible", async () => {
@@ -412,7 +421,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
       globalThis.dispatchEvent(new Event("focus"));
-      await settleConfigPage();
+      flush();
       expect(statusReads()).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(9_999);
       expect(statusReads()).toHaveLength(1);
@@ -452,16 +461,20 @@ describe("ConfigPage model catalog lifecycle", () => {
         } else {
           source.publish(snapshot);
         }
-        await settleConfigPage();
+        flush();
         const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
         second.resolve({ models: currentModels });
-        await settleConfigPage();
-        expect(observerModels(view)).toEqual(expectedModels(currentModels));
+        flush();
+        await waitForSolid(() =>
+          expect(observerModels(view)).toEqual(expectedModels(currentModels)),
+        );
 
         first.resolve({ models: [{ id: "stale", name: "Stale", provider: "old" }] });
         await first.promise;
-        await settleConfigPage();
-        expect(observerModels(view)).toEqual(expectedModels(currentModels));
+        flush();
+        await waitForSolid(() =>
+          expect(observerModels(view)).toEqual(expectedModels(currentModels)),
+        );
         expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
         expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, firstClient, {
           agentId: "main",
@@ -497,26 +510,27 @@ describe("ConfigPage model catalog lifecycle", () => {
       const selection = context.settingsAgentSelection.state as { selectedId: string | null };
       selection.selectedId = "writer";
       publishConfigSource(context.settingsAgentSelection);
-      await settleConfigPage();
+      flush();
       const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
       writer.resolve({ models: writerModels });
-      await settleConfigPage();
-      expect(observerModels(view)).toEqual(expectedModels(writerModels));
+      flush();
+      await waitForSolid(() => expect(observerModels(view)).toEqual(expectedModels(writerModels)));
 
       selection.selectedId = "main";
       publishConfigSource(context.settingsAgentSelection);
-      await settleConfigPage();
+      flush();
       const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
       expect(mainRequests).toBe(1);
-      expect(observerModels(view)).toEqual([]);
+      await waitForSolid(() => expect(observerModels(view)).toEqual([]));
       firstMain.resolve({ models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }] });
-      await settleConfigPage();
+      flush();
       expect(mainRequests).toBe(2);
-      expect(observerModels(view)).toEqual([]);
+      await waitForSolid(() => expect(observerModels(view)).toEqual([]));
       secondMain.resolve({ models: currentMainModels });
-      await settleConfigPage();
-      await settleConfigPage();
-      expect(observerModels(view)).toEqual(expectedModels(currentMainModels));
+      flush();
+      await waitForSolid(() =>
+        expect(observerModels(view)).toEqual(expectedModels(currentMainModels)),
+      );
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
         ["main", "writer", "main"].map((agentId) => [
           "models.list",
@@ -526,9 +540,11 @@ describe("ConfigPage model catalog lifecycle", () => {
 
       selection.selectedId = null;
       publishConfigSource(context.settingsAgentSelection);
-      await settleConfigPage();
-      expect(observerModels(view)).toEqual([]);
-      expect(view.page.textContent?.includes("Explicit model catalog unavailable")).toBe(true);
+      flush();
+      await waitForSolid(() => expect(observerModels(view)).toEqual([]));
+      await waitForSolid(() =>
+        expect(view.page.textContent).toContain("Explicit model catalog unavailable"),
+      );
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
     });
 
@@ -555,20 +571,20 @@ describe("ConfigPage model catalog lifecycle", () => {
       // The application retires catalogs on publication; the next status poll reads that generation.
       invalidateChatMetadataStore(client);
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(observerModels(view)).toEqual(expectedModels(original));
+      await waitForSolid(() => expect(observerModels(view)).toEqual(expectedModels(original)));
       await vi.advanceTimersByTimeAsync(30_000);
       expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(6);
       expect(catalogReads).toBe(2);
       view.dispose();
-      await settleConfigPage();
+      flush();
 
       const remounted = mountConfigPage(context, { pageId: "appearance" });
-      await settleConfigPage();
+      flush();
       expect(catalogReads).toBe(2);
-      expect(observerModels(remounted)).toEqual([]);
+      await waitForSolid(() => expect(observerModels(remounted)).toEqual([]));
       stale.resolve({ models: original });
-      await settleConfigPage();
-      expect(observerModels(remounted)).toEqual(expectedModels(fresh));
+      flush();
+      await waitForSolid(() => expect(observerModels(remounted)).toEqual(expectedModels(fresh)));
       expect(catalogReads).toBe(3);
     });
 
@@ -577,22 +593,28 @@ describe("ConfigPage model catalog lifecycle", () => {
         Promise.resolve(method === "models.list" ? { models: [] } : {}),
       );
       const { view } = await mount({ request } as unknown as GatewayBrowserClient);
-      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+      await waitForSolid(() =>
+        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
+      );
       view.update({ pageId: "advanced" });
-      await settleConfigPage();
+      flush();
       await vi.advanceTimersByTimeAsync(20_000);
       expect(view.page.isConnected).toBe(true);
-      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+      await waitForSolid(() =>
+        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
+      );
       view.update({ pageId: "appearance" });
-      await settleConfigPage();
-      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(2);
+      flush();
+      await waitForSolid(() =>
+        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(2),
+      );
     });
   });
 });
 
 describe("ConfigPage meeting capture", () => {
   afterEach(() => {
-    cleanupConfigPages();
+    cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
@@ -644,17 +666,17 @@ describe("ConfigPage meeting capture", () => {
       } as unknown as ApplicationContext;
       const view = mountConfigPage(context, { pageId: "communications" });
       const container = view.container;
-      await settleConfigPage();
+      flush();
       expect(container.querySelector("openclaw-meeting-capture-settings")).toBeNull();
       const captureTab = container.querySelector<HTMLElement>('wa-tab[panel="transcripts"]')!;
       expect(captureTab.textContent?.trim()).toBe("Meeting capture");
       const tabs = captureTab.closest("wa-tab-group") as HTMLElement & { active: string };
       expect(tabs.active).toBe("messages");
       captureTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await settleConfigPage();
+      flush();
       const capture = container.querySelector("openclaw-meeting-capture-settings") as HTMLElement;
       expect(container.querySelector("#config-section-panel")?.contains(capture)).toBe(true);
-      await settleConfigPage();
+      flush();
       const advanced = capture.querySelector<HTMLDetailsElement>("details")!;
       expect(advanced).not.toBeNull();
       expect(advanced.open).toBe(false);
@@ -682,19 +704,18 @@ describe("ConfigPage meeting capture", () => {
           targetBlockId: "config-section-transcripts",
         },
       });
-      await settleConfigPage();
-      await settleConfigPage();
+      flush();
       expect(advanced.open).toBe(true);
       await advancedToggled;
       const messagesTab = container.querySelector<HTMLElement>('wa-tab[panel="messages"]')!;
       messagesTab.focus();
       messagesTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await settleConfigPage();
+      flush();
       expect(container.querySelector("openclaw-meeting-capture-settings")).toBeNull();
-      await settleConfigPage();
+      flush();
       expect(document.activeElement).toBe(messagesTab);
     } finally {
-      cleanupConfigPages();
+      cleanupSolid();
       runtimeConfig.dispose();
     }
   });

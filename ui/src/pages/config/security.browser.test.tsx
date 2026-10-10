@@ -1,6 +1,6 @@
-import { flush } from "@solidjs/signals";
-import { render } from "@solidjs/web";
 import { expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { Security } from "./security.tsx";
 
 it.each([
@@ -15,7 +15,7 @@ it.each([
     const container = document.createElement("div");
     const onToolProfileChange = vi.fn();
     document.body.append(container);
-    const dispose = render(
+    const { unmount } = mountSolid(
       () => (
         <Security
           security={{
@@ -32,7 +32,7 @@ it.each([
           editor={undefined}
         />
       ),
-      container,
+      { container },
     );
     try {
       const radios = [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
@@ -53,7 +53,7 @@ it.each([
         expect(full.checked).toBe(true);
       }
     } finally {
-      dispose();
+      unmount();
       container.remove();
     }
   },

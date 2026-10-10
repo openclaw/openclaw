@@ -4,11 +4,8 @@ import { createEffect, onCleanup } from "solid-js";
 import type { ConfigFormStructuredDraftProps } from "./config-form-structured-draft.ts";
 import { ConfigFormStructuredDraftContent } from "./config-form-structured-draft.tsx";
 import { ConfigMapField } from "./config-form.node.collection-map.tsx";
-import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
-import { JsonTextarea } from "./config-form.node.json.tsx";
-import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.tsx";
-import type { ConfigNodeRenderParams, ConfigNodeRenderer } from "./config-form.node.shared.ts";
-import { ConfigNode, renderNode } from "./config-form.node.tsx";
+import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
+import { renderNode } from "./config-form.node.tsx";
 import {
   ConfigForm,
   ConfigTierGroups,
@@ -75,47 +72,23 @@ export function LegacyConfigTierGroups(props: { props: LegacyConfigTierGroupsPro
     />
   );
 }
-export function LegacyConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
-  return <ConfigNode params={props.params} />;
-}
-type LegacyCollectionProps = { params: ConfigNodeRenderParams; renderNode?: LegacyNodeRenderer };
-function collectionRenderer(props: { renderNode?: LegacyNodeRenderer }): ConfigNodeRenderer {
-  return (params) =>
-    props.renderNode ? (
-      <ConfigFormLitContent content={props.renderNode(params())} />
-    ) : (
-      renderNode(params)
-    );
-}
-export function LegacyConfigArray(props: LegacyCollectionProps): JSX.Element {
-  return <ConfigArray params={props.params} renderNode={collectionRenderer(props)} />;
-}
-export function LegacyConfigObject(props: LegacyCollectionProps): JSX.Element {
-  return <ConfigObject params={props.params} renderNode={collectionRenderer(props)} />;
-}
 export function LegacyConfigMap(props: {
   params: Parameters<typeof ConfigMapField>[0]["params"];
   renderNode?: LegacyNodeRenderer;
 }): JSX.Element {
-  return <ConfigMapField params={props.params} renderNode={collectionRenderer(props)} />;
+  return (
+    <ConfigMapField
+      params={props.params}
+      renderNode={(params) =>
+        props.renderNode ? (
+          <ConfigFormLitContent content={props.renderNode(params())} />
+        ) : (
+          renderNode(params)
+        )
+      }
+    />
+  );
 }
-export function LegacyConfigText(props: {
-  params: Parameters<typeof TextInput>[0]["params"];
-}): JSX.Element {
-  return <TextInput params={props.params} />;
-}
-export function LegacyConfigNumber(props: { params: ConfigNodeRenderParams }): JSX.Element {
-  return <NumberInput params={props.params} />;
-}
-export function LegacyConfigSelect(props: {
-  params: Parameters<typeof SelectInput>[0]["params"];
-}): JSX.Element {
-  return <SelectInput params={props.params} />;
-}
-export function LegacyConfigJson(props: { params: ConfigNodeRenderParams }): JSX.Element {
-  return <JsonTextarea params={props.params} />;
-}
-
 export function LegacyConfigStructuredDraft(props: {
   props?: ConfigFormStructuredDraftProps;
 }): JSX.Element {

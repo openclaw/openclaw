@@ -1,8 +1,4 @@
 import { createEffect, createMemo, Show, For } from "solid-js";
-import {
-  BUILTIN_THEMES,
-  resolveThemeBranding,
-} from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -11,19 +7,11 @@ import {
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings.ts";
-import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
-import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import {
-  renderSettingsDefaultDescription,
+  SettingsDefaultDescription,
   SettingsRow,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/tooltip.ts";
-import "../../components/lobster-illustration.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { languageLabel, LanguageSelect } from "./language-select.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
@@ -31,6 +19,8 @@ import { SessionObserverSettings } from "./session-observer-settings.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import type { ConfigProps } from "./view-types.ts";
+
+export { LobsterPetSection } from "./view-appearance-lobster.tsx";
 export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
   if (provenance === "profile") {
     return t("configView.profileSyncedHint");
@@ -44,11 +34,11 @@ export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): 
   return t("configView.syncedHint");
 }
 export function LanguageSection(props: ConfigProps) {
-  const defaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      props.localeResetValue ? languageLabel(props.localeResetValue) : t("common.system"),
-      props.localeOverridden,
-    ),
+  const defaultDescription = (
+    <SettingsDefaultDescription
+      value={props.localeResetValue ? languageLabel(props.localeResetValue) : t("common.system")}
+      overridden={props.localeOverridden}
+    />
   );
   const provenance = createMemo(() => serverUiPrefProvenanceHint(props.localeProvenance));
   return (
@@ -61,7 +51,7 @@ export function LanguageSection(props: ConfigProps) {
               title={t("quickSettings.language")}
               description={
                 <>
-                  {defaultDescription()} {provenance()}
+                  {defaultDescription} {provenance()}
                 </>
               }
               control={
@@ -171,10 +161,10 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
             onChange={(event) => onSelect()?.(event.currentTarget.value)}
           >
             {
-              <For each={selectOptions()}>
+              <For each={selectOptions()} keyed={(option) => option.value}>
                 {(option) => (
-                  <option value={option.value} selected={option.value === selectedDeviceId()}>
-                    {option.label}
+                  <option value={option().value} selected={option().value === selectedDeviceId()}>
+                    {option().label}
                   </option>
                 )}
               </For>
@@ -195,19 +185,21 @@ export function ChatPreferencesSection(props: ConfigProps) {
         })
       : undefined,
   );
-  const messageWidthDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth,
-      props.chatMessageMaxWidth !== undefined,
-    ),
+  const messageWidthDefaultDescription = (
+    <SettingsDefaultDescription
+      value={UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth}
+      overridden={props.chatMessageMaxWidth !== undefined}
+    />
   );
-  const sendShortcutDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      props.chatSendShortcutResetValue === "modifier-enter"
-        ? t("chat.sendShortcutModifierEnter")
-        : t("chat.sendShortcutEnter"),
-      props.chatSendShortcutOverridden,
-    ),
+  const sendShortcutDefaultDescription = (
+    <SettingsDefaultDescription
+      value={
+        props.chatSendShortcutResetValue === "modifier-enter"
+          ? t("chat.sendShortcutModifierEnter")
+          : t("chat.sendShortcutEnter")
+      }
+      overridden={props.chatSendShortcutOverridden}
+    />
   );
   const sendShortcutProvenance = createMemo(() =>
     serverUiPrefProvenanceHint(props.chatSendShortcutProvenance),
@@ -215,29 +207,31 @@ export function ChatPreferencesSection(props: ConfigProps) {
   const followUpProvenance = createMemo(() =>
     serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance),
   );
-  const catalogTargetDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("chat.catalogOpenTargetViewer"),
-      props.catalogOpenTarget !== UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
-    ),
+  const catalogTargetDefaultDescription = (
+    <SettingsDefaultDescription
+      value={t("chat.catalogOpenTargetViewer")}
+      overridden={props.catalogOpenTarget !== UI_APPEARANCE_DEFAULTS.catalogOpenTarget}
+    />
   );
-  const holdToRecordDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("common.enabled"),
-      props.composerHoldToRecord !== UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
-    ),
+  const holdToRecordDefaultDescription = (
+    <SettingsDefaultDescription
+      value={t("common.enabled")}
+      overridden={props.composerHoldToRecord !== UI_APPEARANCE_DEFAULTS.composerHoldToRecord}
+    />
   );
-  const showTaskProgressDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("common.enabled"),
-      props.chatShowTaskProgress !== UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
-    ),
+  const showTaskProgressDefaultDescription = (
+    <SettingsDefaultDescription
+      value={t("common.enabled")}
+      overridden={props.chatShowTaskProgress !== UI_APPEARANCE_DEFAULTS.chatShowTaskProgress}
+    />
   );
-  const collapseTaskProgressDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("common.disabled"),
-      props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
-    ),
+  const collapseTaskProgressDefaultDescription = (
+    <SettingsDefaultDescription
+      value={t("common.disabled")}
+      overridden={
+        props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress
+      }
+    />
   );
   return (
     <>
@@ -251,7 +245,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                 <>
                   {t("configView.chatPrefs.messageWidthHint")}
                   <br />
-                  {messageWidthDefaultDescription()} {t("quickSettings.personal.browserOnly")}
+                  {messageWidthDefaultDescription} {t("quickSettings.personal.browserOnly")}
                 </>
               }
               control={
@@ -291,7 +285,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                 <>
                   {t("configView.chatPrefs.showTaskProgressHint")}
                   <br />
-                  {showTaskProgressDefaultDescription()} {t("quickSettings.personal.browserOnly")}
+                  {showTaskProgressDefaultDescription} {t("quickSettings.personal.browserOnly")}
                 </>
               }
               checked={props.chatShowTaskProgress}
@@ -309,8 +303,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                 <>
                   {t("configView.chatPrefs.collapseTaskProgressHint")}
                   <br />
-                  {collapseTaskProgressDefaultDescription()}{" "}
-                  {t("quickSettings.personal.browserOnly")}
+                  {collapseTaskProgressDefaultDescription} {t("quickSettings.personal.browserOnly")}
                 </>
               }
               checked={props.chatCollapseTaskProgress}
@@ -329,7 +322,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
               setting={"send-shortcut"}
               description={
                 <>
-                  {sendShortcutDefaultDescription()} {sendShortcutProvenance()}
+                  {sendShortcutDefaultDescription} {sendShortcutProvenance()}
                 </>
               }
               options={[
@@ -406,7 +399,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
               setting={"catalog-open-target"}
               description={
                 <>
-                  {catalogTargetDefaultDescription()}
+                  {catalogTargetDefaultDescription}
                   {t("quickSettings.personal.browserOnly")}
                 </>
               }
@@ -454,7 +447,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                 <>
                   {t("chat.composer.holdToRecordSettingDescription")}
                   <br />
-                  {holdToRecordDefaultDescription()} {t("quickSettings.personal.browserOnly")}
+                  {holdToRecordDefaultDescription} {t("quickSettings.personal.browserOnly")}
                 </>
               }
               checked={props.composerHoldToRecord}
@@ -470,228 +463,22 @@ export function ChatPreferencesSection(props: ConfigProps) {
     </>
   );
 }
-export function LobsterPetSection(props: ConfigProps) {
-  const activeTheme = createMemo(
-    () =>
-      BUILTIN_THEMES.find((theme) => theme.id === props.theme) ??
-      props.themeCatalog?.themes.find((theme) => theme.id === props.theme),
-  );
-  const branding = createMemo(() => resolveThemeBranding(activeTheme()));
-  const themeHiddenDescription = createMemo(() =>
-    branding().mascot === "none" ? (
-      <>
-        <br />
-        {t("quickSettings.appearance.lobsterVisitsThemeHidden", {
-          theme:
-            activeTheme()?.source === "builtin"
-              ? t(`configView.themes.${activeTheme()?.id}.label`)
-              : (activeTheme()?.name ?? props.theme),
-        })}
-      </>
-    ) : undefined,
-  );
-  const lobsterVisitsDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("common.enabled"),
-      props.lobsterPetVisits !== UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
-    ),
-  );
-  const lobsterSoundsDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("common.disabled"),
-      props.lobsterPetSounds !== UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
-    ),
-  );
-  const dex = projectLobsterdex();
-  const dexEntries = () => dex.read();
-  const seenCount = createMemo(
-    () => LOBSTER_PET_PALETTES.filter((palette) => dexEntries().has(palette.id)).length,
-  );
-  return (
-    <Show when={branding().lobsterdex}>
-      <section class="settings-section">
-        {<SettingsSectionHeader title={t("quickSettings.appearance.lobsterdex")} />}
-        <div class="settings-group">
-          {
-            <SettingsToggleRow
-              title={t("quickSettings.appearance.lobsterVisits")}
-              description={
-                <>
-                  {t(
-                    props.lobsterPetVisits
-                      ? "quickSettings.appearance.lobsterVisitsOn"
-                      : "quickSettings.appearance.lobsterVisitsOff",
-                  )}
-                  <br />
-                  {lobsterVisitsDefaultDescription()}
-                  {t("quickSettings.personal.browserOnly")}
-                  {themeHiddenDescription()}
-                </>
-              }
-              checked={props.lobsterPetVisits}
-              onChange={(enabled) =>
-                props.onAppearanceChange({
-                  lobsterPetVisits: enabled,
-                })
-              }
-            />
-          }
-          {
-            <SettingsToggleRow
-              title={t("quickSettings.appearance.lobsterSounds")}
-              description={
-                <>
-                  {t(
-                    props.lobsterPetSounds
-                      ? "quickSettings.appearance.lobsterSoundsOn"
-                      : "quickSettings.appearance.lobsterSoundsOff",
-                  )}
-                  <br />
-                  {lobsterSoundsDefaultDescription()} {t("quickSettings.personal.browserOnly")}
-                </>
-              }
-              checked={props.lobsterPetSounds}
-              onChange={(enabled) =>
-                props.onAppearanceChange({
-                  lobsterPetSounds: enabled,
-                })
-              }
-              onAct={(enabled) => {
-                if (enabled) {
-                  previewLobsterChirp();
-                }
-              }}
-            />
-          }
-          {
-            <SettingsRow
-              title={t("quickSettings.appearance.lobsterdex")}
-              description={t("quickSettings.appearance.lobsterdexSeen", {
-                seen: String(seenCount()),
-                total: String(LOBSTER_PET_PALETTES.length),
-              })}
-              stacked={true}
-              control={
-                <>
-                  <div class="lobsterdex__gallery">
-                    <div class="lobsterdex">
-                      {
-                        <For each={LOBSTER_PET_PALETTES}>
-                          {(palette) => {
-                            const look = canonicalLobsterLook(palette);
-                            const entry = createMemo(() => dexEntries().get(palette.id));
-                            const seen = createMemo(() => entry() !== undefined);
-                            const shinySeen = createMemo(() => entry()?.shinySeenAt != null);
-                            const baseName = createMemo(() =>
-                              entry() ? (entry()?.name ?? lobsterPaletteName(palette.id)) : "?",
-                            );
-                            const displayName = createMemo(() =>
-                              shinySeen() ? `${baseName()} ✦` : baseName(),
-                            );
-                            const lore = LOBSTER_PALETTE_LORE[palette.id];
-                            const loreLine = createMemo(() => (seen() ? lore.flavor : lore.hint));
-                            const visitedLine = createMemo(() => {
-                              const firstSeenAt = entry()?.firstSeenAt;
-                              return firstSeenAt != null
-                                ? t("quickSettings.appearance.lobsterdexFirstVisited", {
-                                    name: baseName(),
-                                    date: new Date(firstSeenAt).toLocaleDateString(),
-                                  })
-                                : null;
-                            });
-                            const ariaLabel = createMemo(() =>
-                              [displayName(), loreLine(), visitedLine()]
-                                .filter((line): line is string => line !== null)
-                                .join("\n"),
-                            );
-                            return (
-                              <>
-                                <openclaw-tooltip>
-                                  <span
-                                    class={[
-                                      "lobsterdex__mini",
-                                      `lobster-pet--palette-${palette.id}`,
-                                      { "lobsterdex__mini--unseen": !seen() },
-                                    ]}
-                                    style={lobsterLookStyle(look)}
-                                    tabIndex={0}
-                                    role="img"
-                                    aria-label={ariaLabel()}
-                                  >
-                                    <openclaw-lobster-illustration
-                                      style={{ display: "contents" }}
-                                      prop:look={look}
-                                      prop:options={{
-                                        standalone: true,
-                                      }}
-                                    />
-                                    {shinySeen() ? (
-                                      <>
-                                        <span class="lobsterdex__mini-star" aria-hidden="true">
-                                          ✦
-                                        </span>
-                                      </>
-                                    ) : undefined}
-                                  </span>
-                                  <span slot="content" class="lobsterdex__tooltip">
-                                    <strong>{displayName()}</strong>
-                                    <span>{loreLine()}</span>
-                                    {visitedLine() ? (
-                                      <>
-                                        <span>{visitedLine()}</span>
-                                      </>
-                                    ) : undefined}
-                                  </span>
-                                </openclaw-tooltip>
-                              </>
-                            );
-                          }}
-                        </For>
-                      }
-                    </div>
-                    {props.lobsterdexHref ? (
-                      <>
-                        <a
-                          class="btn btn--sm lobsterdex__open"
-                          href={props.lobsterdexHref}
-                          onClick={(event: MouseEvent) => {
-                            if (!shouldHandleNavigationClick(event)) {
-                              return;
-                            }
-                            event.preventDefault();
-                            props.onOpenLobsterdex?.();
-                          }}
-                        >
-                          {t("quickSettings.appearance.lobsterdexOpen")}
-                        </a>
-                      </>
-                    ) : undefined}
-                  </div>
-                </>
-              }
-            />
-          }
-        </div>
-      </section>
-    </Show>
-  );
-}
 export function SidebarPreferencesSection(props: ConfigProps) {
   const hiddenCatalogIds = createMemo(() => [...props.hiddenSessionCatalogIds].toSorted());
-  const liveActivityDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("common.enabled"),
-      props.sidebarLiveActivity !== UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
-    ),
+  const liveActivityDefaultDescription = (
+    <SettingsDefaultDescription
+      value={t("common.enabled")}
+      overridden={props.sidebarLiveActivity !== UI_APPEARANCE_DEFAULTS.sidebarLiveActivity}
+    />
   );
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
   const sessionDeleteConfirm = createMemo(() => props.sessionDeleteConfirm);
-  const deleteConfirmDefaultDescription = createMemo(() =>
-    renderSettingsDefaultDescription(
-      t("common.enabled"),
-      sessionDeleteConfirm() !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
-    ),
+  const deleteConfirmDefaultDescription = (
+    <SettingsDefaultDescription
+      value={t("common.enabled")}
+      overridden={sessionDeleteConfirm() !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm}
+    />
   );
   return (
     <>
@@ -706,7 +493,7 @@ export function SidebarPreferencesSection(props: ConfigProps) {
                 <>
                   {t("configView.sidebarPrefs.liveActivityHint")}
                   <br />
-                  {liveActivityDefaultDescription()} {t("quickSettings.personal.browserOnly")}
+                  {liveActivityDefaultDescription} {t("quickSettings.personal.browserOnly")}
                 </>
               }
               checked={props.sidebarLiveActivity}
@@ -724,7 +511,7 @@ export function SidebarPreferencesSection(props: ConfigProps) {
                 <>
                   {t("configView.sidebarPrefs.deleteConfirmHint")}
                   <br />
-                  {deleteConfirmDefaultDescription()} {t("quickSettings.personal.browserOnly")}
+                  {deleteConfirmDefaultDescription} {t("quickSettings.personal.browserOnly")}
                 </>
               }
               checked={sessionDeleteConfirm()}

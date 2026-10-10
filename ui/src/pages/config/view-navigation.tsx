@@ -6,8 +6,7 @@ import {
   localizedHintForPath,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
-import type { IconName } from "../../components/icons.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConfigProps } from "./view-types.ts";
 

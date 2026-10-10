@@ -1,21 +1,11 @@
-import { render, type JSX } from "@solidjs/web";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
 import { SessionObserverSettings } from "./session-observer-settings.tsx";
-
-const disposers: Array<() => void> = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
-function mountSolid(view: () => JSX.Element, container: HTMLElement) {
-  disposers.push(render(view, container));
-}
 
 describe("session observer settings patches", () => {
   it("uses null to restore the default toggle and false to opt out", () => {
@@ -55,7 +45,7 @@ describe("session observer settings patches", () => {
           onEnabledChange: () => undefined,
           onUtilityModelChange: () => undefined,
         }),
-      container,
+      { container },
     );
 
     await updatePickers(container);
@@ -116,7 +106,7 @@ describe("session observer settings patches", () => {
           onEnabledChange: () => undefined,
           onUtilityModelChange: () => undefined,
         }),
-      container,
+      { container },
     );
     expect(container.textContent).toContain(expected);
   });

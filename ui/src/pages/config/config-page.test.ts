@@ -21,15 +21,12 @@ import {
   nextFrame,
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
-import {
-  cleanupConfigPages,
-  mountConfigPage,
-  publishConfigSource,
-  settleConfigPage,
-} from "./config-page.test-support.ts";
-import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.tsx";
+import { mountConfigPage, publishConfigSource } from "./config-page.test-support.ts";
+import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
 import type { ConfigViewState } from "./view.tsx";
 
 const switchActiveRealtimeTalkCameras =
@@ -50,7 +47,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanupConfigPages();
+  cleanupSolid();
   resetServerUiPrefsSync();
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -354,10 +351,13 @@ describe("ConfigPage synced preference provenance", () => {
     } as unknown as ApplicationContext;
     const beforeReset = loadSettings();
     const { container } = mountConfigPage(context, { pageId: "appearance" });
-    await settleConfigPage();
+    flush();
 
-    const themeSection = container.querySelector<HTMLElement>("#settings-appearance-theme");
-    expect(themeSection?.textContent).toContain("Default: Claw");
+    const themeSection = await waitForSolid(() => {
+      const section = container.querySelector<HTMLElement>("#settings-appearance-theme");
+      expect(section?.textContent).toContain("Default: Claw");
+      return section!;
+    });
     expect(themeSection?.textContent).toContain("Synced across your devices");
     expect(themeSection?.textContent).not.toContain("Default: Knot");
     expect(themeSection?.textContent).not.toContain("Stored in this browser only");
@@ -547,16 +547,16 @@ describe("ConfigPage Updates integration", () => {
     } as unknown as ApplicationContext;
 
     const view = mountConfigPage(context, { pageId: "updates" });
-    await settleConfigPage();
+    flush();
     publishConfigSource(context.gateway);
     publishConfigSource(context.overlays);
-    expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+    await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
 
     view.update({ pageId: "advanced" });
-    await settleConfigPage();
+    flush();
     view.update({ pageId: "updates" });
-    await settleConfigPage();
-    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+    flush();
+    await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledTimes(2));
   });
 
   it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
@@ -608,7 +608,7 @@ describe("ConfigPage Updates integration", () => {
 
     context.overlays.snapshot.updateStatusRefreshing = true;
     publishConfigSource(context.overlays);
-    await settleConfigPage();
+    flush();
     const checkingButton = container.querySelector<HTMLButtonElement>(".btn.primary")!;
     expect(checkingButton.textContent?.trim()).toBe("Update now");
     expect(checkingButton.disabled).toBe(true);
@@ -624,7 +624,7 @@ describe("ConfigPage Updates integration", () => {
       text: "Could not check for updates: timeout",
     };
     publishConfigSource(context.overlays);
-    await settleConfigPage();
+    flush();
     const unknownUpdateButton = container.querySelector<HTMLButtonElement>(".btn.primary")!;
     expect(unknownUpdateButton.disabled).toBe(true);
     expect(unknownUpdateButton.title).toBe(
@@ -637,7 +637,7 @@ describe("ConfigPage Updates integration", () => {
       install: { kind: "git", git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 } },
     };
     publishConfigSource(context.overlays);
-    await settleConfigPage();
+    flush();
     const knownUpdateButton = container.querySelector<HTMLButtonElement>(".btn.primary")!;
     expect(knownUpdateButton.disabled).toBe(false);
     expect(knownUpdateButton.title).toBe("");

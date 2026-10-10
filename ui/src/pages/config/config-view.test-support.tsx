@@ -1,24 +1,34 @@
-import { createSignal, flush } from "@solidjs/signals";
-import { render, type JSX } from "@solidjs/web";
-import { afterEach, vi } from "vitest";
+import { createSignal, onCleanup } from "solid-js";
+import { vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
+import type { ApplicationContext, ApplicationTheme } from "../../app/context-types.ts";
+import { loadSettings } from "../../app/settings.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { Config, createConfigViewState, type ConfigProps } from "./view.tsx";
 
-const disposers: Array<() => void> = [];
 const views = new WeakMap<HTMLElement, (props: ConfigProps) => void>();
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
 
-export function mountSolid(view: () => JSX.Element, container: HTMLElement) {
-  const dispose = render(view, container);
-  disposers.push(() => {
-    dispose();
-    views.delete(container);
-  });
-  flush();
+function createViewContext(): ApplicationContext {
+  const { gateway } = createApplicationGateway();
+  const theme: ApplicationTheme = {
+    branding: resolveThemeBranding(undefined),
+    settings: loadSettings(),
+    mode: "system",
+    resolvedMode: "light",
+    serverSelection: null,
+    appliedPalette: null,
+    recordServerSelection: () => undefined,
+    setMode: () => undefined,
+    refresh: () => undefined,
+    subscribe: () => () => undefined,
+  };
+  return { gateway, theme, router: { subscribe: () => () => undefined } } as ApplicationContext;
 }
 
 /** Update one mounted view so the test exercises retained field identity. */
@@ -31,7 +41,15 @@ export function renderConfigInto(props: ConfigProps, container: HTMLElement) {
   }
   const [current, setCurrent] = createSignal({ ...props });
   views.set(container, setCurrent);
-  mountSolid(() => <Config {...current()} />, container);
+  const provider = createSolidApplicationContextProvider(createViewContext());
+  mountSolid(
+    () => {
+      onCleanup(() => views.delete(container));
+      return <Config {...current()} />;
+    },
+    { container, wrapper: provider.wrapper },
+  );
+  flush();
 }
 
 export const baseProps = () => ({

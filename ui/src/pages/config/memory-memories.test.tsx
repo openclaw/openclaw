@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { MemoryMemories, type MemoryMemoriesProps } from "./memory-memories.tsx";
 
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -55,21 +55,15 @@ function createElement(request: Request, advertised = true) {
   return element;
 }
 
-async function settle() {
+function typeQuery(element: MemoryMemoriesTestElement, query: string) {
   flush();
-  await Promise.resolve();
-  flush();
-}
-
-async function typeQuery(element: MemoryMemoriesTestElement, query: string) {
-  await settle();
   const input = element.querySelector<HTMLInputElement>("#memory-search-input");
   if (!input) {
     throw new Error("missing memory search input");
   }
   input.value = query;
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  await settle();
+  flush();
 }
 
 function submit(element: MemoryMemoriesTestElement) {
@@ -103,9 +97,9 @@ function memoryFileResponse(content: string, path = result.path) {
 }
 
 describe("MemoryMemoriesElement", () => {
-  it("renders idle and gateway-update-required states", async () => {
+  it("renders idle and gateway-update-required states", () => {
     const current = createElement(vi.fn(() => Promise.resolve({})));
-    await settle();
+    flush();
     expect(current.textContent).toContain("Search for a person, project, decision");
     expect(current.querySelector("form")).not.toBeNull();
     current.remove();
@@ -114,7 +108,7 @@ describe("MemoryMemoriesElement", () => {
       vi.fn(() => Promise.resolve({})),
       false,
     );
-    await settle();
+    flush();
     expect(old.textContent).toContain("Update the gateway to search memories");
     expect(old.querySelector("form")).toBeNull();
     old.remove();
@@ -125,7 +119,7 @@ describe("MemoryMemoriesElement", () => {
     const element = createElement(request);
     try {
       element.agentId = null;
-      await typeQuery(element, "Ada");
+      typeQuery(element, "Ada");
       expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(
         true,
       );
@@ -141,11 +135,11 @@ describe("MemoryMemoriesElement", () => {
     const request = vi.fn(() => pending.promise);
     const element = createElement(request);
     try {
-      await typeQuery(element, "Ada");
+      typeQuery(element, "Ada");
       expect(request).not.toHaveBeenCalled();
 
       submit(element);
-      await waitForFast(() => expect(element.textContent).toContain("Searching memories"));
+      await waitForSolid(() => expect(element.textContent).toContain("Searching memories"));
       expect(request).toHaveBeenCalledWith("memory.search", { query: "Ada", agentId: "main" });
 
       pending.resolve({
@@ -154,7 +148,7 @@ describe("MemoryMemoriesElement", () => {
         searchMode: "hybrid",
         results: [result],
       });
-      await waitForFast(() => expect(element.textContent).toContain(result.snippet));
+      await waitForSolid(() => expect(element.textContent).toContain(result.snippet));
       expect(element.textContent).toContain("hybrid search");
       expect(element.textContent?.replace(/\s+/g, " ")).toContain(
         "memory/people/ada.md · lines 2–3",
@@ -178,15 +172,15 @@ describe("MemoryMemoriesElement", () => {
       });
     const element = createElement(request);
     try {
-      await typeQuery(element, "missing");
+      typeQuery(element, "missing");
       submit(element);
-      await waitForFast(() => expect(element.textContent).toContain("index unavailable"));
+      await waitForSolid(() => expect(element.textContent).toContain("index unavailable"));
 
       const retry = [...element.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Retry",
       );
       retry?.click();
-      await waitForFast(() => expect(element.textContent).toContain("No memories matched"));
+      await waitForSolid(() => expect(element.textContent).toContain("No memories matched"));
       expect(element.textContent).toContain("keyword search");
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
@@ -214,17 +208,17 @@ describe("MemoryMemoriesElement", () => {
     });
     const element = createElement(request);
     try {
-      await typeQuery(element, "Ada");
+      typeQuery(element, "Ada");
       submit(element);
-      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(3));
+      await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(3));
 
       const rows = element.querySelectorAll<HTMLButtonElement>("article > button");
       rows[0]?.click();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(element.textContent).toContain("Loading the full memory file"),
       );
       rows[1]?.click();
-      await settle();
+      flush();
       expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
       expect(rows[1]?.getAttribute("aria-expanded")).toBe("true");
       expect(element.querySelectorAll(".memory-memories__detail")).toHaveLength(1);
@@ -233,18 +227,18 @@ describe("MemoryMemoriesElement", () => {
       ).toHaveLength(1);
 
       pending.resolve(fileResponse);
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe("first"),
       );
       rows[0]?.click();
-      await settle();
+      flush();
       expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
         "matched two\nmatched three",
       );
 
       rows[0]?.click();
       rows[0]?.click();
-      await settle();
+      flush();
       expect(
         request.mock.calls.filter(([method]) => method === "agents.workspace.get"),
       ).toHaveLength(1);
@@ -254,7 +248,7 @@ describe("MemoryMemoriesElement", () => {
       });
 
       rows[2]?.click();
-      await settle();
+      flush();
       expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
       expect(rows[2]?.getAttribute("aria-expanded")).toBe("true");
       expect(rows[2]?.getAttribute("aria-controls")).toBe("memory-detail-2");
@@ -285,9 +279,9 @@ describe("MemoryMemoriesElement", () => {
     );
     const element = createElement(request);
     try {
-      await typeQuery(element, "memory");
+      typeQuery(element, "memory");
       submit(element);
-      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(6));
+      await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(6));
 
       expect(element.querySelectorAll("article > button")).toHaveLength(1);
       expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(5);
@@ -312,12 +306,12 @@ describe("MemoryMemoriesElement", () => {
     );
     const element = createElement(request);
     try {
-      await typeQuery(element, "Ada");
+      typeQuery(element, "Ada");
       submit(element);
-      await waitForFast(() => expect(element.querySelector("article > button")).not.toBeNull());
+      await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
       element.querySelector<HTMLButtonElement>("article > button")?.click();
 
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(element.textContent).toContain(
           "Could not load this memory file: workspace file not found",
         ),
@@ -340,12 +334,12 @@ describe("MemoryMemoriesElement", () => {
     );
     const element = createElement(request);
     try {
-      await typeQuery(element, "Ada");
+      typeQuery(element, "Ada");
       submit(element);
-      await waitForFast(() => expect(element.textContent).toContain(result.snippet));
+      await waitForSolid(() => expect(element.textContent).toContain(result.snippet));
 
       element.agentId = "research";
-      await waitForFast(() => expect(element.textContent).toContain("Search for a person"));
+      await waitForSolid(() => expect(element.textContent).toContain("Search for a person"));
       expect(element.textContent).not.toContain(result.snippet);
       expect(element.querySelector<HTMLInputElement>("#memory-search-input")?.value).toBe("");
     } finally {
@@ -373,12 +367,14 @@ describe("MemoryMemoriesElement", () => {
       const element = createElement(request);
       try {
         for (const query of ["Ada", "Ada again"]) {
-          await typeQuery(element, query);
+          typeQuery(element, query);
           submit(element);
-          await settle();
-          await waitForFast(() => expect(element.querySelector("article > button")).not.toBeNull());
+          flush();
+          await waitForSolid(() =>
+            expect(element.querySelector("article > button")).not.toBeNull(),
+          );
           element.querySelector<HTMLButtonElement>("article > button")?.click();
-          await waitForFast(() =>
+          await waitForSolid(() =>
             expect(element.textContent).toContain("Loading the full memory file"),
           );
         }
@@ -390,12 +386,12 @@ describe("MemoryMemoriesElement", () => {
           previous.reject(new Error("Retired read failure"));
         }
         await previous.promise.catch(() => undefined);
-        await settle();
+        flush();
         expect(element.textContent).toContain("Loading the full memory file");
         expect(element.textContent).not.toContain("Retired");
 
         current.resolve(memoryFileResponse("first\nFresh matched content\nthird"));
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
             "Fresh matched content\nthird",
           ),
@@ -434,9 +430,9 @@ describe("MemoryMemoriesElement", () => {
       const element = createElement(request);
       const readText = () => (element.textContent ?? "").replace(/\s+/gu, " ").trim();
       try {
-        await typeQuery(element, "Ada");
+        typeQuery(element, "Ada");
         submit(element);
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(element.querySelector(".memory-memories__results-heading")).not.toBeNull(),
         );
         expect(element.querySelectorAll("article")).toHaveLength(hasHits ? 1 : 0);
@@ -446,9 +442,9 @@ describe("MemoryMemoriesElement", () => {
           expect(readText()).toContain(result.snippet);
         }
 
-        await typeQuery(element, "Ada fresh");
+        typeQuery(element, "Ada fresh");
         submit(element);
-        await waitForFast(() => expect(readText()).toContain(fresh.snippet));
+        await waitForSolid(() => expect(readText()).toContain(fresh.snippet));
         expect(readText()).not.toContain(warning);
         expect(readText()).not.toContain(action);
       } finally {

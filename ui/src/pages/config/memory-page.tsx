@@ -1,4 +1,3 @@
-import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 // Controller for the Memory destination page. The URL owns the active tab;
 // this element projects Settings agent selection into Overview status and
@@ -8,7 +7,6 @@ import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-m
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -23,14 +21,15 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   resolveConfiguredDreaming,
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
 import "../agents/memory/memory-panel.ts";
-import { dreamingConfigPath, resolveDreamingTimezoneDefault } from "./memory-defaults.ts";
-import { DreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.tsx";
+import { dreamingConfigPath } from "./memory-defaults.ts";
+import { MemoryDreamingControls } from "./memory-dreaming.tsx";
 import { MemoryMemories } from "./memory-memories.tsx";
 import { MemoryOverview, type MemoryOverviewStatus } from "./memory-overview.tsx";
 import {
@@ -58,7 +57,6 @@ registerEnglishCatalog(registerSettingsEnglish);
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
 const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
-const DREAMING_DOCS_URL = "https://docs.openclaw.ai/concepts/dreaming";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
@@ -394,7 +392,7 @@ export function MemorySettingsContent(props: MemorySettingsPageProps) {
 
   async function changeAddon(pluginId: string, enabled: boolean) {
     if (
-      addonNoticeOperations.has(pluginId) ||
+      addonBusy().has(pluginId) ||
       props.mutationDisabled ||
       catalog().kind !== "ready" ||
       !catalogCanMutate() ||
@@ -650,34 +648,6 @@ export function MemorySettingsContent(props: MemorySettingsPageProps) {
   const currentEngineState = () => engineState(engineSelection());
   const agentId = () => agentSelection.read().state.selectedId;
   const agentError = () => (agentId() ? null : agents.read().agentsError);
-  const dreamingConfig = () => {
-    const config = currentConfigObject(runtime.read().state);
-    const { pluginId } = resolveConfiguredDreaming(config);
-    const plugins = asConfigRecord(config?.plugins);
-    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[pluginId]);
-    return { config, pluginId, dreaming: asConfigRecord(asConfigRecord(entry?.config)?.dreaming) };
-  };
-
-  function DreamingControls() {
-    return (
-      <>
-        <p class="settings-page__intro">
-          {t("memoryPage.dreaming.intro", { plugin: dreamingConfig().pluginId })}
-          {<LearnMoreLink href={DREAMING_DOCS_URL} />}
-        </p>
-        {support() === "unsupported" ? (
-          renderDreamingUnsupported(dreamingConfig().pluginId)
-        ) : (
-          <DreamingSettings
-            dreaming={dreamingConfig().dreaming}
-            timezoneDefault={resolveDreamingTimezoneDefault(dreamingConfig().config)}
-            disabled={props.mutationDisabled}
-            onPatch={patchDreaming}
-          />
-        )}
-      </>
-    );
-  }
 
   return (
     <Memory
@@ -732,15 +702,31 @@ export function MemorySettingsContent(props: MemorySettingsPageProps) {
       }
       dreams={agentId() ? <openclaw-agent-memory-panel prop:agentId={agentId()} /> : null}
       editor={activeTab() === "settings" ? props.buildEditor() : null}
-      dreamingSettings={activeTab() === "settings" ? <DreamingControls /> : null}
+      dreamingSettings={
+        activeTab() === "settings" ? (
+          <MemoryDreamingControls
+            config={currentConfigObject(runtime.read().state)}
+            support={support()}
+            disabled={props.mutationDisabled}
+            onPatch={patchDreaming}
+          />
+        ) : null
+      }
     />
   );
 }
 
-export function MemorySettingsPage(props: MemorySettingsPageProps) {
-  return (
-    <openclaw-memory-settings>
-      <MemorySettingsContent {...props} />
-    </openclaw-memory-settings>
-  );
-}
+export const MemorySettingsPage = defineSolidBridge<MemorySettingsPageProps>(
+  "openclaw-memory-settings",
+  (props) => <MemorySettingsContent {...props} />,
+  {
+    properties: {
+      configObject: { default: {}, attribute: false },
+      mutationDisabled: { default: false, type: Boolean },
+      pluginsHref: { default: "" },
+      memoryImportHref: { default: "" },
+      routeData: { default: null, attribute: false },
+      buildEditor: { default: () => null, attribute: false },
+    },
+  },
+);

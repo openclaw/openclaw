@@ -12,7 +12,7 @@ import {
 import { setControlValidity } from "./config-form.scalar-edit.ts";
 import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
 import { Icon } from "./solid/icon.tsx";
-import { SettingsSegmented } from "./solid/settings-ui.tsx";
+import { SettingsDefaultDescription, SettingsSegmented } from "./solid/settings-ui.tsx";
 
 export * from "./config-form.node.shared.ts";
 
@@ -164,9 +164,9 @@ function removeCollectionRow(event: Event, remove: () => boolean) {
 }
 
 export function renderSchemaDefaultDescription(schema: JsonSchema, value: unknown): JSX.Element {
-  return schema.default !== undefined && value !== undefined
-    ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-    : undefined;
+  return schema.default !== undefined && value !== undefined ? (
+    <SettingsDefaultDescription value={formatConfigValueText(schema.default)} overridden />
+  ) : undefined;
 }
 
 export function SegmentedControl(props: {

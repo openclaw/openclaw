@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { cleanup, render } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 
 // The hero derives its lobster from lobsterPetSeed, which mixes in a random
 // per-load salt, so the palette (and with it sprite geometry like the sleeping
@@ -84,8 +85,6 @@ function fixturePayload(): DoctorMemoryStatusPayload {
   };
 }
 
-afterEach(cleanup);
-
 async function renderOverview(
   status: MemoryOverviewStatus,
   engineSelection: MemoryOverviewProps["engineSelection"] = {
@@ -94,22 +93,20 @@ async function renderOverview(
   },
   overrides: Partial<MemoryOverviewProps> = {},
 ) {
-  const container = document.createElement("div");
-  render(
-    () =>
-      renderMemoryOverview({
-        agentId: "main",
-        engineSelection,
-        engineDisabled: false,
-        status,
-        probingEmbeddings: false,
-        onRefresh: vi.fn(),
-        onProbeEmbeddings: vi.fn(),
-        onNavigate: vi.fn(),
-        ...overrides,
-      }),
-    { container },
+  const { container } = mountSolid(() =>
+    renderMemoryOverview({
+      agentId: "main",
+      engineSelection,
+      engineDisabled: false,
+      status,
+      probingEmbeddings: false,
+      onRefresh: vi.fn(),
+      onProbeEmbeddings: vi.fn(),
+      onNavigate: vi.fn(),
+      ...overrides,
+    }),
   );
+  flush();
   await container.querySelector("openclaw-lobster-illustration")?.updateComplete;
   return container;
 }

@@ -5,11 +5,11 @@ import {
   renderTextInputFixture,
   renderNumberInputFixture,
   renderArrayFixture,
-} from "../test-helpers/config-form-fixtures.ts";
-import {
+} from "../test-helpers/config-form-fixtures.tsx";
+import type {
   ConfigFormCollectionDraft,
-  type ConfigFormCollectionDraftCommit,
-} from "./config-form-collection-draft.ts";
+  ConfigFormCollectionDraftCommit,
+} from "./config-form-collection-draft.tsx";
 import { configFieldId } from "./config-form.shared.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 

@@ -1,17 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { render, type JSX } from "@solidjs/web";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { renderMcp } from "./mcp.tsx";
-const disposers: Array<() => void> = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
-function mount(view: () => JSX.Element, container: HTMLElement) {
-  disposers.push(render(view, container));
-}
 
 type McpViewProps = Parameters<typeof renderMcp>[0];
 
@@ -53,7 +44,7 @@ describe("renderMcp", () => {
   it("renders summary counts, operator commands, and the managed servers card", () => {
     const container = document.createElement("div");
 
-    mount(() => renderMcp(createProps()), container);
+    mountSolid(() => renderMcp(createProps()), { container });
 
     const summary = container.querySelector(".mcp-page__summary");
     expect(summary?.textContent).toContain("Servers");
@@ -71,7 +62,7 @@ describe("renderMcp", () => {
   it("keeps the summary free of save actions and preserves the embedded editor", () => {
     const container = document.createElement("div");
 
-    mount(() => renderMcp(createProps()), container);
+    mountSolid(() => renderMcp(createProps()), { container });
 
     expect(buttonByText.bind(null, container, "Save")).toThrow();
     expect(buttonByText.bind(null, container, "Save & Publish")).toThrow();

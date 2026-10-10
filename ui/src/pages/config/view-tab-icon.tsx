@@ -15,6 +15,7 @@ import "../../components/lobster-illustration.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
+
 export type TabIconViewProps = {
   tabIcon: TabIconPreference | undefined;
   lobsterdexEnabled?: boolean;
@@ -22,26 +23,47 @@ export type TabIconViewProps = {
   tabIconLobsters?: readonly LobsterPetPalette[];
   setTabIconMode: (mode: TabIconPreference) => void;
 };
-function renderLobsterPreview(palette: LobsterPetPalette) {
-  const look = canonicalLobsterLook(palette);
+
+const SHAPE_CHOICES = [
+  ["square", "agent"],
+  ["rounded", "agent:rounded"],
+  ["circle", "agent:circle"],
+] as const;
+
+function LobsterPreview(props: { palette: LobsterPetPalette }) {
+  const look = createMemo(() => canonicalLobsterLook(props.palette));
   return (
-    <>
-      <span
-        class={`lobster-pet settings-tab-icon__lobster lobster-pet--palette-${palette.id}`}
-        style={lobsterLookStyle(look)}
-        aria-hidden="true"
-      >
-        <openclaw-lobster-illustration
-          style={{ display: "contents" }}
-          prop:look={look}
-          prop:options={{
-            standalone: true,
-          }}
-        />
-      </span>
-    </>
+    <span
+      class={["lobster-pet settings-tab-icon__lobster", `lobster-pet--palette-${props.palette.id}`]}
+      style={lobsterLookStyle(look())}
+      aria-hidden="true"
+    >
+      <openclaw-lobster-illustration
+        style={{ display: "contents" }}
+        prop:look={look()}
+        prop:options={{ standalone: true }}
+      />
+    </span>
   );
 }
+
+function AvatarPreview(props: {
+  source: string | null;
+  fallbackUrl: string;
+  shape?: AgentTabIconShape;
+  fallbackOnly?: boolean;
+}) {
+  return (
+    <openclaw-tab-icon-avatar
+      style={{ display: "contents" }}
+      prop:imageUrl={props.source}
+      prop:shape={props.shape ?? "square"}
+      prop:fallbackOnly={props.fallbackOnly ?? false}
+      prop:fallbackUrl={props.fallbackUrl}
+    />
+  );
+}
+
 export function TabIconSection(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
@@ -56,186 +78,146 @@ export function TabIconSection(props: TabIconViewProps) {
     lobsters().find((palette) => props.tabIcon === `lobster:${palette.id}`),
   );
   const preview = createMemo(() => (lobsterMode() ? selected() : lobsters()[0]));
-  const defaultPreview = () => (
-    <openclaw-tab-icon-avatar
-      style={{ display: "contents" }}
-      prop:imageUrl={null}
-      prop:fallbackOnly={true}
-      prop:fallbackUrl={defaultSource()}
-    />
-  );
-  const avatarPreview = (source: string | null, shape: AgentTabIconShape = "square") => (
-    <openclaw-tab-icon-avatar
-      style={{ display: "contents" }}
-      prop:imageUrl={source}
-      prop:shape={shape}
-      prop:fallbackUrl={defaultSource()}
-    />
-  );
-  const optionLabel = (
-    label: string,
-    source: string | null,
-    shape: AgentTabIconShape = "square",
-  ) => (
-    <>
+  // Labels retain their preview hosts while the controlled selection changes.
+  const commonOptions = [
+    {
+      value: "default",
+      label: (
+        <span class="settings-tab-icon__option">
+          <AvatarPreview source={null} fallbackUrl={defaultSource()} />
+          {t("configView.appearance.tabIcon.default")}
+        </span>
+      ),
+    },
+    {
+      value: "agent",
+      label: (
+        <span class="settings-tab-icon__option">
+          <AvatarPreview
+            source={props.tabIconAgentAvatar ?? null}
+            shape={selectedShape() ?? "square"}
+            fallbackUrl={defaultSource()}
+          />
+          {t("configView.appearance.tabIcon.agent")}
+        </span>
+      ),
+    },
+  ];
+  const lobsterOption = {
+    value: "lobster",
+    get disabled() {
+      return lobsters().length === 0;
+    },
+    label: (
       <span class="settings-tab-icon__option">
-        {avatarPreview(source, shape)}
-        {label}
+        <span class="settings-tab-icon__preview">
+          <Show
+            when={preview()}
+            fallback={<AvatarPreview source={null} fallbackOnly fallbackUrl={defaultSource()} />}
+          >
+            {(palette) => <LobsterPreview palette={palette()} />}
+          </Show>
+        </span>
+        {t("configView.appearance.tabIcon.lobsterdex")}
       </span>
-    </>
-  );
+    ),
+  };
   return (
-    <>
-      <section
-        id={APPEARANCE_SETTINGS_TARGET_IDS.tabIcon}
-        class="settings-section settings-tab-icon"
-      >
-        {<SettingsSectionHeader title={t("configView.appearance.tabIcon.title")} />}
-        <div class="settings-group">
-          {
-            <SettingsRow
-              title={t("configView.appearance.tabIcon.source")}
-              stackedOnNarrow={true}
-              description={
-                lobsterdexEnabled() && lobsters().length === 0 && !lobsterMode()
-                  ? t("configView.appearance.tabIcon.empty")
-                  : undefined
-              }
-              control={
-                <SettingsSegmented
-                  value={lobsterMode() ? "lobster" : selectedShape() ? "agent" : "default"}
-                  options={[
-                    {
-                      value: "default",
-                      label: optionLabel(t("configView.appearance.tabIcon.default"), null),
-                    },
-                    {
-                      value: "agent",
-                      label: optionLabel(
-                        t("configView.appearance.tabIcon.agent"),
-                        props.tabIconAgentAvatar ?? null,
-                        selectedShape() ?? "square",
-                      ),
-                    },
-                    ...(lobsterdexEnabled()
-                      ? [
-                          {
-                            value: "lobster",
-                            label: (
-                              <>
-                                <span class="settings-tab-icon__option">
-                                  <span class="settings-tab-icon__preview">
-                                    <Show when={preview()} fallback={defaultPreview()}>
-                                      {(palette) => renderLobsterPreview(palette())}
-                                    </Show>{" "}
-                                  </span>
-                                  {t("configView.appearance.tabIcon.lobsterdex")}
-                                </span>
-                              </>
-                            ),
-                            disabled: lobsters().length === 0,
-                          },
-                        ]
-                      : []),
-                  ]}
-                  ariaLabel={t("configView.appearance.tabIcon.sourceLabel")}
-                  onChange={(mode) => {
-                    if (mode === "lobster") {
-                      const palette = selected() ?? lobsters()[0];
-                      if (palette) {
-                        props.setTabIconMode(`lobster:${palette.id}`);
-                      }
-                    } else if (mode === "default" || mode === "agent") {
-                      props.setTabIconMode(mode);
-                    }
-                  }}
-                />
-              }
+    <section id={APPEARANCE_SETTINGS_TARGET_IDS.tabIcon} class="settings-section settings-tab-icon">
+      <SettingsSectionHeader title={t("configView.appearance.tabIcon.title")} />
+      <div class="settings-group">
+        <SettingsRow
+          title={t("configView.appearance.tabIcon.source")}
+          stackedOnNarrow
+          description={
+            lobsterdexEnabled() && lobsters().length === 0 && !lobsterMode()
+              ? t("configView.appearance.tabIcon.empty")
+              : undefined
+          }
+          control={
+            <SettingsSegmented
+              value={lobsterMode() ? "lobster" : selectedShape() ? "agent" : "default"}
+              options={lobsterdexEnabled() ? [...commonOptions, lobsterOption] : commonOptions}
+              ariaLabel={t("configView.appearance.tabIcon.sourceLabel")}
+              onChange={(mode) => {
+                if (mode === "lobster") {
+                  const palette = selected() ?? lobsters()[0];
+                  if (palette) {
+                    props.setTabIconMode(`lobster:${palette.id}`);
+                  }
+                } else if (mode === "default" || mode === "agent") {
+                  props.setTabIconMode(mode);
+                }
+              }}
             />
           }
-          {selectedShape() ? (
-            <SettingsRow
-              title={t("configView.appearance.tabIcon.shape")}
-              stackedOnNarrow={true}
-              control={
-                <>
-                  <div
-                    class="settings-tab-icon__shapes"
-                    role="group"
-                    aria-label={t("configView.appearance.tabIcon.shapeLabel")}
-                  >
-                    {
-                      <For
-                        each={
-                          [
-                            ["square", "agent"],
-                            ["rounded", "agent:rounded"],
-                            ["circle", "agent:circle"],
-                          ] as const
-                        }
-                      >
-                        {([choice, preference]) => (
-                          <>
-                            <button
-                              type="button"
-                              class="settings-tab-icon__pick"
-                              aria-pressed={String(selectedShape() === choice)}
-                              aria-label={t(`configView.appearance.tabIcon.${choice}`)}
-                              title={t(`configView.appearance.tabIcon.${choice}`)}
-                              onClick={() => props.setTabIconMode(preference)}
-                            >
-                              {avatarPreview(props.tabIconAgentAvatar ?? null, choice)}
-                            </button>
-                          </>
-                        )}
-                      </For>
-                    }
-                  </div>
-                </>
-              }
-            />
-          ) : undefined}
-          {lobsterMode() ? (
-            <SettingsRow
-              title={t("configView.appearance.tabIcon.lobster")}
-              description={t(
-                selected()
-                  ? "configView.appearance.tabIcon.localCollection"
-                  : "configView.appearance.tabIcon.unavailable",
-              )}
-              stackedOnNarrow={true}
-              control={
-                <>
-                  <div
-                    class="settings-tab-icon__lobsters"
-                    role="group"
-                    aria-label={t("configView.appearance.tabIcon.lobster")}
-                  >
-                    {
-                      <For each={lobsters()} keyed={(entry) => entry.id}>
-                        {(palette) => (
-                          <>
-                            <button
-                              type="button"
-                              class="settings-tab-icon__pick"
-                              aria-pressed={String(selected()?.id === palette().id)}
-                              aria-label={lobsterPaletteName(palette().id)}
-                              title={lobsterPaletteName(palette().id)}
-                              onClick={() => props.setTabIconMode(`lobster:${palette().id}`)}
-                            >
-                              {renderLobsterPreview(palette())}
-                            </button>
-                          </>
-                        )}
-                      </For>
-                    }
-                  </div>
-                </>
-              }
-            />
-          ) : undefined}
-        </div>
-      </section>
-    </>
+        />
+        <Show when={selectedShape()}>
+          <SettingsRow
+            title={t("configView.appearance.tabIcon.shape")}
+            stackedOnNarrow
+            control={
+              <div
+                class="settings-tab-icon__shapes"
+                role="group"
+                aria-label={t("configView.appearance.tabIcon.shapeLabel")}
+              >
+                <For each={SHAPE_CHOICES}>
+                  {([choice, preference]) => (
+                    <button
+                      type="button"
+                      class="settings-tab-icon__pick"
+                      aria-pressed={String(selectedShape() === choice)}
+                      aria-label={t(`configView.appearance.tabIcon.${choice}`)}
+                      title={t(`configView.appearance.tabIcon.${choice}`)}
+                      onClick={() => props.setTabIconMode(preference)}
+                    >
+                      <AvatarPreview
+                        source={props.tabIconAgentAvatar ?? null}
+                        shape={choice}
+                        fallbackUrl={defaultSource()}
+                      />
+                    </button>
+                  )}
+                </For>
+              </div>
+            }
+          />
+        </Show>
+        <Show when={lobsterMode()}>
+          <SettingsRow
+            title={t("configView.appearance.tabIcon.lobster")}
+            description={t(
+              selected()
+                ? "configView.appearance.tabIcon.localCollection"
+                : "configView.appearance.tabIcon.unavailable",
+            )}
+            stackedOnNarrow
+            control={
+              <div
+                class="settings-tab-icon__lobsters"
+                role="group"
+                aria-label={t("configView.appearance.tabIcon.lobster")}
+              >
+                <For each={lobsters()} keyed={(entry) => entry.id}>
+                  {(palette) => (
+                    <button
+                      type="button"
+                      class="settings-tab-icon__pick"
+                      aria-pressed={String(selected()?.id === palette().id)}
+                      aria-label={lobsterPaletteName(palette().id)}
+                      title={lobsterPaletteName(palette().id)}
+                      onClick={() => props.setTabIconMode(`lobster:${palette().id}`)}
+                    >
+                      <LobsterPreview palette={palette()} />
+                    </button>
+                  )}
+                </For>
+              </div>
+            }
+          />
+        </Show>
+      </div>
+    </section>
   );
 }

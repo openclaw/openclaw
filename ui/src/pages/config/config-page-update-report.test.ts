@@ -2,15 +2,13 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
-import {
-  cleanupConfigPages,
-  mountConfigPage,
-  settleConfigPage,
-} from "./config-page.test-support.ts";
+import { mountConfigPage } from "./config-page.test-support.ts";
 
 afterEach(() => {
-  cleanupConfigPages();
+  cleanupSolid();
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
@@ -110,12 +108,15 @@ describe("ConfigPage update failure reporting", () => {
         },
       } as unknown as ApplicationContext;
       const { container } = mountConfigPage(context, { pageId: "updates" });
-      await settleConfigPage();
+      flush();
 
-      const report = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Report update failure",
-      );
-      expect(report).toBeDefined();
+      const report = await waitForSolid(() => {
+        const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (candidate) => candidate.textContent?.trim() === "Report update failure",
+        );
+        expect(button).toBeDefined();
+        return button!;
+      });
       expect(report?.disabled).toBe(!allowed);
       report?.click();
       expect(reportUpdateFailure).toHaveBeenCalledTimes(allowed ? 1 : 0);

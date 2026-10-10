@@ -1,6 +1,5 @@
-import { render as mountSolid, type JSX } from "@solidjs/web";
-import { createSignal, flush, type Accessor } from "solid-js";
-import { onTestFinished } from "vitest";
+import type { JSX } from "@solidjs/web";
+import { createSignal, onCleanup, type Accessor } from "solid-js";
 import { analyzeConfigSchema } from "../components/config-form.analyze.ts";
 import { ConfigArray, ConfigObject } from "../components/config-form.node.collection.tsx";
 import { JsonTextarea } from "../components/config-form.node.json.tsx";
@@ -8,6 +7,8 @@ import { NumberInput, SelectInput, TextInput } from "../components/config-form.n
 import type { ConfigNodeRenderParams } from "../components/config-form.node.shared.ts";
 import { renderNode } from "../components/config-form.node.tsx";
 import { ConfigForm, type ConfigFormProps } from "../components/config-form.render.tsx";
+import { mountSolid } from "./mount-solid.ts";
+import { flush } from "./solid-settle.ts";
 
 type FixtureOptions<Extra = object> = Omit<
   ConfigNodeRenderParams,
@@ -33,18 +34,18 @@ function fixture<Props>(component: (props: Accessor<Props>) => JSX.Element) {
     } else {
       activeMounts.get(container)?.();
       const [value, setValue] = createSignal(props);
-      const dispose = mountSolid(() => component(value), container);
+      const view = mountSolid(
+        () => {
+          onCleanup(() => {
+            mounted.delete(container);
+            activeMounts.delete(container);
+          });
+          return component(value);
+        },
+        { container },
+      );
       mounted.set(container, (next) => setValue(() => next));
-      let disposed = false;
-      const cleanup = () => {
-        if (disposed) return;
-        disposed = true;
-        dispose();
-        mounted.delete(container);
-        activeMounts.delete(container);
-      };
-      activeMounts.set(container, cleanup);
-      onTestFinished(cleanup);
+      activeMounts.set(container, view.unmount);
     }
     flush();
   };

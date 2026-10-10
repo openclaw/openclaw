@@ -593,7 +593,7 @@ export function SelectInput(props: {
           <For each={props.params.options}>
             {(option, index) => (
               <option value={String(index())}>
-                {configEnumOptionLabel(option(), props.params.options)}
+                {configEnumOptionLabel(option, props.params.options)}
               </option>
             )}
           </For>
