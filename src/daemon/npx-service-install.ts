@@ -61,7 +61,8 @@ export async function resolveDurableNodeEntrypoint(
       packageName: "openclaw",
       packageRoot,
       runCommand: runCommandWithTimeout,
-      runStep: (step) => runStep({ ...step, runCommand: runCommandWithTimeout }),
+      runStep: (step) =>
+        runStep({ ...step, runCommand: runCommandWithTimeout, stepIndex: 0, totalSteps: 0 }),
       timeoutMs: 30_000,
       workTimeoutMs: null,
       env: installEnv,
