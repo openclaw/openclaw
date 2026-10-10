@@ -392,8 +392,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         authMode = undefined;
       }
       // A native catalog owner without an observation is unknown, not missing host API auth.
-      const availability =
-        ready && !harness?.readModelCatalogReadiness && !observedNative ? undefined : ready;
+      const availability = observedNative
+        ? ready
+        : ready && harness?.readModelCatalogReadiness
+          ? true
+          : undefined;
       return {
         availability,
         availabilityAuthoritative: true,

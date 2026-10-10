@@ -28,7 +28,24 @@ export type IncognitoSessionFacts = {
     | "spawnedWorkspaceDir"
     | "pendingWorktree"
     | "pendingProjectGitUrl"
+    | "projectId"
+    | "worktree"
+    | "pluginOwnerId"
   > & { worktreeId?: string };
+  modelSelection?: Pick<
+    SessionEntry,
+    | "modelOverride"
+    | "modelOverrideSource"
+    | "providerOverride"
+    | "modelOverrideRouteResolution"
+    | "modelOverrideFallbackOriginProvider"
+    | "modelOverrideFallbackOriginModel"
+    | "agentRuntimeOverride"
+    | "agentHarnessId"
+    | "authProfileOverride"
+    | "sandboxMode"
+    | "nativeRuntimeConsent"
+  >;
   policy?: Pick<
     SessionEntry,
     | "sessionId"

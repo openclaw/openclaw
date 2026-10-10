@@ -2489,12 +2489,15 @@ importers:
 
   extensions/x:
     dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
       linkify-it:
         specifier: 6.1.0
         version: 6.1.0
-      lit:
-        specifier: 3.3.3
-        version: 3.3.3
+      solid-js:
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13
       tlds:
         specifier: 1.261.0
         version: 1.261.0
@@ -2505,6 +2508,12 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       openclaw:
         specifier: workspace:*
         version: link:../..
