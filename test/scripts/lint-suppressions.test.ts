@@ -267,6 +267,8 @@ describe("production lint suppressions", () => {
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
         "src/secrets/egress-proxy/proxy-server.ts|no-warning-comments|1",
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
+        // Synchronous acquisition failures reject with the acquiring owner's original value.
+        "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
