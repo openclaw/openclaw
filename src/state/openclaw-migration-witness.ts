@@ -174,8 +174,8 @@ function captureTable(
   const columns = executeSqliteQuerySync(
     database,
     db
-      // kysely-allow-raw: schema-owned table metadata, including declared primary-key order.
       .selectFrom(
+        // kysely-allow-raw: schema-owned table metadata, including declared primary-key order.
         sql<{
           name: string;
           pk: number;
@@ -206,22 +206,38 @@ function captureTable(
     retained.every(Boolean) && !registry
       ? undefined
       : createHash("sha256").update(JSON.stringify(names.filter((_, index) => retained[index])));
-  let query = db.selectFrom(sql<Record<string, Cell>>`${sql.id(table)}`.as("witness")).select(
-    names.flatMap((name, index) => [
-      // kysely-allow-raw: preserve SQLite value kinds and exact 64-bit integers without JS number rounding.
-      sql<string>`typeof(${sql.id("witness", name)})`.as(`type_${index}`),
-      // kysely-allow-raw: numeric text is a lossless witness encoding, not a stored representation change.
-      sql<Cell>`CASE typeof(${sql.id("witness", name)})
-        WHEN 'integer' THEN CAST(${sql.id("witness", name)} AS TEXT)
-        WHEN 'real' THEN printf('%!.17g', ${sql.id("witness", name)})
-        WHEN 'text' THEN CAST(${sql.id("witness", name)} AS BLOB)
-        ELSE ${sql.id("witness", name)} END`.as(`value_${index}`),
-    ]),
-  );
+  const tableIdentifier =
+    // kysely-allow-raw: the pinned SQLite catalog and table-kind lookup admit this quoted table name.
+    sql.id(table);
+  let query = db
+    .selectFrom(
+      // kysely-allow-raw: schema introspection retains arbitrary plugin tables and native value kinds.
+      sql<Record<string, Cell>>`${tableIdentifier}`.as("witness"),
+    )
+    .select(
+      names.flatMap((name, index) => {
+        const columnIdentifier =
+          // kysely-allow-raw: only PRAGMA-derived columns or the selected native rowid alias are quoted.
+          sql.id("witness", name);
+        return [
+          // kysely-allow-raw: preserve SQLite value kinds and exact 64-bit integers without JS number rounding.
+          sql<string>`typeof(${columnIdentifier})`.as(`type_${index}`),
+          // kysely-allow-raw: numeric text is a lossless witness encoding, not a stored representation change.
+          sql<Cell>`CASE typeof(${columnIdentifier})
+        WHEN 'integer' THEN CAST(${columnIdentifier} AS TEXT)
+        WHEN 'real' THEN printf('%!.17g', ${columnIdentifier})
+        WHEN 'text' THEN CAST(${columnIdentifier} AS BLOB)
+        ELSE ${columnIdentifier} END`.as(`value_${index}`),
+        ];
+      }),
+    );
   const primary = columns.filter(({ pk }) => pk > 0).toSorted((a, b) => a.pk - b.pk);
   const primaryNames = primary.map(({ name }) => name);
   for (const column of [...primaryNames, ...names.filter((name) => !primaryNames.includes(name))]) {
-    query = query.orderBy(sql.id("witness", column));
+    query = query.orderBy(
+      // kysely-allow-raw: ordering is restricted to the same inspected column and rowid set.
+      sql.id("witness", column),
+    );
   }
   let rowCount = 0;
   const expectedRegistrations = new Set(
@@ -349,8 +365,10 @@ export function captureOpenClawMigrationWitness(
     const applicationId = executeSqliteQueryTakeFirstSync(
       database,
       db
-        // kysely-allow-raw: read the persistent format identifier from SQLite's header.
-        .selectFrom(sql<{ application_id: number }>`pragma_application_id()`.as("header"))
+        .selectFrom(
+          // kysely-allow-raw: read the persistent format identifier from SQLite's header.
+          sql<{ application_id: number }>`pragma_application_id()`.as("header"),
+        )
         .select("application_id"),
     )?.application_id;
     const schemaVersion = role === "global" ? readStateSchemaContentVersion(database) : userVersion;
@@ -360,8 +378,10 @@ export function captureOpenClawMigrationWitness(
         db
           .selectFrom("schema_meta")
           .select(["role", "agent_id"])
-          // kysely-allow-raw: compare the native version exactly without generic-row numeric coercion.
-          .select(sql<string>`CAST(schema_version AS TEXT)`.as("schema_version"))
+          .select(
+            // kysely-allow-raw: compare the native version exactly without generic-row numeric coercion.
+            sql<string>`CAST(schema_version AS TEXT)`.as("schema_version"),
+          )
           .where("meta_key", "=", "primary"),
       );
       if (
@@ -403,8 +423,8 @@ export function captureOpenClawMigrationWitness(
       executeSqliteQuerySync(
         database,
         db
-          // kysely-allow-raw: SQLite owns rowid availability, including WITHOUT ROWID tables.
           .selectFrom(
+            // kysely-allow-raw: SQLite owns rowid availability, including WITHOUT ROWID tables.
             sql<{
               name: string;
               wr: number;
