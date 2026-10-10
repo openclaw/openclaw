@@ -5,7 +5,7 @@ import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/pro
 import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { stopCrabboxLease, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
   createWarmProvider,
@@ -124,7 +124,7 @@ describe("Crabbox stop lifetime", () => {
         let closed = false;
         operations.push(
           (entrance === "destroy"
-            ? provider.destroy(lease)
+            ? destroyAndWait(provider, lease)
             : entrance === "dispose"
               ? provider.dispose()
               : provider.inspect(lease)
@@ -171,7 +171,7 @@ describe("Crabbox stop lifetime", () => {
     { exitCode: 5, elapsedMs: 6 * 60_000, outcome: "failure" },
     { exitCode: 0, elapsedMs: 18 * 60_000, outcome: "timeout" },
   ])(
-    "preserves destroy custody through late $outcome",
+    "preserves teardown custody through late $outcome",
     async ({ exitCode, elapsedMs, outcome }) => {
       const marker = path.join(tempDirs.make("openclaw-crabbox-stop-"), "release");
       const started = createDeferred<void>();
@@ -204,8 +204,10 @@ describe("Crabbox stop lifetime", () => {
       armed = true;
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       let settled = false;
-      const operation = provider
-        .destroy({ leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } })
+      const operation = destroyAndWait(provider, {
+        leaseId: LEASE_ID,
+        profile: { ...PROFILE, warmImage: false },
+      })
         .then(
           () => ({ success: true }),
           (error: unknown) => ({ error }),
@@ -240,10 +242,11 @@ describe("Crabbox stop lifetime", () => {
       } else {
         expect(await operation).toMatchObject({
           error: {
-            message:
+            message: expect.stringContaining(
               outcome === "failure"
                 ? "Crabbox stop failed with exit code 5: ready"
                 : "Crabbox stop did not exit normally (timeout): ready",
+            ),
           },
         });
         expect(childResult).toMatchObject(

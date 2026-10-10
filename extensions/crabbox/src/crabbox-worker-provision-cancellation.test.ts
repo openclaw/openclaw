@@ -3,7 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   captureWarmImage,
   createProjectOptions,
@@ -119,7 +119,10 @@ describe("Crabbox provisioning cancellation", () => {
     expect(await operation).toEqual({ error: reason });
     expect(calls).toHaveLength(commandCount);
     expect(warn).not.toHaveBeenCalled();
-    await provider.destroy({ leaseId: LEASE_ID, profile: { ...profile, warmImage: false } });
+    await destroyAndWait(provider, {
+      leaseId: LEASE_ID,
+      profile: { ...profile, warmImage: false },
+    });
     expect(calls.at(-1)?.argv[1]).toBe("stop");
     expect(calls.at(-1)?.options.signal).toBeUndefined();
   });
@@ -192,7 +195,7 @@ describe("Crabbox provisioning cancellation", () => {
     await setImmediate();
     expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
     calls.length = 0;
-    await provider.destroy({ leaseId: LEASE_ID, profile: PROFILE });
+    await destroyAndWait(provider, { leaseId: LEASE_ID, profile: PROFILE });
     expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
   });
 });

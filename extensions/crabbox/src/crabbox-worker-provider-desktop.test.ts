@@ -2,7 +2,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
-import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
+import {
+  destroyAndWait,
+  commandResult,
+  nodeEnrollmentFixture,
+} from "./crabbox-worker-provider.test-support.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
   createWarmProvider,
@@ -85,7 +89,7 @@ describe("Crabbox desktop provisioning", () => {
       if (target === "windows/normal") {
         expect(browser?.args).toContain("-File");
       }
-      await provider.destroy({ ...result, profile });
+      await destroyAndWait(provider, { ...result, profile });
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
     },
