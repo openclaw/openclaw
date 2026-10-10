@@ -213,7 +213,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // -8: retired Skill Workshop proposal hook types.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
-      3644,
+      // +1: async channel approval adapter for worker-backed account state.
+      3645,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
