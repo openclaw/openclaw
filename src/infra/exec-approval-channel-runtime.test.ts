@@ -5,7 +5,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import type { ApprovalRequestInput } from "./approval-types.js";
-import type { ExecApprovalChannelRuntimeAdapter } from "./exec-approval-channel-runtime.types.js";
+import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 import type {
@@ -195,7 +195,11 @@ function createRuntime<
   TRequest extends ApprovalRequestInput = ExecApprovalRequest,
   TResolved extends ExecApprovalResolved | PluginApprovalResolved | SystemAgentApprovalResolved =
     ExecApprovalResolved,
->(overrides: Partial<ExecApprovalChannelRuntimeAdapter<{ id: string }, TRequest, TResolved>> = {}) {
+>(
+  overrides: Partial<
+    ExecApprovalChannelRuntimeAdapterAsync<{ id: string }, TRequest, TResolved>
+  > = {},
+) {
   return createExecApprovalChannelRuntime<{ id: string }, TRequest, TResolved>({
     label: "test/exec-approvals",
     clientDisplayName: "Test Exec Approvals",
@@ -209,6 +213,31 @@ function createRuntime<
 }
 
 describe("createExecApprovalChannelRuntime", () => {
+  it.each(["decline", "resolve", "stop", "duplicate"] as const)(
+    "joins async eligibility before delivery when a request receives %s",
+    async (outcome) => {
+      const eligibility = createDeferred<boolean>();
+      const deliverRequested = vi.fn(async () => []);
+      const runtime = createRuntime({
+        shouldHandle: () => eligibility.promise,
+        deliverRequested,
+      });
+      const request = createExecReplayRequest("async-eligibility");
+      const requested = runtime.handleRequested(request);
+      if (outcome === "resolve") {
+        await runtime.handleResolved({ id: request.id, decision: "deny", ts: 1 });
+      } else if (outcome === "stop") {
+        await runtime.stop();
+      } else if (outcome === "duplicate") {
+        await runtime.handleRequested(request);
+      }
+      eligibility.resolve(outcome !== "decline");
+      await requested;
+      expect(deliverRequested).toHaveBeenCalledTimes(outcome === "duplicate" ? 1 : 0);
+      await runtime.stop();
+    },
+  );
+
   it("does not connect when the adapter is not configured", async () => {
     const runtime = createRuntime({
       isConfigured: () => false,
@@ -356,7 +385,7 @@ describe("createExecApprovalChannelRuntime", () => {
       | {
           onRequested: (request: ExecApprovalRequest) => void;
           onResolved: (resolved: never) => void;
-          shouldHandle: (request: ExecApprovalRequest) => boolean;
+          shouldHandle: (request: ExecApprovalRequest) => boolean | Promise<boolean>;
         }
       | undefined;
     const unsubscribe = vi.fn();
@@ -384,8 +413,9 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
     const approval = createExecReplayRequest("overlap");
-    if (subscriber?.shouldHandle(approval)) {
-      subscriber.onRequested(approval);
+    const liveSubscriber = subscriber;
+    if (liveSubscriber && (await liveSubscriber.shouldHandle(approval))) {
+      liveSubscriber.onRequested(approval);
     }
     replay.resolve([approval]);
     await vi.waitFor(() => expect(deliverRequested).toHaveBeenCalledTimes(1));
@@ -526,10 +556,15 @@ describe("createExecApprovalChannelRuntime", () => {
 
   it("does not leave a gateway client running when stop wins the startup race", async () => {
     const pendingClient = createDeferred<GatewayClient>();
-    mockCreateOperatorApprovalsGatewayClient.mockReturnValueOnce(pendingClient.promise);
+    const clientCreationStarted = createDeferred();
+    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(() => {
+      clientCreationStarted.resolve();
+      return pendingClient.promise;
+    });
     const runtime = createRuntime();
 
     const startPromise = runtime.start();
+    await clientCreationStarted.promise;
     const stopPromise = runtime.stop();
     pendingClient.resolve({
       start: mockGatewayClientStarts,
