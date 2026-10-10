@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  INWORLD_REALTIME_BACKCHANNEL_ITEM_PREFIX,
   readInworldRealtimeErrorDetail,
   type InworldRealtimeEvent,
 } from "./realtime-voice-config.js";
@@ -42,8 +43,13 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
     const responseId = event.response_id ?? event.response?.id;
     // A terminal retires all output from that response. Fence late deltas and
     // duplicate terminals before they reach the relay or mutate the next response.
+    // Back-channel interjections are out-of-band from the main response: they arrive
+    // while the user is still speaking and carry no response id, so the fence must not
+    // retire them with the previous response.
+    const isBackchannelEvent = event.type.startsWith("response.backchannel.");
     if (
       event.type.startsWith("response.") &&
+      !isBackchannelEvent &&
       event.type !== "response.created" &&
       this.outputResponse &&
       (this.outputResponse.ended ||
@@ -157,6 +163,27 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
             }
           });
         }
+        return;
+      }
+      case "response.backchannel.audio.delta": {
+        // Out-of-band interjection ("uh-huh") while the user is still speaking. It is
+        // delivered as its own playback bucket, never attributed to the assistant
+        // response item, and never creates a playback mark: marks gate the next
+        // response.create and an interjection must not hold that gate.
+        const audioDelta = event.delta ?? event.data;
+        if (!audioDelta) {
+          return;
+        }
+        const canonicalAudio = canonicalizeBase64(audioDelta);
+        if (!canonicalAudio) {
+          throw new InworldRealtimeMalformedAudioError(
+            "Inworld realtime voice back-channel returned malformed base64 audio data",
+          );
+        }
+        const backchannelId = normalizeOptionalString(event.backchannel_id) ?? "unknown";
+        this.config.onAudio(Buffer.from(canonicalAudio, "base64"), {
+          itemId: `${INWORLD_REALTIME_BACKCHANNEL_ITEM_PREFIX}${backchannelId}`,
+        });
         return;
       }
       case "input_audio_buffer.speech_started":
@@ -357,6 +384,8 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
         return;
       case "error":
         this.handleErrorEvent(event.error);
+      // response.backchannel.audio.done / response.backchannel.skipped are diagnostics only;
+      // the bridge event above already carried their type and detail.
       default:
     }
   }
@@ -494,6 +523,17 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
   }
 
   private describeServerEvent(event: InworldRealtimeEvent): string | undefined {
+    if (event.type.startsWith("response.backchannel.")) {
+      return (
+        [
+          event.backchannel_id ? `backchannelId=${event.backchannel_id}` : undefined,
+          event.phrase ? `phrase=${JSON.stringify(event.phrase)}` : undefined,
+          event.reason ? `reason=${event.reason}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined
+      );
+    }
     if (
       event.type === "error" ||
       event.type === "conversation.item.input_audio_transcription.failed"

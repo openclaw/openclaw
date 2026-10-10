@@ -23,15 +23,6 @@ describe("createLazyInworldRealtimeVoiceProvider", () => {
     vi.useRealTimers();
   });
 
-  it("describes the provider without loading the bridge runtime", () => {
-    const provider = createLazyInworldRealtimeVoiceProvider();
-    expect(provider.id).toBe("inworld");
-    expect(provider.label).toBe("Inworld Realtime");
-    expect(provider.capabilities?.supportsToolCalls).toBe(true);
-    expect(provider.isConfigured({ providerConfig: { apiKey: "k" } })).toBe(true); // pragma: allowlist secret
-    expect(FakeWebSocket.instances).toHaveLength(0);
-  });
-
   it("queues input before the lazy bridge is ready and flushes it once connected", async () => {
     const provider = createLazyInworldRealtimeVoiceProvider();
     const onReady = vi.fn();

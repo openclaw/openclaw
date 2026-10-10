@@ -135,7 +135,7 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
     (`STABLE` / `BALANCED` / `CREATIVE`, honored by `inworld-tts-2`), `steeringHandling`,
     `segmenterStrategy`, `turnDetection` (`semantic_vad` default or `server_vad`), `eagerness`
     (`low` / `medium` / `high`), `vadThreshold`, `silenceDurationMs`, `prefixPaddingMs`,
-    `backchannel`, `responsiveness`, and `providerData`. The last is a bounded passthrough for the
+    `backchannel`, `responsiveness`, and `providerData`. Back-channel interjections (`response.backchannel.audio.delta`) are delivered to the host as their own playback bucket (`backchannel:<id>`) without playback marks, so they never gate the next response; responsiveness fillers arrive on the normal assistant audio stream. The last is a bounded passthrough for the
     documented Inworld extensions (`stt`, `tts`, `memory`, `backchannel`, `responsiveness`
     sections only, 8 KiB max); typed keys win over it, and `auto_tool_response` is always
     pinned to `false` so the Gateway keeps control of `response.create` after tool results.

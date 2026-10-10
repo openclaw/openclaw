@@ -388,6 +388,64 @@ describe("buildInworldRealtimeVoiceProvider", () => {
     expect(sent(socket, "response.create")).toHaveLength(0);
   });
 
+  it("delivers back-channel interjections out of band without playback marks, even after a response ended", async () => {
+    const onAudio = vi.fn();
+    const onMark = vi.fn();
+    const onEvent = vi.fn();
+    const { bridge, socket } = await connect({ onAudio, onMark, onEvent });
+    socket.emitServer({ type: "response.created", response: { id: "r1" } });
+    audio(socket, "item-1");
+    responseDone(socket, "r1");
+    expect(onMark).toHaveBeenCalledTimes(1);
+    const chunk = Buffer.alloc(480, 7).toString("base64");
+    // The user is speaking again; the server interjects while no main response is active.
+    socket.emitServer({ type: "input_audio_buffer.speech_started" });
+    socket.emitServer({
+      type: "response.backchannel.audio.delta",
+      backchannel_id: "bc-1",
+      delta: chunk,
+    });
+    socket.emitServer({
+      type: "response.backchannel.audio.delta",
+      backchannel_id: "bc-1",
+      delta: chunk,
+    });
+    socket.emitServer({
+      type: "response.backchannel.audio.done",
+      backchannel_id: "bc-1",
+      phrase: "uh-huh",
+    });
+    socket.emitServer({ type: "response.backchannel.skipped", reason: "no_phrase" });
+    expect(onAudio).toHaveBeenCalledTimes(3);
+    expect(onAudio.mock.calls[1]).toEqual([Buffer.alloc(480, 7), { itemId: "backchannel:bc-1" }]);
+    expect(onAudio.mock.calls[2]?.[1]).toEqual({ itemId: "backchannel:bc-1" });
+    // No new marks: interjections must not gate the next response.create.
+    expect(onMark).toHaveBeenCalledTimes(1);
+    bridge.sendUserMessage?.("go on");
+    expect(sent(socket, "response.create")).toHaveLength(1);
+    const types = onEvent.mock.calls.map((call) => (call[0] as { type: string }).type);
+    expect(types).toContain("response.backchannel.audio.done");
+    expect(types).toContain("response.backchannel.skipped");
+    const done = onEvent.mock.calls.find(
+      (call) => (call[0] as { type: string }).type === "response.backchannel.audio.done",
+    )?.[0] as { detail?: string };
+    expect(done.detail).toContain("backchannelId=bc-1");
+    expect(done.detail).toContain('phrase="uh-huh"');
+  });
+
+  it("rejects malformed back-channel audio as a terminal error", async () => {
+    const onError = vi.fn();
+    const { socket } = await connect({ onError });
+    socket.emitServer({
+      type: "response.backchannel.audio.delta",
+      backchannel_id: "bc-2",
+      delta: "%%%",
+    });
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/back-channel.*malformed/) }),
+    );
+  });
+
   it("clears playback and cancels the response when the server reports user speech", async () => {
     const onClearAudio = vi.fn();
     const { socket } = await connect({ onClearAudio });

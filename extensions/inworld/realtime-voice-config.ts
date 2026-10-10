@@ -82,7 +82,14 @@ export type InworldRealtimeEvent = {
   conversation?: { id?: string };
   item?: InworldRealtimeResponseItem;
   error?: unknown;
+  /** Inworld back-channel interjections (`response.backchannel.*`) group deltas by this id. */
+  backchannel_id?: string;
+  phrase?: string;
+  reason?: string;
 };
+
+/** Playback bucket prefix for Inworld back-channel interjections, per docs.inworld.ai/realtime/usage/back-channel. */
+export const INWORLD_REALTIME_BACKCHANNEL_ITEM_PREFIX = "backchannel:";
 
 export type InworldRealtimeSessionUpdate = {
   type: "session.update";
