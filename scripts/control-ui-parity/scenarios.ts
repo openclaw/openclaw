@@ -24,7 +24,7 @@ import {
   settingsControlsScenario,
 } from "./fixtures.ts";
 
-export { fixedTime, sessionKey };
+export { fixedTime };
 export const baseScenario = parityBaseScenario;
 export type Profile = {
   id: string;
