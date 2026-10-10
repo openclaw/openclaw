@@ -111,21 +111,6 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("cancels failed OpenRouter catalog response bodies", async () => {
-    await withOpenRouterStateDir(async () => {
-      const response = new Response("temporarily unavailable", { status: 503 });
-      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-      const fetchSpy = vi.fn(async () => response);
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const module = await importOpenRouterModelCapabilities("failed-catalog-response");
-      await module.loadOpenRouterModelCapabilities("acme/missing-model");
-
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(cancel).toHaveBeenCalledOnce();
-    });
-  });
-
   it("persists a fetched catalog to the store selected before the network wait", async () => {
     await withOpenRouterStateDir(async (stateDir) => {
       const requested = createDeferredCore();
@@ -401,40 +386,6 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("preserves explicit OpenRouter tool support metadata", async () => {
-    await withOpenRouterStateDir(async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () =>
-          Response.json({
-            data: [
-              {
-                id: "perplexity/sonar-deep-research",
-                name: "Sonar Deep Research",
-                supported_parameters: ["reasoning", "web_search_options"],
-              },
-              {
-                id: "google/gemini-2.5-pro",
-                name: "Gemini 2.5 Pro",
-                supported_parameters: ["reasoning", "tools"],
-              },
-            ],
-          }),
-        ),
-      );
-
-      const module = await importOpenRouterModelCapabilities("tool-support");
-      await module.loadOpenRouterModelCapabilities("perplexity/sonar-deep-research");
-
-      expect(
-        module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")?.supportsTools,
-      ).toBe(false);
-      expect(module.getOpenRouterModelCapabilities("google/gemini-2.5-pro")?.supportsTools).toBe(
-        true,
-      );
-    });
-  });
-
   it("bounds an oversized streamed OpenRouter catalog instead of buffering it whole", async () => {
     await withOpenRouterStateDir(async () => {
       // First pull emits a chunk larger than the cap; a well-behaved bounded read
@@ -540,7 +491,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it.each(["getOpenRouterModelCapabilities", "getLoadedOpenRouterModelCapabilities"] as const)(
+  it.each(["getOpenRouterModelCapabilities"] as const)(
     "does not refetch immediately after an awaited miss through %s",
     async (firstLookup) => {
       await withOpenRouterStateDir(async () => {

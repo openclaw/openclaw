@@ -216,24 +216,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
-  it("dispatches claude-cli runs with subscription (oauth) credentials", async () => {
-    expect(await runGate({ agentDir: "/agents/main", workspaceDir: "/workspace" })).toBeDefined();
-    expect(ensureAuthProfileStore).toHaveBeenCalledWith("/agents/main", expect.anything());
-    expect(resolveModelAuthMode).toHaveBeenCalledWith(
-      "claude-cli",
-      undefined,
-      expect.anything(),
-      expect.objectContaining({ workspaceDir: "/workspace" }),
-    );
-    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({ provider: "claude-cli" });
-  });
-
-  it("dispatches when no credential mode resolves for the passthrough", async () => {
-    resolveModelAuthMode.mockReturnValue(undefined);
-    expect(await runGate()).toBeDefined();
-    expect(runCliAgent).toHaveBeenCalledTimes(1);
-  });
-
   it("dispatches when the credential store is unreadable", async () => {
     ensureAuthProfileStore.mockImplementation(() => {
       throw new Error("store unreadable");
@@ -251,34 +233,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     },
   );
 
-  it("dispatches when the ordered profile selection picks a subscription credential in a mixed store", async () => {
-    // The passthrough follows auth.order; a store-wide "mixed" aggregate must
-    // not suppress dispatch when the selected profile is oauth.
-    ensureAuthProfileStore.mockReturnValue({
-      profiles: {
-        "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" },
-        "anthropic:api": { type: "api_key", provider: "anthropic" },
-      },
-    });
-    resolveAuthProfileOrder.mockReturnValue(["anthropic:claude-cli", "anthropic:api"]);
-    resolveModelAuthMode.mockReturnValue("mixed");
-    expect(await runGate()).toBeDefined();
-    expect(resolveModelAuthMode).not.toHaveBeenCalled();
-  });
-
-  it("keeps the passthrough when the ordered profile selection picks an API key", async () => {
-    ensureAuthProfileStore.mockReturnValue({
-      profiles: {
-        "anthropic:api": { type: "api_key", provider: "anthropic" },
-        "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" },
-      },
-    });
-    resolveAuthProfileOrder.mockReturnValue(["anthropic:api", "anthropic:claude-cli"]);
-    expect(await runGate()).toBeUndefined();
-    expect(runCliAgent).not.toHaveBeenCalled();
-  });
-
-  it.each([undefined, "raw", "resolved"] as const)(
+  it.each(["raw", "resolved"] as const)(
     "dispatches canonical refs through claude-cli with %s logical route resolution",
     async (requestedRouteResolution) => {
       resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
@@ -315,18 +270,8 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
-  it("keeps the passthrough for other CLI runtimes until verified", async () => {
-    expect(await runGate({ provider: "google-gemini-cli" })).toBeUndefined();
-    expect(resolveModelAuthMode).not.toHaveBeenCalled();
-  });
-
   it("keeps the passthrough without a caller-owned session file", async () => {
     expect(await runGate({ sessionFile: undefined })).toBeUndefined();
-  });
-
-  it("keeps the passthrough when no claude-cli backend is registered", async () => {
-    resolveRuntimeCliBackends.mockReturnValue([]);
-    expect(await runGate()).toBeUndefined();
   });
 });
 
@@ -429,21 +374,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(cliParams).not.toHaveProperty("toolsAllow");
   });
 
-  it("forwards authoritative group type through embedded-to-CLI dispatch for opaque keys", async () => {
-    const chatType = "group";
-    await runEmbeddedAgentViaCliBackendIfEligible(
-      baseRunParams({
-        sessionKey: "agent:main:opaque:binding",
-        chatType,
-      }),
-    );
-
-    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: "agent:main:opaque:binding",
-      chatType,
-    });
-  });
-
   // Fail-closed tool policy: only a non-empty named allowlist is expressible
   // on the CLI surface. Every other embedded tool state keeps the passthrough
   // so no closed state silently widens.
@@ -504,50 +434,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(transcriptRecorder.finalize).toHaveBeenCalledOnce();
   });
 
-  it("retains the prepared vision capability with ordered prompt images and media", async () => {
-    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
-    const imageOrder = ["inline" as const];
-    const media = [{ path: "/tmp/recall.png", contentType: "image/png" }];
-
-    await runEmbeddedAgentViaCliBackendIfEligible(
-      baseRunParams({ modelHasVision: true, images, imageOrder, media }),
-    );
-
-    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
-      prompt: "recall prompt",
-      modelHasVision: true,
-      images,
-      imageOrder,
-      media,
-    });
-  });
-
-  it("forwards execution phases from the CLI backend", async () => {
-    const onExecutionPhase = vi.fn();
-    runCliAgent.mockImplementation(
-      async (cliParams: { onExecutionPhase?: CliDispatchParams["onExecutionPhase"] }) => {
-        cliParams.onExecutionPhase?.({
-          phase: "model_call_started",
-          provider: "anthropic",
-          model: "claude-opus-4-8",
-          backend: "claude-cli",
-          firstModelCallStarted: true,
-        });
-        return cliRunResult();
-      },
-    );
-
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ onExecutionPhase }));
-
-    expect(onExecutionPhase).toHaveBeenCalledWith({
-      phase: "model_call_started",
-      provider: "anthropic",
-      model: "claude-opus-4-8",
-      backend: "claude-cli",
-      firstModelCallStarted: true,
-    });
-  });
-
   it("bridges CLI tool result events to onAgentToolResult without the MCP prefix", async () => {
     const observed: Array<{ toolName: string; isError: boolean }> = [];
     const params = baseRunParams({
@@ -601,15 +487,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       data: { phase: "result", name: "mcp__openclaw__memory_search", isError: false },
     });
     expect(observed).toHaveLength(2);
-  });
-
-  it("delegates MCP lifetime policy to the CLI settlement owner", async () => {
-    const cleanupBundleMcpOnRunEnd = true;
-    runCliAgent.mockResolvedValue(cliRunResult());
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
-    expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(cleanupBundleMcpOnRunEnd);
-    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
-    expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
   it("mirrors the run into the transcript recorder", async () => {

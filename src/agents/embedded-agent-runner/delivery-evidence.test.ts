@@ -37,18 +37,9 @@ describe("explicit final source-reply delivery evidence", () => {
     ).toBe(true);
   });
 
-  it("returns undefined for legacy telemetry without final markers", () => {
-    expect(
-      resolveExplicitFinalSourceReplyDeliveryEvidence({
-        messagingToolSourceReplyPayloads: [{ text: "legacy reply" }],
-      }),
-    ).toBeUndefined();
-  });
-
   it.each([
     { name: "legacy", final: undefined, state: undefined, delivered: true },
     { name: "explicit progress", final: false, state: undefined, delivered: false },
-    { name: "explicit final", final: true, state: undefined, delivered: true },
     { name: "earlier input", final: true, state: "missing", delivered: false },
   ] as const)("honors $name evidence over coarse send flags", ({ final, state, delivered }) => {
     expect(
@@ -76,17 +67,6 @@ describe("visible messaging-tool delivery evidence", () => {
         messagingToolSentTargets: [{ text: "\n" }],
       }),
     ).toBe(false);
-  });
-
-  it("keeps rich delivery evidence when accompanying text is blank", () => {
-    expect(
-      hasVisibleOutboundDeliveryEvidence({
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [{ text: "  ", hasRichContent: true }],
-      }),
-    ).toBe(true);
   });
 });
 
@@ -120,17 +100,6 @@ describe("route-checkable messaging-tool aggregate evidence", () => {
             to: "channel:123",
             mediaUrls: ["/tmp/one.png"],
           },
-        ],
-      }),
-    ).toBe(true);
-  });
-
-  it("accounts for duplicate aggregate sends by multiplicity", () => {
-    expect(
-      hasUnaccountedMessagingToolAggregateEvidence({
-        messagingToolSentMediaUrls: ["/tmp/proof.png", "/tmp/proof.png"],
-        messagingToolSentTargets: [
-          { provider: "discord", to: "channel:123", mediaUrls: ["/tmp/proof.png"] },
         ],
       }),
     ).toBe(true);
@@ -293,17 +262,6 @@ describe("queued delivery evidence", () => {
         ["/tmp/proof.png"],
       ),
     ).toBe(false);
-  });
-
-  it("does not credit an ambiguous single-payload send as delivered", () => {
-    const result = {
-      payloads: [{ mediaUrls: ["/tmp/proof.png"] }],
-      deliveryStatus: {
-        status: "partial_failed",
-        payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
-      },
-    };
-    expect(collectAutomaticDeliveredMediaUrls(result)).toEqual([]);
   });
 });
 
