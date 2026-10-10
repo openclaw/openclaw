@@ -411,8 +411,7 @@ export function createGatewayHttpServer(opts: {
       const addAdmittedStage = (enabled: boolean, stage: GatewayHttpRequestStage) =>
         addRequestStage(enabled, stage, true);
 
-      const workerGatewayRoute = classifyWorkerGatewayPath(scopedRequestPath);
-      addRequestStage(workerGatewayRoute !== "outside", () => {
+      addRequestStage(classifyWorkerGatewayPath(scopedRequestPath) !== "outside", () => {
         respondNotFound(res);
         return true;
       });
@@ -528,17 +527,15 @@ export function createGatewayHttpServer(opts: {
           await getControlUiPluginAssetsModule()
         ).handleControlUiPluginAssetRequest(req, res, controlUiRouteOptions);
       });
-      const userProfileAvatarRoute = parseControlUiUserAvatarPath(
-        scopedRequestPath,
-        controlUiRouteBasePath,
-      );
-      addAdmittedStage(userProfileAvatarRoute.matched, async () =>
-        (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
-          req,
-          res,
-          scopedRequestPath,
-          { ...routeAuth, basePath: controlUiRouteBasePath },
-        ),
+      addAdmittedStage(
+        parseControlUiUserAvatarPath(scopedRequestPath, controlUiRouteBasePath).matched,
+        async () =>
+          (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
+            req,
+            res,
+            scopedRequestPath,
+            { ...routeAuth, basePath: controlUiRouteBasePath },
+          ),
       );
       addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {

@@ -1,7 +1,20 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { PUBLIC_SESSION_ENTRY_SCRIPT } from "./control-ui-public-session-render.js";
+import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
+
+const html = renderPublicSessionDocument({
+  messages: [],
+  title: "Shared conversation",
+  truncated: false,
+  latestUrl: "/chat/main/topic",
+  cardUrl: "/chat/main/topic/card",
+  assetBasePath: "",
+});
+const entryScript = /<script>([\s\S]*?)<\/script>/u.exec(html)?.[1];
+if (!entryScript) {
+  throw new Error("Expected public reader script in the served document");
+}
 
 afterEach(() => vi.useRealTimers());
 function fixture() {
@@ -34,7 +47,7 @@ function fixture() {
   const response = (status: number, body = "updated", etag = '"revision-1"') =>
     new Response(status === 304 ? null : body, { status, headers: { ETag: etag } });
   fetch.mockResolvedValue(response(200));
-  runInNewContext(PUBLIC_SESSION_ENTRY_SCRIPT, {
+  runInNewContext(entryScript, {
     document,
     fetch,
     location: { href: "https://example.test/chat/main/topic" },
