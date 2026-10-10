@@ -866,7 +866,8 @@ describe("handleControlUiHttpRequest", () => {
     });
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(end).toHaveBeenCalledWith();
+    expect(end).toHaveBeenCalledOnce();
+    expect(responseBody(end)).toBe("");
     expect(readSync).not.toHaveBeenCalled();
   });
 

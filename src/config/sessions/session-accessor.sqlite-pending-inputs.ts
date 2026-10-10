@@ -390,6 +390,12 @@ export function writeSessionInputCompletion(
   outcome: AgentRunTerminalOutcome,
 ): AgentRunTerminalOutcome {
   const retained = readSessionInputCompletion(database, scope);
+  if (
+    retained &&
+    (retained.run_id !== scope.runId || retained.request_hash !== scope.requestHash)
+  ) {
+    throw new SessionPendingInputCustodyError("Input completion conflicts with the accepted input");
+  }
   if (retained && isFinalInputCompletion(retained.outcome)) {
     return retained.outcome;
   }
