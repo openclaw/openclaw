@@ -1208,11 +1208,10 @@ def forum_identity(driver, test_server):
 
 
 def public_forum_record(record):
-    return {
-        key: record[key]
-        for key in ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
-        if key in record
-    }
+    keys = ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
+    if record.get("creationUncertain"):
+        keys += ("testerUserId", "createdAt", "error", "deletionReadback")
+    return {key: record[key] for key in keys if key in record}
 
 
 def prepare_forum(driver, manifest_path, test_server):
@@ -1224,6 +1223,7 @@ def prepare_forum(driver, manifest_path, test_server):
     record = {
         **identity,
         "status": "creating",
+        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "title": f"OpenClaw {'QA forum' if test_server else 'private QA'} {secrets.token_hex(6)}",
         "topicTitle": f"{'Topic' if test_server else 'Identity'} proof {secrets.token_hex(4)}",
     }
@@ -1329,11 +1329,30 @@ def cleanup_forum(driver, manifest_path, test_server):
     if record.get("status") == "deleted":
         return public_forum_record(record)
     group_id = record.get("groupId") or record.get("basicGroupId")
+    reconciled = not group_id or record.get("creationUncertain") is True
     if not group_id:
-        record.pop("inviteLink", None)
-        record.update(status="not-created", ok=True)
+        record["creationUncertain"] = True
         write_json_private(manifest_path, record)
-        return public_forum_record(record)
+        # A create timeout says nothing about whether Telegram committed it.
+        # Search the leased user's server chats, then require exact ownership.
+        try:
+            matches = driver.client.request({
+                "@type": "searchChatsOnServer", "query": record["title"], "limit": 100,
+            })
+            chats = [
+                driver.client.request({"@type": "getChat", "chat_id": chat_id})
+                for chat_id in matches["chat_ids"]
+            ]
+            exact = [chat for chat in chats if chat.get("title") == record["title"]]
+            if len(exact) != 1:
+                raise DriverError("Creation remains uncertain: exact-title search did not find one chat.")
+            group_id = exact[0]["id"]
+            record["groupId"] = str(group_id)
+            write_json_private(manifest_path, record)
+        except (DriverError, KeyError, TypeError, ValueError) as error:
+            record.update(status="uncertain-creation", ok=False, error=str(error))
+            write_json_private(manifest_path, record)
+            return public_forum_record(record)
     chat = driver.client.request({"@type": "getChat", "chat_id": int(group_id)})
     membership = driver.client.request(
         {
@@ -1363,7 +1382,30 @@ def cleanup_forum(driver, manifest_path, test_server):
             if "The chat can't be deleted" not in str(error) or attempt == 4:
                 raise
             time.sleep(1)
+    if reconciled:
+        try:
+            chat_type = chat["type"]
+            if chat_type["@type"] == "chatTypeBasicGroup":
+                remaining = driver.client.request({
+                    "@type": "getBasicGroup", "basic_group_id": chat_type["basic_group_id"],
+                })
+                deleted = remaining.get("is_active") is False
+            else:
+                remaining = driver.client.request({
+                    "@type": "getSupergroup", "supergroup_id": chat_type["supergroup_id"],
+                })
+                deleted = remaining["status"]["@type"] in {
+                    "chatMemberStatusLeft", "chatMemberStatusBanned",
+                }
+            if not deleted:
+                raise DriverError("Deleted forum is still active in the deletion read-back.")
+            record["deletionReadback"] = True
+        except (DriverError, KeyError, TypeError, ValueError) as error:
+            record.update(status="uncertain-creation", ok=False, error=str(error))
+            write_json_private(manifest_path, record)
+            return public_forum_record(record)
     record.pop("inviteLink", None)
+    record.pop("error", None)
     record.update(status="deleted", deletion=deletion, ok=True)
     write_json_private(manifest_path, record)
     return public_forum_record(record)
