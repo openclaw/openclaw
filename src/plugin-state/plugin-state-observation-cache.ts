@@ -37,7 +37,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStateObservation
           entries.delete(key);
         }
       }
-    } else {
+    } else if (change.kind === "committed") {
       for (const [key, fact] of change.receipt.facts) {
         const cacheKey = JSON.stringify([identity, key]);
         if (fact.kind === "unknown") {
