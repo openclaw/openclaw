@@ -30,7 +30,10 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import {
+  configuredPreparedPluginGenerations,
+  retainPreparedPluginGeneration,
+} from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   retirePreparedModelRuntimeOwnerIfUnused,
   type PreparedModelRuntimeOwnerRetention,
@@ -264,9 +267,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
               [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
             };
           }
-          // Acquisition precedes run side effects. A selection the admitted generation cannot
-          // serve (e.g. a per-run provider owner) is admitted afresh on the current generation.
-          if (configuredOwner.pluginGeneration) {
+          // Acquisition precedes run side effects. A run admitted on a superseded configured
+          // generation is admitted afresh on its replacement; nested parents stay confined.
+          if (
+            configuredOwner.pluginGeneration &&
+            configuredPreparedPluginGenerations.has(options.pluginGeneration)
+          ) {
             options = { ...options, pluginGeneration: configuredOwner.pluginGeneration };
             continue;
           }

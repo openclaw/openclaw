@@ -257,6 +257,54 @@ it("re-admits an uncovered selection on the configured generation after a catalo
   expect(next.pluginGeneration).toBe(configured.pluginGeneration);
 });
 
+it("keeps derived parents confined to their selections after a catalog publication", async () => {
+  await setup();
+  const input = fixture.agentInput("default", config);
+  await using configured = await acquirePublishedPreparedModelRuntime(input);
+  const selected = {
+    ...input,
+    workspaceDir: configured.snapshot.workspaceDir,
+    runtimePluginSelections: [{ provider: "custom", modelId: "remote-200", runtime: "openclaw" }],
+  };
+  // Each selection resolves its own harness owner; the parent registry holds only "first".
+  const ownersSpy = vi
+    .spyOn(runtimePluginLoadPlan, "resolveAgentRuntimePluginSelectionOwners")
+    .mockImplementation(({ selections }) => {
+      const pluginIds = selections.map((selection) =>
+        selection.provider === "openai" ? "openai" : "first",
+      );
+      return { pluginIds, forceActivatedPluginIds: pluginIds };
+    });
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(createPluginRecord({ id: "first", status: "loaded" }));
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  try {
+    await using parent = scopePreparedModelRuntimeLease(
+      await acquireAgentRunPreparedModelRuntime(selected, {
+        catalogMode: "static",
+        pluginGeneration: configured.pluginGeneration,
+      }),
+    );
+    expect(parent.pluginGeneration).not.toBe(configured.pluginGeneration);
+    expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    await expect(
+      parent.run(() =>
+        acquireAgentRunPreparedModelRuntime(
+          {
+            ...selected,
+            runtimePluginSelections: [
+              { provider: "openai", modelId: "gpt-5.6-luna", runtime: "openclaw" },
+            ],
+          },
+          { catalogMode: "static", pluginGeneration: parent.pluginGeneration },
+        ),
+      ),
+    ).rejects.toThrow(PreparedModelRuntimePublicationSupersededError);
+  } finally {
+    ownersSpy.mockRestore();
+  }
+});
+
 it("keeps downloaded catalogs pending while plugin work drains", async ({ signal }) => {
   await setup();
   const preparing = createDeferred();
