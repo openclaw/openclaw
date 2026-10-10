@@ -35,7 +35,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function observePostReadyStartupMaintenance(): Promise<{ settled: Promise<void> }> {
   const startupPlugins = await import("./server-startup-plugins.js");
   const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
-  const settled = createDeferred<void>();
+  const settled = createDeferred();
   const observer = vi
     .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
     .mockImplementation((params) => {

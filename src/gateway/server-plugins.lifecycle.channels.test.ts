@@ -41,7 +41,7 @@ import {
 async function observePostReadyStartupMaintenance(): Promise<{ settled: Promise<void> }> {
   const startupPlugins = await import("./server-startup-plugins.js");
   const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
-  const settled = createDeferredCore<void>();
+  const settled = createDeferredCore();
   const observer = vi
     .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
     .mockImplementation((params) => {
