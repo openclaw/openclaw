@@ -258,6 +258,7 @@ function hybridResultRangeKey(entry: HybridResultRange): string {
 export function selectHybridSearchResults<TSource extends HybridSource>(params: {
   merged: HybridSearchResult<TSource>[];
   keyword: HybridResultRange<TSource>[];
+  vectorCandidates: HybridResultRange<TSource>[];
   maxResults: number;
   minScore: number;
 }): HybridSearchResult<TSource>[] {
@@ -276,8 +277,9 @@ export function selectHybridSearchResults<TSource extends HybridSource>(params: 
       .slice(0, params.maxResults);
   }
 
-  // Strict recall owns the result window. MMR-ranked keyword-only hits may use
-  // spare capacity, but must never displace a qualifying result.
+  // Score completion does not turn a keyword-only candidate into a vector
+  // candidate. Preserve its spare-capacity eligibility after enrichment.
+  const vectorKeys = new Set(params.vectorCandidates.map(hybridResultRangeKey));
   const seen = new Set(selected.map((entry) => hybridResultRangeKey(entry)));
   for (const entry of params.merged) {
     if (selected.length === params.maxResults) {
@@ -286,7 +288,7 @@ export function selectHybridSearchResults<TSource extends HybridSource>(params: 
     const key = hybridResultRangeKey(entry);
     if (
       entry.score < params.minScore &&
-      entry.vectorScore === 0 &&
+      (entry.vectorScore === 0 || !vectorKeys.has(key)) &&
       keywordKeys.has(key) &&
       !seen.has(key)
     ) {

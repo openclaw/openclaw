@@ -69,14 +69,15 @@ describe("memory hybrid helpers", () => {
       endLine: 1,
       snippet: "unrelated lexical topic",
     });
+    const vector = [
+      vectorHit("strict-first", 1, { endLine: 1, snippet: "shared semantic topic" }),
+      vectorHit("strict-later", 0.9, { endLine: 1, snippet: "shared semantic topic" }),
+    ];
     const merged = await mergeHybridResults({
       vectorWeight: 0.7,
       textWeight: 0.3,
       mmr: { enabled: true, lambda: 0.2 },
-      vector: [
-        vectorHit("strict-first", 1, { endLine: 1, snippet: "shared semantic topic" }),
-        vectorHit("strict-later", 0.9, { endLine: 1, snippet: "shared semantic topic" }),
-      ],
+      vector,
       keyword: [keyword],
     });
     expect(merged.map((entry) => entry.path)).toEqual([
@@ -88,6 +89,7 @@ describe("memory hybrid helpers", () => {
     const selected = selectHybridSearchResults({
       merged,
       keyword: [keyword],
+      vectorCandidates: vector,
       maxResults: 2,
       minScore: 0.35,
     });
@@ -113,6 +115,7 @@ describe("memory hybrid helpers", () => {
     const selected = selectHybridSearchResults({
       merged: [overlapping],
       keyword: [overlapping],
+      vectorCandidates: [overlapping],
       maxResults: 1,
       minScore: 0.35,
     });
@@ -491,7 +494,13 @@ describe("memory hybrid helpers", () => {
       expect(merged.every((entry) => !("lexicalRank" in entry) && !("rankingScore" in entry))).toBe(
         true,
       );
-      const selected = selectHybridSearchResults({ merged, keyword, maxResults: 2, minScore: 0 });
+      const selected = selectHybridSearchResults({
+        merged,
+        keyword,
+        vectorCandidates: vectorScore === null ? [] : keyword,
+        maxResults: 2,
+        minScore: 0,
+      });
       expect(selected).toEqual(vectorScore !== null && vectorScore < 0 ? [] : merged);
     },
   );

@@ -40,6 +40,7 @@ const SNIPPET_MAX_CHARS = 700;
 const SEARCH_CANDIDATE_UNIVERSE = 200;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
+type VectorSearchHit = MemoryRetrievalResult & { id: string };
 
 export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
   private readonly sessionWarm = new Set<string>();
@@ -503,7 +504,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         }
       }
       const hasVector = queryVec.some((v) => v !== 0);
-      const vectorResults = hasVector
+      const vector = hasVector
         ? await this.searchVector(
             queryVec,
             candidates,
@@ -512,8 +513,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             indexState,
             keywordResults.map((entry) => entry.id),
             opts?.signal,
-          ).catch((error: unknown) => this.handleRetrievalError("vector", error, opts?.signal))
-        : [];
+          ).catch((error: unknown) => ({
+            results: this.handleRetrievalError("vector", error, opts?.signal),
+            candidates: [],
+          }))
+        : { results: [], candidates: [] };
+      const vectorResults = vector.results;
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
         const decayed = await applyTemporalDecayToHybridResults({
@@ -563,6 +568,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       return selectHybridSearchResults({
         merged,
         keyword: keywordResults,
+        vectorCandidates: vector.candidates,
         maxResults,
         minScore,
       });
@@ -612,7 +618,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     indexState: MemoryRetrievalIndexState,
     keywordCandidateIds: string[],
     signal?: AbortSignal,
-  ): Promise<Array<MemoryRetrievalResult & { id: string }>> {
+  ): Promise<{ results: VectorSearchHit[]; candidates: VectorSearchHit[] }> {
     const query = {
       providerModel: providerIdentity.model,
       providerModelAliases: providerIdentity.aliases,
@@ -671,7 +677,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     });
     // Keyword candidates outside the vector window still need their stored
     // similarity; treating an unqueried vector as zero loses rare-term answers.
-    const scoredIds = new Set(results.map((entry) => entry.id));
+    const candidates = [...results];
+    const scoredIds = new Set(candidates.map((entry) => entry.id));
     const missingIds = keywordCandidateIds.filter((id) => !scoredIds.has(id));
     if (missingIds.length > 0) {
       results.push(
@@ -680,6 +687,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         )),
       );
     }
-    return this.attachRecallMetadata(results, signal);
+    return { results: await this.attachRecallMetadata(results, signal), candidates };
   }
 }
