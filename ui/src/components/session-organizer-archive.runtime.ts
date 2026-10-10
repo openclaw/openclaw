@@ -204,6 +204,9 @@ export async function archiveSessionsWithUndo(
   if (rows.length === 0 || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  // Once confirmed, finish the batch and publish its outcome across page navigation.
+  // The captured connection still retires work and Undo on reconnect.
+  const outcomeHost = sessionUndoHost(host, scope);
   const pending = rows.flatMap((row) => {
     const finish = scope.sessions.beginArchive(row.key, row.sessionId);
     return finish ? [{ row, finish }] : [];
@@ -214,7 +217,7 @@ export async function archiveSessionsWithUndo(
   const pendingRows = pending.map(({ row }) => row);
   let archivedRows: SessionActionRow[] | null;
   try {
-    archivedRows = await patchSessionRows(host, pendingRows, { archived: true }, scope, {
+    archivedRows = await patchSessionRows(outcomeHost, pendingRows, { archived: true }, scope, {
       sessionScope: true,
     });
   } finally {
@@ -232,7 +235,9 @@ export async function archiveSessionsWithUndo(
         ? t("sessionsView.sessionArchived")
         : t("sessionsView.sessionsArchived", { count: String(archived.length) }),
     actionLabel: t("common.undo"),
-    onAction: archiveUndoAction(host, archived, scope),
+    onAction: archiveUndoAction(outcomeHost, archived, scope),
+    // Keep a partial-failure notice readable before presenting successful-only Undo.
+    fifo: true,
   });
 }
 
