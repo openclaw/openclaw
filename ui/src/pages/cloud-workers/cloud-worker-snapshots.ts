@@ -20,6 +20,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -266,11 +267,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
               : code === "invalid_profile" || code === "profile_not_found"
                 ? t("cloudWorkersPage.snapshots.invalidProfile")
                 : formatUiError(error);
-        if (fromDialog) {
-          this.buildError = message;
-        } else {
-          this.error = message;
-        }
+        this[fromDialog ? "buildError" : "error"] = message;
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -300,7 +297,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     this.destroying = environment.id;
     this.error = null;
     this.notice = null;
-    try {
+    await this.runSnapshotMutation(scope, "destroying", async () => {
       await scope.client.request("environments.destroy", { environmentId: environment.id });
       if (this.gateway.isCurrent(scope)) {
         // The Gateway keeps a terminal build record until its retention window ends, so
@@ -314,15 +311,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
         );
         await this.load();
       }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.destroying = null;
-      }
-    }
+    });
   }
 
   private renderBuildDialog() {
@@ -432,7 +421,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     this.recovering = selector;
     this.error = null;
     this.notice = null;
-    try {
+    await this.runSnapshotMutation(scope, "recovering", async () => {
       await scope.client.request("crabbox.images.recover", {
         selector,
         acknowledgeProviderCleanup: true,
@@ -441,15 +430,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
         this.notice = t("cloudWorkersPage.snapshots.recovered");
         await this.load();
       }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.recovering = null;
-      }
-    }
+    });
   }
 
   private deleteReason(image: SnapshotImage) {
@@ -489,7 +470,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       return;
     }
     this.mutating = checkpointId;
-    try {
+    await this.runSnapshotMutation(scope, "mutating", async () => {
       if (action !== "pin") {
         const confirmed = await this.confirm({
           title: t(`cloudWorkersPage.snapshots.${action}Title`),
@@ -523,13 +504,27 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
         this.notice = notice;
         await this.load();
       }
+    });
+  }
+
+  private async runSnapshotMutation(
+    scope: GatewayConnectionScope,
+    busy: "mutating" | "recovering" | "destroying",
+    mutate: () => Promise<void>,
+  ) {
+    try {
+      await mutate();
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        showToast({ message: formatUiError(error) });
+        if (busy === "mutating") {
+          showToast({ message: formatUiError(error) });
+        } else {
+          this.error = formatUiError(error);
+        }
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
-        this.mutating = null;
+        this[busy] = null;
       }
     }
   }

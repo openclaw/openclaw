@@ -14,8 +14,10 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import type { CodexThreadStartParams } from "./protocol.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
-import { createAppServerOptions as createBaseAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createAppServerOptions as createBaseAppServerOptions,
+  startOrResumeThreadWithEmptySkillCatalog as startOrResumeThreadImpl,
+} from "./thread-lifecycle.test-fixtures.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,

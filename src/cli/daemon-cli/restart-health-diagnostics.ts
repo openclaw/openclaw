@@ -65,6 +65,7 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   for (const [heading, errors] of [
     ["Activated plugin load errors:", snapshot.activatedPluginErrors],
     ["Channel health check errors:", snapshot.channelProbeErrors],
+    ["Channel health collection warnings:", snapshot.channelProbeTimeouts],
   ] as const) {
     if (errors?.length) {
       lines.push(heading);
@@ -100,6 +101,12 @@ export function formatGatewayRestartFailure(params: {
   }
   if (params.health.waitOutcome === "still-starting") {
     const message = formatGatewayStillStarting(params.health);
+    return { statusLine: message, failMessage: message };
+  }
+  if (params.health.waitOutcome === "port-held") {
+    const message =
+      params.health.probeError ??
+      `Gateway port ${params.port} is held by another process. Inspect it with openclaw gateway status --deep.`;
     return { statusLine: message, failMessage: message };
   }
   if (params.health.waitOutcome === "stopped-free") {

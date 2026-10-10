@@ -3,7 +3,7 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 
 type RunIdentity = Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">;
 type LookupIdentity = RunIdentity &
-  Pick<SubagentRunReadRecord, "runId" | "swarmRunId" | "controllerSessionKey">;
+  Pick<SubagentRunReadRecord, "runId" | "swarmRunId" | "schedulerSlotId" | "controllerSessionKey">;
 
 function buildChildren(runGroups: readonly Iterable<RunIdentity>[]) {
   const children = new Map<string, Set<string>>();
@@ -51,6 +51,7 @@ type LookupMembership = {
   entry: LookupIdentity;
   runId: string;
   swarmRunId?: string;
+  schedulerSlotId?: string;
   requester: string;
   child: string;
   controller: string;
@@ -68,6 +69,7 @@ export class SubagentSessionReadLookup {
   #memberships = new Map<string, LookupMembership>();
   #byRunId = new Map<string, Set<LookupMembership>>();
   #sessions?: SessionBuckets;
+  #topology?: readonly Readonly<RunIdentity>[];
   #nextOrder = 0;
 
   constructor(entries: Iterable<readonly [string, LookupIdentity]> = []) {
@@ -77,10 +79,11 @@ export class SubagentSessionReadLookup {
   }
 
   set(cacheKey: string, entry: LookupIdentity | undefined): void {
+    this.#topology = undefined;
     const previous = this.#memberships.get(cacheKey);
     if (!entry) {
       if (previous) {
-        this.#remove(previous);
+        this.#index(previous, false);
         this.#memberships.delete(cacheKey);
       }
       return;
@@ -92,6 +95,7 @@ export class SubagentSessionReadLookup {
       previous &&
       previous.runId === entry.runId &&
       previous.swarmRunId === entry.swarmRunId &&
+      previous.schedulerSlotId === entry.schedulerSlotId &&
       previous.child === child &&
       previous.requester === requester &&
       previous.controller === controller
@@ -100,30 +104,42 @@ export class SubagentSessionReadLookup {
       return;
     }
     if (previous) {
-      this.#remove(previous);
+      this.#index(previous, false);
     }
     const membership: LookupMembership = {
       cacheKey,
       entry,
       runId: entry.runId,
       swarmRunId: entry.swarmRunId,
+      schedulerSlotId: entry.schedulerSlotId,
       child,
       requester,
       controller,
       order: previous?.order ?? this.#nextOrder++,
     };
     this.#memberships.set(cacheKey, membership);
-    for (const id of [membership.runId, membership.swarmRunId]) {
-      if (id) {
-        this.#addToBucket(this.#byRunId, id, membership);
-      }
-    }
-    this.#indexSession(membership);
+    this.#index(membership);
   }
 
   /** Broad publications invalidate relationships without rebuilding the eager run-ID index. */
   invalidateSessions(): void {
     this.#sessions = undefined;
+    this.#topology = undefined;
+  }
+
+  /** Durable comparison bases share immutable links until their row owner changes. */
+  captureTopology(): readonly Readonly<RunIdentity>[] {
+    return (this.#topology ??= Object.freeze(
+      [...this.#memberships.values()]
+        .map(({ entry: { childSessionKey, requesterSessionKey } }) =>
+          Object.freeze({ childSessionKey, requesterSessionKey }),
+        )
+        .toSorted(
+          (left, right) =>
+            left.childSessionKey.localeCompare(right.childSessionKey) ||
+            left.requesterSessionKey.localeCompare(right.requesterSessionKey),
+        ),
+    ));
   }
 
   #sessionBuckets(): SessionBuckets {
@@ -144,23 +160,32 @@ export class SubagentSessionReadLookup {
     return this.#sessions;
   }
 
-  #indexSession(membership: LookupMembership): void {
+  #indexSession(membership: LookupMembership, add = true): void {
     const buckets = this.#sessions;
     if (!buckets) {
       return;
     }
-    const { requester, controller } = membership;
+    const { requester, controller, child } = membership;
     for (const owner of new Set([requester.trim(), controller.trim()])) {
-      this.#addToBucket(buckets.byOwner, owner, membership);
+      this.#updateBucket(buckets.byOwner, owner, membership, add);
     }
-    if (membership.child) {
-      const children = buckets.children.get(membership.requester) ?? new Map<string, number>();
-      children.set(membership.child, (children.get(membership.child) ?? 0) + 1);
-      buckets.children.set(membership.requester, children);
-      this.#addToBucket(buckets.byChild, membership.child, membership);
+    if (child) {
+      const children = buckets.children.get(requester) ?? new Map<string, number>();
+      const count = (children.get(child) ?? 0) + (add ? 1 : -1);
+      if (count > 0) {
+        children.set(child, count);
+      } else {
+        children.delete(child);
+      }
+      if (children.size) {
+        buckets.children.set(requester, children);
+      } else {
+        buckets.children.delete(requester);
+      }
+      this.#updateBucket(buckets.byChild, child, membership, add);
     }
-    if (membership.controller) {
-      this.#addToBucket(buckets.byController, membership.controller, membership);
+    if (controller) {
+      this.#updateBucket(buckets.byController, controller, membership, add);
     }
   }
 
@@ -168,13 +193,13 @@ export class SubagentSessionReadLookup {
     return this.#select(this.#byRunId, ids, additionalCacheKeys);
   }
 
-  selectSessions(sessionKeys: readonly string[], inMemoryRuns: Iterable<RunIdentity>) {
+  selectSessions(sessionKeys: readonly string[], live: SubagentSessionReadLookup) {
     const buckets = this.#sessionBuckets();
-    const liveChildren = buildChildren([inMemoryRuns]);
+    const liveBuckets = live.#sessionBuckets();
     const selected = collectKeys(
       sessionKeys,
       (requester) => buckets.children.get(requester)?.keys() ?? [],
-      (requester) => liveChildren.get(requester) ?? [],
+      (requester) => liveBuckets.children.get(requester)?.keys() ?? [],
     );
     return { sessionKeys: selected, cacheKeys: this.#select(buckets.byChild, selected) };
   }
@@ -246,52 +271,31 @@ export class SubagentSessionReadLookup {
       .map((row) => row.cacheKey);
   }
 
-  #addToBucket(
+  #updateBucket(
     buckets: Map<string, Set<LookupMembership>>,
     key: string,
     membership: LookupMembership,
+    add = true,
   ) {
     const bucket = buckets.get(key) ?? new Set<LookupMembership>();
-    bucket.add(membership);
-    buckets.set(key, bucket);
-  }
-
-  #removeFromBucket(
-    buckets: Map<string, Set<LookupMembership>>,
-    key: string,
-    membership: LookupMembership,
-  ) {
-    const bucket = buckets.get(key);
-    bucket?.delete(membership);
-    if (bucket?.size === 0) {
+    if (add) {
+      bucket.add(membership);
+    } else {
+      bucket.delete(membership);
+    }
+    if (bucket.size) {
+      buckets.set(key, bucket);
+    } else {
       buckets.delete(key);
     }
   }
 
-  #remove(membership: LookupMembership) {
-    for (const id of [membership.runId, membership.swarmRunId]) {
+  #index(membership: LookupMembership, add = true) {
+    for (const id of [membership.runId, membership.swarmRunId, membership.schedulerSlotId]) {
       if (id) {
-        this.#removeFromBucket(this.#byRunId, id, membership);
+        this.#updateBucket(this.#byRunId, id, membership, add);
       }
     }
-    const buckets = this.#sessions;
-    if (!buckets) {
-      return;
-    }
-    const children = buckets.children.get(membership.requester);
-    const remaining = (children?.get(membership.child) ?? 0) - 1;
-    if (remaining > 0) {
-      children?.set(membership.child, remaining);
-    } else {
-      children?.delete(membership.child);
-      if (children?.size === 0) {
-        buckets.children.delete(membership.requester);
-      }
-    }
-    this.#removeFromBucket(buckets.byChild, membership.child, membership);
-    this.#removeFromBucket(buckets.byController, membership.controller, membership);
-    for (const owner of new Set([membership.requester.trim(), membership.controller.trim()])) {
-      this.#removeFromBucket(buckets.byOwner, owner, membership);
-    }
+    this.#indexSession(membership, add);
   }
 }

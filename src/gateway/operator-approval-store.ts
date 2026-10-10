@@ -10,6 +10,7 @@ import {
   withCronReceiptAuthorityMutation,
   type CronReceiptAuthorityMutation,
 } from "../cron/store/receipt-authority-owner.js";
+import { execApprovalsPublication } from "../infra/exec-approvals-publication.js";
 import type { SqliteWorkerInputPreparation } from "../infra/sqlite-worker-broker.types.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type {
@@ -34,11 +35,16 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperationOptions } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { batchStateDomainPublications } from "../state/state-domain-publication.js";
 import type {
   CronStandingGrantLookupInput,
   ConsumeCronStandingGrantResult,
 } from "./operator-approval-standing-grants.types.js";
 import type { OperatorApprovalCommitReceipt } from "./operator-approval-store.operations.js";
+import {
+  operatorApprovalPublication,
+  operatorStandingGrantPublication,
+} from "./operator-approval-store.publication.js";
 import { decodeOperatorApprovalHistoryCursor } from "./operator-approval-store.rows.js";
 import type {
   ListTerminalOperatorApprovalsInput,
@@ -158,13 +164,42 @@ function execute<Key extends Operation>(
   let admission: SqliteWorkerOperationAdmission | undefined;
   const createAdmission: SqliteWorkerAdmissionFactory = (operation) => {
     const authority = expectDefined(mutation, "Operator approval receipt authority");
+    let commitAdmitted = false;
     const retained = createSqliteWorkerWriteAdmission(
-      assertOperationCurrent,
+      (request) => {
+        assertOperationCurrent();
+        commitAdmitted ||= request.stage === "commit";
+      },
       [context.admission.databasePath],
       authority.attachment,
     )(operation);
     admission = retained.admission;
-    authority.observe(admission, operation);
+    const owner = {
+      identity: context.admission.identity.key,
+      assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
+    };
+    const approvals = operatorApprovalPublication.begin(owner);
+    const grants = operatorStandingGrantPublication.begin(owner);
+    const exec = execApprovalsPublication.begin(owner);
+    authority.observe(admission, operation, (facts) => {
+      batchStateDomainPublications(() => {
+        approvals.committed(isRecord(facts) ? facts.approvalFacts : undefined);
+        grants.committed(isRecord(facts) ? facts.standingGrantFacts : undefined);
+        exec.committed(isRecord(facts) ? facts.execFacts : undefined);
+      });
+    });
+    const finish = admission.finish.bind(admission);
+    admission.finish = () => {
+      try {
+        finish();
+      } finally {
+        const confirmed = admission?.settlement?.kind === "completed";
+        const rolledBack = confirmed && !admission?.committed && !commitAdmitted;
+        approvals.finish(confirmed, rolledBack);
+        grants.finish(confirmed, rolledBack);
+        exec.finish(confirmed, rolledBack);
+      }
+    };
     return retained;
   };
   const publishCommitted = (facts: unknown) => {
@@ -379,5 +414,16 @@ export function consumeCronStandingGrant(
         assertUseCurrent();
         return result;
       }),
+  );
+}
+
+export function readPlacementStandingGrant(
+  input: import("./operator-approval-placement-grants.read.js").PlacementGrantReadInput,
+  options: Options,
+) {
+  return readApprovalStore(
+    { type: "operatorApprovals.placementGrant", input },
+    options,
+    (result) => (result.type === "operatorApprovals.placementGrant" ? result.rows : undefined),
   );
 }

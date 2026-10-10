@@ -5,7 +5,6 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   ControlUiAction,
-  ControlUiSession,
   ControlUiSurface,
   ControlUiSurfaceProps,
   ControlUiView,
@@ -302,8 +301,8 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
     "navigation";
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) agentId?: string;
-  @property({ attribute: false }) session?: ControlUiSession;
   @property({ attribute: false }) navigationKey = "";
+  @property({ type: Boolean }) navigationChildren = true;
   @property({ attribute: false }) navigationMenus?: SidebarMenusController;
   @property({ type: Boolean }) presented = true;
   @state() private actionError = "";
@@ -416,6 +415,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           class="nav-item ${child ? "nav-item--child" : ""} ${active ? "nav-item--active" : ""}"
           href=${href}
           aria-current=${active ? "page" : nothing}
+          aria-label=${entry.value.label}
           aria-haspopup=${entry.value.actions?.length ? "menu" : nothing}
           @contextmenu=${
             entry.value.actions?.length
@@ -467,6 +467,9 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
       return navigation
         .filter(({ entry }) => entry.key === this.navigationKey)
         .map((parent) => {
+          if (!this.navigationChildren) {
+            return renderLink(parent);
+          }
           const children = navigation
             .filter(
               ({ entry }) =>
@@ -499,7 +502,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           renderPluginContribution(
             "accessories",
             entry.key,
-            { sessionKey: this.sessionKey, agentId: this.agentId, session: this.session },
+            { sessionKey: this.sessionKey, agentId: this.agentId },
             this.presented,
           ),
         );

@@ -53,16 +53,6 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
-function isSelectedSessionKnownIdle(
-  sessionsResult: SessionsListResult,
-  sessionKey: string,
-): boolean {
-  const row = sessionsResult.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, sessionKey),
-  );
-  return Boolean(row && !isSessionRunActive(row));
-}
-
 function isHistorySessionInfoForRequestedSession(
   host: ChatIdleSessionReconciliationHost,
   historySessionKey: string | undefined,
@@ -147,9 +137,12 @@ export function flushChatQueueAfterIdleSessionReconciliation(
       !isSessionRunActive(historySessionInfo) &&
       !historyIdleProofIsStaleForSelectedRow(historySessionInfo, selectedSessionRow),
     );
-    const sessionsResultKnownIdle = freshSessionsResult
-      ? isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
-      : false;
+    const listedSessionRow = freshSessionsResult?.sessions.find((session) =>
+      areUiSessionKeysEquivalent(session.key, sessionKey),
+    );
+    const sessionsResultKnownIdle = Boolean(
+      listedSessionRow && !isSessionRunActive(listedSessionRow),
+    );
     if (
       sessionsRefreshSettled.status !== "fulfilled" ||
       host.chatQueue.length === 0 ||

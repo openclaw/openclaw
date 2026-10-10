@@ -292,7 +292,7 @@ suite.define(() => {
       ],
       inFlightRun: {
         runId: "run-reconnected",
-        text: "Saved opening. Still working after reconnect.",
+        text: "Still working after reconnect.",
       },
       sessionInfo: {
         activeRunIds: ["run-reconnected"],
@@ -541,6 +541,10 @@ suite.define(() => {
     await captureMockStopProof(currentPage, "stopped-live");
     await interrupted.waitFor({ state: "visible" });
     expect(await interrupted.count()).toBe(1);
+    expect(await currentPage.getByLabel("Run status: Interrupted").count()).toBe(0);
+    expect(await currentPage.locator(".agent-chat__run-status-announcement").textContent()).toBe(
+      "Interrupted",
+    );
   });
 
   it("retains stale Stop after a mock-Gateway history error and recovers on the next Stop", async () => {
@@ -767,7 +771,7 @@ suite.define(() => {
       const runId = params.idempotencyKey as string;
 
       await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-      const mainSession = currentPage.locator(".nav-item--home");
+      const mainSession = currentPage.locator(".sidebar-footer-bar__home");
       // Home mirrors session rows: active-run state rings the leading glyph.
       const mainSessionRunIndicator = mainSession
         .locator(".session-glyph")
@@ -814,7 +818,9 @@ suite.define(() => {
           });
           await currentPage.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
           await mainSession.locator('[data-session-attention="error"]').waitFor();
-          expect(await mainSession.getAttribute("aria-label")).toContain(diagnostic);
+          expect(
+            await mainSession.locator("[data-session-attention=error]").getAttribute("aria-label"),
+          ).toContain(diagnostic);
           expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(
             0,
           );
@@ -967,7 +973,7 @@ suite.define(() => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".nav-item--home");
+    const mainSession = currentPage.locator(".sidebar-footer-bar__home");
     // Home mirrors session rows: active-run state rings the leading glyph.
     const mainSessionRunIndicator = mainSession
       .locator(".session-glyph")

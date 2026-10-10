@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +12,6 @@ import {
 import { readRootJsonObjectSync } from "./json-files.js";
 import {
   packageActivationIdentity,
-  resolvePackageActivationHelper,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
 import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
@@ -25,30 +23,12 @@ import {
 
 /** Verify the installed candidate without republishing it or trusting its old tree fingerprint. */
 export async function verifyPackagePublicationSettlement(
-  anchor: string,
   record: PackageActivationRecord,
   assertCurrent: () => void,
 ) {
   const descriptor = record.descriptor;
   const live = descriptor.authority.installKey;
-  const retained = `${anchor}.superseded-${descriptor.operationId}`;
-  const helper = () =>
-    fs.existsSync(resolvePackageActivationHelper(anchor))
-      ? resolvePackageActivationHelper(anchor)
-      : path.join(retained, "recovery.mjs");
   assertCurrent();
-  const helperPath = helper();
-  const helperBefore = fs.lstatSync(helperPath, { bigint: true });
-  if (
-    packageActivationIdentity(helperPath, false) !== descriptor.helperIdentity ||
-    createHash("sha256")
-      .update(await fsp.readFile(helperPath))
-      .digest("hex") !== descriptor.helperDigest ||
-    !packageStatUnchanged(helperBefore, fs.lstatSync(helperPath, { bigint: true }))
-  ) {
-    throw new Error("Sealed package recovery helper changed.");
-  }
-  let helperVerified = helperBefore;
   const observed = new Map<string, fs.BigIntStats>();
   for (const relative of [
     "",
@@ -200,21 +180,9 @@ export async function verifyPackagePublicationSettlement(
     assertCurrent();
     if (
       packageActivationIdentity(live, true) !== descriptor.candidate.identity ||
-      packageActivationIdentity(descriptor.binDir, "parent") !== descriptor.binIdentity ||
-      packageActivationIdentity(helper(), false) !== descriptor.helperIdentity
+      packageActivationIdentity(descriptor.binDir, "parent") !== descriptor.binIdentity
     ) {
       throw new Error("Package settlement identity changed.");
-    }
-    const helperNow = fs.lstatSync(helper(), { bigint: true });
-    if (!packageStatUnchanged(helperVerified, helperNow)) {
-      // Archival can change ctime. Recheck the seal, including on a resumed rename.
-      if (
-        createHash("sha256").update(fs.readFileSync(helper())).digest("hex") !==
-        descriptor.helperDigest
-      ) {
-        throw new Error("Sealed package recovery helper changed.");
-      }
-      helperVerified = helperNow;
     }
     for (const [file, before] of observed) {
       if (!packageStatUnchanged(before, fs.lstatSync(file, { bigint: true }))) {

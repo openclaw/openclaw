@@ -6,13 +6,16 @@ import {
 } from "../../../packages/agent-core/src/harness/session/session.js";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
-  readSessionTranscriptBoundedMessageTailPage,
-  readSessionTranscriptWatermark,
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "../../config/sessions/session-incognito-binding.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
@@ -330,12 +333,20 @@ async function loadCliSessionEntries({
 export async function hasCliSessionTranscript({
   sessionManager,
   sessionTarget,
+  abortSignal,
 }: CliSessionHistoryParams): Promise<boolean> {
   if (sessionManager) {
     return sessionManager.getEntries().length > 0;
   }
+  const source = sessionTarget && captureIncognitoSessionSource(sessionTarget);
+  if (source && "kind" in source) {
+    abortSignal?.throwIfAborted();
+    source.assertCurrent();
+    return false;
+  }
   return (
-    sessionTarget !== undefined && readSessionTranscriptWatermark(sessionTarget).maxSeq !== null
+    sessionTarget !== undefined &&
+    (await readSessionTranscriptWatermarkAsync(sessionTarget)).maxSeq !== null
   );
 }
 
@@ -354,16 +365,33 @@ export async function loadCliSessionHistoryMessages({
   if (!sessionTarget) {
     return [];
   }
+  const source = captureIncognitoSessionSource(sessionTarget);
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return [];
+  }
+  const incognito = captureIncognitoSessionHistoryBinding(sessionTarget);
+  const target = {
+    ...sessionTarget,
+    ...(incognito ? { storePath: incognito.actor.path } : {}),
+  };
   const { restoreSessionColdTranscript } =
     await import("../../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(sessionTarget, () => abortSignal?.throwIfAborted());
-  await waitForSessionTranscriptProjection(sessionTarget, abortSignal);
+  await restoreSessionColdTranscript(target, () => abortSignal?.throwIfAborted());
+  await waitForSessionTranscriptProjection(target, abortSignal);
   // Hooks retain history across compactions; only reset closes their history window.
-  const page = readSessionTranscriptBoundedMessageTailPage(sessionTarget, {
-    maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
-    maxMessages: MAX_CLI_SESSION_HISTORY_MESSAGES,
-    offset: 0,
-  });
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../../gateway/session-transcript-readers.js");
+  const page = await readSessionTranscriptBoundedMessageTailPageAsync(
+    target,
+    {
+      maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
+      maxMessages: MAX_CLI_SESSION_HISTORY_MESSAGES,
+      offset: 0,
+    },
+    abortSignal,
+    incognito,
+  );
   if (page.events.length < page.scannedMessages) {
     cliBackendLog.warn(
       `cli session history truncated to bounded message tail: ${sessionTarget.sessionId}`,

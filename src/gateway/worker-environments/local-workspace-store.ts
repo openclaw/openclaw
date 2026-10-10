@@ -1,17 +1,24 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   captureWorktreeRunEndContext,
   retainWorktreeRunEndFailure,
   withWorktreeRunEnd,
 } from "../../agents/worktrees/run-end-lifecycle.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
-import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  observeSqliteWorkerCommittedFacts,
+  type SqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import { verifyOpenClawStateLeaseOwnership } from "../../state/openclaw-state-lease-storage.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import {
+  localWorkspacePublication,
+  readLocalWorkspaceCommit,
+} from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
@@ -65,6 +72,7 @@ export function withLocalWorkspaceStore<T>(
   const env = params.env ?? process.env;
   const captured = captureWorktreeRunEndContext(env);
   const inherited = params.workerAuthority?.leaseSet;
+  const mutationWorktreeIds = inherited?.mutationWorktreeIds?.slice();
   const context = inherited?.context ?? captured;
   if (context.admission.coordinationKey !== captured.admission.coordinationKey) {
     throw new Error("Local workspace lease belongs to another database");
@@ -100,16 +108,6 @@ export function withLocalWorkspaceStore<T>(
             if (pending) {
               throw new Error("Local workspace publication has not settled");
             }
-            for (const identity of authority.identities) {
-              verifyOpenClawStateLeaseOwnership({
-                ...identity,
-                leaseLabel: "local sandbox workspace",
-                database: {
-                  scope: "shared",
-                  options: { path: context.admission.databasePath, env: context.environment },
-                },
-              });
-            }
             params.assertCurrent?.();
           };
           try {
@@ -144,12 +142,10 @@ export function withLocalWorkspaceStore<T>(
                     : undefined;
                 const mutate = async (
                   mutation: LocalWorkspaceMutation,
-                  next: LocalWorkspaceProjection | undefined,
                   guard: WorktreeWorkerAuthority = params.workerAuthority ?? {},
                 ) => {
                   assertCurrent();
                   const capturedMutation = structuredClone(mutation);
-                  const postimage = next && Object.freeze(structuredClone(next));
                   const receipt = randomUUID();
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
@@ -183,6 +179,23 @@ export function withLocalWorkspaceStore<T>(
                               settled = operation.settled;
                               const result = write.createAdmission(operation);
                               admission = result.admission;
+                              const publication = localWorkspacePublication.begin({
+                                get identity() {
+                                  return context.admission.identity.key;
+                                },
+                                assertCurrent:
+                                  context.assertPublicationCurrent ??
+                                  context.admission.assertCurrent,
+                              });
+                              observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+                                if (!isRecord(facts) || facts.operationId !== receipt) {
+                                  throw new Error("Local workspace receipt changed operation");
+                                }
+                                publication.committed(facts.receipt);
+                              });
+                              void operation.settled.then((outcome) =>
+                                publication.finish(outcome.kind === "completed"),
+                              );
                               return result;
                             },
                           },
@@ -192,8 +205,18 @@ export function withLocalWorkspaceStore<T>(
                     row = acknowledged && Object.freeze(acknowledged);
                   } catch (error) {
                     const outcome = await settled;
-                    if (outcome?.kind === "completed" && admission?.committed?.facts === receipt) {
-                      row = postimage;
+                    if (outcome?.kind === "completed" && admission?.committed) {
+                      try {
+                        row = readLocalWorkspaceCommit(
+                          admission.committed.facts,
+                          receipt,
+                          params.worktreeId,
+                        );
+                      } catch (receiptError) {
+                        active = false;
+                        retainWorktreeRunEndFailure(receiptError);
+                        throw receiptError;
+                      }
                     } else {
                       active = false;
                       retainWorktreeRunEndFailure(error);
@@ -208,7 +231,11 @@ export function withLocalWorkspaceStore<T>(
                   assertCurrent,
                   workerAuthority: {
                     ...params.workerAuthority,
-                    leaseSet: { context, leases },
+                    leaseSet: {
+                      context,
+                      leases,
+                      mutationWorktreeIds,
+                    },
                     assertCurrent: assertHost,
                   },
                   get: () => {
@@ -219,31 +246,21 @@ export function withLocalWorkspaceStore<T>(
                     return row;
                   },
                   create: async (value, guard) => {
-                    const next = { ...value, revision: 0 };
-                    await mutate({ kind: "create", row: value }, next, guard);
+                    await mutate({ kind: "create", row: value }, guard);
                     return row!;
                   },
                   update: async (previous, patch, guard) => {
                     if (previous.worktree_id !== params.worktreeId) {
                       throw new Error("Local workspace binding changed");
                     }
-                    await mutate(
-                      { kind: "update", revision: previous.revision, patch },
-                      {
-                        ...previous,
-                        ...patch,
-                        worktree_id: params.worktreeId,
-                        revision: previous.revision + 1,
-                      },
-                      guard,
-                    );
+                    await mutate({ kind: "update", revision: previous.revision, patch }, guard);
                     return row!;
                   },
                   delete: async (previous, guard) => {
                     if (previous.worktree_id !== params.worktreeId) {
                       throw new Error("Local workspace binding changed");
                     }
-                    await mutate({ kind: "delete", revision: previous.revision }, undefined, guard);
+                    await mutate({ kind: "delete", revision: previous.revision }, guard);
                   },
                 });
               },

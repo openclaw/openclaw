@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import type { NativeModelSource } from "./native-subagent-monitor-types.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -9,9 +10,6 @@ import {
 import { isJsonObject } from "./protocol.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 
-type RetainedSource = NonNullable<
-  ReturnType<NonNullable<EmbeddedRunAttemptParamsV2["hostCapabilities"]["retainSourceAuthority"]>>
->;
 type NativeTurn = { threadId: string; turnId: string };
 type NativeCommand = NativeTurn & { itemId: string };
 type ProcessCustody = { terminate: () => Promise<void> };
@@ -107,7 +105,24 @@ export class CodexNativeProcessClient {
       const threadId = readCodexNotificationThreadId(notification.params);
       const turnId = readCodexNotificationTurnId(notification.params);
       const commands = threadId ? this.threads.get(threadId) : undefined;
-      if (!commands || !turnId) {
+      if (!commands) {
+        return;
+      }
+      if (
+        notification.method === "thread/closed" ||
+        notification.method === "thread/archived" ||
+        notification.method === "thread/deleted"
+      ) {
+        // Codex unloads an unsubscribed thread by dropping its listener before
+        // shutdown, so its background terminals end without an item/completed
+        // this connection can observe. The thread-level receipt is final.
+        for (const command of commands.values()) {
+          command.background = undefined;
+          this.closeAdmission(command);
+        }
+        return;
+      }
+      if (!turnId) {
         return;
       }
       if (notification.method === "turn/completed") {
@@ -211,21 +226,18 @@ export class CodexNativeProcessClient {
     assertAdmission();
     const process = { terminate };
     command.processes.add(process);
-    let settled = false;
     return {
       assertAdmission,
       assertCurrent: () => {
         command.owner.assertCurrent();
-        if (this.closed || settled) {
+        if (this.closed || !command.processes.has(process)) {
           throw new Error("Codex native process authority has ended");
         }
       },
       settle: () => {
-        if (settled) {
+        if (!command.processes.delete(process)) {
           return;
         }
-        settled = true;
-        command.processes.delete(process);
         this.forgetSettled(command);
       },
       fail: (error: unknown) => command.owner.reportSettlementFailure(error),
@@ -263,7 +275,7 @@ export class CodexNativeProcessAuthority {
   private released = false;
   private cancellation?: Promise<void>;
   private parentTurn?: NativeTurn & { client: CodexAppServerClient };
-  private readonly source: RetainedSource | undefined;
+  private readonly source: NativeModelSource | undefined;
   private readonly onAbort = () => {
     if (!this.cancelled) {
       void this.cancel().catch(this.onCleanupFailure);

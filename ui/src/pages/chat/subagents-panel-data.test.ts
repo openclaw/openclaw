@@ -258,36 +258,46 @@ describe("Subagents panel data ownership", () => {
     expect(f.subscriptions.has(row.key)).toBe(false);
   });
 
-  it("keeps later child pages available while excluding Swarm and persistent sessions", async () => {
-    const first = child("first");
-    const last = child("last", { key: "agent:research:subagent:last", agentId: "research" });
-    const swarm = child("swarm", { swarmGroupId: "parallel-audits" });
-    const persistent = child("persistent", {
-      key: "agent:main:dashboard:persistent",
-      classification: undefined,
-    });
-    const f = fixture((method, params) => {
-      if (method === "sessions.list") {
-        if (!params.spawnedBy) {
-          return page([]);
+  it.each([undefined, "parallel-audits"])(
+    "loads older running children beyond the first page (%s)",
+    async (swarmGroupId) => {
+      const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
+      const last = child("last", {
+        key: "agent:research:subagent:last",
+        agentId: "research",
+        swarmGroupId,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["run-1"],
+      });
+      const persistent = child("persistent", {
+        key: "agent:main:dashboard:persistent",
+        classification: undefined,
+      });
+      const f = fixture((method, params) => {
+        if (method === "sessions.list") {
+          if (!params.spawnedBy) {
+            return page([]);
+          }
+          return params.offset === 21
+            ? page([last], { offset: 21, totalCount: 22 })
+            : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 });
         }
-        return params.offset === 3
-          ? page([last], { offset: 3, totalCount: 4 })
-          : page([first, swarm, persistent], { hasMore: true, nextOffset: 3, totalCount: 4 });
-      }
-      if (method === "chat.history") {
-        return history(params.sessionKey === last.key ? last : first);
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
-    f.open();
-    await f.when(() => f.data.hasResult && !f.data.loading);
-    expect(f.data.rows.map((row) => row.session.key)).toEqual([first.key]);
-    expect(f.data.hasMore).toBe(true);
-    await f.data.loadMore();
-    expect(f.data.rows.map((row) => row.session.key)).toEqual([first.key, last.key]);
-    expect(f.data.hasMore).toBe(false);
-  });
+        if (method === "chat.history") {
+          return history(params.sessionKey === last.key ? last : finished[0]!);
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      f.open();
+      await f.data.refresh();
+      expect(f.data.rows.map((row) => row.session.key)).toEqual([
+        ...finished.map((row) => row.key),
+        last.key,
+      ]);
+      expect(f.data.rows.at(-1)?.canStop).toBe(true);
+      expect(f.data.loading).toBe(false);
+    },
+  );
 
   it("rejects a stale Stop target while allowing the current run to be stopped exactly", async () => {
     let row = child("stop", {

@@ -3,7 +3,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -121,6 +124,10 @@ export const progressCardStore = {
     sessionKey: string,
     agentId?: string,
   ): Promise<ReturnType<typeof readSessionProgressCard>> {
+    const source = captureIncognitoSessionSource({ sessionKey, agentId });
+    if (source && "kind" in source) {
+      return null;
+    }
     const incognito = captureIncognitoSessionOperation({ sessionKey, agentId });
     if (incognito) {
       return createIncognitoProgressCardStore(() => ({

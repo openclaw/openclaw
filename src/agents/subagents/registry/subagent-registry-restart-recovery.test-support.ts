@@ -57,6 +57,7 @@ vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
 const childSessionKey = "agent:main:subagent:restart-child";
 const dispatchAgent = vi.fn();
 const gatewayRuntime: GatewayRecoveryRuntime = {
+  prepareRestartRecovery: () => undefined,
   dispatchSessionMethod: vi.fn(),
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(),

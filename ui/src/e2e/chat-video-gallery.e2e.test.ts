@@ -107,6 +107,8 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("chat.startup");
+          // Lazy media admission creates the expand button only near the viewport.
+          await page.getByText("before.mp4", { exact: true }).scrollIntoViewIfNeeded();
           const expand = page.getByRole("button", {
             name: "Expand before.mp4 in the media overlay",
             exact: true,

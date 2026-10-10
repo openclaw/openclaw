@@ -414,7 +414,8 @@ if (process.platform === "win32" && sharedHost) {
   return;
 }
 if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-if (process.getuid() === 0) throw new Error("workspace quiescence refuses root-owned worker sessions");
+// Native custody only owns empty shared-host leases; detached recovery can signal host processes.
+if (process.getuid() === 0 && !ownedWatchdog) throw new Error("workspace quiescence refuses root-owned worker sessions");
 processProbe = createProcessProbe();
 const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
   name.startsWith(workspaceKey + ".") && name.endsWith(".json"),

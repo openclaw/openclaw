@@ -3,6 +3,7 @@ import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-reg
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
+  type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import {
@@ -225,7 +226,7 @@ export function retainHarnessSource(
 
 /** Host-only original source; an explicit undefined operator identifies System work. */
 export type AgentHarnessCompactionSourceAuthority = Readonly<{
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
 }>;
 

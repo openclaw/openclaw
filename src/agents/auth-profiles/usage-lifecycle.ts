@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   getBoundLegacyPluginSdkResourceHost,
   type LegacyPluginSdkResourceHost,
@@ -8,6 +9,8 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+
+const acceptedUsage = new AsyncLocalStorage<{ owner: UsageWork; active: boolean }>();
 
 type UsageWork = {
   work: AsyncWorkScope;
@@ -112,12 +115,21 @@ export async function runAuthProfileUsage<T>(operation: () => Promise<T>): Promi
     return trackAsyncWork(run);
   }
   const owner = usageWork(host);
-  if (owner.closing) {
+  const inherited = acceptedUsage.getStore();
+  const alreadyAccepted = inherited?.owner === owner && inherited.active;
+  if (owner.closing && !alreadyAccepted) {
     throw new Error("Auth profile usage owner is closed");
   }
-  host.scheduler.signal.throwIfAborted();
-  // The scheduler fences new work; accepted persistence keeps independent custody.
-  return owner.work.track(run);
+  if (!alreadyAccepted) {
+    host.scheduler.signal.throwIfAborted();
+  }
+  // Each child retains its own settlement when its parent's observer stops waiting.
+  const custody = { owner, active: true };
+  return owner.work
+    .track(() => acceptedUsage.run(custody, run))
+    .finally(() => {
+      custody.active = false;
+    });
 }
 
 /** Fence synchronously, then join accepted work before its worker transports close. */

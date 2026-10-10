@@ -18,7 +18,6 @@ import {
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { readProcessMemoryCapacity } from "../../scripts/lib/process-memory.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -37,7 +36,6 @@ import {
   resolveTsdownBuildInvocation,
   resolveTsdownBuildInvocations,
   resolveTsdownBuildPlan,
-  resolveStagedDeclarationConcurrency,
   resolveTsdownCleanOutputRoots,
   runTsdownBuild,
   runTsdownBuildInvocation as runTsdownBuildInvocationImpl,
@@ -250,13 +248,39 @@ describe("resolveTsdownBuildInvocation", () => {
     );
   });
 
+  it.each([...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS])(
+    "honors --dts for the single %s declaration selection",
+    (group) => {
+      const results = resolveTsdownBuildInvocations({
+        args: ["--config", "tsdown.config.ts", "--filter", group, "--dts"],
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+        ...NO_MEMORY_LIMIT,
+      });
+      expect(filtersOf(results)).toEqual([group]);
+      expect(results[0]?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
+    },
+  );
+
+  it.each([{ watch: [] }, { watch: ["--watch"] }])(
+    "keeps --no-dts out of canonical config construction (watch=$watch)",
+    ({ watch }) => {
+      const results = resolveTsdownBuildInvocations({
+        args: ["--config", "tsdown.config.ts", "--no-dts", ...watch],
+        env: {},
+        ...NO_MEMORY_LIMIT,
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+    },
+  );
+
   it("serializes an explicit declaration subset in dependency order", () => {
     const args = [
       "--config",
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
-      ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.toReversed().flatMap((group) => ["--filter", group]),
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.toReversed().flatMap((group) => ["--filter", group]),
       "--filter",
       TSDOWN_PACKAGE_CONFIG_GROUP,
       "--format",
@@ -266,7 +290,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(filtersOf(results)).toEqual([
       TSDOWN_PACKAGE_CONFIG_GROUP,
       TSDOWN_UNIFIED_CONFIG_GROUP,
-      ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
     ]);
     for (const result of results) {
       expect(result.args).toEqual(expect.arrayContaining(["--config", "tsdown.config.ts"]));
@@ -309,10 +333,57 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(heapShortfall).toBeNull();
     expect(invocations).toHaveLength(1);
     expect(invocations[0]?.args.slice(-args.length)).toEqual(args);
+    if (args[1] === "tsdown.config.ts") {
+      expect(
+        invocations[0]?.args.filter((_arg, index, all) => all[index - 1] === "--filter"),
+      ).toEqual([
+        TSDOWN_PACKAGE_CONFIG_GROUP,
+        TSDOWN_UNIFIED_CONFIG_GROUP,
+        ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+      ]);
+    }
     if (args.includes("--clean")) {
       expect(invocations[0]?.args.indexOf("--clean")).toBeGreaterThan(
         invocations[0]?.args.indexOf("--no-clean") ?? -1,
       );
+    }
+  });
+
+  it.each([{ extra: [] }, { extra: ["--watch"] }])(
+    "rejects overlapping full and SDK declaration selections $extra",
+    ({ extra }) => {
+      expect(() =>
+        resolveTsdownBuildInvocations({
+          args: [
+            "--config",
+            "tsdown.config.ts",
+            ...extra,
+            ...[
+              ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+              ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+            ].flatMap((group) => ["--filter", group]),
+          ],
+          env: {},
+          ...NO_MEMORY_LIMIT,
+        }),
+      ).toThrow("full declarations already include the SDK");
+    },
+  );
+
+  it("admits the full declaration writer while retaining the SDK-only selection", () => {
+    for (const group of [
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+      ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+    ]) {
+      const plan = resolveTsdownBuildPlan({
+        args: ["--config", "tsdown.config.ts", "--filter", group],
+        env: {},
+        cgroupMemoryLimitBytes: 4 * GiB,
+      });
+      expect(Boolean(plan.heapShortfall?.fatal)).toBe(
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((name) => name === group),
+      );
+      expect(filtersOf(plan.invocations)).toEqual([group]);
     }
   });
 
@@ -1103,7 +1174,6 @@ describe("resolveTsdownBuildInvocation", () => {
         const declarationFiles = [
           "dist/plugin-sdk/core.d.ts",
           "dist/plugin-sdk/nested/types.d.cts",
-          "dist-runtime/extensions/demo/index.d.ts",
           "packages/media-understanding-common/dist/index.d.mts",
           "packages/media-understanding-common/dist/nested/types.d.ts",
         ];
@@ -1120,6 +1190,7 @@ describe("resolveTsdownBuildInvocation", () => {
           "dist-runtime/stale.js",
           "dist-runtime/control-ui/index.html",
           "dist-runtime/extensions/demo/index.js",
+          "dist-runtime/extensions/demo/index.d.ts",
           "dist-runtime/extensions/demo/node_modules/staged/index.js",
           "packages/agent-core/dist/stale.js",
           "packages/net-policy/dist/stale.js",
@@ -1963,105 +2034,4 @@ describe("runTsdownBuildInvocation", () => {
         }
       }),
   );
-});
-
-describe("staged declaration admission", () => {
-  const groups = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.map((name) => ({
-    name,
-    maxOldSpaceMb: 12288,
-  }));
-  const capacity = {
-    platform: "linux",
-    availableParallelism: 2,
-    availableMemoryBytes: 25.5 * GiB,
-    physicalMemoryBytes: 32 * GiB,
-    procMemTotalBytes: 32 * GiB,
-    cgroupMemoryLimitPaths: ["/test/memory.max"],
-    constrainedMemoryBytes: 0,
-    processResidentMemoryBytes: 0,
-    fs: createMemoryFileSystem(
-      new Map([
-        ["/test/memory.max", `${32 * GiB}`],
-        ["/test/memory.current", "0"],
-      ]),
-    ),
-    env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "49152" },
-  };
-  const usageFacts = (limit: string, usage: string, value: string) => ({
-    ...capacity,
-    cgroupMemoryLimitPaths: [`/test/${limit}`],
-    fs: createMemoryFileSystem(
-      new Map([
-        [`/test/${limit}`, `${32 * GiB}`],
-        [`/test/${usage}`, value],
-      ]),
-    ),
-  });
-  it.each<
-    [
-      name: string,
-      facts: NonNullable<Parameters<typeof resolveStagedDeclarationConcurrency>[1]>,
-      expected: 1 | 2,
-      checkHeap?: "default" | "both",
-      selectedGroups?: Parameters<typeof resolveStagedDeclarationConcurrency>[0],
-    ]
-  >([
-    ["unknown available memory", { ...capacity, availableMemoryBytes: Number.NaN }, 1],
-    ["invalid v2 usage", usageFacts("memory.high", "memory.current", "invalid"), 1, "both"],
-    ["charged v2 usage", usageFacts("memory.max", "memory.current", `${8 * GiB}`), 1, "both"],
-    [
-      "readable v1 usage",
-      usageFacts("memory.limit_in_bytes", "memory.usage_in_bytes", "0"),
-      2,
-      "both",
-    ],
-    [
-      "unknown ancestor usage despite known leaf usage",
-      {
-        ...capacity,
-        cgroupMemoryLimitPaths: ["/test/leaf/memory.max", "/test/memory.max"],
-        fs: createMemoryFileSystem(
-          new Map([
-            ["/test/leaf/memory.max", `${32 * GiB}`],
-            ["/test/leaf/memory.current", "0"],
-            ["/test/memory.max", `${64 * GiB}`],
-          ]),
-        ),
-      },
-      1,
-      "default",
-    ],
-    [
-      "unknown declaration group",
-      capacity,
-      1,
-      undefined,
-      [groups[0]!, { name: "unknown-declaration", maxOldSpaceMb: 12288 }],
-    ],
-    [
-      "unresolved cgroup despite explicit heap",
-      {
-        ...capacity,
-        cgroupMemoryLimitPaths: undefined,
-        fs: createMemoryFileSystem(
-          new Map([
-            ["/proc/self/cgroup", "0::/hidden.slice/openclaw.service\n"],
-            [
-              "/proc/self/mountinfo",
-              "29 23 0:26 /different.slice /sys/fs/cgroup rw - cgroup2 cgroup rw\n",
-            ],
-          ]),
-        ),
-      },
-      1,
-    ],
-  ])("admits staged declarations with %s", (_name, facts, expected, checkHeap, selectedGroups) => {
-    expect(resolveStagedDeclarationConcurrency(selectedGroups ?? groups, facts)).toBe(expected);
-    if (checkHeap) {
-      expect(resolveTsdownBuildPlan({ ...facts, env: {} }).maxOldSpaceMb).toBe(12288);
-    }
-    if (checkHeap === "both") {
-      expect(resolveTsdownBuildPlan(facts).maxOldSpaceMb).toBe(49152);
-    }
-  });
 });

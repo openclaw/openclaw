@@ -200,7 +200,7 @@ describe("sessions.title.prepare", () => {
           expect(result).toHaveProperty("respond");
           expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({
-              prompt: "Original title request",
+              prompt: expect.stringContaining("Original title request"),
             }),
           );
         } else {
@@ -417,7 +417,6 @@ describe("sessions.title.prepare", () => {
         expect.objectContaining({
           provider: selection.provider ?? "title-test",
           model: selection.utility ?? "utility",
-          prompt: selection.message ?? "Draft",
           outputTextPolicy: "strict-visible",
           ...(selection.personal
             ? { authProfileId: personalAccountId }

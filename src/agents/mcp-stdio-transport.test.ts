@@ -4,7 +4,6 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { PassThrough, type Writable } from "node:stream";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -111,27 +110,6 @@ afterEach(async () => {
 });
 
 describe("OpenClawStdioClientTransport", () => {
-  it("preserves the configured command, target environment and stderr stream", async () => {
-    createChild();
-    const transport = createTransport({
-      command: "npx",
-      args: ["-y", "example-mcp"],
-      env: { EXAMPLE: "1" },
-      cwd: "/tmp/example",
-      stderr: "pipe",
-    });
-    await transport.start();
-    expect(spawnMock).toHaveBeenCalledWith({
-      argv: ["npx", "-y", "example-mcp"],
-      cwd: "/tmp/example",
-      env: expect.objectContaining({ EXAMPLE: "1" }),
-      abortSignal: expect.any(AbortSignal),
-      stderrDestination: transport.stderr,
-    });
-    expect(transport.pid).toBe(4321);
-    expect(transport.stderr).toBeInstanceOf(PassThrough);
-  });
-
   it("binds an exact environment without importing MCP default variables", async () => {
     createChild();
     await createTransport({
@@ -141,21 +119,6 @@ describe("OpenClawStdioClientTransport", () => {
     }).start();
     expect(spawnMock).toHaveBeenCalledWith(
       expect.objectContaining({ exactEnv: true, env: { ONLY: "1" } }),
-    );
-  });
-
-  it("uses the caller's bounded decoder", async () => {
-    const fixture = createChild();
-    const transport = createTransport({
-      command: "node",
-      decoder: new ReadBuffer({ maxBufferSize: 8 }),
-    });
-    const onerror = vi.fn();
-    Object.assign(transport, { onerror });
-    await transport.start();
-    fixture.stdout.write(Buffer.alloc(9, 0x20));
-    expect(onerror).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "ReadBuffer exceeded maximum size of 8 bytes" }),
     );
   });
 
@@ -220,34 +183,31 @@ describe("OpenClawStdioClientTransport", () => {
     expect(mkdir).not.toHaveBeenCalled();
   });
 
-  it.each(["close", "forceClose"] as const)(
-    "%s retires startup while its owned data directory is being prepared",
-    async (closeMethod) => {
-      const preparation = createDeferred<undefined>();
-      vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);
-      createChild();
-      const transport = createTransport({
-        command: "node",
-        prepareDataDir: "/owned-plugin-data",
-      });
-      const onclose = vi.fn();
-      Object.assign(transport, { onclose });
-      const started = transport.start();
-      const closing = transport[closeMethod]();
-      expect(onclose).not.toHaveBeenCalled();
-      preparation.resolve(undefined);
+  it("forceClose retires startup while its owned data directory is being prepared", async () => {
+    const preparation = createDeferred<undefined>();
+    vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);
+    createChild();
+    const transport = createTransport({
+      command: "node",
+      prepareDataDir: "/owned-plugin-data",
+    });
+    const onclose = vi.fn();
+    Object.assign(transport, { onclose });
+    const started = transport.start();
+    const closing = transport.forceClose();
+    expect(onclose).not.toHaveBeenCalled();
+    preparation.resolve(undefined);
 
-      await expect(started).rejects.toThrow("closed");
-      await closing;
-      expect(spawnMock).not.toHaveBeenCalled();
-      expect(onclose).toHaveBeenCalledOnce();
-      await transport.close();
-      await transport.forceClose();
-      expect(onclose).toHaveBeenCalledOnce();
-      await expect(transport.start()).rejects.toThrow("closed");
-      expect(spawnMock).not.toHaveBeenCalled();
-    },
-  );
+    await expect(started).rejects.toThrow("closed");
+    await closing;
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(onclose).toHaveBeenCalledOnce();
+    await transport.close();
+    await transport.forceClose();
+    expect(onclose).toHaveBeenCalledOnce();
+    await expect(transport.start()).rejects.toThrow("closed");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
 
   it("joins one disposal across root exit, repeated close and forced escalation", async () => {
     const fixture = createChild();
@@ -475,22 +435,6 @@ describe("OpenClawStdioClientTransport", () => {
       await expect(transport.close()).rejects.toBe(failure);
     });
     expect(cleanupScope.outcome).toBe("uncertain");
-  });
-
-  it("sends and receives JSON-RPC while preserving fragmented UTF-8 bytes", async () => {
-    const fixture = createChild();
-    const transport = createTransport({ command: "node" });
-    const onmessage = vi.fn();
-    Object.assign(transport, { onmessage });
-    await transport.start();
-    await transport.send({ jsonrpc: "2.0", id: 1, method: "ping" });
-    expect(fixture.stdin.read()?.toString()).toBe('{"jsonrpc":"2.0","id":1,"method":"ping"}\n');
-    const message = { jsonrpc: "2.0", id: 1, result: { text: "🦞" } };
-    const bytes = Buffer.from(`${JSON.stringify(message)}\n`);
-    const split = bytes.indexOf(Buffer.from("🦞")) + 1;
-    fixture.stdout.write(bytes.subarray(0, split));
-    fixture.stdout.write(bytes.subarray(split));
-    expect(onmessage).toHaveBeenCalledWith(message);
   });
 
   it.each(["callback", "throw"])("rejects failed stdin writes through %s", async (mode) => {

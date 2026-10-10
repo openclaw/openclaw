@@ -39,6 +39,8 @@ For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory
 
 Default-model, alias, and fallback changes resolve provider-owned model aliases using the current plugin configuration. When stored entries resolve to the selected model, their settings move to its canonical key; existing canonical settings take precedence. Adding an alias replaces the model's previous alias. If config changes during that preparation, the command rejects the write; rerun it against the updated config.
 
+An explicit `provider/model` that matches a configured provider model keeps its literal identity, even when another model has a colliding alias. Bare aliases and noncolliding `provider/alias` selections still resolve normally.
+
 ### Status
 
 Bare `openclaw models` is equivalent to `openclaw models status`.
@@ -156,10 +158,19 @@ Chat model menus, the Control UI, and `models list` display the catalog's refres
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
 
-A provider that rejects authentication keeps its sign-in status without causing
-a catalog refresh warning. For an installed agent app, open **Models** in the
-Control UI and follow its sign-in guidance. Timeouts and other discovery failures
-still produce the refresh warning, even when another provider needs sign-in.
+A provider that rejects catalog authentication produces a separate CLI diagnostic
+with its provider and, when available, profile ID. Open **Models** in the Control
+UI to check sign-in and catalog access, then retry with `--refresh`. Catalog
+rejection alone does not cause the generic refresh warning or prove that model
+requests will fail. Timeouts and other discovery failures still produce the
+refresh warning, even when another provider needs sign-in.
+
+Discovery diagnostics go to stderr in every output mode. JSON output also includes
+`providerOutcomes` when the Gateway or local catalog publishes them: each entry
+contains `provider`, optional `profileId`, and `status` (`ready`, `auth-rejected`,
+or `unavailable`). These are catalog-wide outcomes, independent of model-row
+filters such as `--provider` and `--local`. Provider error bodies and credentials
+are not included. Plain stdout remains one model key per line.
 
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
@@ -168,7 +179,9 @@ are reported directly; they do not switch the command to a different local list.
 Without a running local Gateway or an explicit Gateway target, the command
 identifies that it is showing the local cached catalog. This fallback can prepare
 configured and static facts and resolve its configured authentication, but starts
-model discovery only when `--refresh` is supplied.
+model discovery only when `--refresh` is supplied. Local refresh uses the configured
+managed proxy for provider discovery and releases it when discovery finishes.
+Cached lists and Gateway requests do not start the CLI's managed proxy.
 
 Use `--refresh` to acquire provider inventory before listing. A failed refresh
 warns while showing available published rows. Successful empty acquisition stays
@@ -205,11 +218,12 @@ for the wire controls.
 not sign in to providers, test credentials, or activate downloaded rows in a
 running Gateway. It rejects `--agent` because the hosted catalog is global.
 
-The Gateway applies compatible downloads at its next background catalog check
-or after an explicit model-list refresh, without restarting. Refresh requests
-return current rows without waiting for the replacement generation.
-A failed preparation leaves the previous generation active. A successful CLI
-refresh result describes the download, not live activation.
+The command requires the local Gateway to be stopped. Stop it through its
+service owner, run the refresh, then start it again. It takes exclusive offline
+ownership through download and write settlement, and refuses while a Gateway
+owns the state directory. A successful result describes the saved download;
+the next Gateway start loads compatible metadata. The running Gateway continues
+to perform its own scheduled catalog refreshes.
 If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
 is disabled.
 
@@ -253,6 +267,8 @@ Options:
 - `--json`
 
 Numeric scan options reject empty and whitespace-only values. Omit a flag to retain its default behavior.
+
+A probed scan writes config, even without `--set-default`. It replaces `agents.defaults.model.fallbacks` with the selected models, replaces `agents.defaults.imageModel.fallbacks` when image-capable models are selected, and adds the selected models to `agents.defaults.models`. `--set-default` and `--set-image` additionally set the matching primary. `--json` still writes. Use `--no-probe` to inspect candidates without changing config.
 
 `--set-default` and `--set-image` require live checks; metadata-only scan results are informational and are not applied to config.
 
@@ -328,7 +344,18 @@ openclaw models accounts list --timeout 45000 --json
 
 These commands manage **System / agent** credentials, not personal Gateway accounts. Before provider sign-in, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw.
 
-Before a `models auth` command changes the local auth store, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
+`models auth` commands require exclusive offline ownership of the selected local
+state. Stop the Gateway through its service owner, wait for it to release ownership,
+then run the command. OpenClaw refuses before loading auth state or starting provider
+sign-in while a Gateway owns that state; it never writes around a live owner. This
+also applies to `list` and `order get`, whose configuration and auth-store loaders can
+initialize persistent state. Ownership stays held until the command's database work
+and cleanup finish. Start the Gateway again after the command completes.
+
+To manage credentials while the Gateway stays running, use its **Models** page.
+CLI-only setup options, local provider CLI imports, and partial profile-order
+overrides remain offline operations. Personal `models accounts` commands continue
+to use the selected Gateway.
 
 ```bash
 openclaw models auth add
@@ -354,13 +381,10 @@ openclaw models auth order clear --provider <id>
 
 After credentials are saved, an existing model restriction can prompt **Show all &lt;Provider&gt; models** or **Keep current restrictions**. Only the first choice adds that provider's wildcard to the current restriction. Credentials stay saved either way. The CLI, private-chat login, and Control UI use the same choice. No prompt appears when the provider is already unrestricted. If restrictions change during sign-in, OpenClaw preserves the newer settings and asks you to choose model access again.
 
-The CLI reports saved model access separately from confirmed Gateway application. If application is not confirmed, run `openclaw gateway restart` to apply the saved policy to the running Gateway. This is required when automatic config reload is disabled.
+The CLI reports saved model access separately from confirmed Gateway application.
+Offline changes become active when the Gateway next starts.
 
-Without `--set-default`, login preserves the current default, including an unset default, and keeps unrelated configuration edits made while login is running. If credentials are saved but provider settings cannot be applied, the error reports the saved credentials separately. Auth changes request a refresh from the running local Gateway; a refresh failure does not undo the saved change, and the command reports how to apply it.
-
-With an older Gateway, the CLI tries its legacy auth-status refresh. This cannot
-confirm that the saved change is active; follow the restart guidance. This
-fallback applies to auth changes, not to `models list`.
+Without `--set-default`, login preserves the current default, including an unset default, and keeps unrelated configuration edits made while login is running. If credentials are saved but provider settings cannot be applied, the error reports the saved credentials separately. A Gateway refresh warning does not undo a saved change; start the Gateway after the offline operation finishes.
 
 For the shared-main agent, `--force` clears the provider's shared credentials and main-agent local overrides, including their order and health state. For another agent it clears only that agent's local profiles, leaving shared credentials unchanged. A busy auth store stops the command before login starts; close other OpenClaw commands using the same state directory and retry. SQLite lock diagnostics can name either the shared state database or an agent database, so checking only the legacy auth file for open handles does not rule out contention.
 

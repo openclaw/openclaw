@@ -105,7 +105,9 @@ describe("memory remote error redaction", { concurrent: false }, () => {
       }).catch((cause: unknown) => cause);
 
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain("embedding fetch failed (401)");
+      expect((error as Error).message).toContain(
+        "embedding fetch failed (model: proof, batch size: 1) (401)",
+      );
       expect((error as Error).message).toContain("Authorization: ***");
       expect((error as Error).message).not.toContain(API_KEY);
       expect((error as Error).message).not.toContain(UNIQUE_NEEDLE);

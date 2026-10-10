@@ -5,7 +5,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
-import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
 import {
@@ -189,11 +188,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const initialized = this.initializeBrowserSidebarLayout(layout);
-    const fitted =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(initialized, this.paneWidth) ?? initialized)
-        : initialized;
-    state.updateSidebarLayout(fitted, options);
+    state.updateSidebarLayout(this.fitPaneSidebarLayout(initialized), options);
+  }
+
+  private fitPaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    return this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+      ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
+      : layout;
   }
 
   protected initializeBrowserSidebarLayout(layout: SidebarLayout): SidebarLayout {
@@ -224,10 +225,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
-    const fittedProjection =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
-        : resizedProjection;
+    const fittedProjection = this.fitPaneSidebarLayout(resizedProjection);
     const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
     const fittedSize =
       sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;
@@ -482,10 +480,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           retry = true;
           return;
         }
-        const enabled =
-          state.connected &&
-          isSwarmEnabledInConfig(context.runtimeConfig?.state.configSnapshot?.config, agentId);
-        if (!enabled) {
+        const swarmEnabled = isSwarmEnabledInConfig(
+          context.runtimeConfig?.state.configSnapshot?.config,
+          agentId,
+        );
+        if (this.swarmEnabled !== swarmEnabled) {
+          this.swarmEnabled = swarmEnabled;
+          requestChatPageUpdate(state, "animation-frame");
+        }
+        // The child roster also owns ordinary subagent waits, launch rows, and
+        // attention. Disabling swarm must not hide those recorded outcomes.
+        if (!state.connected) {
           if (this.swarmHydrator) {
             this.swarmHydrator.dispose();
             this.swarmHydrator = null;
@@ -621,16 +626,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!this.isBoardPanelAvailable(board)) {
       return nothing;
     }
-    if (!board.provider.hasLoadedSnapshot) {
-      const error = board.provider.loadError$.value;
-      return error
-        ? html`<div
-            class="board-session-surface__state board-session-surface__state--error"
-            role="alert"
-          >
-            ${t("dashboardDocument.loadFailed", { error })}
-          </div>`
-        : renderPanelLoadingSkeleton("board", t("common.loading"));
+    const error = !board.provider.hasLoadedSnapshot && board.provider.loadError$.value;
+    if (error) {
+      return html`<div
+        class="board-session-surface__state board-session-surface__state--error"
+        role="alert"
+      >
+        ${t("dashboardDocument.loadFailed", { error })}
+      </div>`;
     }
     // Only the loaded board acknowledgment supplies a missing owner; its display key
     // must not replace the original session target (notably global versus a literal key).
@@ -645,7 +648,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
         },
         session,
-        snapshot: board.snapshot,
+        snapshot: board.provider.hasLoadedSnapshot ? board.snapshot : undefined,
         activeTabId: board.activeTabId,
         pageWidgetName: this.pageBoardWidget(layout, board)?.name,
         canMutate: board.provider.canMutate,

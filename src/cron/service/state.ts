@@ -31,12 +31,12 @@ import type {
   CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
-  CronResolvedDeliveryState,
   CronJob,
   CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
+  CronRunDeliveryResult,
   CronMessageChannel,
   CronRunOutcome,
   CronRunStatus,
@@ -107,17 +107,6 @@ export type CronSystemEventEnqueueResult =
 
 /** Notifications queued by cron mutations until their state is durable. */
 export type DeferredCronNotifications = CronNotificationIntent[];
-
-export type CronRunDeliveryResult = {
-  /** True after verified delivery, including a matching messaging-tool send. */
-  delivered?: boolean;
-  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
-  deliveryAttempted?: boolean;
-  deliveryError?: string;
-  deliverySuppressionReason?: NormalizeReplySkipReason;
-  deliveryState?: CronResolvedDeliveryState;
-  delivery?: CronDeliveryTrace;
-};
 
 export type CronServiceDeps = {
   nowMs?: () => number;
@@ -482,6 +471,7 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  sourceConversation?: CronStoredJob["sourceConversation"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;

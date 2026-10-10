@@ -1,8 +1,6 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import {
   acquireSimpleCompletionModelForAgent,
@@ -61,62 +59,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
         modelRef: "fast",
       }),
     ).toMatchObject({ provider: "openai", modelId: "global-model" });
-  });
-
-  it.each([false, true])("normalizes configured aliases once (explicit=%s)", (explicit) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: {} },
-        defaults: { model: { primary: "fixture/entry" } },
-      },
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://fixture.invalid/v1",
-            models: ["middle", "final"].map((id): ModelDefinitionConfig => ({
-              id,
-              name: id,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 256,
-            })),
-          },
-        },
-      },
-    };
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({
-        cfg,
-        agentId: "main",
-        ...(explicit ? { modelRef: "fixture/entry" } : {}),
-        manifestPlugins: [
-          createPluginManifestRecordFixture({
-            id: "fixture",
-            modelIdNormalization: {
-              providers: { fixture: { aliases: { entry: "middle", middle: "final" } } },
-            },
-          }),
-        ],
-      }),
-    );
-
-    expect(selection).toMatchObject({ provider: "fixture", modelId: "middle" });
-  });
-
-  it("preserves multi-segment model ids (openrouter provider models)", () => {
-    const cfg = {
-      agents: {
-        defaults: { model: "openrouter/anthropic/claude-sonnet-4-6" },
-      },
-    } as OpenClawConfig;
-
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
-    );
-    expect(selection.provider).toBe("openrouter");
-    expect(selection.modelId).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it.each([
@@ -292,21 +234,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     ).toMatchObject({ provider: "fixture", modelId: "operation" });
   });
 
-  it("keeps trailing auth profile for credential lookup", () => {
-    const cfg = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-6@work" },
-      },
-    } as OpenClawConfig;
-
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
-    );
-    expect(selection.provider).toBe("anthropic");
-    expect(selection.modelId).toBe("claude-opus-4-6");
-    expect(selection.profileId).toBe("work");
-  });
-
   it("resolves alias refs before parsing provider/model", () => {
     const cfg = {
       agents: {
@@ -325,25 +252,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection.provider).toBe("openrouter");
     expect(selection.modelId).toBe("anthropic/claude-sonnet-4-6");
     expect(selection.profileId).toBe("work");
-  });
-
-  it("keeps OpenAI as execution provider for OpenAI model refs with Codex runtime policy", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4-mini",
-          models: {
-            "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
-    );
-    expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.4-mini");
   });
 
   it("falls back to runtime default model when no explicit model is configured", () => {

@@ -26,7 +26,7 @@ const LEGACY_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 type RecoveryCursor = { lastRowid: number };
 
 function openRecoveryCursorStore() {
-  return getIMessageRuntime().state.openKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
+  return getIMessageRuntime().state.openKeyedStoreV2<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
 }
 
 // Canonicalize a local chat.db path (expand a leading ~, then resolve) so the
@@ -107,33 +107,14 @@ async function applyRecoveryCursorUpdate(
   key: string,
   update: RecoveryCursorUpdate,
 ): Promise<RecoveryCursor | undefined> {
-  const state = getIMessageRuntime().state;
-  const store = state.openKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
-  if (!store.observe || !store.compareAndApply) {
-    // Published 2026.9.4 hosts have atomic update but no comparison methods.
-    // Remove this branch when the declared host floor requires comparisons.
-    const legacy = state.openSyncKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
-    if (!legacy.update) {
-      throw new Error("iMessage recovery cursor persistence requires atomic update support.");
-    }
-    let result: RecoveryCursor | undefined;
-    legacy.update(key, (current) => {
-      const next = decideRecoveryCursorUpdate(current, update);
-      result = next ?? current;
-      return next;
-    });
-    return result;
-  }
-
-  const observe = store.observe.bind(store);
-  const compareAndApply = store.compareAndApply.bind(store);
-  let observation = await observe(key);
+  const store = openRecoveryCursorStore();
+  let observation = await store.observe(key);
   for (;;) {
     const next = decideRecoveryCursorUpdate(observation.value, update);
     if (!next) {
       return observation.value;
     }
-    const result = await compareAndApply(key, observation.comparison, {
+    const result = await store.compareAndApply(key, observation.comparison, {
       operation: "update",
       action: "set",
       value: next,
@@ -177,7 +158,7 @@ async function migrateLegacyCatchupCursor(
   dbIdentity: string,
 ): Promise<number | null> {
   try {
-    const legacy = getIMessageRuntime().state.openKeyedStore<{ lastSeenRowid?: unknown }>({
+    const legacy = getIMessageRuntime().state.openKeyedStoreV2<{ lastSeenRowid?: unknown }>({
       namespace: LEGACY_CATCHUP_CURSOR_NAMESPACE,
       maxEntries: LEGACY_CATCHUP_CURSOR_MAX_ENTRIES,
     });

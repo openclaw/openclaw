@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -104,7 +105,12 @@ suite.define(() => {
 
       const progressRequest = await gateway.waitForRequest("progressCard.get");
       expect(progressRequest.params).toEqual({ sessionKey: "global", agentId: "ops" });
-      await page.getByText("Global progress after startup", { exact: true }).waitFor();
+      const progress = page.getByText("Global progress after startup", { exact: true });
+      await progress.waitFor({ state: "attached" });
+      expect(await progress.isVisible()).toBe(false);
+      const details = await openChatDetails(page);
+      await details.getByText("Global progress after startup", { exact: true }).waitFor();
+      await details.getByRole("button", { name: "Close details", exact: true }).click();
 
       const prompt = "send after configured inference loads";
       await composer.fill(prompt);

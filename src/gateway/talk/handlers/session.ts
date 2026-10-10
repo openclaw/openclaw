@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  validateTalkSessionAcknowledgeMarkParams,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
   validateTalkSessionCloseParams,
@@ -9,11 +10,11 @@ import {
   validateTalkSessionSteerParams,
   validateTalkSessionSubmitToolResultParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { assertSecretOwnerAvailable } from "../../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../../talk/agent-run-control-shared.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import {
   projectInternalRealtimeVoicePublicConfig,
   resolveInternalRealtimeVoiceGatewayRelayLaunchError,
@@ -21,23 +22,24 @@ import {
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
+import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
-import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
 import { withPreparedSessionResolve } from "../../sessions-resolve.js";
-import { formatForLog } from "../../ws-log.js";
 import { resolveTalkAgentConsultAuthority } from "../client-gateway-control.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../handoff.js";
 import {
+  acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
-} from "../relay/index.js";
+} from "../relay/operations.js";
+import { createTalkRealtimeRelaySession } from "../relay/session-create.js";
+import { talkRequestError } from "../request-error.js";
 import {
   buildRealtimeInstructions,
   buildRealtimeVoiceLaunchOptions,
@@ -63,48 +65,31 @@ import {
   stopTalkTranscriptionRelaySession,
 } from "../transcription-relay.js";
 import { prepareTalkVoiceReplacement } from "../voice-selection.js";
-import { acknowledgeTalkSessionMark } from "./session-mark.js";
 
 function respondInvalidRequest(respond: RespondFn, message: string) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
-function talkSessionError(err: unknown) {
-  if (err instanceof SessionMutationAuthorizationChangedError) {
-    return err.error;
-  }
-  const message = formatForLog(err);
-  if (err instanceof AgentSelectionRequiredError) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, message);
-  }
-  return errorShape(ErrorCodes.UNAVAILABLE, message, {
-    details: {
-      talkIssue: {
-        code: "realtime_unavailable",
-        message,
-        phase: "request",
-      },
-    },
-  });
-}
+const talkSessionError = (error: unknown) => talkRequestError(error, "session");
 
 function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {
   respond(true, payload, undefined);
 }
 
-/** RPC handlers for gateway-managed Talk sessions and room lifecycle. */
 export const talkSessionHandlers: GatewayRequestHandlers = {
   "talk.session.create": defineValidatedGatewayHandler(
     "talk.session.create",
     validateTalkSessionCreateParams,
-    async ({
-      params,
-      respond,
-      context,
-      client,
-      sessionMutationAuthorization,
-      sessionMutationCommitGuard,
-    }) => {
+    async (request) => {
+      const {
+        params,
+        respond,
+        context,
+        client,
+        sessionMutationAuthorization,
+        sessionMutationCommitGuard,
+      } = request;
+      const requester = readGatewayRequestMutationAuthority(request);
       const mode = params.mode ?? (params.transport === "managed-room" ? "stt-tts" : "realtime");
       const transport = params.transport ?? (mode === "stt-tts" ? "managed-room" : "gateway-relay");
       const brain = params.brain ?? (mode === "transcription" ? "none" : "agent-consult");
@@ -223,14 +208,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             connId,
             sessionKey: params.sessionKey,
           });
-          const requested = replacement
-            ? {
-                ...params,
-                provider: replacement.provider,
-                model: replacement.model,
-                voice: replacement.voice,
-              }
-            : params;
+          const requested = replacement ? { ...params, ...replacement.launch } : params;
           const runtimeConfig = context.getRuntimeConfig();
           const realtimeConfig = buildTalkRealtimeConfig(
             runtimeConfig,
@@ -246,11 +224,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           replacement?.assertCurrent(target);
           const { agentId } = target;
-          const assertCommitAllowed = () => {
-            sessionMutationCommitGuard?.();
-            sessionMutationAuthorization?.assertCurrent();
-            replacement?.assertCurrent(target);
-          };
+          const assertCommitAllowed = composeSessionSourceAssertion(
+            [sessionMutationCommitGuard, sessionMutationAuthorization?.assertCurrent],
+            (assertSources) => {
+              assertSources();
+              replacement?.assertCurrent(target);
+            },
+          );
           assertCommitAllowed();
           assertSecretOwnerAvailable("capability", "talk:realtime");
           const resolution = resolveConfiguredRealtimeVoiceProvider({
@@ -299,7 +279,22 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             creation:
               resolveSandboxedSessionCreation(client, runtimeConfig) ??
               resolveOperatorSessionCreation(client),
-            assertCommitAllowed,
+            requester: composeSessionSourceAssertion([
+              requester.assertCurrent,
+              replacement?.source(target).assertCurrent,
+            ]),
+            source: sessionMutationAuthorization?.assertCurrent,
+            prepareWorkerGrant: sessionMutationAuthorization?.prepareWorkerGrant,
+            assertCurrent: requester.assertPreparationCurrent,
+            onCommittedSource: (readSource, entry) =>
+              sessionMutationAuthorization?.recordCreatedSession?.({
+                agentId,
+                sessionKey: target.canonicalKey,
+                storePath: target.storePath,
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision,
+                readSource,
+              }),
           });
           const assertEnsuredTargetCurrent = () => {
             sessionMutationCommitGuard?.();
@@ -432,23 +427,21 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           audioBase64: params.audioBase64,
           timestamp: params.timestamp,
         });
-        respondOk(respond);
-        return;
-      }
-      if (session.kind === "transcription-relay") {
+      } else if (session.kind === "transcription-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
         sendTalkTranscriptionRelayAudio({
           transcriptionSessionId: session.transcriptionSessionId,
           connId,
           audioBase64: params.audioBase64,
         });
-        respondOk(respond);
+      } else {
+        respondInvalidRequest(
+          respond,
+          "talk.session.appendAudio is not supported for managed-room sessions",
+        );
         return;
       }
-      respondInvalidRequest(
-        respond,
-        "talk.session.appendAudio is not supported for managed-room sessions",
-      );
+      respondOk(respond);
     },
     talkSessionError,
   ),
@@ -472,7 +465,27 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     },
     talkSessionError,
   ),
-  "talk.session.acknowledgeMark": acknowledgeTalkSessionMark,
+  "talk.session.acknowledgeMark": defineValidatedGatewayHandler(
+    "talk.session.acknowledgeMark",
+    validateTalkSessionAcknowledgeMarkParams,
+    ({ params, respond, client }) => {
+      try {
+        const session = getUnifiedTalkSession(params.sessionId);
+        if (session.kind !== "realtime-relay") {
+          respondInvalidRequest(respond, "talk.session.acknowledgeMark requires realtime relay");
+          return;
+        }
+        acknowledgeTalkRealtimeRelayMark({
+          relaySessionId: session.relaySessionId,
+          connId: requireUnifiedTalkSessionConn(session, client?.connId),
+          markName: params.markName,
+        });
+        respondOk(respond);
+      } catch (error) {
+        respond(false, undefined, talkRequestError(error, "legacy-relay"));
+      }
+    },
+  ),
   "talk.session.submitToolResult": defineValidatedGatewayHandler(
     "talk.session.submitToolResult",
     validateTalkSessionSubmitToolResultParams,

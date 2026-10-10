@@ -9,7 +9,11 @@ import type {
   DiagnosticEmbeddedRunOwner,
 } from "../infra/diagnostic-model-request-provenance.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../infra/diagnostic-model-request.js";
-import { isCoreSemanticRunProgressDiagnosticMetadata } from "../infra/diagnostic-semantic-run-progress.js";
+import type { CoreSemanticRunProgressProvenance } from "../infra/diagnostic-semantic-run-progress-provenance.js";
+import {
+  emitCoreSemanticRunProgressDiagnosticEvent,
+  resolveCoreSemanticRunProgressDiagnosticMetadata,
+} from "../infra/diagnostic-semantic-run-progress.js";
 import {
   resolveToolExecutionLivenessDiagnosticMetadata,
   type DiagnosticToolExecutionLiveness,
@@ -142,6 +146,38 @@ function recordToolEnded(event: DiagnosticToolStartedActivityEvent): void {
   }
   activity.activeTools.delete(toolKey(event));
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
+}
+
+/** Capture at source execution, before a tool can outlive its attempt. */
+export function captureDiagnosticToolProgress(event: DiagnosticToolStartedActivityEvent) {
+  const runId = event.runId;
+  const activity = runId ? activityByRunId.get(runId) : undefined;
+  const generation = event.sessionId
+    ? activity?.activeEmbeddedRuns.get(event.sessionId)?.generation
+    : undefined;
+  const owner = generation ? activeDiagnosticOwners.get(generation)?.owner : undefined;
+  if (
+    !runId ||
+    !owner ||
+    owner.runId !== runId ||
+    owner.sessionKey !== event.sessionKey ||
+    !resolveCurrentDiagnosticOwner(owner)
+  ) {
+    return undefined;
+  }
+  return () => {
+    if (resolveCurrentDiagnosticOwner(owner)) {
+      emitCoreSemanticRunProgressDiagnosticEvent(
+        {
+          runId,
+          sessionId: owner.sessionId,
+          sessionKey: owner.sessionKey,
+          reason: `tool:${event.toolName}:completed`,
+        },
+        owner,
+      );
+    }
+  };
 }
 
 export function markDiagnosticOwnedToolActivity(
@@ -306,8 +342,17 @@ export function markDiagnosticRunProgress(
 
 function applyRunProgress(
   params: RunProgressEvent,
-  provenance: "direct" | "semantic" | "unbound" = "direct",
+  provenance: "direct" | "unbound" | CoreSemanticRunProgressProvenance = "direct",
 ): void {
+  if (typeof provenance === "object") {
+    const registration = resolveCurrentDiagnosticOwner(provenance);
+    if (registration) {
+      touchSemanticSessionActivity(registration.activity, params.reason, {
+        runId: provenance.runId,
+      });
+    }
+    return;
+  }
   const runId = params.runId?.trim() || undefined;
   // Exact owners record transport progress synchronously. Delayed public events
   // must neither merge their session refs nor refresh a replacement or tool phase.
@@ -319,7 +364,7 @@ function applyRunProgress(
     return;
   }
   // Only an explicit fact from the current owner may clear its recovery evidence.
-  if (provenance !== "semantic" || !runId) {
+  if (provenance !== true || !runId) {
     touchSessionActivity(activity, params.reason);
     return;
   }
@@ -644,7 +689,7 @@ export function startDiagnosticRunActivityTracking(): void {
         case "run.progress":
           return applyRunProgress(
             event,
-            isCoreSemanticRunProgressDiagnosticMetadata(metadata) ? "semantic" : "unbound",
+            resolveCoreSemanticRunProgressDiagnosticMetadata(metadata) ?? "unbound",
           );
         case "run.completed":
           return recordRunCompleted(event);

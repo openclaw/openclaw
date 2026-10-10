@@ -45,7 +45,6 @@ import { InstalledAgentsController } from "./installed-agents.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
 import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
-import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
@@ -172,7 +171,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     getOrders: () => this.profileOrders,
     setData: (data) => (this.data = data),
-    setError: showProfileActionError,
     setOrders: (orders) => (this.profileOrders = orders),
     clearMessage: (cardId) => this.setMessage(cardId, null),
     canMutate: () => this.canMutate(),
@@ -184,7 +182,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setProbeResult: (cardId, result) =>
       (this.probeResults = updateRecordEntry(this.probeResults, cardId, result)),
     setProbeError: (cardId, error) => this.setMessage(cardId, { kind: "error", text: error }),
-    setLogoutSuccess: showProfileLogoutSuccess,
     getConfig: () => this.context.runtimeConfig,
   });
   private readonly discovery = new ModelProviderDiscoveryController(this, {
@@ -602,12 +599,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         : data.providerOutcomes,
       pendingProviders: catalog?.pendingProviders,
       providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
-      configProviderIds: config.providerIds,
-      configApiKeyProviderIds: config.apiKeyProviderIds,
-      configProviderAuthModes: config.providerAuthModes,
+      configProviders: config.providers,
     });
     const configuredProviderIds = new Set([
-      ...config.providerIds,
+      ...config.providers.map(({ key }) => key),
       ...(data.authStatus?.providers
         .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
         .map((provider) => provider.provider) ?? []),

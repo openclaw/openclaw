@@ -52,7 +52,7 @@ import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SqliteWorkerWriteAdmission } from "./session-accessor.sqlite-worker-request.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
@@ -739,9 +739,9 @@ test("file warnings retain rejected native admission releases without attributin
     await expect(second).resolves.toBe("successor");
     await flushLogger();
     const records = (await readLogRecords(file))
-      .filter((record) => record["1"] === "slow SQLite session write")
+      .filter((record) => record["2"] === "slow SQLite session write")
       .map((record) => {
-        const details = record["2"];
+        const details = record["1"];
         assert.ok(isRecord(details));
         return details;
       });
@@ -957,7 +957,7 @@ test.each([
       await closeOpenClawAgentDatabasesAsync();
       expect(workers[0]?.worker.threadId).toBe(-1);
       expect(exits).toEqual([0]);
-      expect(records.some((record) => record["1"] === "slow SQLite session write")).toBe(false);
+      expect(records.some((record) => record["2"] === "slow SQLite session write")).toBe(false);
       expect(hooks.workerLogAttempts).toBe(elapsedMs > 0 || rejected ? 1 : 0);
       expect(observations).toHaveLength((elapsedMs > 0 || rejected) && !failLog ? 1 : 0);
       if (observations[0]) {

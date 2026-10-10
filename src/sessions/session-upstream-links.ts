@@ -1,11 +1,7 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
-import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
@@ -15,28 +11,20 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import {
-  rowToSessionUpstreamLink,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
+  type SessionUpstreamLinkInput,
 } from "./session-upstream-links.kernel.js";
 import type { SessionUpstreamLinkCurrentCheck } from "./session-upstream-links.worker-contract.js";
 
 export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
-type SessionUpstreamDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "session_upstream_links" | "session_watch_cursors"
->;
 const log = createSubsystemLogger("sessions/upstream-links");
-
-function getSessionUpstreamKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<SessionUpstreamDatabase>(db);
-}
 
 /** @deprecated Use upsertSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
 export function upsertSessionUpstreamLink(
-  input: Omit<SessionUpstreamLink, "lastScannedAt" | "createdAt" | "updatedAt">,
+  input: SessionUpstreamLinkInput,
   options: OpenClawStateDatabaseOptions & {
     now?: number;
     ifAbsent?: true;
@@ -58,28 +46,6 @@ export function upsertSessionUpstreamLink(
     }
     log.warn(`failed to upsert session upstream link: ${String(error)}`);
     return false;
-  }
-}
-
-export function readSessionUpstreamLink(
-  sessionKey: string,
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): SessionUpstreamLink | undefined {
-  try {
-    const { db } = openOpenClawStateDatabase(options);
-    const row = executeSqliteQuerySync(
-      db,
-      getSessionUpstreamKysely(db)
-        .selectFrom("session_upstream_links")
-        .selectAll()
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId),
-    ).rows[0];
-    return row ? rowToSessionUpstreamLink(row) : undefined;
-  } catch (error) {
-    log.warn(`failed to read session upstream link: ${String(error)}`);
-    return undefined;
   }
 }
 
@@ -117,7 +83,7 @@ type UpstreamWriteOptions = Pick<
 >;
 
 export async function upsertSessionUpstreamLinkAsync(
-  input: Parameters<typeof upsertSessionUpstreamLink>[0],
+  input: SessionUpstreamLinkInput,
   options: UpstreamWriteOptions & {
     now?: number;
     ifAbsent?: true;
@@ -129,7 +95,7 @@ export async function upsertSessionUpstreamLinkAsync(
 
 /** Internal initializer adapter; source authority is never part of the public SDK arguments. */
 export async function upsertSessionUpstreamLinkWithCurrentSource(
-  input: Parameters<typeof upsertSessionUpstreamLink>[0],
+  input: SessionUpstreamLinkInput,
   options: NonNullable<Parameters<typeof upsertSessionUpstreamLinkAsync>[1]>,
   source?: SessionUpstreamLinkCurrentCheck,
 ): Promise<boolean> {

@@ -24,11 +24,13 @@ import {
   tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
+import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
@@ -379,12 +381,30 @@ export function streamOpenAICompletionsRequest(
               }),
               ...(await encodeBody(params)),
             };
-      const { data: responseStream, response } = await client.chat.completions
-        .create(
-          params as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-          requestOptions,
-        )
-        .withResponse();
+      const request = client.chat.completions.create(
+        params as OpenAI.Chat.Completions.ChatCompletionCreateParams,
+        requestOptions,
+      );
+      const response = await request.asResponse();
+      const responseStream = {
+        async *[Symbol.asyncIterator]() {
+          // Parse only after provider acceptance; JSON bodies are consumed here too.
+          if (!params.stream) {
+            yield (await boundResponseBody(response, {
+              maxBytes: 16 * 1024 * 1024,
+              onOverflow: ({ maxBytes }) =>
+                new Error(`Chat Completions JSON response exceeds ${maxBytes} bytes`),
+            }).json()) as OpenAI.Chat.Completions.ChatCompletion; // SAFETY: Provider JSON follows the Chat Completions wire contract.
+            return;
+          }
+          const data = await request;
+          if (Symbol.asyncIterator in data) {
+            yield* data;
+          } else {
+            yield data;
+          }
+        },
+      };
       const hookedResponseStream = withProviderResponseHook({
         stream: responseStream,
         signal: firstEventAbort.signal,
@@ -449,7 +469,7 @@ export function streamOpenAICompletionsRequest(
           if (mode === "direct") {
             for (const block of output.content) {
               delete (block as { index?: number }).index;
-              delete (block as { partialArgs?: string }).partialArgs;
+              delete (block as { partialJson?: string }).partialJson;
               delete (block as { streamIndex?: number }).streamIndex;
             }
           }
@@ -510,7 +530,11 @@ function createManagedCompletionsClient(
   );
   // The SDK consumes DONE without yielding it; native tool calls need to distinguish it from EOF.
   const doneDetector = createSseDoneDetector();
-  const baseFetch = buildGuardedModelFetch(model);
+  // The SDK replaces the fetch signal; keep liveness keyed to the exact
+  // caller signal watched by the idle timer.
+  const baseFetch = buildGuardedModelFetch(model, undefined, {
+    onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
+  });
   const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
     const response = await baseFetch(url as never, init);
     if (!response.body || !response.ok) {
@@ -530,11 +554,7 @@ function createManagedCompletionsClient(
         },
       }),
     );
-    return new Response(transformed, {
-      headers: response.headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
+    return new Response(transformed, response);
   };
   const clientConfig = buildOpenAICompletionsClientConfig(
     model,

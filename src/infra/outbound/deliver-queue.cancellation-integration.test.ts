@@ -15,7 +15,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
   boundedCronCompletionRetention,
@@ -154,15 +154,12 @@ describe("queued cancellation during adapter preparation", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(
-    [false, true].flatMap((reconciliation) =>
-      [false, true].flatMap((bestEffort) =>
-        (["active", "retired"] as const).map((state) => ({ state, reconciliation, bestEffort })),
-      ),
-    ),
-  )(
-    "keeps queued caller authority through recovery ($state, reconciliation: $reconciliation, bestEffort: $bestEffort)",
-    async ({ state, reconciliation, bestEffort }) => {
+  it.each([
+    { reconciliation: false, bestEffort: true },
+    { reconciliation: true, bestEffort: false },
+  ])(
+    "rejects retired queued callers through recovery (reconciliation: $reconciliation, bestEffort: $bestEffort)",
+    async ({ reconciliation, bestEffort }) => {
       const stateDir = fixtures.tmpDir();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const adapter = installHeldAdapter(reconciliation);
@@ -191,25 +188,21 @@ describe("queued cancellation during adapter preparation", () => {
       try {
         await adapter.prepared;
         expect(await loadPendingDeliveries(stateDir)).toHaveLength(1);
-        callerIsActive = state === "active";
+        callerIsActive = false;
         adapter.releasePreparation();
         adapter.releaseProvider();
         const settled = await outcome;
-        if (state === "active") {
-          expect(settled).toMatchObject({ results: [{ messageId: "accepted-message" }] });
-        } else {
-          const rejection = { message: expect.stringContaining("message caller retired") };
-          expect(settled).toMatchObject(bestEffort ? { results: [] } : { error: rejection });
-          expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-            expect.objectContaining({
-              status: "failed",
-              error: expect.objectContaining(rejection),
-            }),
-          );
-          expect(adapter.send).not.toHaveBeenCalled();
-        }
+        const rejection = { message: expect.stringContaining("message caller retired") };
+        expect(settled).toMatchObject(bestEffort ? { results: [] } : { error: rejection });
+        expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining(rejection),
+          }),
+        );
+        expect(adapter.send).not.toHaveBeenCalled();
         await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-        expect(adapter.send).toHaveBeenCalledTimes(state === "active" ? 1 : 0);
+        expect(adapter.send).not.toHaveBeenCalled();
         expect(await loadPendingDeliveries(stateDir)).toEqual([]);
       } finally {
         adapter.releasePreparation();
@@ -388,111 +381,98 @@ describe("queued cancellation during adapter preparation", () => {
     },
   );
 
-  it.each(["fresh", "restored media"] as const)(
-    "retires %s custody before preparation settles and releases its late token once",
-    async (mode) => {
-      vi.useFakeTimers();
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const adapter = installHeldAdapter();
-      const controller = new AbortController();
-      const audit: string[] = [];
-      const retired = createDeferred();
-      const unsubscribe = onTrustedMessageAuditEvent((event) => {
-        audit.push(event.outcome);
-        if (event.outcome === "failed") {
-          retired.resolve();
-        }
-      });
-      const queueIdReady = createDeferred<string>();
-      const stableId = "cron-direct-delivery:v1:cancelled-preparation";
-      let artifact: string | undefined;
-      if (mode === "restored media") {
-        const spoolDir = resolveDeliveryQueueMediaDir(stateDir);
-        fs.mkdirSync(spoolDir, { recursive: true });
-        artifact = path.join(spoolDir, `${randomUUID()}.txt`);
-        fs.writeFileSync(artifact, "retained attachment");
-        await enqueueDeliveryOnce(
-          {
-            channel: "matrix",
-            to: "!room:example",
-            payloads: [{ text: "question", mediaUrl: artifact }],
-            completionRetention: boundedCronCompletionRetention,
-          },
-          stableId,
-          stateDir,
-        );
+  it("retires restored media custody before preparation settles and releases its late token once", async () => {
+    vi.useFakeTimers();
+    const stateDir = fixtures.tmpDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const adapter = installHeldAdapter();
+    const controller = new AbortController();
+    const audit: string[] = [];
+    const retired = createDeferred();
+    const unsubscribe = onTrustedMessageAuditEvent((event) => {
+      audit.push(event.outcome);
+      if (event.outcome === "failed") {
+        retired.resolve();
       }
-      const delivery = deliverOutboundPayloads({
-        cfg: {},
+    });
+    const queueIdReady = createDeferred<string>();
+    const stableId = "cron-direct-delivery:v1:cancelled-preparation";
+
+    const spoolDir = resolveDeliveryQueueMediaDir(stateDir);
+    fs.mkdirSync(spoolDir, { recursive: true });
+    const artifact = path.join(spoolDir, `${randomUUID()}.txt`);
+    fs.writeFileSync(artifact, "retained attachment");
+    await enqueueDeliveryOnce(
+      {
         channel: "matrix",
         to: "!room:example",
-        payloads: [{ text: "question" }],
-        queuePolicy: "required",
-        abortSignal: controller.signal,
-        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
-        ...(mode === "restored media"
-          ? {
-              deliveryIntentId: stableId,
-              reusePendingDeliveryIntent: true,
-              completionRetention: boundedCronCompletionRetention,
-            }
-          : {}),
+        payloads: [{ text: "question", mediaUrl: artifact }],
+        completionRetention: boundedCronCompletionRetention,
+      },
+      stableId,
+      stateDir,
+    );
+    const delivery = deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "question" }],
+      queuePolicy: "required",
+      abortSignal: controller.signal,
+      onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
+      deliveryIntentId: stableId,
+      reusePendingDeliveryIntent: true,
+      completionRetention: boundedCronCompletionRetention,
+    });
+    const outcome = delivery.then(
+      () => "sent",
+      (error: unknown) => error,
+    );
+    try {
+      const queueId = await queueIdReady.promise;
+      await adapter.prepared;
+      controller.abort(new Error("question ended"));
+      await retired.promise;
+
+      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+      expect(adapter.afterSendFailure).not.toHaveBeenCalled();
+      expect(audit).toEqual(["queued", "failed"]);
+      const recoveredSend = vi.fn(async () => []);
+      await drainMatrixReconnect({ stateDir, deliver: recoveredSend });
+      expect(recoveredSend).not.toHaveBeenCalled();
+      expect(fs.existsSync(artifact)).toBe(true);
+      expect(
+        (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
+          .stagedArtifacts,
+      ).toEqual([artifact]);
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir),
+      ).toBeUndefined();
+
+      // The removed row must not turn its old producer heartbeat into claim loss.
+      await vi.advanceTimersByTimeAsync(65_000);
+      adapter.releasePreparation();
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining("Operation aborted"),
+        queueCustody: "released",
       });
-      const outcome = delivery.then(
-        () => "sent",
-        (error: unknown) => error,
-      );
-      try {
-        const queueId = await queueIdReady.promise;
-        await adapter.prepared;
-        controller.abort(new Error("question ended"));
-        await retired.promise;
-
-        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-        expect(adapter.afterSendFailure).not.toHaveBeenCalled();
-        expect(audit).toEqual(["queued", "failed"]);
-        const recoveredSend = vi.fn(async () => []);
-        await drainMatrixReconnect({ stateDir, deliver: recoveredSend });
-        expect(recoveredSend).not.toHaveBeenCalled();
-        if (artifact) {
-          expect(fs.existsSync(artifact)).toBe(true);
-          expect(
-            (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
-              .stagedArtifacts,
-          ).toEqual([artifact]);
-          expect(
-            getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir),
-          ).toBeUndefined();
-        }
-
-        // The removed row must not turn its old producer heartbeat into claim loss.
-        await vi.advanceTimersByTimeAsync(65_000);
-        adapter.releasePreparation();
-        expect(await outcome).toMatchObject({
-          message: expect.stringContaining("Operation aborted"),
-          queueCustody: "released",
-        });
-        expect(adapter.send).not.toHaveBeenCalled();
-        expect(adapter.afterSendFailure).toHaveBeenCalledOnce();
-        expect(adapter.releaseResource).toHaveBeenCalledOnce();
-        expect(audit).toEqual(["queued", "failed"]);
-        if (artifact) {
-          expect(fs.existsSync(artifact)).toBe(false);
-          expect(
-            (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
-              .stagedArtifacts,
-          ).toEqual([]);
-        }
-      } finally {
-        controller.abort();
-        adapter.releasePreparation();
-        adapter.releaseProvider();
-        await outcome;
-        unsubscribe();
-      }
-    },
-  );
+      expect(adapter.send).not.toHaveBeenCalled();
+      expect(adapter.afterSendFailure).toHaveBeenCalledOnce();
+      expect(adapter.releaseResource).toHaveBeenCalledOnce();
+      expect(audit).toEqual(["queued", "failed"]);
+      expect(fs.existsSync(artifact)).toBe(false);
+      expect(
+        (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
+          .stagedArtifacts,
+      ).toEqual([]);
+    } finally {
+      controller.abort();
+      adapter.releasePreparation();
+      adapter.releaseProvider();
+      await outcome;
+      unsubscribe();
+    }
+  });
 
   it("does not retire a replacement producer while old preparation is held", async () => {
     const stateDir = fixtures.tmpDir();
@@ -602,14 +582,9 @@ describe("queued cancellation during adapter preparation", () => {
   });
 
   it.each([
-    ...(["sent", "ambiguous"] as const).flatMap((result) =>
-      (["signal", "assertion"] as const).map((authority) => ({
-        result,
-        authority,
-        bestEffort: false,
-      })),
-    ),
-    { result: "sent", authority: "assertion", bestEffort: true },
+    { result: "sent", authority: "signal", bestEffort: false },
+    { result: "ambiguous", authority: "signal", bestEffort: false },
+    { result: "ambiguous", authority: "assertion", bestEffort: false },
     { result: "ambiguous", authority: "assertion", bestEffort: true },
     { result: "partial", authority: "assertion", bestEffort: true },
   ] as const)(

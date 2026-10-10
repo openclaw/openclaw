@@ -176,7 +176,7 @@ describe("DraftPlaceBrowser", () => {
         false,
         { host, root },
       );
-      browser.onPopoverShow("project");
+      browser.popoverCallbacks("project").onPopoverShow();
       browse.focus();
       browser.selectGatewayBrowser("/workspace");
       const path = document.createElement("input");
@@ -215,7 +215,9 @@ describe("DraftPlaceBrowser", () => {
   );
 
   it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
-    const request = vi.fn(async () => ({ projects: [] }));
+    const request = vi.fn(async (method: string) =>
+      method === "agents.list" ? { sessionPlacement: {} } : { projects: [] },
+    );
     const fixture = createBrowser(request);
     await fixture.browser.refreshProjects();
     const reads = request.mock.calls.length;
@@ -226,28 +228,33 @@ describe("DraftPlaceBrowser", () => {
     expect(request).toHaveBeenCalledTimes(reads);
     fixture.update();
     await fixture.browser.refreshProjects();
-    expect(request).toHaveBeenCalledTimes(reads + 1);
+    expect(
+      request.mock.calls
+        .slice(reads)
+        .map(([method]) => method)
+        .toSorted(),
+    ).toEqual(["agents.list", "projects.list"]);
   });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
     const writeStorage = vi.spyOn(Storage.prototype, "setItem");
     onTestFinished(() => writeStorage.mockRestore());
     browser.changeProjectQuery("openclaw");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     browser.changeEnvironmentQuery("runner");
 
     expect(browser.environmentQuery).toBe("runner");
     expect(browser.projectQuery).toBe("openclaw");
     expect(writeStorage).not.toHaveBeenCalled();
 
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("where").onPopoverHide();
     browser.onPopoverAfterHide("where");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     expect(browser.environmentQuery).toBe("");
     expect(browser.projectQuery).toBe("openclaw");
 
     browser.changeEnvironmentQuery("cloud");
-    browser.onPopoverShow("project");
+    browser.popoverCallbacks("project").onPopoverShow();
     expect(browser.environmentQuery).toBe("cloud");
     browser.disconnect();
     expect(browser.environmentQuery).toBe("");
@@ -448,8 +455,8 @@ describe("DraftPlaceBrowser", () => {
   it("tracks overlapping popover hides independently", () => {
     const { browser } = createBrowser(async () => ({}));
 
-    browser.onPopoverHide("project");
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("project").onPopoverHide();
+    browser.popoverCallbacks("where").onPopoverHide();
 
     expect(browser.popoverHiding("project")).toBe(true);
     expect(browser.popoverHiding("where")).toBe(true);
@@ -549,6 +556,9 @@ describe("DraftGatewayState", () => {
 
   it("discovers places from authenticated hello without refetching or losing input during migration", async () => {
     const request = vi.fn(async (method: string) => {
+      if (method === "agents.list") {
+        return { sessionPlacement: {} };
+      }
       if (method === "system.info") {
         return { machineName: "Gateway A" };
       }
@@ -562,6 +572,9 @@ describe("DraftGatewayState", () => {
     fixture.hello.auth.scopes.push("operator.write");
     fixture.browser.browser.setDraft("/draft-folder");
     fixture.update();
+    // Adding write access retires the old policy scope, independently of recovery migration.
+    expect(fixture.onInvalidate).toHaveBeenCalledWith(true, "gateway-changed");
+    fixture.onInvalidate.mockClear();
     await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
     await waitForFast(() => expect(fixture.browser.projects).toHaveLength(1));
     await waitForFast(() => expect(fixture.gateway.cloudProfilesReady).toBe(true));
@@ -588,7 +601,11 @@ describe("DraftGatewayState", () => {
     fixture.client.recoveryScopeReady = true;
     fixture.update();
     expect(fixture.browser.projectId).toBe("project");
-    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(
+        2,
+      ),
+    );
 
     fixture.hello.auth.recoveryScope = "principal-b";
     fixture.update();

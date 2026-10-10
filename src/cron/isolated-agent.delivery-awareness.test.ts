@@ -1,22 +1,26 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import "./isolated-agent.mocks.js";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { resolveDefaultSessionStorePath } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
+import {
+  makeCfg,
+  makeJob,
+  withTempCronHome,
+  writeSessionStoreEntries,
+} from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 type AnnounceOptions = {
   texts: string[];
   cfg?: Parameters<typeof makeCfg>[2];
-  entries?: Record<string, Record<string, unknown>>;
+  entries?: Record<string, SessionEntry>;
   delivery?: { mode: "announce"; channel: "last" | "telegram"; to?: string };
 };
 async function withAnnounce(
@@ -27,9 +31,7 @@ async function withAnnounce(
   ) => void = () => {},
 ) {
   await withTempCronHome(async (home) => {
-    const storePath = resolveDefaultSessionStorePath("main");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(options.entries ?? {}), "utf-8");
+    const storePath = await writeSessionStoreEntries(home, options.entries ?? {});
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
     const result = await runCronIsolatedAgentTurn({
@@ -60,14 +62,6 @@ describe("isolated cron delivery awareness", () => {
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
-  });
-
-  it("queues delivered text for the next main-session turn", async () => {
-    await withAnnounce({ texts: ["hello from cron"] }, (result) => {
-      expect(result.status).toBe("ok");
-      expect(result.delivered).toBe(true);
-      expect(peekSystemEvents("agent:main:main")).toEqual(["hello from cron"]);
-    });
   });
 
   it("adds the exact run-session inspection link only to the final visible payload", async () => {
@@ -132,15 +126,19 @@ describe("isolated cron delivery awareness", () => {
           "agent:main:main": {
             sessionId: "main-session",
             updatedAt: Date.now(),
-            lastProvider: "telegram",
-            lastChannel: "telegram",
-            lastTo: "123",
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "123" },
+            }),
           },
         },
       },
-      (result) => {
-        expect(result.status).toBe("error");
-        expect(result.delivered).toBeFalsy();
+      (result, deps) => {
+        expect(result.status).toBe("ok");
+        expect(result.error).toBeUndefined();
+        expect(result.deliveryError).toContain("shared agent-main session bucket");
+        expect(result.deliveryState?.status).toBe("not-delivered");
+        expect(result.delivered).toBe(false);
+        expect(deps.telegram).not.toHaveBeenCalled();
         expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       },
     );

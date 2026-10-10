@@ -185,8 +185,8 @@ async function withRecoveryRuntime(
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
-        get: (sessionId: string) => placements.get(sessionId),
-        list: () => [...placements.values()],
+        getAsync: async (sessionId: string) => placements.get(sessionId),
+        listAsync: async () => [...placements.values()],
         readChangeSnapshot,
         readProjection: async (sessionIds: readonly string[]) => ({
           placements: new Map(
@@ -197,7 +197,7 @@ async function withRecoveryRuntime(
           ),
           environments: options.environmentRows ?? new Map(),
         }),
-        retireSessionPlacement: ({ sessionId }: { sessionId: string }) => {
+        retireSessionPlacementAsync: async ({ sessionId }: { sessionId: string }) => {
           placements.delete(sessionId);
         },
         pruneOrphanedWorkspaceReconciliations: async () => [],
@@ -401,13 +401,16 @@ describe("worker placement recovery session events", () => {
           }
         },
       },
-      async ({ context, changes, start, time }) => {
+      async ({ context, changes, readChangeSnapshot, start, time }) => {
         const initialMutationVersion = changes.mock.calls.length;
         await start();
         await time.advanceBy(60_000);
         sweepCount = 0;
+        readChangeSnapshot.mockClear();
         await time.advanceBy(60_000);
         expect(sweepCount).toBe(1);
+        // Empty retirement and disabled auto-suspension need no reporting snapshots.
+        expect(readChangeSnapshot).toHaveBeenCalledTimes(2);
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
         expect(changes.mock.calls.length).toBe(initialMutationVersion);
 
@@ -425,6 +428,11 @@ describe("worker placement recovery session events", () => {
           new Set(["session-observer"]),
           expect.objectContaining({ agentId: recovered.agentId, dropIfSlow: true }),
         );
+        expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
+        readChangeSnapshot.mockClear();
+        await time.advanceBy(60_000);
+        // Nonempty retirement reuses its scan as the before-snapshot, then reads once after.
+        expect(readChangeSnapshot).toHaveBeenCalledTimes(3);
         expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
         expect(runtimeMocks.createDispatch.mock.lastCall?.[0]).not.toHaveProperty(
           "onRecoveredMoveTransition",
@@ -526,7 +534,7 @@ describe("worker placement recovery session events", () => {
             if (mode === "broadcast failure") {
               expect(runtimeMocks.publicationWarn).toHaveBeenCalledWith(
                 "Session change publication failed",
-                { error: expect.objectContaining({ message: "session broadcast failed" }) },
+                { error: "session broadcast failed" },
               );
             }
           }

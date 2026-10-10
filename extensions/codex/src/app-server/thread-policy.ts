@@ -17,10 +17,8 @@ import {
 } from "./request.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
-import type {
-  CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
-} from "./thread-lifecycle-types.js";
+import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 
 /** A refusal, not a failed native write: the ephemeral conversation must stay alive. */
 export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError {
@@ -177,7 +175,10 @@ export function assertCodexSupervisionThreadLineage(
 export async function assertAdoptedCodexThreadResumeAllowed(
   params: CodexStartOrResumeThreadParams,
   threadId: string,
-  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+  context: {
+    lifecycleTiming: Pick<CodexThreadLifecycleTimingTracker, "measure">;
+    throwIfAborted: () => void;
+  },
   assertCurrent: () => void,
 ): Promise<CodexThread> {
   const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>

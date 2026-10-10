@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { waitForTeardown, commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   createWarmProvider,
   LEASE_ID,
@@ -57,5 +57,33 @@ describe("Crabbox worker stop confirmation", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       `Crabbox lease ${LEASE_ID} (provider aws) is absent; treating stop as already released`,
     );
+  });
+
+  it("returns before a slow capture finishes and stops the lease after capture", async () => {
+    const captureStarted = Promise.withResolvers<void>();
+    const finishCapture = Promise.withResolvers<void>();
+    const { provider, calls } = createWarmProvider(async ({ argv }) => {
+      if (argv[1] === "checkpoint" && argv[2] === "create") {
+        captureStarted.resolve();
+        await finishCapture.promise;
+      }
+      return undefined;
+    });
+    const provisioned = await provisionWarmProfile(provider);
+    vi.useFakeTimers();
+    const returned = vi.fn();
+    const destroy = provider.destroy({ ...provisioned, profile: PROFILE }).then(returned);
+    try {
+      await captureStarted.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(returned).toHaveBeenCalledOnce();
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+    } finally {
+      finishCapture.resolve();
+      await destroy;
+      await waitForTeardown(provider, LEASE_ID);
+      vi.useRealTimers();
+    }
+    expect(calls.at(-1)?.argv).toEqual(["crabbox", "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 });

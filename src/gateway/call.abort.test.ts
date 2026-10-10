@@ -16,10 +16,10 @@ const fixture = vi.hoisted(() => ({
   } satisfies DeviceIdentity,
 }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateDeviceIdentity: () => fixture.identity,
-  loadDeviceIdentityIfPresent: () => fixture.identity,
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: () => fixture.identity,
+  loadDeviceIdentityIfPresentAsync: () => fixture.identity,
 }));
 
 vi.mock("./client.js", () => ({

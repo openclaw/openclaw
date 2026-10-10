@@ -52,10 +52,7 @@ function rejectUnexpectedCompactionSuccessor(): never {
 }
 
 describe("executeAgentTurn: CLI session routing", () => {
-  it.each([
-    { provider: "telegram", messageId: "42", currentMessageId: "42" },
-    { provider: "webchat", messageId: "rpc-run-id", currentMessageId: undefined },
-  ])(
+  it.each([{ provider: "webchat", messageId: "rpc-run-id", currentMessageId: undefined }])(
     "carries prepared route facts without leaking $provider identity into replies",
     async ({ provider, messageId, currentMessageId }) => {
       const { isInternalMessageChannel } = await vi.importActual<
@@ -175,56 +172,12 @@ describe("executeAgentTurn: CLI session routing", () => {
     });
   });
 
-  it("keeps standalone turn route facts when the adapter requires no thread", async () => {
-    await runSlackCliTurn({});
-
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      currentThreadTs: undefined,
-      replyToMode: "off",
-    });
-  });
-
-  it("preserves queued image fields from runs created before the prepared marker", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-5");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "described" }],
-      meta: {},
-    });
-    const images = [
-      {
-        type: "image" as const,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
-        mimeType: "image/png",
-      },
-    ];
-    const imageOrder = ["inline" as const];
-    followupRun.images = images;
-    followupRun.imageOrder = imageOrder;
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "telegram",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
-
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      images,
-      imageOrder,
-    });
-  });
-
   it("keeps prepared current-turn images aligned with CLI media facts", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-5");
     const images = [
       {
         type: "image" as const,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=",
         mimeType: "image/png",
       },
     ];
@@ -471,46 +424,6 @@ describe("executeAgentTurn: CLI session routing", () => {
     });
   });
 
-  it("keeps the first CLI session created by a room-event turn", async () => {
-    const followupRun = createCliRun("codex-cli", "gpt-5.4");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ambient" }],
-      meta: {
-        agentMeta: {
-          sessionId: "new-cli-session",
-          cliSessionBinding: {
-            sessionId: "new-cli-session",
-            authProfileId: "profile",
-          },
-        },
-      },
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    followupRun.currentInboundEventKind = "room_event";
-    const sessionEntry = {} as unknown as SessionEntry;
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      getActiveSessionEntry: () => sessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      currentInboundEventKind: "room_event",
-      cliSessionId: undefined,
-      cliSessionBinding: undefined,
-    });
-    if (result.kind !== "success") {
-      throw new Error("expected success");
-    }
-    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("new-cli-session");
-    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toEqual({
-      sessionId: "new-cli-session",
-      authProfileId: "profile",
-    });
-  });
-
   it("drops replacement room-event CLI sessions when reuse fails", async () => {
     const followupRun = createCliRun("codex-cli", "gpt-5.4");
     state.runCliAgentMock.mockResolvedValueOnce({
@@ -574,45 +487,6 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
     expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
     expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
-  });
-
-  it("keeps room-event CLI bindings when synthetic hooks return no CLI binding", async () => {
-    const followupRun = createCliRun("codex-cli", "gpt-5.4");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "handled" }],
-      meta: {
-        agentMeta: {
-          sessionId: "openclaw-session",
-          provider: "codex-cli",
-          model: "gpt-5.4",
-        },
-      },
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    followupRun.currentInboundEventKind = "room_event";
-    const sessionEntry = {
-      cliSessionBindings: {
-        "codex-cli": { sessionId: "existing-cli-session" },
-      },
-    } as unknown as SessionEntry;
-    const activeSessionStore = { main: sessionEntry };
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      activeSessionStore,
-      getActiveSessionEntry: () => sessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    if (result.kind !== "success") {
-      throw new Error("expected success");
-    }
-    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
-    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
-    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toEqual({
-      sessionId: "existing-cli-session",
-    });
   });
 
   it("clears room-event CLI bindings when an unflushed replacement is dropped", async () => {

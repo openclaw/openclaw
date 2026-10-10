@@ -1,13 +1,13 @@
 import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
+import { redactReefRelayErrorMessage } from "./transport-errors.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 type FetchLike = typeof fetch;
@@ -38,16 +38,6 @@ const REEF_INBOX_KEEPALIVE_MS = 45_000;
 // Cover headers and body consumption. A relay that accepts the request but
 // stops producing bytes must not pin inbox recovery forever.
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
-
-function redactReefRelayErrorMessage(message: string, secrets: readonly string[]): string {
-  let redacted = message;
-  for (const secret of secrets) {
-    if (secret.length > 0) {
-      redacted = redacted.replaceAll(secret, "<redacted>");
-    }
-  }
-  return redactSensitiveText(redacted, { mode: "tools" });
-}
 
 export class ReefRelayError extends Error {
   constructor(
@@ -240,8 +230,16 @@ export class ReefTransportClient {
     peer: string,
     envelope: Envelope,
     signal?: AbortSignal,
+    assertCurrent?: () => void,
   ): Promise<{ id: string; status: string }> {
-    return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope, signal);
+    return this.signed(
+      "POST",
+      `/v1/mail/${encodeURIComponent(peer)}`,
+      envelope,
+      signal,
+      [],
+      assertCurrent,
+    );
   }
   acknowledge(peer: string, id: string, receipt: SignedReceipt): Promise<{ result: string }> {
     return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}/ack`, { id, receipt });
@@ -267,6 +265,7 @@ export class ReefTransportClient {
     body?: unknown,
     signal?: AbortSignal,
     secrets: readonly string[] = [],
+    assertCurrent?: () => void,
   ): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body));
     const auth = this.auth(path, bytes, method);
@@ -281,6 +280,7 @@ export class ReefTransportClient {
       },
       signal,
       [auth.signature, ...secrets],
+      assertCurrent,
     );
   }
 
@@ -317,8 +317,11 @@ export class ReefTransportClient {
     headers: Record<string, string>,
     signal?: AbortSignal,
     secrets: readonly string[] = [],
+    assertCurrent?: () => void,
   ): Promise<T> {
-    const effect = captureEffectAuthority();
+    // Preserve the namespace in bundled output: supported older hosts omit this export.
+    const { captureEffectAuthority } = { ...fetchRuntime };
+    const effect = captureEffectAuthority === undefined ? null : captureEffectAuthority();
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
       timeoutMs: this.requestTimeoutMs,
@@ -330,8 +333,10 @@ export class ReefTransportClient {
       let response: Response;
       let initiated = false;
       try {
-        response = await effect.initiate(() => {
+        const initiate = () => {
           timeout.signal?.throwIfAborted();
+          // Host effect preparation may yield after the peer was last observed.
+          assertCurrent?.();
           initiated = true;
           return this.fetcher(url, {
             method,
@@ -342,7 +347,8 @@ export class ReefTransportClient {
             ...(bytes.length ? { body: bytes as BodyInit } : {}),
             signal: timeout.signal,
           });
-        });
+        };
+        response = await (effect === null ? initiate() : effect.initiate(initiate));
       } catch (error) {
         if (!initiated) {
           throw error;

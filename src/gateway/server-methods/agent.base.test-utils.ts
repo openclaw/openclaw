@@ -33,6 +33,7 @@ import {
   expectRespondError,
   flushScheduledDispatchStep,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   buildExistingMainStoreEntry,
   useTestStateDir,
   primeMainAgentRun,
@@ -45,6 +46,7 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -139,8 +141,7 @@ describe("gateway agent handler", () => {
 
     await runMainAgent("hi", "idem-maintenance-config");
 
-    const updateOptions = mocks.updateSessionStore.mock.calls.at(-1)?.[2];
-    expect(updateOptions).toMatchObject({
+    expect(mocks.updateSessionStore.mock.calls.at(-1)?.[2]).toMatchObject({
       takeCacheOwnership: true,
       maintenanceConfig: {
         mode: "enforce",
@@ -192,7 +193,7 @@ describe("gateway agent handler", () => {
     });
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: { sessionId: "recipient-session", updatedAt: Date.now() },
       canonicalKey: sessionKey,
     });
@@ -205,10 +206,7 @@ describe("gateway agent handler", () => {
       persistedEntry = store[sessionKey];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent({
       message: "hi",
@@ -261,7 +259,7 @@ describe("gateway agent handler", () => {
       mocks.resolveExplicitAgentSessionKey.mockReturnValue(sessionKey);
       mocks.loadSessionEntry.mockReturnValue({
         cfg: {},
-        storePath: "/tmp/sessions.json",
+        storePath: getAgentTestStorePath(),
         entry: { sessionId: "ops-main", updatedAt: Date.now() },
         canonicalKey: sessionKey,
       });
@@ -271,10 +269,7 @@ describe("gateway agent handler", () => {
             [sessionKey]: { sessionId: "ops-main", updatedAt: Date.now() },
           }),
       );
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
+      mockSuccessfulAgentCommand();
 
       await invokeAgent({
         message: "hi",
@@ -301,7 +296,7 @@ describe("gateway agent handler", () => {
     mocks.resolveAgentExplicitRecipientSession.mockReturnValue(routePending);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: { sessionId: "recipient-session", updatedAt: Date.now() },
       canonicalKey: sessionKey,
     });
@@ -311,10 +306,7 @@ describe("gateway agent handler", () => {
           [sessionKey]: { sessionId: "recipient-session", updatedAt: Date.now() },
         }),
     );
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     const context = makeContext();
     const request = {
@@ -367,7 +359,7 @@ describe("gateway agent handler", () => {
     mocks.resolveAgentExplicitRecipientSession.mockReturnValue(routePending);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: { sessionId: "recipient-session", updatedAt: Date.now() },
       canonicalKey: sessionKey,
     });
@@ -497,7 +489,7 @@ describe("gateway agent handler", () => {
       mocks.resolveAgentExplicitRecipientSession.mockResolvedValue({ sessionKey });
       mocks.loadSessionEntry.mockReturnValue({
         cfg: {},
-        storePath: "/tmp/sessions.json",
+        storePath: getAgentTestStorePath(),
         entry: { sessionId: "recipient-session", updatedAt: 1, ...entry },
         canonicalKey: sessionKey,
       });
@@ -529,7 +521,7 @@ describe("gateway agent handler", () => {
     const runId = "agent-harness-reserved";
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: undefined,
       canonicalKey: sessionKey,
     });
@@ -561,7 +553,7 @@ describe("gateway agent handler", () => {
       const runId = "agent-harness-session-id-rotation";
       mocks.loadSessionEntry.mockReturnValue({
         cfg: {},
-        storePath: "/tmp/sessions.json",
+        storePath: getAgentTestStorePath(),
         entry: {
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -600,7 +592,7 @@ describe("gateway agent handler", () => {
     const runId = "agent-harness-model-run";
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
@@ -636,7 +628,7 @@ describe("gateway agent handler", () => {
     const runId = "legacy-harness-model-run";
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         agentHarnessId: "codex",
         modelSelectionLocked: false,
@@ -803,7 +795,7 @@ describe("gateway agent handler", () => {
     let currentSessionId = initialSessionId;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: { sessionId: currentSessionId, updatedAt: Date.now() },
       canonicalKey: sessionKey,
     }));
@@ -814,10 +806,7 @@ describe("gateway agent handler", () => {
       currentSessionId = admittedSessionId;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("hi", "idem-reset-before-admission");
 
@@ -830,7 +819,7 @@ describe("gateway agent handler", () => {
     let deleted = false;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: deleted ? undefined : { sessionId: "session-before-delete", updatedAt: Date.now() },
       canonicalKey: sessionKey,
     }));
@@ -864,7 +853,7 @@ describe("gateway agent handler", () => {
     const sessionKey = "agent:main:main";
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: { sessionId: "session-before-delete", updatedAt: Date.now() },
       canonicalKey: sessionKey,
     }));
@@ -893,7 +882,7 @@ describe("gateway agent handler", () => {
     let storedEntry: Record<string, unknown> | undefined;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: storedEntry,
       canonicalKey: sessionKey,
     }));
@@ -930,7 +919,7 @@ describe("gateway agent handler", () => {
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
     const mutation = runExclusiveSessionLifecycleMutation("patch", {
-      scope: "/tmp/sessions.json",
+      scope: getAgentTestStorePath(),
       identities: [sessionKey, "existing-session-id"],
       run: async () => {
         markMutationStarted();
@@ -987,7 +976,7 @@ describe("gateway agent handler", () => {
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
     const mutation = runExclusiveSessionLifecycleMutation("patch", {
-      scope: "/tmp/sessions.json",
+      scope: getAgentTestStorePath(),
       identities: [sessionKey, "existing-session-id"],
       run: async () => {
         markMutationStarted();
@@ -1046,7 +1035,7 @@ describe("gateway agent handler", () => {
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
     const mutation = runExclusiveSessionLifecycleMutation("patch", {
-      scope: "/tmp/sessions.json",
+      scope: getAgentTestStorePath(),
       identities: [sessionKey, "existing-session-id"],
       run: async () => {
         markMutationStarted();
@@ -1099,7 +1088,7 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockImplementationOnce(async () => {
       await expect(
         interruptSessionWorkAdmissions({
-          scope: "/tmp/sessions.json",
+          scope: getAgentTestStorePath(),
           identities: [sessionKey, sessionId],
           timeoutMs: 5,
         }),
@@ -1123,11 +1112,12 @@ describe("gateway agent handler", () => {
   it.each(["restart", "rpc"] as const)(
     "adopts a recovery admission interrupted by %s before the RPC",
     async (stopReason) => {
-      const reason = stopReason === "rpc" ? createAgentRunDirectAbortError() : undefined;
+      const reason =
+        stopReason === "rpc" ? createAgentRunDirectAbortError() : createAgentRunRestartAbortError();
       const sessionKey = "agent:main:main";
       const sessionId = "existing-session-id";
       const runId = "idem-recovery-admission-handoff";
-      const scope = "/tmp/sessions.json";
+      const scope = getAgentTestStorePath();
       primeMainAgentRun({ sessionId });
       mocks.agentCommand.mockClear();
       const admission = await beginSessionWorkAdmission({
@@ -1202,6 +1192,7 @@ describe("gateway agent handler", () => {
       const sessionKey = "agent:main:main";
       const sessionId = "existing-session-id";
       const terminal = interruption === "terminal Stop" || interruption === "already stopped";
+      const restart = interruption === "explicit restart";
       const reason = terminal
         ? createAgentRunDirectAbortError()
         : interruption === "explicit restart"
@@ -1246,13 +1237,13 @@ describe("gateway agent handler", () => {
         abortEntry.controller.abort(reason);
       }
       const draining = interruptSessionWorkAdmissions({
-        scope: "/tmp/sessions.json",
+        scope: getAgentTestStorePath(),
         identities: [sessionKey, sessionId],
         reason: interruption === "already stopped" ? createAgentRunRestartAbortError() : reason,
       });
       try {
-        expect(abortEntry.abortStopReason).toBe(terminal ? "rpc" : "restart");
-        if (terminal) {
+        expect(abortEntry.abortStopReason).toBe(restart ? "restart" : "rpc");
+        if (reason) {
           expect(abortEntry.controller.signal.reason).toBe(reason);
         }
       } finally {
@@ -1261,16 +1252,19 @@ describe("gateway agent handler", () => {
       }
       await flushScheduledDispatchStep();
 
-      expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(!terminal);
+      expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(restart);
       expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(terminal);
-      if (terminal) {
+      if (reason) {
         expect(observedAbortReason).toBe(reason);
       }
       expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
         runId,
-        status: "timeout",
-        stopReason: terminal ? "rpc" : "restart",
+        status: interruption === "generic" ? "error" : "timeout",
+        ...(interruption === "generic" ? {} : { stopReason: restart ? "restart" : "rpc" }),
       });
+      if (interruption === "generic") {
+        expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("stopReason");
+      }
     },
   );
 
@@ -1312,7 +1306,7 @@ describe("gateway agent handler", () => {
     mocks.loadConfigReturn = cfg;
     mocks.loadSessionEntry.mockReturnValue({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: { sessionId: "restored-session", updatedAt: 2 },
       canonicalKey: "agent:main:work",
       // Post-flip the accessor target carries the alias set prepared at request
@@ -1331,10 +1325,7 @@ describe("gateway agent handler", () => {
       },
     };
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent({
       message: "continue restored session",
@@ -1376,7 +1367,7 @@ describe("gateway agent handler", () => {
     expect(mocks.persistSessionTranscriptTurn).toHaveBeenCalledTimes(1);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "new-session-id",
         updatedAt: Date.now(),
@@ -1406,10 +1397,7 @@ describe("gateway agent handler", () => {
       providerOverride: "test",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const context = {
       ...makeContext(),
       loadGatewayModelCatalog: vi.fn(async () => [
@@ -1474,10 +1462,7 @@ describe("gateway agent handler", () => {
       providerOverride: "test",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const context = {
       ...makeContext(),
       loadGatewayModelCatalog: vi.fn(async () => [
@@ -1551,10 +1536,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("test", "test-idem-acp-meta");
 
@@ -1627,10 +1609,7 @@ describe("gateway agent handler", () => {
       capturedEntry = result as Record<string, unknown>;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("test", "test-idem-stale-transcript");
 
@@ -1785,10 +1764,7 @@ describe("gateway agent handler", () => {
       capturedEntry = result as Record<string, unknown>;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("hi", "test-idem-terminal-main-fresh-marker");
 
@@ -1845,10 +1821,7 @@ describe("gateway agent handler", () => {
       capturedEntry = result as Record<string, unknown>;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent({
       message: "resume terminal main",
@@ -1914,10 +1887,7 @@ describe("gateway agent handler", () => {
         capturedEntry = result as Record<string, unknown>;
         return result;
       });
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
+      mockSuccessfulAgentCommand();
 
       await invokeAgent({
         message: `${runKind} probe`,

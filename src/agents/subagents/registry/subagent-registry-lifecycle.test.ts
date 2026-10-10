@@ -148,8 +148,7 @@ function waitForLifecycleState<T>(assertion: () => T | Promise<T>): Promise<T> {
 
 const completionDeliveryMocks = vi.hoisted(() => ({
   blockSubagentCompletionDelivery: vi.fn(),
-  settleRequesterCompletionBatch: vi.fn(),
-  mutateRequesterSettleWakeBatch: vi.fn(),
+  mutateRequesterCompletionBatch: vi.fn(),
   ownersByEntry: new Map<object, Pick<SubagentLifecycleOptions, "runs">>(),
 }));
 
@@ -198,8 +197,7 @@ vi.mock("../completion/subagent-completion-admission.store.js", async (importOri
     typeof import("../completion/subagent-completion-admission.store.js")
   >()),
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
-  settleRequesterCompletionBatch: completionDeliveryMocks.settleRequesterCompletionBatch,
-  mutateRequesterSettleWakeBatch: completionDeliveryMocks.mutateRequesterSettleWakeBatch,
+  mutateRequesterCompletionBatch: completionDeliveryMocks.mutateRequesterCompletionBatch,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", async (importOriginal) => ({
@@ -546,7 +544,7 @@ describe("subagent registry lifecycle hardening", () => {
         readSubagentRun: (id) => controller.options.runs.get(id),
         resolveAgentIdFromSessionKey: () => "main",
         resolveSessionStorePathCore: () => "/unused",
-        readSubagentSessionEntry: () => undefined,
+        readSubagentSessionEntry: async () => undefined,
         findTranscriptEvent: async () => undefined,
         findSessionTranscriptArchiveEventReadOnly: async () => undefined,
       });
@@ -557,7 +555,12 @@ describe("subagent registry lifecycle hardening", () => {
           change === "reply"
             ? { ...terminalReply, text: "corrected result" }
             : { ...terminalReply },
-        endedAt: change === "older equivalent" ? 3_999 : change === "timing" ? 4_001 : 4_000,
+        endedAt:
+          change === "older equivalent"
+            ? 3_999
+            : change === "timing" || change === "reply"
+              ? 4_001
+              : 4_000,
         ...(change === "error"
           ? {
               outcome: { status: "error", error: "provider failed" },
@@ -566,6 +569,61 @@ describe("subagent registry lifecycle hardening", () => {
           : {}),
       });
       expect(prepared.isCurrent()).toBe(current);
+    },
+  );
+
+  describe.each([
+    {
+      name: "visible answer",
+      first: { disposition: "visible" as const, text: "first final" },
+      resultText: "first final",
+    },
+    {
+      name: "intentional silence",
+      first: { disposition: "silent" as const },
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "empty reply",
+      first: { disposition: "empty" as const },
+      resultText: null,
+    },
+  ])("completion receipt ordering after $name", ({ first, resultText }) => {
+    it.each([
+      { order: "older", endedAt: 3_999, accepted: false },
+      { order: "equal-time", endedAt: 4_000, accepted: false },
+      { order: "newer", endedAt: 4_001, accepted: true },
+    ])("accepts only a newer correction ($order receipt)", async ({ endedAt, accepted }) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const controller = createLifecycleController({ entry });
+      const correction = { disposition: "visible", text: "corrected final" } as const;
+      await completeRun(controller, entry, { terminalReply: first, endedAt: 4_000 });
+      await completeRun(controller, entry, { terminalReply: correction, endedAt });
+
+      const stored = readLifecycleRun(entry);
+      expect(stored.execution.endedAt).toBe(accepted ? 4_001 : 4_000);
+      expect(stored.completion).toMatchObject({
+        terminalReply: accepted ? correction : first,
+        resultText: accepted ? "corrected final" : resultText,
+      });
+    });
+  });
+
+  it.each([3_999, 4_000])(
+    "accepts the first producer reply after terminal timing (%s)",
+    async (endedAt) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const controller = createLifecycleController({ entry });
+      const outcome = { status: "error", error: "provider failed" } as const;
+      const reason = SUBAGENT_ENDED_REASON_ERROR;
+      await completeRun(controller, entry, { outcome, reason, terminalReply: undefined });
+      const terminalReply = { disposition: "visible", text: "first producer reply" } as const;
+      await completeRun(controller, entry, { outcome, reason, endedAt, terminalReply });
+
+      expect(readLifecycleRun(entry).completion).toMatchObject({
+        terminalReply,
+        resultText: "first producer reply",
+      });
     },
   );
 
@@ -5080,7 +5138,7 @@ describe("requester settle wake trigger", () => {
     });
     await waitForLifecycleState(() => expect(settleParams).toBeDefined());
     const before = structuredClone(readLifecycleRun(entry));
-    completionDeliveryMocks.settleRequesterCompletionBatch.mockRejectedValueOnce(
+    completionDeliveryMocks.mutateRequesterCompletionBatch.mockRejectedValueOnce(
       new Error("bookkeeping write failed"),
     );
 

@@ -45,6 +45,60 @@ afterAll(() => {
 
 afterEach(() => vi.useRealTimers());
 
+describe("observed steering boundary", () => {
+  it.each(["live", "history"] as const)(
+    "anchors only first-observed live tools and commentary (%s)",
+    (source) => {
+      useToolStreamFakeTimers();
+      const host = createHost({
+        chatRunId: "run-1",
+        chatMessages: [
+          {
+            role: "user",
+            content: "Steer",
+            __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "run-1" },
+          },
+        ],
+      });
+      const tool = agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "call",
+        name: "read",
+      });
+      handleAgentEvent(host, tool, source);
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "item", {
+          kind: "preamble",
+          itemId: "comment",
+          progressText: "Checking.",
+        }),
+        source,
+      );
+      const expected = source === "live" ? "steer" : undefined;
+      expect(
+        host.toolStreamById.get(buildToolStreamIdentity("run-1", "call"))?.afterUserSendId,
+      ).toBe(expected);
+      expect(host.chatStreamSegments[0]?.afterUserSendId).toBe(expected);
+      host.chatMessages = [
+        ...(host.chatMessages ?? []),
+        {
+          role: "user",
+          content: "Later",
+          __openclaw: { idempotencyKey: "later:user", steerTargetRunId: "run-1" },
+        },
+      ];
+      handleAgentEvent(host, {
+        ...tool,
+        seq: 3,
+        data: { ...tool.data, phase: "result", result: "Done" },
+      });
+      expect(host.chatToolMessages[0]?.openclawToolStreamAfterSendId).toBe(expected);
+      resetToolStream(host);
+    },
+  );
+});
+
 describe("status text truncation", () => {
   it.each([
     ["short", "Ready 😀", "Ready 😀"],

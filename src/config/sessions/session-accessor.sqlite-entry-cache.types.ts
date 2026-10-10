@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SessionMembershipFact } from "./session-membership-facts.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -52,6 +54,8 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
         }
       : {}),
     archivedAt: entry.archivedAt,
+    category: entry.category,
+    sidebarRoot: entry.sidebarRoot,
     ...(entry.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
@@ -70,6 +74,8 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
+    permissionMode: entry.permissionMode,
+    toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
   };
 }
 
@@ -77,6 +83,7 @@ export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
 export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
+  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
 };
@@ -115,18 +122,40 @@ export type PreparedSessionEntryChanges = {
   source: SessionEntryPublicationSource;
   entries: ReadonlyMap<string, SessionEntry>;
   sharing?: ReadonlyMap<string, SessionSharingEntry>;
+  projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
 };
+
+export type SessionEntryProjectionFacts = {
+  membership: SessionMembershipFact;
+  hasBoard: boolean;
+  activitySummaryWatermark: SessionTranscriptWatermark | undefined;
+};
+
+export type SessionEntryReplacementPostimage = { entry: SessionEntry } & (
+  | { projection: SessionEntryProjectionFacts; participantProjectionUnavailable?: never }
+  | { projection?: never; participantProjectionUnavailable: true }
+);
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  /** Canonical metadata is committed, but these entries lack a valid display projection. */
+  unavailableParticipantKeys?: readonly string[];
   ageChanges: SessionEntryMaintenanceAgeChange[];
   source?: SessionEntryPublicationSource;
+  projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
   changedKeys: string[];
   membershipInvalidatedKeys: string[];
   sharingUnchangedKeys: string[];
+  generationUnchangedKeys: string[];
+  /** Scoped receipt; raw writers and other session domains remain incomplete. */
+  receipt?: import("../../infra/sqlite-commit-receipt.js").SqliteCommitReceipt<
+    SessionEntryReplacementPostimage,
+    SessionEntryPublicationSource
+  >;
 };
 
 export type CreationDatabase =
@@ -149,11 +178,21 @@ export type CreationRecord = {
   active: boolean;
 };
 export type PlaceholderReceipt = {
+  kind: "placeholder";
   creation: CreationRecord | undefined;
   databaseIdentity: DatabaseSync | string;
   sessionKey: string;
   placeholder: SessionEntryPlaceholder;
   committed: boolean;
+};
+
+export type CreatedSessionEntryReceipt = {
+  kind: "entry";
+  creation: CreationRecord;
+  databaseIdentity: string;
+  sessionKey: string;
+  entry: SessionSharingEntry;
+  committed: true;
 };
 
 export type SessionEntryPublicationRecord = {
@@ -165,7 +204,17 @@ export type SessionEntryPublicationRecord = {
   | {
       kind: "metadata";
       sharingChange: "changed" | "unchanged";
+      previous?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
       prepared: PreparedSessionEntryChanges;
+      /** Row delivery rechecks and folds synchronous writes made by earlier listeners. */
+      readCurrent?: (sessionKey: string) =>
+        | {
+            entry?: SessionEntry;
+            sharing?: SessionSharingEntry;
+            projection?: SessionEntryProjectionFacts;
+          }
+        | undefined;
+      creation?: CreatedSessionEntryReceipt;
     }
   | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt }
 );
@@ -173,9 +222,12 @@ export type SessionEntryPublicationRecord = {
 export type PendingSessionEntryPublication = {
   superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
   metadataSuperseded: Set<string>;
+  projectionSuperseded: Set<string>;
   ownerChanges: Map<string, Extract<SessionRowFacts, { kind: "owner" }>>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
+  /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */
+  generationUnchanged: Set<string>;
   settled: boolean;
   completion: Promise<void>;
 };

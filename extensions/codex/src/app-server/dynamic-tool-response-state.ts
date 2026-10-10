@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  captureToolAuthoredSourceReply,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexDynamicToolCallResponse,
   CodexDynamicToolDiagnosticTerminalReason,
@@ -16,8 +19,8 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   replaySafe?: boolean;
   sideEffectEvidence?: boolean;
   terminate?: boolean;
-  /** A `canDeliverSourceReply` tool authored the turn's final reply; siblings cannot reopen it. */
-  toolAuthoredFinalReply?: true;
+  /** Candidate reply, committed only when the entire tool batch can complete. */
+  toolAuthoredSourceReply?: ReturnType<typeof captureToolAuthoredSourceReply>;
   transcriptDetails?: unknown;
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };

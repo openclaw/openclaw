@@ -80,7 +80,7 @@ import { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-w
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const validation = vi.hoisted<{
   checks: SharedArrayBuffer;
@@ -202,7 +202,7 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
     const config = { agents: { entries: { main: {} } }, session: { store: database.path } };
     const operationId = "conversation-admission";
     if (operation !== "directory discovery") {
-      registerConversationAddresses(scope, [
+      await registerConversationAddresses(scope, [
         { ...conversation, deliveryTarget: conversation.target },
       ]);
     }

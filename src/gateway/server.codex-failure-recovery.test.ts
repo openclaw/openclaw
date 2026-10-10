@@ -74,6 +74,12 @@ it.each(cases)(
     const state = path.join(root, "state");
     const plugin = path.join(root, "instruction-plugin");
     await Promise.all([workspace, state, plugin].map((dir) => fs.mkdir(dir, { recursive: true })));
+    // Native plugins and their SDK must share the built worker graph.
+    const sdkHost = path.join(root, "sdk-host");
+    await fs.mkdir(path.join(sdkHost, "src"), { recursive: true });
+    await fs.mkdir(path.join(sdkHost, "extensions"));
+    await fs.copyFile(path.join(process.cwd(), "package.json"), path.join(sdkHost, "package.json"));
+    await fs.symlink(path.join(process.cwd(), "dist"), path.join(sdkHost, "dist"), "junction");
     const instruction = path.join(root, "instructions.txt");
     await fs.writeFile(instruction, "INITIAL_POLICY");
     await fs.writeFile(
@@ -208,6 +214,7 @@ it.each(cases)(
       OPENCLAW_SKIP_PROVIDERS: "0",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
+      OPENCLAW_DEV_SOURCE_ROOT: sdkHost,
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       HTTP_PROXY: "http://127.0.0.1:9",
       HTTPS_PROXY: "http://127.0.0.1:9",

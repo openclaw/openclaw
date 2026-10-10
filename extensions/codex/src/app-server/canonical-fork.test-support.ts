@@ -28,6 +28,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
@@ -40,9 +41,9 @@ import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlit
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resetSharedCodexAppServerClientForTests,
   resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -258,6 +259,11 @@ export async function createCanonicalForkFixture(params: {
           },
           runtimeParams: attempt,
           effectiveRuntimeModelId: model.id,
+          nativeExecutionPolicy: await prepareCodexNativeExecutionPolicyForRun(attempt, {
+            agentId: "main",
+            runtimeSessionKey: key,
+            sandbox: null,
+          }),
           nativeToolSurfaceEnabled: true,
           nativeProviderWebSearchSupport: "supported",
           bundleMcpThreadConfig,
@@ -272,8 +278,11 @@ export async function createCanonicalForkFixture(params: {
             buildAttemptParams: () => attempt,
             pluginConfig,
             computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig }),
-            startupAuthProfileId: null,
-            startupAuthBindingFingerprint: undefined,
+            clientOptions: {
+              authProfileId: null,
+              authBindingFingerprint: undefined,
+              authRequirement: undefined,
+            },
             startupAuthAccountCacheKey: undefined,
             startupEnvApiKeyCacheKey: undefined,
             sessionAgentId: "main",

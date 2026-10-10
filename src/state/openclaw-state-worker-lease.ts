@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError, isSqliteWorkerStoreAvailable } from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -112,7 +113,7 @@ export function retainOpenClawStateWorkerLease(
       const run = async () => {
         // Prepared input transfers its credits at enqueue in this same turn.
         if (!acquisitionReady) {
-          await ready.promise;
+          await racePromiseWithAbortSignal(ready.promise, options?.signal);
         }
         assertInvocation(invocation);
         if (!scope) {

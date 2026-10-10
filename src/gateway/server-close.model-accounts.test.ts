@@ -6,6 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as personalAccountAuth from "../plugins/personal-account-auth.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -56,25 +57,13 @@ it("settles an accepted personal account write across the real close prelude", a
     const owner = ensureProfileForEmail("account-close@example.test", { env: fixture.state.env });
     const action = { owner: owner.id, assertCurrent() {} };
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "userProfiles.modelAccount.connect") {
-                  writeEntered.resolve();
-                  await releaseWrite.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "userProfiles.modelAccount.connect") {
+        writeEntered.resolve();
+        await releaseWrite.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     restoreWorker = () => worker.mockRestore();
     // The Wizard outlives its initiating request but inherits that request's work scope.
     await kernel.gatewayRequestContext.trackExecution(() =>

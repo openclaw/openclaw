@@ -86,6 +86,7 @@ export class UpdateFinalizationLifecycle {
   private driver?: UpdateRunDriver;
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
   private ownsRun = false;
+  private ownsRepairRun = false;
   private warnedHeartbeat = false;
   private deferredExitWatch?: () => void;
   completed = false;
@@ -117,7 +118,8 @@ export class UpdateFinalizationLifecycle {
     this.ownsRun = !inherited;
     adoptUpdateRun(this.runId, admissionOptions);
     this.handoff?.bindRun(this.runId);
-    if (repair && this.ownsRun) {
+    this.ownsRepairRun = repair && this.ownsRun;
+    if (this.ownsRepairRun) {
       recordUpdateRunRepairContinuation(this.runId, this.runId, admissionOptions);
     }
     if (this.active) {
@@ -161,6 +163,7 @@ export class UpdateFinalizationLifecycle {
     detail?: string,
     failureFacts?: UpdateFailureFact[],
     exitCode?: number | null,
+    startedAtMs?: number,
   ): void {
     const failureReason = failureFacts?.find(
       (fact) => fact.code.trim() && fact.code !== "finalization-failed",
@@ -173,6 +176,7 @@ export class UpdateFinalizationLifecycle {
       ...(exitCode !== undefined ? { exitCode } : {}),
       ...(status === "failed" ? { reason: failureReason ?? name } : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
+      ...(startedAtMs !== undefined ? { startedAtMs } : {}),
     };
     const message = `[update finalize] ${JSON.stringify(step)}`;
     if (status === "failed") {
@@ -209,6 +213,7 @@ export class UpdateFinalizationLifecycle {
         row.detail,
         row.failureFacts,
         row.exitCode,
+        Math.max(0, endedAtMs - step.durationMs),
       );
     }
   }
@@ -391,21 +396,16 @@ export class UpdateFinalizationLifecycle {
       const doctorFailure = collectNestedErrorCandidates(error).find(
         (cause): cause is UpdateDoctorError => cause instanceof UpdateDoctorError,
       );
-      const facts = failure
-        ? [
-            createUpdateFailureFact({
-              check: phase,
-              code: "finalization-timeout",
-              message: failure.message,
-            }),
-          ]
-        : doctorFailure
+      const facts =
+        !failure && doctorFailure
           ? collectUpdateDoctorFailureFacts(error)
           : [
               createUpdateFailureFact({
                 check: phase,
-                code: extractErrorCode(error) ?? "finalization-failed",
-                message: formatErrorMessage(error),
+                code: failure
+                  ? "finalization-timeout"
+                  : (extractErrorCode(error) ?? "finalization-failed"),
+                message: failure ? failure.message : formatErrorMessage(error),
               }),
             ];
       const deferred =
@@ -446,8 +446,8 @@ export class UpdateFinalizationLifecycle {
             failure: { cause: error },
             durationMs: Math.round(performance.now() - this.startedAt),
           });
-    if (result.reason === "update-failed" && this.failureReason) {
-      result.reason = this.failureReason;
+    if (result.reason === "update-failed") {
+      result.reason = this.failureReason ?? (this.ownsRepairRun ? "repair-failed" : result.reason);
     }
     try {
       this.failureObservation = await verifyUpdateFailureRecovery({
@@ -471,13 +471,19 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
-  private finishLedger(exitCode: number): void {
+  private finishLedger(exitCode: number, deferredMaintenance?: string): void {
     if (this.runId && this.ownsRun) {
       try {
         finishUpdateRun(
           this.runId,
           {
-            status: exitCode ? "failed" : "succeeded",
+            status: exitCode ? "failed" : deferredMaintenance ? "skipped" : "succeeded",
+            reason: deferredMaintenance
+              ? "doctor-maintenance-pending"
+              : this.failureObservation?.reason === "repair-failed"
+                ? "repair-failed"
+                : undefined,
+            nextAction: deferredMaintenance,
             diagnostics: this.failureObservation,
           },
           this.ledgerOptions,
@@ -513,12 +519,12 @@ export class UpdateFinalizationLifecycle {
     watch?.();
   }
 
-  complete(exitCode: number): void {
+  complete(exitCode: number, deferredMaintenance?: string): void {
     if (this.completed) {
       return;
     }
     this.completed = true;
-    this.finishLedger(exitCode);
+    this.finishLedger(exitCode, deferredMaintenance);
     this.reportTimeout?.();
     if (!hasCliProcessScope()) {
       return;

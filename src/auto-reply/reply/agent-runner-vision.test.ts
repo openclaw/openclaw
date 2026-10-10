@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerTunnelHandle } from "../../gateway/worker-environments/tunnel-contract.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
 import type { Model } from "../../llm/types.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 
 const { loadScopedCatalog } = vi.hoisted(() => ({
@@ -103,12 +103,13 @@ describe("ordinary reply model capability at cloud media admission", () => {
       loadScopedCatalog.mockResolvedValue([
         { provider: "acme", id: testCase.selected, name: "Selected", input: [...vision] },
       ]);
-      const produced = await buildEmbeddedRunBaseParams({
+      const produced = await buildEmbeddedRunExecutionParams({
         run,
         provider: "acme",
         model: testCase.selected,
         runId: "vision-run",
-        authProfile: {},
+        sessionCtx: {},
+        hasRepliedRef: undefined,
       });
       const images = [
         createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 }),
