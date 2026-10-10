@@ -7152,7 +7152,6 @@
 ["src/gateway/managed-image-attachments.test.ts","../config/config.js","ba59cdee51f2fa757c967d8832989aee0574b0b7c860108dc592f4819a6a73f5",1]
 ["src/gateway/managed-image-attachments.test.ts","./http-utils.js","5766f77241a116b1312adfdf4d81f74da56c34b721d0735e22369da5df1ca97c",1]
 ["src/gateway/managed-image-attachments.test.ts","./session-transcript-readers.js","b412e97bbc7d6e59c050ab55c30b51c168ba33559a70f3175f08ccae90587e85",1]
-["src/gateway/managed-image-attachments.test.ts","./session-utils.js","8e96c224bf0cf1a599c0f34a50895bd503f983345638a6dafa6977258182efb7",1]
 ["src/gateway/mcp-app-channel-action.test.ts","../agents/agent-bundle-mcp-manager-api.js","8e3bbef26c5272435317bcf7a2f162ac79a60d92721ddbca09043cc805c0a4a1",1]
 ["src/gateway/mcp-app-channel-action.test.ts","../agents/mcp-ui-resource.js","13e59f849242d10f302fcbe5263fdcbcb31834c28e5cfb5052b21829260bdef8",1]
 ["src/gateway/mcp-app-channel-action.test.ts","./mcp-app-standalone.js","7204ec9584da7227fbe7489481094ff60143e077fd534de54539f0053888d2c1",1]
