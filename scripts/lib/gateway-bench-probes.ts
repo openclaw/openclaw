@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { performance } from "node:perf_hooks";
@@ -120,6 +120,21 @@ export function readProcessRssMb(pid: number | undefined): number | null {
   }
   const rssKb = parseProcessRssKb(result.stdout);
   return rssKb === null ? null : rssKb / 1024;
+}
+
+export function startGatewayRssSampling(child: Pick<ChildProcess, "pid">) {
+  let maxRssMb: number | null = null;
+  const sample = () => {
+    const rssMb = readProcessRssMb(child.pid);
+    if (rssMb != null) {
+      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+    }
+    return maxRssMb;
+  };
+  sample();
+  const timer = setInterval(sample, 100);
+  timer.unref?.();
+  return { sample, stop: () => clearInterval(timer) };
 }
 
 export function parseProcessRssKb(raw: string): number | null {
