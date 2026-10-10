@@ -187,6 +187,12 @@ If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
 
+Automatic full-rebuild retries wait 30 seconds after a failure. Repeated
+failures double that delay up to 30 minutes; a successful rebuild resets it.
+Searches keep reading the published index, and targeted session updates can
+still publish when its identity is valid. Explicit CLI repair bypasses the
+process-local cooldown.
+
 When native file watching is unavailable, Memory Core uses background polling
 with a 30-second default interval, including when polling is explicitly enabled
 with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,

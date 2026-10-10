@@ -9,7 +9,7 @@ import {
   sqliteExtendedResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-operation-admission.js";
+import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";

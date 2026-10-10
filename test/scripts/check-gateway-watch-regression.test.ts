@@ -71,6 +71,7 @@ function createWatchChildFixture(outputDir: string) {
     pid: { configurable: true, value: 1234 },
     exitCode: { get: () => exitState.code },
     signalCode: { get: () => exitState.signal },
+    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
   });
   const close = () => {
     if (
@@ -782,6 +783,9 @@ import { PassThrough } from "node:stream";
 const outputDir = ${JSON.stringify(outputDir)};
 const child = Object.assign(new cp.ChildProcess(), {
   pid: 1234, stdout: new PassThrough(), stderr: new PassThrough(),
+});
+Object.defineProperty(child, "stdio", {
+  get: () => [child.stdin, child.stdout, child.stderr, null],
 });
 for (const output of [child.stdout, child.stderr]) {
   output.once("close", () => {

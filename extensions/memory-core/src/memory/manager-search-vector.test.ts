@@ -240,6 +240,32 @@ describe("searchVector sqlite-vec KNN", () => {
       });
 
       expect(results.map((row) => row.id)).toEqual(["canonical", "alias"]);
+      insertFallbackChunk(db, {
+        id: "hidden",
+        model: "/cache/default.gguf",
+        vector: [1, 0],
+        source: "sessions",
+      });
+      const candidateQuery: Parameters<typeof searchChunksByEmbedding>[0] = {
+        db,
+        providerModel: "canonical-model",
+        providerModelAliases: ["/cache/default.gguf"],
+        sourceFilter: { sql: " AND source IN (?)", params: ["memory"] },
+        queryVec: [1, 0],
+        limit: 5,
+        snippetMaxChars: 200,
+      };
+      const selected = await searchChunksByEmbedding({
+        ...candidateQuery,
+        candidateIds: ["alias", "arbitrary", "hidden"],
+      });
+      expect(selected.map((row) => row.id)).toEqual(["alias"]);
+      await expect(
+        searchChunksByEmbedding({
+          ...candidateQuery,
+          candidateIds: [],
+        }),
+      ).resolves.toEqual([]);
     } finally {
       db.close();
     }

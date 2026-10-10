@@ -20,7 +20,7 @@ import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.j
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
-} from "../../infra/sqlite-worker-operation-admission.js";
+} from "../../infra/sqlite-worker-database-admission-relay.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";

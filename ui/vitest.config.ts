@@ -7,7 +7,7 @@ import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
-import { experimental_getRunnerTask, type Reporter, type Vitest } from "vitest/node";
+import type { Vitest } from "vitest/node";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
@@ -35,7 +35,6 @@ import {
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
-import { webkitExpectedFailures } from "./test/webkit-expected-failures.ts";
 import { controlUiSolidPlugin } from "./vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -135,38 +134,6 @@ const webkitTestFiles = [
   "src/pages/chat/components/chat-effort-picker.browser.test.ts",
   "src/pages/chat/components/chat-model-picker.browser.test.ts",
 ];
-
-const webkitExpectedFailureReporter: Reporter = {
-  onTestModuleCollected(module) {
-    if (module.project.name !== "webkit") {
-      return;
-    }
-    const entries = webkitExpectedFailures.filter((entry) =>
-      module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`),
-    );
-    for (const test of module.children.allTests()) {
-      if (entries.some((entry) => entry.name === test.fullName)) {
-        // Mirror the browser-side flag for native expected-failure reporting.
-        experimental_getRunnerTask(test).fails = true;
-      }
-    }
-  },
-  onTestRunEnd(modules) {
-    const webkitModules = modules.filter((module) => module.project.name === "webkit");
-    if (webkitModules.length === 0) {
-      return;
-    }
-    for (const entry of webkitExpectedFailures) {
-      const tests = webkitModules
-        .filter((module) => module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`))
-        .flatMap((module) => Array.from(module.children.allTests()))
-        .filter((test) => test.fullName === entry.name);
-      if (tests.length !== 1 || tests[0]?.result().state !== "passed") {
-        throw new Error(`WebKit expected failure did not execute as expected: ${entry.name}`);
-      }
-    }
-  },
-};
 
 export function createUiBrowserVitestConfig(
   env = process.env,
@@ -299,10 +266,7 @@ export function createUiBrowserVitestConfig(
       // cannot load in browser mode. Browser files own their own teardown.
       include,
       exclude: [...nodeDrivenBrowserLayoutTests],
-      setupFiles: [
-        "./src/test-helpers/lit-warnings.setup.ts",
-        ...(browser === "webkit" ? ["./test/webkit-expected-failures.setup.ts"] : []),
-      ],
+      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
       browser: {
         enabled: true,
         provider,
@@ -366,10 +330,7 @@ export default defineConfig({
   test: {
     ...sharedUiTestConfig,
     maxWorkers: sharedVitestConfig.test.maxWorkers,
-    reporters: [
-      ...sharedVitestConfig.test.reporters,
-      ...(process.env.OPENCLAW_UI_WEBKIT === "1" ? [webkitExpectedFailureReporter] : []),
-    ],
+    reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.
     projects: [
       {
