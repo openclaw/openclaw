@@ -104,15 +104,8 @@ export function retainPreparedModelCatalogPublication(
 
 /** Builds complete inventory before generation-specific runtime capability projection. */
 export async function prepareFullCatalogFacts(
-  agentFacts: Pick<
-    PreparedModelRuntimeAgentFacts,
-    | "input"
-    | "env"
-    | "templateAuthStorage"
-    | "credentials"
-    | "configuredModelRefs"
-    | "configuredRuntimeModels"
-  >,
+  agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
+    Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
@@ -392,11 +385,7 @@ export function prepareModelCatalogPublication(
   const acceptedRows = new Map<string, Set<string>>();
   for (const [owner, keys] of hookRows) {
     const provider = normalizeProvider(owner);
-    const accepted = acceptedRows.get(provider) ?? new Set<string>();
-    for (const key of keys) {
-      accepted.add(key);
-    }
-    acceptedRows.set(provider, accepted);
+    acceptedRows.set(provider, new Set([...(acceptedRows.get(provider) ?? []), ...keys]));
   }
   const outcomeProviders = new Set(
     catalog.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),

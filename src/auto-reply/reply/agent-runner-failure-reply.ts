@@ -382,7 +382,7 @@ export function buildExternalRunFailureReply(
     };
   }
   const classifiedFailure =
-    failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
+    failoverFacts.requestFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {
     return { text: classifiedFailure, isGenericRunnerFailure: false };
   }

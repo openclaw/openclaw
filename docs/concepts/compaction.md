@@ -194,6 +194,30 @@ The byte guard applies to the active SQLite transcript history. Legacy JSONL
 checkpoint artifacts are not the active compaction target.
 </Warning>
 
+### History hydration byte limit
+
+The embedded runtime also bounds the history it loads for model replay, independently
+of token-based compaction and `maxActiveTranscriptBytes`. Its byte cap is eight times
+the effective context token budget, with a 1 KiB minimum and 64 MiB maximum. This is
+a resource bound on serialized model-context events, not a token count. Private
+transcript metadata and tool-result details are excluded, but event envelopes and
+other content can still reach the byte cap before the model's token budget is full.
+
+When this cap is exceeded, the history loader advances the omitted prefix in
+quarter-cap steps. It prefers complete turns, keeps tool calls with their results,
+and reserves the latest compaction summary. The retained history starts near 75%
+of the available byte capacity, subject to event and turn sizes, then grows toward
+the cap. Its existing prefix stays unchanged between steps, including across
+worker or process restarts. An independent event-count limit can still shorten
+unusually dense histories.
+
+This selection does not delete saved history, create a summary, run a memory
+flush, or trigger compaction notifications. Older context can therefore remain
+outside the model's view while the token budget has room. Chunking trades some
+immediate history for prefix-cache reuse; it does not solve that byte/token
+mismatch. Use `/compact` when you want semantic summarization. The normal
+compaction triggers and the opt-in active-transcript byte guard are unchanged.
+
 ### Compaction notices
 
 By default, compaction runs silently. Set `notifyUser` to show brief status messages when compaction starts and completes, and to surface a degraded notice when a pre-compaction memory flush is exhausted but the reply still continues:

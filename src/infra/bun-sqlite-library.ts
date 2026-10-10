@@ -5,6 +5,7 @@ import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worke
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
 export type SqliteLibrarySelection =
@@ -329,6 +330,7 @@ export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
       SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
       getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY),
     ],
+    [SQLITE_DATABASE_ADMISSIONS_KEY, getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)],
   ];
 }
 

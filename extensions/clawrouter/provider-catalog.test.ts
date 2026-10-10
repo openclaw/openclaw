@@ -344,21 +344,37 @@ describe("ClawRouter provider catalog", () => {
     expect(rejectedModel?.thinkingLevelMap).toBeUndefined();
   });
 
-  it("caches catalog rows per credential scope", async () => {
-    const { fetchGuard, fetchGuardMock } = buildFetchGuard();
+  it.each([
+    ["granted models", CATALOG],
+    ["no granted models", { providers: [] }],
+  ])("reuses %s for an hour without mixing credentials or endpoints", async (_label, catalog) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const { fetchGuard, fetchGuardMock } = buildFetchGuard(catalog);
     const params = {
-      apiKey: "clawrouter-test-key",
+      apiKey: "catalog-key-a",
       baseUrl: "https://clawrouter.example",
       fetchGuard,
     };
+    try {
+      const first = await buildClawRouterProviderConfig(params);
+      now.mockReturnValue(1_800_000_000_000 + 59 * 60_000);
+      expect(await buildClawRouterProviderConfig(params)).toEqual(first);
+      expect(fetchGuardMock).toHaveBeenCalledOnce();
 
-    await buildClawRouterProviderConfig(params);
-    await buildClawRouterProviderConfig(params);
+      await buildClawRouterProviderConfig({ ...params, discoveryApiKey: "catalog-key-b" });
+      await buildClawRouterProviderConfig({ ...params, baseUrl: "https://other.example" });
+      expect(fetchGuardMock).toHaveBeenCalledTimes(3);
+      const headers = fetchGuardMock.mock.calls[1]?.[0].init?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      expect((headers as Headers).get("authorization")).toBe("Bearer catalog-key-b");
 
-    expect(fetchGuardMock).toHaveBeenCalledOnce();
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBe("Bearer clawrouter-test-key");
+      // A cache hit does not renew the original deadline indefinitely.
+      now.mockReturnValue(1_800_000_000_000 + 60 * 60_000);
+      await buildClawRouterProviderConfig(params);
+      expect(fetchGuardMock).toHaveBeenCalledTimes(4);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("does not advertise Gemini without a streaming route", async () => {

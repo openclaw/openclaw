@@ -1,17 +1,26 @@
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
+import { notifyListeners } from "../shared/listeners.js";
+import { resolveQuarantineStorePath } from "../state/openclaw-state-db.paths.js";
 import {
   retainOpenClawStateWorkerErrorPayload,
   hydrateOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
+  installSqliteDatabaseAdmissions,
+  type SqliteDatabaseAdmissionCursor,
+} from "./sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import { prepareSqliteWorkerActorContext } from "./sqlite-worker-broker-admission.js";
 import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
@@ -30,6 +39,8 @@ import {
   type SqliteWorkerTransferFrame,
   type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
+
+const databaseAdmissionCursors = new WeakMap<Slot, SqliteDatabaseAdmissionCursor>();
 
 export function dispatchSqliteWorkerJob(
   slot: Slot,
@@ -60,6 +71,12 @@ export function dispatchSqliteWorkerJob(
       assertDispatchable,
       assertCurrentJob,
     );
+    let admissionCursor = databaseAdmissionCursors.get(slot);
+    if (!admissionCursor) {
+      admissionCursor = createSqliteDatabaseAdmissionCursor();
+      databaseAdmissionCursors.set(slot, admissionCursor);
+    }
+    job.request.databaseAdmissions = captureSqliteDatabaseAdmissions(admissionCursor);
     const request = prepareSqliteWorkerRequest(job);
     assertDispatchable();
     job.nativeDispatched = true;
@@ -104,6 +121,34 @@ function prepareSqliteWorkerOperationAdmission(
       };
   try {
     if (databasePath) {
+      const assertCreate = (location: string) => {
+        const creationPaths = new Set<string>();
+        if (job.request.type === "open" && !job.request.existingIdentity) {
+          creationPaths.add(resolveIdentityPathViaExistingAncestorSync(job.request.databasePath));
+          creationPaths.add(resolveIdentityPathViaExistingAncestorSync(databasePath));
+        }
+        // Existing agents prepare lazily; only their original captured companions may be created.
+        if (actor?.stateContext) {
+          const primary = resolveIdentityPathViaExistingAncestorSync(actor.databasePath);
+          for (const companion of [
+            actor.stateDatabasePath,
+            resolveQuarantineStorePath(actor.stateContext.environment),
+          ]) {
+            if (companion) {
+              const target = resolveIdentityPathViaExistingAncestorSync(companion);
+              if (target !== primary) {
+                creationPaths.add(target);
+              }
+            }
+          }
+        }
+        if (!creationPaths.has(resolveIdentityPathViaExistingAncestorSync(location))) {
+          throw new SqliteWorkerError(
+            "SQLite creation target differs from its captured database",
+            "closed",
+          );
+        }
+      };
       let schemaLease: StateDatabaseSchemaLease | undefined;
       const assertAccess = () => {
         assertCurrentJob();
@@ -117,6 +162,7 @@ function prepareSqliteWorkerOperationAdmission(
         databasePath,
         assertRequest: assertDispatchable,
         assertAccess,
+        ...(job.request.type === "close" ? {} : { assertCreate }),
         acquireSchema() {
           assertAccess();
           const acquire = () => acquireStateDatabaseSchemaLease(databasePath);
@@ -305,6 +351,9 @@ export function receiveSqliteWorkerReply(
     owner.fail(new Error("SQLite worker returned an unexpected response"));
     return;
   }
+  if (reply.databaseAdmissions) {
+    installSqliteDatabaseAdmissions(reply.databaseAdmissions);
+  }
   if (!reply.ok) {
     if (reply.cleanupFailure && job.nativeDispatched && !reply.retire) {
       const admission = job.operationAdmission?.admission;
@@ -410,7 +459,50 @@ export function withSqliteWorkerCleanupFailure(failure: Error, cleanupError: unk
   return retainSqliteWorkerErrorCode(combined, failure);
 }
 
-export function settleFailedSqliteWorkerJobs({
+export function failSqliteWorkerSlot(
+  slot: Pick<Slot, "failed" | "current" | "queue"> & {
+    actors: ReadonlySet<Pick<Actor, "backendClosed" | "nativeLostObservers">>;
+  },
+  reason: unknown,
+  owner: {
+    currentError?: Error;
+    openOutcome?: "refused-before-agent-open";
+    completed?: CompletedSqliteWorkerOutcome;
+    waiters?: Iterable<(error?: unknown) => void>;
+    retire(): Promise<void>;
+    finish: typeof settleSqliteWorkerJob;
+  },
+): void {
+  if (slot.failed) {
+    return;
+  }
+  const error = toErrorObject(reason, "SQLite worker failed");
+  slot.failed = new SqliteWorkerError(error.message, "unavailable");
+  for (const actor of slot.actors) {
+    if (!actor.backendClosed) {
+      notifyListeners(actor.nativeLostObservers ?? [], slot.failed);
+    }
+  }
+  for (const resume of owner.waiters ?? []) {
+    resume(slot.failed);
+  }
+  const current = slot.current;
+  slot.current = undefined;
+  if (current) {
+    current.inputTransfer?.producer.cancel();
+    current.inputTransfer = undefined;
+    current.transfer = undefined;
+  }
+  settleFailedSqliteWorkerJobs({
+    ...owner,
+    queuedError: slot.failed,
+    current,
+    queued: slot.queue.splice(0),
+    error,
+  });
+}
+
+function settleFailedSqliteWorkerJobs({
   queuedError,
   current,
   queued,

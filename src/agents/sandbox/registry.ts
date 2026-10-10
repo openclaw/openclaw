@@ -19,6 +19,7 @@ import {
   finishSandboxRegistryRemoval,
   withSandboxRegistrySettlement,
 } from "./registry-lifecycle.js";
+import { withSandboxRegistryPublication } from "./registry-publication.js";
 import {
   assertSandboxRegistryGenerationCurrent,
   shouldPruneSandboxRegistryEntry,
@@ -63,9 +64,11 @@ async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
     (scope) => scope.execute({ type: command.type, input }),
     {
       assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
+      createAdmission: withSandboxRegistryPublication(
+        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+        () => context.admission.identity.key,
+        () => context.admission.assertCurrent(),
+      ),
     },
   );
 }
@@ -161,8 +164,8 @@ export async function reserveSandboxRegistryEntry(
 
 /** Validate the exact generation; retained handles cannot outlive removal intent. */
 // Released synchronous sandbox callbacks span provider waits and deferred process launch.
-// They need live generation authority observing foreign removals; revisit with async
-// companions at the next SDK major (docs/reference/database-schemas/worker-access.md).
+// Raw synchronous writers still lack complete receipts, so retain the native generation
+// guard until their next SDK-major removal (docs/reference/database-schemas/worker-access.md).
 export function assertSandboxRegistryEntryCurrent(entry: SandboxRegistryEntry): void {
   const current =
     withExistingOpenClawStateDatabaseReadOnly(({ db }) =>

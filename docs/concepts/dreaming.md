@@ -20,7 +20,10 @@ When the cron scheduler is disabled (`cron.enabled: false` or
 preserving existing jobs. Startup cleanup of historical dreaming artifacts waits
 for each agent's pending database preparation before running, including managed
 background cleanup after a restart or upgrade. Database preparation failures are
-reported with repair guidance. Explicitly disabling dreaming removes jobs carrying
+reported with repair guidance. If an agent database is still absent after preparation,
+cleanup completes without creating it; concurrent first creation is not a cleanup failure.
+Existing databases remain protected against replacement during cleanup.
+Explicitly disabling dreaming removes jobs carrying
 its canonical declaration key in the active cron store.
 
 ## What dreaming writes
@@ -125,6 +128,12 @@ memory framing in the Generative Agents research.
 Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a tool-free background completion and appends a short diary entry, using the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
 
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
+
+Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,
+instead of a separate one-minute deadline. It inherits the same 48-hour default and
+timer-safe unlimited setting as agent runs. The selected provider's
+`models.providers.<provider>.timeoutSeconds` still bounds its model requests, so
+keep both budgets long enough for slow local inference.
 
 <Note>
 The diary is for human reading in the Dreams UI, not a promotion source. Diary/report artifacts are excluded from short-term promotion; only grounded memory snippets are eligible to promote into `MEMORY.md`.

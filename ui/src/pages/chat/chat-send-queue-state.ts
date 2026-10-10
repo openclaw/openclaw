@@ -265,6 +265,9 @@ export function finishChatDeliveryAdmission(
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
     chatSendHoldReason(host, route, false, current.agentId) ||
+    chatOutboxOwner(host).admissions.has(
+      resolveUiConversationIdentity(host, queueSessionKey, current.agentId),
+    ) ||
     (options?.routingSessionKey && !routeVisible(current.agentId)) ||
     (!sendsDuringActiveRun &&
       routeVisible(current.agentId) &&

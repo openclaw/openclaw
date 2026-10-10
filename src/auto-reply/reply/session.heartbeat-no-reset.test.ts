@@ -26,6 +26,7 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
     { storePath, sessionKey },
     {
       sessionId: "daily-session-id",
+      sidebarRoot: true,
       updatedAt: Date.now(),
       systemSent: true,
       sessionStartedAt: staleTime,
@@ -68,10 +69,10 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
   expect(user).toMatchObject({
     isNewSession: true,
     sessionId: "daily-session-id",
-    sessionEntry: { snoozedUntil: undefined, snoozedAt: undefined },
+    sessionEntry: { sidebarRoot: true, snoozedUntil: undefined, snoozedAt: undefined },
   });
   const persisted = loadSessionEntry({ storePath, sessionKey });
-  expect(persisted).toBeDefined();
+  expect(persisted?.sidebarRoot).toBe(true);
   expect(persisted?.snoozedUntil).toBeUndefined();
   expect(persisted?.snoozedAt).toBeUndefined();
 });

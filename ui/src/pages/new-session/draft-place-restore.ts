@@ -19,6 +19,7 @@ export type DraftPlaceRestoreState = {
   configuredDefaultRepositoryOptOut: boolean;
   whereSelectedByUser: boolean;
   projectSelectedByUser: boolean;
+  requiredModelDefaults: boolean;
 };
 
 export function createDraftPlaceRestoreState(): DraftPlaceRestoreState {
@@ -35,6 +36,7 @@ export function createDraftPlaceRestoreState(): DraftPlaceRestoreState {
     configuredDefaultRepositoryOptOut: false,
     whereSelectedByUser: false,
     projectSelectedByUser: false,
+    requiredModelDefaults: false,
   };
 }
 
@@ -75,13 +77,15 @@ export function draftPlacePreferenceReady(
   state: DraftPlaceRestoreState,
   workspaceReady: boolean,
   projectCatalogActive: boolean,
+  requiredPlacement = false,
 ): boolean {
   return (
-    workspaceReady &&
-    !(state.configuredDefaultRepositoryPending && projectCatalogActive) &&
-    state.preferredWhereRestore === null &&
-    !state.preferredProjectRestore &&
-    !state.preferredRemoteProjectRestore
+    requiredPlacement ||
+    (workspaceReady &&
+      !(state.configuredDefaultRepositoryPending && projectCatalogActive) &&
+      state.preferredWhereRestore === null &&
+      !state.preferredProjectRestore &&
+      !state.preferredRemoteProjectRestore)
   );
 }
 
@@ -95,6 +99,8 @@ export function restoreDraftPlacePreferences(params: {
   isAdmin: () => boolean;
   persistPreference: (patch: Parameters<DraftGatewayState["persistPreference"]>[2]) => void;
   requestUpdate: () => void;
+  requiredPlacement: boolean;
+  loadConfiguredDefaults: (configuredDefaults: boolean) => void;
 }) {
   const {
     state,
@@ -106,6 +112,19 @@ export function restoreDraftPlacePreferences(params: {
     persistPreference,
     requestUpdate,
   } = params;
+  if (state.requiredModelDefaults !== params.requiredPlacement) {
+    state.requiredModelDefaults = params.requiredPlacement;
+    params.loadConfiguredDefaults(params.requiredPlacement);
+  }
+  if (params.requiredPlacement) {
+    if (
+      browser.browserOpen ||
+      (["where", "project", "checkout"] as const).some((kind) => browser.popoverOpen(kind))
+    ) {
+      browser.close();
+    }
+    return;
+  }
   let changed = false;
   const preferredWhere = state.whereSelectedByUser ? null : state.preferredWhereRestore;
   const preferredProject = state.projectSelectedByUser ? "" : state.preferredProjectRestore;

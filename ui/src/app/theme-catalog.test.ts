@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
@@ -10,6 +9,7 @@ import type {
 import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import {
   BUILTIN_THEMES,
+  resolveThemeBranding,
   type ThemeDescriptor,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -102,11 +102,12 @@ afterEach(() => {
 it("resolves built-in branding before the palette and catalog load", () => {
   const id = "knot";
   patchSettings({ theme: id });
-  setCurrentThemeBranding({ mascot: "none", critters: [] });
+  setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
   const { gateway } = createGatewayStoreTestStore();
   const theme = createApplicationTheme(loadSettings(), gateway);
   try {
     expect(theme.branding).toEqual({
+      ...resolveThemeBranding(undefined),
       mascot: "claw",
       workingPhrases: undefined,
       critters: [],
@@ -206,6 +207,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       ),
     );
     expect(applicationTheme.branding).toEqual({
+      ...resolveThemeBranding({ mascot: "none" }),
       mascot: "none",
       workingPhrases: ["Building", "Compiling"],
       critters: ["penguin", "fedora"],
@@ -217,6 +219,9 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
     expect(decodeURIComponent(favicon.href)).toContain("<rect");
 
     const artwork = {
+      icons: {
+        compass: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/icon/compass?v=1" },
+      },
       hats: {
         beret: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/hat/beret?v=1" },
       },
@@ -231,6 +236,11 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       ...definition,
       mascot: "none",
       avatarHat: "beret",
+      brandName: "Northstar",
+      brandIcon: "compass",
+      workingIndicator: "brand",
+      lobsterdex: false,
+      communityLinks: false,
       critters: ["ferris"],
       workingPhrases: [],
       dark: createThemePaletteFixture({ background: "#332244" }),
@@ -243,6 +253,13 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       ),
     );
     expect(applicationTheme.branding.artwork).toEqual(artwork);
+    expect(applicationTheme.branding).toMatchObject({
+      brandName: "Northstar",
+      brandIcon: "compass",
+      workingIndicator: "brand",
+      lobsterdex: false,
+      communityLinks: false,
+    });
     expect(currentThemeBranding().artwork).toEqual(artwork);
     expect(currentThemeBranding().avatarHat).toBe("beret");
     expect(currentThemeBranding().critters).toEqual(["ferris"]);

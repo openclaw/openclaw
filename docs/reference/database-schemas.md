@@ -17,9 +17,14 @@ readers install their lock-wait timeout at connection open.
 Non-mutating WAL observations reuse the loaded library's admitted capability;
 they still observe current WAL frames and read freshness on each use. Quarantine
 decision readers and writers set their existing lock-wait timeout at connection
-open; each decision reads the current schema version and quarantine row in one
-SQLite snapshot and validates any recorded file generation. WAL safety, quarantine authority, and recovery
-behavior are unchanged.
+open. The quarantine store's format is admitted once per physical database per
+process, while existing guards retain the indexed durable quarantine-row lookup
+in one SQLite snapshot and validate any recorded file generation.
+A separate inspection process can admit a target before the Gateway's verifier
+confirms corruption; its next guard must observe that recorded refusal even when
+the target's physical identity is unchanged. Quarantine rows retain their pathname
+scope, and aliases still share physical format, schema, and integrity facts.
+The persisted schema, WAL safety, and recovery behavior are unchanged.
 
 Managed writes publish committed facts before their public observers. Private
 receipts distinguish explicit absence from incomplete coverage and preserve known
@@ -27,18 +32,39 @@ commits independently of reply delivery. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
 for ordering, rollback, and the writer families that still retain native guards.
 
-Schema-version, integrity, canonical-index, and table-existence checks belong to open/admission and the migration owner after migrations; runtime paths must carry admitted schema facts with the handle, never re-query them, and use fresh `PRAGMA data_version` checks to observe foreign commits on the next unpinned read while preserving active SQLite snapshots. Existing per-call checks are legacy and must be migrated when touched.
+SQLite format, schema-version, integrity, canonical-index, and
+table-existence validation runs once per physical database per process load,
+on its first admission. The admitted facts are shared with all workers and
+handles, including later opens and reopens after idle close. File identity uses
+volume, inode, and stable birthtime checked with `fstat`, not SQL. A replaced or
+restored file needs its own first validation. Migration and repair owners validate
+their changes and publish the new facts after successful DDL settlement; later
+runtime consumers do not recheck them. Doctor and explicit verification retain
+their checks, and observed corruption still revokes admission.
 
-Shared-state and agent read-only connections reuse bounded prepared statements under their native connection lifecycle. Prepared-statement reuse alone does not retain query results. Read admission shares one freshness check within its synchronous operation; schema-fact lookups reuse the admitted handle without checking again. Write transactions refresh after acquiring `BEGIN`, before consuming those facts. Explicit fresh checks always execute, even inside another read operation. A foreign commit compares the schema and user versions before retaining or replacing schema facts, preserving active SQLite snapshots. Closing or replacing the connection clears retained statements and facts.
+Shared-state and agent read-only connections reuse bounded prepared statements
+under their native connection lifecycle. Prepared-statement reuse alone does not
+retain query results. Read admission shares one `PRAGMA data_version` freshness
+check within its synchronous operation; schema-fact lookups use the process's
+admitted facts without SQL. Write transactions refresh cached row facts after
+acquiring `BEGIN`. Explicit row-freshness checks still execute, even inside another
+read operation. Foreign commits invalidate cached row results without querying
+`schema_version`, `user_version`, or the catalog again. Active SQLite snapshots
+keep their view until they end. Closing a connection clears its prepared statements
+and row caches, while physical-database admission survives for the process lifetime.
 
-Shared-state content-version checks reuse their value at the admitted connection
-revision. Foreign commits, local writes, schema changes, and connection closure
-invalidate reuse. Native transactions, pinned snapshots, unadmitted handles, and
-dynamic authorizers continue reading the marker directly. Cold admission still
-checks freshness after catalog capture before validating the supported version.
-Schema versions, stored bytes, and upgrade or downgrade behavior are unchanged.
+Shared-state content-version checks reuse the physical database's admitted version
+facts across handles and workers. Ordinary commits, transactions, and connection
+closure do not force another marker read. The migration owner publishes replacement
+facts with its committed schema. Observed DDL without replacement facts expires
+the content-version admission: an unchanged catalog shape does not prove that the
+`config_machine_state` marker survived. The next owner lookup validates it once,
+and later opens reuse the result. A historical snapshot keeps its own marker facts;
+publication requires a positive match with the current committed admission. Each
+caller still applies its published-version floor. Schema versions, stored bytes,
+and upgrade or downgrade behavior are unchanged.
 
-New agent readers share the initial freshness probe with schema validation;
+New agent readers reuse the process's schema admission and probe row freshness;
 subsequent unpinned uses still probe again. Shared-state worker reads keep admission
 and query execution in the same freshness scope. Point transcript statistics, mutation clocks, pending-archive checks, and
 hot/cold watermarks use a single statement's snapshot; composite reads retain
@@ -50,23 +76,23 @@ lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
 The admitted catalog includes index names and trigger definitions alongside tables.
 Canonical session validation consumes these definitions without another catalog scan.
-Canonical index admission shares the schema contract reader's batched metadata snapshot
+First canonical index admission shares the schema contract reader's batched metadata snapshot
 instead of querying each table and index separately. Shadowed PRAGMA names retain
-native inspection, and authorization, drift detection, transactional repair, and
-integrity checks remain unchanged.
+native inspection during that validation. Authorization, initial drift detection,
+transactional repair, and integrity checks remain with their existing owners.
 First-use schema owners skip additive DDL only when all their tables and indexes
-are present in the current facts. Foreign schema changes, local DDL, rollback, and
-connection replacement invalidate those facts through the same connection owner;
-missing objects still use the existing installation transaction. Unadmitted and
-authorizer-controlled connections retain their native checks. Schemas, stored
-bytes, and update behavior are unchanged.
+are present in the published facts. Missing objects use the existing installation
+transaction, which publishes the new schema facts on commit; rollback cannot
+publish a schema that did not commit. Ordinary connection replacement and foreign
+data commits do not repeat schema validation. Schemas, stored bytes, and update
+behavior are unchanged.
 
-Schema facts gathered within a managed read operation survive data-only transaction
-settlement. The next operation still checks foreign commits. Unmanaged transaction
-snapshots, and sibling schema publications observed inside an active transaction,
-discard their facts when that snapshot ends.
+Admitted schema facts survive data-only transaction settlement. The next operation
+still checks foreign commits for cached row freshness. Transaction-local views of
+schema facts end with their SQLite snapshot; the next transaction consumes the
+process's published facts without repeating validation.
 
-Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent, so warm writes preserve schema facts for that handle and its local siblings. First use after rollback or a foreign schema change still creates missing storage through normal write admission. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
+Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
 The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths stop warm retention and drain affected executors after their last borrower settles. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
@@ -78,20 +104,18 @@ worker transfers so alias publication revokes superseded proof while preserving
 acknowledged copies. Later revocation still refuses publication. Schemas, stored
 bytes, and update behavior are unchanged.
 
-Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
+Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes cached row facts when consuming data; schema facts come from process-wide admission. Canonical readiness owns the row-freshness check before reusing its clean-store decision.
 
-Agent ownership metadata follows the admitted snapshot revision as well. Unchanged
-reads, including reads within one transaction or pinned snapshot, reuse the handle's
-metadata. Foreign commits on the next unpinned use, local mutations, rollback, and
-schema changes require a new ownership read. Dynamic authorizers keep querying
-the metadata. This changes no schema, stored bytes, or update behavior.
-
-The shared-state content-version marker uses the same admitted read revision.
-Unchanged reads reuse its successful result; foreign commits, local writes,
-rollback, schema changes, and connection disposal invalidate reuse. Transactions
-and pinned snapshots reuse the marker at their admitted revision;
-authorizer-controlled reads still query it. Version validation and upgrade or
-downgrade behavior are unchanged.
+The agent ID and role in `schema_meta` describe the physical store's fixed schema
+owner. Creation and migration validate and publish these facts for every handle
+and worker; ordinary commits do not require another ownership-metadata read.
+Observed DDL without owner-published replacement metadata expires that admission,
+even when the recreated table has the same definition: its primary row must be
+validated once by the next owner lookup. Historical metadata stays with its
+snapshot until positively matched to current committed admission. External row
+edits do not reassign an admitted store. Live session permissions, lease ownership,
+and caller authority retain their current-row checks. Dynamic authorizers retain
+native metadata reads. This changes no schema, stored bytes, or update behavior.
 
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and
@@ -118,7 +142,8 @@ synchronous domain read. ACP metadata reuses at most 128 rows per connection
 under that revision; foreign commits, local writes, schema changes, and close
 invalidate reuse. Transactions and pinned or authorizer-controlled reads still
 query SQLite. Supplied shared-state writers reuse their selected handle and check
-schema and ownership after `BEGIN`, without a duplicate pre-transaction row read.
+ownership after `BEGIN`, without a duplicate pre-transaction row read or schema
+validation.
 Stored bytes, schemas, permissions, and update behavior are unchanged.
 
 Exact entry and participant readers retain their last result at the admitted
@@ -148,7 +173,8 @@ Canonical main-key policy reads reuse a connection-owned value at the current re
 
 The Gateway does not schedule daily full-database scans. Admission-requested
 background checks stay limited to the requested agent database: `quick_check`
-for clean restart proof, or a full check after proven same-boot process death.
+for clean restart proof, or a full check after proven same-boot process death or
+native WAL admission without a verification receipt while the verifier is running.
 See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
 for the provenance requirements and operator-requested verification.
 

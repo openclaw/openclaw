@@ -314,6 +314,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Independent sidebar placement; origin, execution ownership, and access remain unchanged. */
+    sidebarRoot?: boolean;
     /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
     snoozedUntil?: number;
     /** Server-stamped epoch ms when the current snooze was set. */
@@ -401,6 +403,14 @@ type SessionEntryCore = SessionRestartRecoveryState &
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
     inheritedToolAllow?: string[];
+    /** Host-created native execution exception; the full inherited snapshot still owns completion. */
+    delegatedToolPolicy?: {
+      requesterSessionKey: string;
+      targetAgentId: string;
+      deny: string[];
+      /** The immediate parent’s effective deny snapshot, separately from revocation fallback. */
+      requesterDeny: string[];
+    };
     systemSent?: boolean;
     abortedLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */
