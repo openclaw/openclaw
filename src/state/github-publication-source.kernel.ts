@@ -143,7 +143,7 @@ export function readGitHubPublicationSourceFacts(
       findLiveRegistryWorktreeByOwnerInDatabase(stateDb, "session", selector.sessionKey),
     );
   }
-  facts.placement = executeSqliteQueryTakeFirstSync(
+  const placement = executeSqliteQueryTakeFirstSync(
     stateDb,
     getNodeSqliteKysely<Pick<DB, "worker_session_placements">>(stateDb)
       .selectFrom("worker_session_placements")
@@ -164,6 +164,8 @@ export function readGitHubPublicationSourceFacts(
       ])
       .where("session_id", "=", selector.sessionId),
   );
+  // SQLite rows have a null prototype; source facts must survive worker cloning.
+  facts.placement = placement && { ...placement };
   if (selector.personalOwnerProfileId) {
     const connection = readUserGitHubConnectionInDatabase(stateDb, selector.personalOwnerProfileId);
     facts.connection = projectUserGitHubConnectionAuthority(connection) ?? undefined;
@@ -205,7 +207,7 @@ export function assertGitHubPublicationWorktreeSource(
   }
 }
 
-export function assertGitHubPublicationConnectionSource(
+export function assertGitHubPublicationConnectionAdmissionSource(
   source: GitHubPublicationSourcePredicate,
   row: Pick<
     PersonalGitHubPublicationRow,
@@ -213,10 +215,9 @@ export function assertGitHubPublicationConnectionSource(
     | "connection_generation"
     | "identity_profile_id"
     | "identity_account_id"
-    | "identity_login"
     | "identity_source"
   >,
-): void {
+) {
   const connection = source.expected.connection;
   const selected = connection?.selection;
   if (
@@ -225,9 +226,20 @@ export function assertGitHubPublicationConnectionSource(
     selected?.kind !== "connected" ||
     row.identity_profile_id !== selected.profileId ||
     row.identity_source !== "personal" ||
-    selected.accountId !== row.identity_account_id ||
-    selected.login.toLowerCase() !== row.identity_login.toLowerCase()
+    selected.accountId !== row.identity_account_id
   ) {
+    throw new Error("GitHub publication requested connection changed.");
+  }
+  return selected;
+}
+
+export function assertGitHubPublicationConnectionSource(
+  source: GitHubPublicationSourcePredicate,
+  row: Parameters<typeof assertGitHubPublicationConnectionAdmissionSource>[1] &
+    Pick<PersonalGitHubPublicationRow, "identity_login">,
+): void {
+  const selected = assertGitHubPublicationConnectionAdmissionSource(source, row);
+  if (selected.login.toLowerCase() !== row.identity_login.toLowerCase()) {
     throw new Error("GitHub publication requested connection changed.");
   }
 }
