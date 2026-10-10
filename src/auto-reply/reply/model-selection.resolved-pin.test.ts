@@ -17,7 +17,8 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
-import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { resolveContextTokens } from "./model-selection-context.js";
+import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),

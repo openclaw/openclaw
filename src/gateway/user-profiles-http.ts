@@ -57,6 +57,7 @@ function setAvatarCorsHeaders(
   res: ServerResponse,
   cfg: OpenClawConfig,
 ): boolean {
+  res.setHeader("Vary", "Origin, Authorization, Cookie");
   if (!req.headers.origin) {
     return true;
   }
@@ -66,7 +67,6 @@ function setAvatarCorsHeaders(
   }
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Vary", "Origin");
   return true;
 }
 
@@ -204,8 +204,12 @@ function sendAvatar(
   req: IncomingMessage,
   res: ServerResponse,
   avatar: { bytes?: Uint8Array; byteLength: number; mime: string; etag: string },
+  revision?: string,
 ): void {
-  const cacheControl = "private, max-age=0, must-revalidate";
+  const cacheControl =
+    revision && new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision
+      ? "private, max-age=31536000, immutable"
+      : "private, max-age=0, must-revalidate";
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], avatar.etag)) {
     // Carry the success cache policy so a 304 does not inherit the miss-path
     // no-store and force the client to re-download an unchanged avatar.
@@ -269,9 +273,7 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   authResult.assertCurrent();
-  // Avatars render as plain <img> against a stable, unversioned route, so a
-  // heuristically-cached 404 miss would otherwise hide a later uploaded image.
-  // Misses must never be cached; the 200 path overrides this with must-revalidate.
+  // Cached misses would hide a later uploaded image behind the unversioned route.
   res.setHeader("Cache-Control", "no-store");
   const profileId = parsed.value;
   if (!profileId) {
@@ -298,7 +300,7 @@ export async function handleUserProfileAvatarHttpRequest(
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
-        sendAvatar(req, res, { ...uploaded, bytes: bytes?.bytes, etag });
+        sendAvatar(req, res, { ...uploaded, bytes: bytes?.bytes, etag }, etag.slice(1, -1));
         return true;
       }
       // A legacy owner tombstone must never borrow the host photo after a merge.

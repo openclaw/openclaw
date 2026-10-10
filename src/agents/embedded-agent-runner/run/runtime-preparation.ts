@@ -26,7 +26,7 @@ import {
 } from "./auth-controller.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import { createScopedAuthProfileStore } from "./auth-store.js";
-import { type OuterContextTokenMeta, resolveOuterContextTokenMeta } from "./context-token-meta.js";
+import { resolveOuterContextTokenMeta } from "./context-token-meta.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveEmbeddedRunEffectiveModel, selectEmbeddedRunHarness } from "./model-harness.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
@@ -98,10 +98,6 @@ export async function prepareEmbeddedRunRuntime(input: {
       pinnedHarnessId,
     });
   let resolvedRuntimeModel = resolveEffectiveModel(model);
-  let outerContextTokenMeta: OuterContextTokenMeta = resolveOuterContextTokenMeta(
-    model,
-    resolvedRuntimeModel,
-  );
   const models: EmbeddedRunAuthState["models"] = {
     runtime: model,
     effective: resolvedRuntimeModel.effectiveModel,
@@ -126,7 +122,6 @@ export async function prepareEmbeddedRunRuntime(input: {
         : resolveEffectiveModel(resolvedModel);
     models.runtime = resolvedModel;
     models.effective = resolvedRuntimeModel.effectiveModel;
-    outerContextTokenMeta = resolveOuterContextTokenMeta(resolvedModel, resolvedRuntimeModel);
   };
   const selectHarness = (
     candidate: typeof model,
@@ -515,7 +510,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       contextTokenBudget: resolvedRuntimeModel.contextTokenBudget,
       authoredContextTokenCap: resolvedRuntimeModel.authoredContextTokenCap,
       contextWindowInfo: resolvedRuntimeModel.contextWindowInfo,
-      outerContextTokenMeta,
+      outerContextTokenMeta: resolveOuterContextTokenMeta(models.runtime, resolvedRuntimeModel),
       activePreparedAuthPlan: authState.apiKeyInfo
         ? {
             ...activePreparedAuthPlan,

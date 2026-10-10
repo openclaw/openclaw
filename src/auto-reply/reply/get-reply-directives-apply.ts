@@ -1,3 +1,6 @@
+import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
@@ -26,7 +29,6 @@ import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { hasSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
-import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { ReplyPreRunRejectionCode } from "./reply-operation-run-state.js";
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
@@ -83,6 +85,7 @@ type ApplyDirectiveResult =
       provider: string;
       model: string;
       contextTokens: number;
+      contextTokenProjection?: ModelContextTokenProjection;
       directiveAck?: ReplyPayload;
       perMessageQueueMode?: InlineDirectives["queueMode"];
       perMessageQueueOptions?: Pick<InlineDirectives, "debounceMs" | "cap" | "dropPolicy">;
@@ -120,6 +123,7 @@ export async function applyInlineDirectiveOverrides(params: {
   resolvedElevatedLevel: ElevatedLevel;
   defaultActivation: () => "always" | "mention";
   contextTokens: number;
+  contextTokenProjection?: ModelContextTokenProjection;
   effectiveModelDirective?: string;
   typing: TypingController;
 }): Promise<ApplyDirectiveResult> {
@@ -155,7 +159,7 @@ export async function applyInlineDirectiveOverrides(params: {
     return { kind: "reply", reply: { text, isError: true }, preRunRejection: code };
   };
   const requesterProfileId = readSessionInputProfileId(ctx);
-  let { directives, provider, model, contextTokens } = params;
+  let { directives, provider, model, contextTokens, contextTokenProjection } = params;
   let directiveAck: ReplyPayload | undefined;
   let selectionCatalog = modelState.allowedModelCatalog;
   let committedCatalog: typeof selectionCatalog | undefined;
@@ -252,6 +256,7 @@ export async function applyInlineDirectiveOverrides(params: {
       provider,
       model,
       contextTokens,
+      contextTokenProjection,
     };
   }
 
@@ -501,8 +506,9 @@ export async function applyInlineDirectiveOverrides(params: {
       modelKey(entry.provider, entry.id) === modelKey(provider, model) &&
       (agentRuntime === "openclaw" ? !entry.nativeRuntime : entry.nativeRuntime === agentRuntime),
   );
-  contextTokens = resolveContextTokens({
+  contextTokenProjection = resolveModelContextTokenProjection({
     cfg,
+    allowAsyncLoad: false,
     provider: resolveContextConfigProviderForRuntime({
       provider,
       runtimeId: agentRuntime,
@@ -514,6 +520,7 @@ export async function applyInlineDirectiveOverrides(params: {
     modelContextWindowSource: selectedCatalogEntry?.contextWindowSource,
     modelContextTokens: selectedCatalogEntry?.contextTokens,
   });
+  contextTokens = contextTokenProjection.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
 
   const perMessageQueueMode =
     directives.hasQueueDirective && !directives.queueReset ? directives.queueMode : undefined;
@@ -532,6 +539,7 @@ export async function applyInlineDirectiveOverrides(params: {
     provider,
     model,
     contextTokens,
+    contextTokenProjection,
     directiveAck,
     perMessageQueueMode,
     perMessageQueueOptions,

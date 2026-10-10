@@ -696,6 +696,109 @@ describe("captured model decisions", () => {
     ).toMatchObject({ availability: false });
   });
 
+  describe("with a ChatGPT account listing", () => {
+    const chatgpt = {
+      type: "oauth",
+      provider: "openai",
+      access: "synthetic-access",
+      refresh: "synthetic-refresh",
+      expires: Date.now() + 60 * 60_000,
+    } as const;
+    const platformKey = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+    type Outcome =
+      | { profileId: string; status: "ready"; listedModelIds: readonly string[] }
+      | { profileId: string; status: "unavailable" };
+    const listing = (profileId: string, ...listedModelIds: string[]): Outcome => ({
+      profileId,
+      status: "ready",
+      listedModelIds,
+    });
+    const evaluate = (
+      outcomes: readonly Outcome[],
+      id: string,
+      options: { profileIds?: readonly string[]; withApiKey?: boolean; pin?: string } = {},
+    ) =>
+      createModelCatalogDecisions({
+        cfg: {},
+        agentId: "main",
+        workspaceDir: "/tmp/catalog-workspace",
+        pinnedProfileId: options.pin,
+        snapshot: {
+          entries: [],
+          routeVariants: [],
+          providerOutcomes: outcomes.map((outcome) => ({ provider: "openai", ...outcome })),
+        },
+        metadataSnapshot: metadata,
+        preparedAuthStore: {
+          version: 1,
+          profiles: {
+            ...Object.fromEntries(
+              (options.profileIds ?? ["openai:chatgpt"]).map((profileId) => [profileId, chatgpt]),
+            ),
+            ...(options.withApiKey ? { "openai:platform": platformKey } : {}),
+          },
+        },
+        routeResolverFactory: routeResolverFactory({
+          ...dualRoutes,
+          preferredAuthRequirement: "subscription",
+        }),
+      }).evaluateEntry({ provider: "openai", id }, undefined, "codex");
+    // The listing returned gpt-5.5 as a hidden row and did not return gpt-5.4-pro.
+    const ready = listing("openai:chatgpt", "gpt-6-sol", "gpt-5.5");
+
+    it("does not offer an unlisted dual-route model to a ChatGPT-only account", () => {
+      const unlisted = evaluate([ready], "gpt-5.4-pro");
+      expect(unlisted).toMatchObject({ availability: false });
+      // The account is signed in; a missing-auth reason would render sign-in guidance.
+      expect(unlisted.unavailableReason).toBeUndefined();
+      expect(evaluate([ready], "gpt-5.5")).toMatchObject({
+        availability: true,
+        selectedProfileId: "openai:chatgpt",
+      });
+    });
+
+    it.each([
+      ["an OpenAI API key is also stored", ready, true],
+      [
+        "the listing is unavailable",
+        { profileId: "openai:chatgpt", status: "unavailable" } as const,
+        false,
+      ],
+    ])("keeps the subscription route when %s", (_label, outcome, withApiKey) => {
+      expect(evaluate([outcome], "gpt-5.4-pro", { withApiKey })).toMatchObject({
+        availability: true,
+        selectedProfileId: "openai:chatgpt",
+        selectedRoute: { authRequirement: "subscription" },
+      });
+    });
+
+    const selectedB = {
+      availability: true,
+      selectedProfileId: "openai:b",
+      selectedRoute: { authRequirement: "subscription" },
+    };
+    it.each([
+      ["it has no observation", [], selectedB],
+      [
+        "its discovery is unavailable",
+        [{ profileId: "openai:b", status: "unavailable" } as const],
+        selectedB,
+      ],
+      ["its listing returns the model", [listing("openai:b", "gpt-5.5-pro")], selectedB],
+      // A third account listing the model does not entitle the selected one.
+      [
+        "its listing omits the model",
+        [listing("openai:b", "gpt-5.5"), listing("openai:c", "gpt-5.5-pro")],
+        { availability: false },
+      ],
+    ])("uses only the selected account's listing when %s", (_label, outcomes, expected) => {
+      // Account A's ready listing omits gpt-5.5-pro and gpt-5.5; account B is selected.
+      const others = [listing("openai:a", "gpt-6-sol")];
+      const options = { profileIds: ["openai:a", "openai:b"], pin: "openai:b" };
+      expect(evaluate([...others, ...outcomes], "gpt-5.5-pro", options)).toMatchObject(expected);
+    });
+  });
+
   it("distinguishes unknown choices from authoritative empty choices", async () => {
     expect(nativeOwner(false, false).runtimeChoices(entry)).toBeUndefined();
     expect(nativeOwner(true, false).runtimeChoices(entry)).toEqual([]);

@@ -246,6 +246,18 @@ function createConfiguredModel(
 }
 
 describe("resolveEmbeddedRuntimeModelPolicy", () => {
+  it("keeps an unknown model's generic fallback untrusted", () => {
+    const result = resolveEmbeddedRuntimeModelPolicy({
+      cfg: {},
+      provider: "local-fixture",
+      modelId: "unknown-window",
+      runtimeModel: { ...createRuntimeModel(), contextTokens: undefined, contextWindow: 0 },
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextWindowInfo).toEqual({ source: "default", tokens: 200_000 });
+  });
+
   it("rejects an authored context window below the floor despite a larger contextTokens cap", () => {
     const cfg = {
       models: {

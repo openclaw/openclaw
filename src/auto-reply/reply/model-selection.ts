@@ -65,7 +65,6 @@ export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
-export { resolveContextTokens } from "./model-selection-context.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 
