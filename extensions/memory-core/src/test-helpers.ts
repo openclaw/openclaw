@@ -5,7 +5,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { openOpenClawAgentDatabase, tableExists } from "openclaw/plugin-sdk/sqlite-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
@@ -41,7 +41,9 @@ const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
 
 export function readMemoryForgetTombstonesForTest(params: { agentId: string }) {
   const { db } = openOpenClawAgentDatabase(params);
-  return tableExists(db, "memory_session_tombstones")
+  return db
+    .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+    .get("memory_session_tombstones")
     ? db
         .prepare(`SELECT session_id AS sessionId, agent_id AS agentId, reason,
         created_at AS createdAt FROM memory_session_tombstones
