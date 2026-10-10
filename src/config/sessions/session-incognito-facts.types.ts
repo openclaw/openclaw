@@ -40,6 +40,10 @@ export type IncognitoSessionFacts = {
     | "permissionMode"
     | "execHost"
     | "execNode"
+    | "execCwd"
+    | "skillLibrarySelections"
+    | "pluginOwnerId"
+    | "agentHarnessId"
   >;
   cliHistory?: {
     boundary: SessionEntry["cliHistoryBoundary"];

@@ -8,6 +8,7 @@ import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnost
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatProviderRefusalText,
@@ -180,10 +181,7 @@ export function formatAssistantErrorText(
     return formatCopy;
   }
   if (failoverReason === "context_overflow") {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-    );
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (isReasoningConstraintErrorMessage(raw)) {
     return (

@@ -59,11 +59,7 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
 /** The observed base is part of pin intent, not independently acknowledgeable metadata. */
-export function prefIntentMatches(
-  left: ServerUiPrefs,
-  right: ServerUiPrefs,
-  key: SyncedPrefKey,
-): boolean {
+export function prefIntentMatches(left: ServerUiPrefs, right: ServerUiPrefs, key: string): boolean {
   return (
     prefValuesEqual(left[key], right[key]) &&
     (key !== "sidebarEntries" ||
@@ -134,4 +130,11 @@ export function mergePendingUiPrefs(
     clearSidebarEntriesMetadata(merged);
   }
   return merged;
+}
+
+/** Browser metadata belongs to its owning intent, never an independently dispatched/settled key. */
+export function pendingUiPrefKeys(prefs: ServerUiPrefs): string[] {
+  return Object.keys(prefs).filter(
+    (key) => !["sidebarEntriesBase", "sidebarEntriesOrder", "navigationConfirmation"].includes(key),
+  );
 }

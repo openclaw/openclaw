@@ -1,4 +1,4 @@
-import { prefIntentMatches } from "./server-prefs-intent.ts";
+import { prefIntentMatches, pendingUiPrefKeys } from "./server-prefs-intent.ts";
 // Write-only algorithms load with the existing async preference drain, not the boot mirror.
 import { extractServerUiPrefs } from "./server-prefs-reconcile.ts";
 import {
@@ -7,7 +7,6 @@ import {
   prefValuesEqual,
   SYNCED_PREF_KEYS,
   type ServerUiPrefs,
-  type SyncedPrefKey,
 } from "./server-prefs-state.ts";
 
 /** Rebase only authored membership/order changes, preserving unseen remote pins and removals. */
@@ -67,12 +66,12 @@ export function selectProfileUiPrefs(pending: ServerUiPrefs): ServerUiPrefs {
 export function removePendingUiPrefsBatch(
   pending: ServerUiPrefs | null,
   batch: ServerUiPrefs,
-  persistedKeys: Set<SyncedPrefKey>,
+  persistedKeys: Set<string>,
 ): ServerUiPrefs | null {
   if (!pending) {
     return null;
   }
-  for (const key of SYNCED_PREF_KEYS) {
+  for (const key of pendingUiPrefKeys(batch)) {
     if (Object.hasOwn(batch, key) && prefIntentMatches(pending, batch, key)) {
       delete pending[key];
       persistedKeys.delete(key);
@@ -101,14 +100,11 @@ export function serverUiPrefsCommittedSnapshot(
       continue;
     }
     if (committed[key] === null) {
-      delete profilePrefs[key];
       if (configPrefs[key] === undefined) {
         delete next[key];
       } else {
         Object.assign(next, { [key]: configPrefs[key] });
       }
-    } else {
-      Object.assign(profilePrefs, { [key]: committed[key] });
     }
   }
   return next;

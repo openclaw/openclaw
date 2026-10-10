@@ -7,11 +7,10 @@ import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
 import {
-  selectThemeSettings,
-  resetServerUiPref,
   applyServerUiPrefs,
   refreshProfileAppearancePrefs,
   resolveServerUiPrefState,
@@ -307,12 +306,7 @@ describe("profile-bound appearance preferences", () => {
 
     expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
       keys: [
-        "ui.theme",
-        "ui.themeMode",
-        "ui.accent",
-        "ui.fontUi",
-        "ui.fontChat",
-        "ui.tabIcon",
+        ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
         "ui.sidebarEntries",
         "ui.navigationScope",
       ],

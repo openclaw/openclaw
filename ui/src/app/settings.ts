@@ -20,6 +20,11 @@ import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme } from "./custom-theme.ts";
 import { resolveProfileAppearanceProfileId } from "./server-prefs-profile.ts";
 import {
+  loadBackgroundPreference,
+  saveBackgroundPreference,
+  subscribeBackgroundPreferenceIdentity,
+} from "./settings-background.ts";
+import {
   normalizeAccentColor,
   normalizeCatalogOpenTarget,
   normalizeChatFollowUpModeOverride,
@@ -333,7 +338,13 @@ let livePreferenceOwner: LivePreferenceOwner | null = null;
 /** Bind local writes to the mounted runtime, never its credentials. */
 export function bindUiPreferences(owner: LivePreferenceOwner): () => void {
   livePreferenceOwner = owner;
+  const stopIdentity = subscribeBackgroundPreferenceIdentity(() => {
+    if (livePreferenceOwner === owner) {
+      owner.refresh();
+    }
+  });
   return () => {
+    stopIdentity();
     if (livePreferenceOwner === owner) {
       livePreferenceOwner = null;
     }
@@ -396,7 +407,7 @@ export function loadUiPreferences(
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
-      return defaults;
+      return { ...defaults, background: loadBackgroundPreference(defaults.gatewayUrl) };
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
@@ -434,6 +445,7 @@ export function loadUiPreferences(
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
+      background: loadBackgroundPreference(gatewayUrl),
       tabIcon: normalizeTabIconPreference(parsed.tabIcon),
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
       chatShowThinking: booleanSetting("chatShowThinking"),
@@ -654,6 +666,7 @@ export function saveSettings(
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,
   };
+  saveBackgroundPreference(next.gatewayUrl, next.background);
   const serialized = JSON.stringify(persisted);
   settingsFallback = { key: scopedKey, record: persisted, pendingNavigation };
   try {

@@ -1,3 +1,4 @@
+import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
   type TabIconPreference,
@@ -92,6 +93,8 @@ export type UiSettings = {
   tabIcon?: TabIconPreference;
   // Device-local: custom terminal faces must be installed on the browser computer.
   terminalFontFamily?: string;
+  // Personal metadata uses its identity-scoped mirror, never the general settings record.
+  background?: BackgroundPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;

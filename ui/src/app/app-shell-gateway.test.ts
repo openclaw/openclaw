@@ -98,7 +98,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
   });
 
   it("refuses profile hydration from a superseded config snapshot", async () => {
-    const { context, owner, snapshot, request, refreshTheme } =
+    const { context, owner, snapshot, request, refreshTheme, requestUpdate } =
       createProfileAppearanceGateway("profile-owner");
     const readStarted = createDeferred();
     const reply = createDeferred<{
@@ -119,6 +119,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     await ready;
     expect(loadSettings().accent).not.toBe("#336699");
     expect(refreshTheme).not.toHaveBeenCalled();
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("loads current agent discovery when hello lands", async () => {
@@ -145,10 +146,17 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     "loads and caches profile appearance (matching browser mirror: %s)",
     async (mirrored) => {
       if (mirrored) {
-        patchSettings({ accent: "#336699" });
+        patchSettings({ gatewayUrl: "ws://profile.test", accent: "#336699" });
       }
-      const { completeProfileAppearance, context, owner, refreshTheme, request, snapshot } =
-        createProfileAppearanceGateway(mirrored ? "profile-owner" : null);
+      const {
+        completeProfileAppearance,
+        context,
+        owner,
+        refreshTheme,
+        requestUpdate,
+        request,
+        snapshot,
+      } = createProfileAppearanceGateway(mirrored ? "profile-owner" : null);
       owner.synchronizeGateway(snapshot);
       if (!mirrored) {
         owner.handleGatewayEvent({
@@ -164,8 +172,11 @@ describe("ShellGatewayOwner profile appearance integration", () => {
         expect(loadSettings().accent).toBeUndefined();
       }
       await completeProfileAppearance();
-      // One publication resets navigation on adoption; the second applies the profile snapshot.
+      await vi.dynamicImportSettled();
+      // Adoption publishes navigation, then hydration publishes profile/readiness.
       expect(refreshTheme).toHaveBeenCalledTimes(2);
+      expect(requestUpdate).toHaveBeenCalledOnce();
+      expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
       expect(loadSettings().accent).toBe("#336699");
       expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
         keys: [

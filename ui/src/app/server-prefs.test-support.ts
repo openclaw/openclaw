@@ -1,8 +1,9 @@
 import { vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigExternalMutationOptions } from "../lib/config/config-gateway-operations.ts";
-import { refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
-import { pushServerUiPrefs } from "./server-prefs.ts";
+import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
+import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import { patchSettings } from "./settings.ts";
 
 export type RequestMock = ReturnType<
   typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>
@@ -123,4 +124,34 @@ export function createProfilePrefsServer(
     return { writer, request, refresh };
   };
   return { profiles, connect };
+}
+
+export function refreshServerPrefsProfile(
+  writer: ReturnType<typeof createServerPrefsWriter>,
+  profileId: string,
+  configObject: unknown = {},
+) {
+  const client = writer.state.client!;
+  return refreshProfileAppearancePrefs({
+    client,
+    profileId,
+    scope: client.gatewayUrl,
+    configObject,
+    onApplied: vi.fn(),
+  });
+}
+
+export async function initializeServerPrefsProfile(
+  scope: string,
+  profileId: string,
+  configObject: unknown = {},
+) {
+  resetServerUiPrefsSync();
+  patchSettings({ gatewayUrl: scope });
+  applyServerUiPrefs(configObject, { scope, profileId, onApplied: vi.fn() });
+  const initial = createServerPrefsWriter(
+    vi.fn(async () => ({ status: "ok", entries: {} })),
+    scope,
+  );
+  await refreshServerPrefsProfile(initial, profileId);
 }

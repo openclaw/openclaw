@@ -17,6 +17,7 @@ export type PersistedUiSettings = Omit<
   | "navCollapsed"
   | "sidebarEntries"
   | "navigationScope"
+  | "background"
 > &
   Partial<ProfileNavigation> & {
     token?: never;

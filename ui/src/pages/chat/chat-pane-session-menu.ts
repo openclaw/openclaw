@@ -125,6 +125,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     return this.headerSessionDataMemo.read(
       [
         label,
+        row.key,
+        row.agentId,
         row.sessionId,
         isChild,
         hasChildren,
@@ -133,6 +135,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         row.snoozedUntil,
         row.unread,
         row.hiddenFromInvolvingMe,
+        row.communication,
+        row.effectiveCommunication,
         row.archived,
         archiving,
         row.category,
@@ -141,6 +145,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       ],
       () => ({
         label,
+        target: { key: row.key, agentId: row.agentId },
         sessionId: row.sessionId ?? null,
         isChild,
         hasChildren,
@@ -149,6 +154,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         snoozedUntil: row.snoozedUntil ?? null,
         unread: row.unread === true,
         hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+        communication: row.communication,
+        effectiveCommunication: row.effectiveCommunication,
         archived: row.archived === true,
         archiving,
         category: normalizeOptionalString(row.category) ?? null,
@@ -341,6 +348,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "toggle-unread":
         case "set-icon":
         case "set-color":
+        case "set-communication":
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
@@ -351,7 +359,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
                   ? { icon: action.icon }
                   : action.kind === "set-color"
                     ? { color: action.color }
-                    : { icon: null, color: null };
+                    : action.kind === "set-communication"
+                      ? { communication: action.communication }
+                      : { icon: null, color: null };
             await operations.patchSession(host, currentSession, patch, scope);
           }
           break;

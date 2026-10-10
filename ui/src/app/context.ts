@@ -60,7 +60,7 @@ export type ApplicationTheme = {
   readonly serverSelection: ApplicationThemeServerSelection | null;
   recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
-  refresh: () => void;
+  refresh: (options?: { notify?: boolean }) => void;
   subscribe: (listener: () => void) => () => void;
 };
 

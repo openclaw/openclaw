@@ -8,6 +8,7 @@ import {
   mergePendingUiPrefs,
   resetServerUiPrefIntent,
   prefIntentMatches,
+  pendingUiPrefKeys,
 } from "./server-prefs-intent.ts";
 import {
   rememberProfileAppearanceIdentity,
@@ -51,28 +52,72 @@ export type { ServerUiPrefProvenance } from "./server-prefs-state.ts";
 
 const CONFLICT_REDRAIN_DELAY_MS = 1_000;
 const MAX_CONFLICT_REDRAINS = 5;
-export const serverUiPrefsSync: ServerUiPrefsSync = {
-  applyingServerPrefs: false,
-  pendingScope: "",
-  pendingPrefs: null,
-  pendingPersistedKeys: new Set(),
-  composeSidebar: null,
-  pushWriter: null,
-  pushScope: "",
-  pushClient: null,
-  pushProfileId: null,
-  pushCanWrite: false,
-  pushAfterCommit: undefined,
-  pushDraining: false,
-  drainRequested: false,
-  pushEpoch: 0,
-  conflictRedrainTimer: null,
-  consecutiveConflictRedrains: 0,
-  confirmedPrefsFallback: null,
-  lastReconciledScope: null,
-  lastReconciledConfigObject: null,
-};
-const sync = serverUiPrefsSync;
+const preferenceWriteListeners = new Set<() => void>();
+export function subscribeServerUiPrefWrites(listener: () => void): () => void {
+  preferenceWriteListeners.add(listener);
+  return () => preferenceWriteListeners.delete(listener);
+}
+function publishPreferenceWrites(): void {
+  for (const listener of preferenceWriteListeners) {
+    listener();
+  }
+}
+class ServerUiPrefsOutbox implements ServerUiPrefsSync {
+  applyingServerPrefs = false;
+  pendingScope = "";
+  pendingPrefs: ServerUiPrefs | null = null;
+  pendingPersistedKeys = new Set<string>();
+  composeSidebar: ServerUiPrefsSync["composeSidebar"] = null;
+  pushWriter: ServerUiPrefsWriter | null = null;
+  pushScope = "";
+  pushClient: ServerUiPrefsSync["pushClient"] = null;
+  pushProfileId: string | null = null;
+  pushCanWrite = false;
+  pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
+  pushDraining = false;
+  drainRequested = false;
+  pushEpoch = 0;
+  conflictRedrainTimer: ReturnType<typeof setTimeout> | null = null;
+  consecutiveConflictRedrains = 0;
+  confirmedPrefsFallback: ServerUiPrefsSync["confirmedPrefsFallback"] = null;
+  lastReconciledScope: string | null = null;
+  lastReconciledConfigObject: unknown = null;
+  preferenceWriteFailures: ServerUiPrefsSync["preferenceWriteFailures"] = new Map();
+  writePendingStorage = writePendingStorage;
+  recordPreferenceWriteFailures = recordPreferenceWriteFailures;
+  reconcilePersistedPendingPrefs = reconcilePersistedPendingPrefs;
+  cancelPendingKeys = cancelPendingKeys;
+  updateRetainedLocalKeys = updateRetainedLocalKeys;
+  publishPreferenceWrites = publishPreferenceWrites;
+  clearConflictRedrain = clearConflictRedrain;
+  scheduleConflictRedrain = scheduleConflictRedrain;
+  mergePendingIntoStorage = mergePendingIntoStorage;
+  startPendingDrain = startPendingDrain;
+  batchIsCurrent = batchIsCurrent;
+  applyServerPrefsPatch = applyServerPrefsPatch;
+}
+// One owner survives lazy dispatch, resets, and connection changes.
+export const serverUiPrefsOutbox = new ServerUiPrefsOutbox();
+const sync = serverUiPrefsOutbox;
+function recordPreferenceWriteFailures(
+  scope: string,
+  values: ServerUiPrefs,
+  error: unknown,
+  retained = false,
+): void {
+  const failures = sync.preferenceWriteFailures.get(scope) ?? new Map();
+  for (const key of SYNCED_PREF_KEYS) {
+    if (!Object.hasOwn(values, key)) {
+      continue;
+    }
+    failures.set(key, {
+      value: values[key],
+      error: error instanceof Error ? error.message : String(error),
+      retained,
+    });
+  }
+  sync.preferenceWriteFailures.set(scope, failures);
+}
 function clearConflictRedrain(): void {
   if (sync.conflictRedrainTimer !== null) {
     clearTimeout(sync.conflictRedrainTimer);
@@ -80,7 +125,7 @@ function clearConflictRedrain(): void {
   }
   sync.consecutiveConflictRedrains = 0;
 }
-export function updateRetainedLocalKeys(
+function updateRetainedLocalKeys(
   scope: string,
   keys: readonly SyncedPrefKey[],
   retained: boolean,
@@ -104,7 +149,7 @@ function adoptPendingScope(scope: string): void {
   const stored = readStoredPrefs(PENDING_KEY, scope);
   sync.pendingPrefs = stored.prefs;
   sync.pendingPersistedKeys = new Set(
-    SYNCED_PREF_KEYS.filter((key) => stored.prefs && Object.hasOwn(stored.prefs, key)),
+    stored.available && stored.prefs ? pendingUiPrefKeys(stored.prefs) : [],
   );
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
@@ -118,13 +163,16 @@ function writePendingStorage(prefs: ServerUiPrefs | null): void {
   );
   if (persisted) {
     sync.pendingPersistedKeys = new Set(
-      SYNCED_PREF_KEYS.filter((key) => sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, key)),
+      sync.pendingPrefs ? pendingUiPrefKeys(sync.pendingPrefs) : [],
     );
   } else {
     sync.pendingPersistedKeys.clear();
   }
 }
-export function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void {
+function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void {
+  for (const key of keys) {
+    sync.preferenceWriteFailures.get(scope)?.delete(key);
+  }
   if (scope === sync.pendingScope) {
     reconcilePersistedPendingPrefs();
   }
@@ -155,7 +203,7 @@ export function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[])
 // no CAS and the drain converges through server-side LWW.
 function mergePendingIntoStorage(ackedBatch: ServerUiPrefs = {}): void {
   const stored = parseStoredPrefs(readStorage(PENDING_KEY, sync.pendingScope)) ?? {};
-  for (const key of SYNCED_PREF_KEYS) {
+  for (const key of pendingUiPrefKeys(ackedBatch)) {
     if (Object.hasOwn(ackedBatch, key) && prefIntentMatches(stored, ackedBatch, key)) {
       delete stored[key];
       if (key === "sidebarEntries") {
@@ -175,10 +223,10 @@ function reconcilePersistedPendingPrefs(adoptKeys: readonly SyncedPrefKey[] = []
   }
   const current = stored.prefs ?? {};
   const pending = sync.pendingPrefs ?? {};
-  for (const key of SYNCED_PREF_KEYS) {
+  for (const key of new Set([...SYNCED_PREF_KEYS, ...sync.pendingPersistedKeys])) {
     if (
       !sync.pendingPersistedKeys.has(key) &&
-      (Object.hasOwn(pending, key) || !adoptKeys.includes(key))
+      (Object.hasOwn(pending, key) || !adoptKeys.some((candidate) => candidate === key))
     ) {
       continue;
     }
@@ -206,7 +254,7 @@ function batchIsCurrent(batch: ServerUiPrefs): boolean {
   const current = sync.pendingPrefs;
   return Boolean(
     current &&
-    SYNCED_PREF_KEYS.every(
+    pendingUiPrefKeys(batch).every(
       (key) =>
         !Object.hasOwn(batch, key) ||
         (Object.hasOwn(current, key) && prefIntentMatches(current, batch, key)),
@@ -229,6 +277,9 @@ export function resetServerUiPrefsSync() {
   sync.lastReconciledConfigObject = null;
   resetProfileAppearancePrefs();
   resetServerUiPrefIntent();
+  sync.preferenceWriteFailures.clear();
+  sync.pushEpoch += 1;
+  publishPreferenceWrites();
 }
 
 export function isApplyingServerUiPrefs(): boolean {
@@ -308,20 +359,11 @@ function scheduleConflictRedrain(writer: ServerUiPrefsWriter, epoch: number): vo
   }, CONFLICT_REDRAIN_DELAY_MS);
 }
 
-async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Promise<void> {
-  const runtime = await import("./server-prefs-drain.ts");
-  return runtime.drainPendingPrefs(writer, epoch, sync, {
-    scheduleConflictRedrain,
-    reconcilePersistedPendingPrefs,
-    cancelPendingKeys,
-    updateRetainedLocalKeys,
-    batchIsCurrent,
-    applyServerPrefsPatch,
-    mergePendingIntoStorage,
-    clearConflictRedrain,
-  });
-}
 function startPendingDrain(writer: ServerUiPrefsWriter): void {
+  // Offline intent must not load dispatch or invalidate another profile.
+  if (!writer.state.connected) {
+    return;
+  }
   if (sync.pushDraining) {
     sync.drainRequested = true;
     return;
@@ -338,8 +380,15 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
   }
   sync.pushDraining = true;
   const epoch = sync.pushEpoch;
-  void drainPendingPrefs(writer, epoch)
-    .catch(() => undefined)
+  void import("./server-prefs-drain.ts")
+    .then(({ drainPendingPrefs }) => drainPendingPrefs(sync, writer, epoch))
+    .catch((error: unknown) => {
+      if (sync.pushWriter !== writer || sync.pushEpoch !== epoch || !sync.pendingPrefs) {
+        return;
+      }
+      recordPreferenceWriteFailures(sync.pendingScope, sync.pendingPrefs, error);
+      publishPreferenceWrites();
+    })
     .finally(() => {
       if (sync.pushWriter === writer && sync.pushEpoch === epoch) {
         sync.pushDraining = false;
@@ -359,6 +408,9 @@ export function pushServerUiPrefs(
   clearConflictRedrain();
   sync.pushAfterCommit = hooks.afterCommit;
   const keys = SYNCED_PREF_KEYS.filter((key) => Object.hasOwn(prefs, key));
+  for (const key of keys) {
+    sync.preferenceWriteFailures.get(sync.pendingScope)?.delete(key);
+  }
   const blockedKeys = writer.state.connected
     ? keys.filter((key) => {
         if (SYNCED_PREFS[key].configSync === false && !sync.pushProfileId) {
@@ -377,11 +429,17 @@ export function pushServerUiPrefs(
     // same-key offline intent so a later authorization cannot replay stale input.
     cancelPendingKeys(sync.pendingScope, blockedKeys);
     updateRetainedLocalKeys(sync.pendingScope, blockedKeys, true);
+    publishPreferenceWrites();
     hooks.afterCommit?.({ needsRefresh: false, retainedLocal: true });
     if (blockedKeys.length === keys.length) {
       return;
     }
   }
+  updateRetainedLocalKeys(
+    sync.pendingScope,
+    keys.filter((key) => !blockedKeys.includes(key)),
+    false,
+  );
   const writablePrefs = blockedKeys.length
     ? Object.fromEntries(
         Object.entries(prefs).filter(
@@ -393,6 +451,7 @@ export function pushServerUiPrefs(
   sync.composeSidebar?.(sync.pendingPrefs, writablePrefs);
   sync.pendingPrefs = mergePendingUiPrefs(sync.pendingPrefs, writablePrefs);
   mergePendingIntoStorage();
+  publishPreferenceWrites();
   startPendingDrain(writer);
 }
 export function flushServerUiPrefs(
@@ -409,7 +468,7 @@ export function flushServerUiPrefs(
   startPendingDrain(writer);
 }
 
-export function applyServerPrefsPatch(patch: Partial<UiSettings>): void {
+function applyServerPrefsPatch(patch: Partial<UiSettings>): void {
   sync.applyingServerPrefs = true;
   try {
     patchSettings(patch);

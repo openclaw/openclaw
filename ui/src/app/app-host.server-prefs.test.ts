@@ -516,14 +516,14 @@ describe("profile preference ACK publication across browser realms", () => {
         entries["ui.sidebarEntries"] = ["route:usage"];
         entries["ui.navigationScope"] = "mine";
         await refresh();
-        const confirmed = realm.prefs.serverUiPrefsSync.confirmedPrefsFallback?.prefs;
+        const confirmed = realm.prefs.serverUiPrefsOutbox.confirmedPrefsFallback?.prefs;
         reply.resolve({ status: "ok" });
         await vi.dynamicImportSettled();
         expect(realm.settings.loadSettings(scope)).toMatchObject({
           sidebarEntries: ["route:usage"],
           navigationScope: "mine",
         });
-        expect(realm.prefs.serverUiPrefsSync.confirmedPrefsFallback?.prefs).toMatchObject({
+        expect(realm.prefs.serverUiPrefsOutbox.confirmedPrefsFallback?.prefs).toMatchObject({
           sidebarEntries: confirmed?.sidebarEntries,
           navigationScope: confirmed?.navigationScope,
         });

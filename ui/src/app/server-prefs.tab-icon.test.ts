@@ -3,10 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import {
-  selectThemeSettings,
-  resetServerUiPref,
   refreshProfileAppearancePrefs,
   resolveServerUiPrefState,
   extractServerUiPrefs,

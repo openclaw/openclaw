@@ -559,7 +559,7 @@ export class ShellGatewayOwner {
           canWrite: () => hasOperatorWriteAccess(context.gateway.snapshot.hello?.auth ?? null),
           onApplied: () => {
             if (remainsCurrent()) {
-              context.theme.refresh();
+              context.theme.refresh({ notify: true });
             }
           },
           onThemeChanged: (theme) => {
@@ -568,8 +568,13 @@ export class ShellGatewayOwner {
             }
           },
         });
-        if (!applied && remainsCurrent()) {
-          context.theme.refresh();
+        if (remainsCurrent()) {
+          if (!applied) {
+            context.theme.refresh({ notify: true });
+          }
+          // Readiness releases the shell and private-background descendants even
+          // when the profile snapshot matches the browser mirror.
+          this.host.requestUpdate();
         }
       })
       .catch(reportError);

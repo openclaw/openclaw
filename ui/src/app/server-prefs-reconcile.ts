@@ -4,9 +4,9 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
-import { requestServerUiPrefIntent } from "./server-prefs-intent.ts";
 import {
   rememberProfileAppearanceIdentity,
+  resolveProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
   resolveProfilePreferenceScope,
   profilePreferencesState,
@@ -19,7 +19,6 @@ import {
   isNavigationPref,
   isProfilePref,
   prefValuesEqual,
-  type ResettableServerUiPrefKey,
   type SyncedPrefKey,
   type SyncedPrefValue,
   type ServerUiPrefs,
@@ -33,19 +32,13 @@ import {
   readStorage,
   readRetainedLocalKeys,
 } from "./server-prefs-storage.ts";
-import {
-  cancelPendingKeys,
-  serverUiPrefsSync as sync,
-  updateRetainedLocalKeys,
-  applyServerPrefsPatch,
-} from "./server-prefs.ts";
+import { serverUiPrefsOutbox as sync } from "./server-prefs.ts";
 import type { UiSettings } from "./settings-contract.ts";
 import {
   loadSettings,
   loadUiPreferences,
   readSettingsForGateway,
   profileNavigation,
-  patchSettings,
 } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
 
@@ -392,9 +385,7 @@ export function applyServerUiPrefs(
   },
 ): boolean {
   const gatewayScope = hooks.scope ?? "";
-  if (hooks.profileId) {
-    rememberProfileAppearanceIdentity(gatewayScope, hooks.profileId);
-  }
+  rememberProfileAppearanceIdentity(gatewayScope, hooks.profileId ?? null);
   const scope = resolveProfilePreferenceScope(gatewayScope, hooks.profileId);
   if (
     !hooks.navigationConfirmed &&
@@ -410,6 +401,7 @@ export function applyServerUiPrefs(
   const scopeChanged = sync.lastReconciledScope !== null && scope !== sync.lastReconciledScope;
   const profilePrefs = resolveProfileAppearancePrefs(gatewayScope, hooks.profileId);
   const readiness = resolveProfilePreferenceReadiness(gatewayScope, hooks.profileId, scopeChanged);
+  const backgroundReady = Boolean(hooks.profileId && profilePrefs !== null);
   const shadowPrefs =
     scope === sync.pendingScope
       ? sync.pendingPrefs
@@ -420,12 +412,20 @@ export function applyServerUiPrefs(
   );
   const finishReconciliation = () => {
     if (reconciledRetainedKeys.length) {
-      updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
+      sync.updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
     }
     sync.lastReconciledScope = scope;
     sync.lastReconciledConfigObject = configObject;
   };
   const prefs = { ...extractServerUiPrefs(configObject), ...profilePrefs };
+  if (
+    backgroundReady &&
+    profilePrefs?.background === undefined &&
+    loadSettings(gatewayScope || undefined).background !== undefined
+  ) {
+    // Confirmed absence clears only the current profile's private mirror.
+    prefs.background = null;
+  }
   const lastSeenSnapshot = readConfirmedPrefs(sync, scope);
   const lastSeen = { ...lastSeenSnapshot };
   delete lastSeen.navigationConfirmation;
@@ -485,6 +485,9 @@ export function applyServerUiPrefs(
     shadowPrefs,
     retainedLocalKeys,
   });
+  if (!backgroundReady) {
+    delete changed.background;
+  }
   Object.assign(changed, navigationPatch);
   publishConfirmedPrefs(sync, scope, prefs, confirmedKeys);
   finishReconciliation();
@@ -501,7 +504,7 @@ export function applyServerUiPrefs(
   if (!patch) {
     return false;
   }
-  applyServerPrefsPatch(patch);
+  sync.applyServerPrefsPatch(patch);
   hooks.onApplied(patch);
   return true;
 }
@@ -534,52 +537,6 @@ export async function refreshProfileAppearancePrefs(options: {
   return applyServerUiPrefs(options.configObject, { ...options, scope, navigationConfirmed: true });
 }
 
-export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
-  key: K,
-  state?: ServerUiPrefState<SyncedPrefValue<K>>,
-  scope = sync.pendingScope,
-  profileId?: string | null,
-): UiSettings {
-  const specification = SYNCED_PREFS[key];
-  const applyReset = (patch: Partial<UiSettings>) =>
-    key === "theme" && patch.theme !== undefined
-      ? selectThemeSettings(patch.theme)
-      : patchSettings(patch);
-  // Disconnected clients retain their last known profile for local cancellation.
-  const activeProfile = isProfilePref(key)
-    ? (profileId ?? resolveProfileAppearanceProfileId(scope))
-    : null;
-  const effectiveScope = resolveProfilePreferenceScope(scope, activeProfile);
-  // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
-  const write = specification.write as
-    | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
-    | undefined;
-  if (!write) {
-    throw new Error(`Server UI preference is not resettable: ${key}`);
-  }
-  if (state?.provenance === "device-local") {
-    const patch = write(state.resetValue);
-    const keys: SyncedPrefKey[] =
-      key === "theme" && patch.theme !== loadSettings().theme
-        ? [key, "accent", "fontUi", "fontChat"]
-        : [key];
-    cancelPendingKeys(effectiveScope, keys);
-    // Edits made after disconnect lose the profile and queue in the Gateway scope.
-    if (effectiveScope !== scope) {
-      cancelPendingKeys(scope, keys);
-    }
-    updateRetainedLocalKeys(effectiveScope, keys, false);
-    for (const resetKey of keys) {
-      requestServerUiPrefIntent(resetKey, "device-local");
-    }
-    return applyReset(patch);
-  }
-  requestServerUiPrefIntent(key, "server");
-  // The resolved state owns the reset target, including the Gateway fallback
-  // while the profile is still loading. Config preferences use product defaults.
-  return applyReset(write(state?.resetValue));
-}
-
 function resolveProfilePreferenceReadiness(
   scope: string,
   profileId: string | null | undefined,
@@ -598,18 +555,7 @@ function resolveProfilePreferenceReadiness(
   };
 }
 
-export function resolveProfileAppearancePrefs(
-  scope: string,
-  profileId?: string | null,
-): ServerUiPrefs | null {
-  return profileId &&
-    profilePreferencesState.appearance?.profileId === profileId &&
-    profilePreferencesState.appearance.scope === scope
-    ? profilePreferencesState.appearance.prefs
-    : null;
-}
-
-async function loadProfileAppearancePrefs(
+export async function loadProfileAppearancePrefs(
   client: GatewayBrowserClient,
   profileId: string,
   scope: string,
@@ -645,28 +591,4 @@ function loadLocalNavigationPreferences(
   } catch {
     return null;
   }
-}
-
-/** Explicit user selection only; incoming snapshots and mode changes never reset design choices. */
-export function selectThemeSettings(
-  theme: ThemeName,
-  patch: Pick<Partial<UiSettings>, "customTheme"> = {},
-): UiSettings {
-  if (theme === loadSettings().theme) {
-    return patchSettings({ ...patch, theme });
-  }
-  // Clear even unresolved profile values: a missing boot mirror is not evidence
-  // that the server has no font override. Send these with the theme in one batch.
-  // Carry the whole selection intent even if another tab already mirrors this
-  // marker, so a read-only selection can cancel every older queued design edit.
-  requestServerUiPrefIntent("accent", "write");
-  requestServerUiPrefIntent("fontUi", "server");
-  requestServerUiPrefIntent("fontChat", "server");
-  return patchSettings({
-    ...patch,
-    theme,
-    fontUi: undefined,
-    fontChat: undefined,
-    accent: "theme",
-  });
 }

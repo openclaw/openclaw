@@ -1,14 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs, requestServerUiPrefIntent } from "./server-prefs-intent.ts";
-import {
-  resetServerUiPref,
-  applyServerUiPrefs,
-  resolveServerUiPrefState,
-} from "./server-prefs-reconcile.ts";
+import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter as createClient,
@@ -57,6 +55,18 @@ describe("server preferences", () => {
     }
     expect(changedServerUiPrefs(settings, settings)).toEqual(expected);
     expect(changedServerUiPrefs(settings, settings)).toBeNull();
+  });
+
+  it("settles rejected persisted keys even when they are not known preference names", async () => {
+    const completed = createDeferred();
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Unknown preference" });
+    });
+    localStorage.setItem(pendingKey(scope), JSON.stringify({ unknownPreference: true }));
+    flushServerUiPrefs(createClient(request, scope), { afterCommit: () => completed.resolve() });
+    await completed.promise;
+    expectPatch(request, { unknownPreference: true });
+    expect(localStorage.getItem(pendingKey(scope))).toBeNull();
   });
 
   it("rejects malformed accents in a minimal persisted settings record", () => {

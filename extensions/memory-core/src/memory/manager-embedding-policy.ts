@@ -107,6 +107,21 @@ type MemoryEmbeddingRetryBudget = {
   retryAfterMs?: number;
 };
 
+const MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE =
+  /\b(?:embeddings api input limit exceeded:\s*max\s+(\d+)\s*,\s*got\s+\d+|embeddings max input length is\s+(\d+(?:\.\d+)?)|batch size is invalid,?\s+it should not be larger than\s+(\d+(?:\.\d+)?)|input array max\s+(\d+)(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*(\d+)\s*条)/gi;
+
+function parseMemoryEmbeddingBatchItemLimit(message: string): number | undefined {
+  const limits = new Set<number>();
+  for (const match of message.matchAll(MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE)) {
+    const value = Number(match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5]);
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      return undefined;
+    }
+    limits.add(value);
+  }
+  return limits.size === 1 ? limits.values().next().value : undefined;
+}
+
 function isInvalidEmbeddingResponse(error: unknown): boolean {
   // Diagnostic counts and model names must not be mistaken for HTTP status or input limits.
   return asOptionalRecord(error)?.code === "INVALID_EMBEDDING_RESPONSE";
@@ -222,17 +237,22 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
       throw err;
     }
 
-    const splitAt = Math.ceil(params.items.length / 2);
+    const itemLimit = parseMemoryEmbeddingBatchItemLimit(message);
+    const splitAt =
+      itemLimit !== undefined && itemLimit < params.items.length
+        ? itemLimit
+        : Math.ceil(params.items.length / 2);
     params.onSplit?.({ itemCount: params.items.length, splitAt, message });
-    const left = await runMemoryEmbeddingBatchRetryWithSplit({
-      ...params,
-      items: params.items.slice(0, splitAt),
-    });
-    const right = await runMemoryEmbeddingBatchRetryWithSplit({
-      ...params,
-      items: params.items.slice(splitAt),
-    });
-    return [...left, ...right];
+    const results: TOutput[] = [];
+    for (let start = 0; start < params.items.length; start += splitAt) {
+      results.push(
+        ...(await runMemoryEmbeddingBatchRetryWithSplit({
+          ...params,
+          items: params.items.slice(start, start + splitAt),
+        })),
+      );
+    }
+    return results;
   }
   await params.onSuccess?.(params.items, outputs);
   return outputs;
