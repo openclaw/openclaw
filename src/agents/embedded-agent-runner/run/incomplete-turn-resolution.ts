@@ -159,7 +159,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     preflightFailureText ??
     (failureFacts
       ? (failureFacts.providerRequestError?.userMessage ??
-        failureFacts.formatFailureText ??
+        failureFacts.requestFailureText ??
         renderAssistantRequestFailureCopy({
           reason: failureFacts.reason,
           status: failureFacts.status,
