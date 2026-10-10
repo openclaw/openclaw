@@ -844,11 +844,9 @@ export const en: TranslationMap & {
     snoozeNextWeek: "Next week",
     snoozed: "Snoozed",
     snoozeWakes: "Wakes {time}",
-    sessionSnoozed: "Snoozed until {time}",
     snoozeTomorrowTime: "tomorrow {time}",
     sessionArchived: "Session archived",
     archiving: "Archiving…",
-    sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
     deleteAllArchivedConfirm:
       "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
@@ -960,9 +958,7 @@ export const en: TranslationMap & {
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
     cloudWorkerDescendantConflicts: "Cloud worker children: {count} workspace conflicts",
     renameSession: "Rename session",
-    renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
-    sessionNameInUse: "A session with this name already exists.",
     setIconMenu: "Set icon",
     setColorMenu: "Color",
     setIconColorMenu: "Icon & color",
@@ -1033,25 +1029,13 @@ export const en: TranslationMap & {
     movingSession: "Moving to {target}…",
     movingSessionGeneric: "Moving session…",
     stopCloudWorker: "Stop cloud worker…",
-    stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
-    stopCloudWorkerConfirmAction: "Stop worker",
     initialTurnPausedByWorkerStop:
       "Worker stop requested. Review the initial message before retrying.",
-    stopCloudWorkerStale:
-      'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionConfirm:
-      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsConfirm:
-      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
-    deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
-    deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -1076,8 +1060,6 @@ export const en: TranslationMap & {
     newGroupCreate: "Create group",
     newGroupFailed: "Could not create the group.",
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
-    newGroupMoveSkipped:
-      "Group created, but the move was skipped because the list changed. Move from the row menu.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
@@ -1086,18 +1068,7 @@ export const en: TranslationMap & {
     groupMenu: "Group options for {group}",
     newSessionInGroup: "New session in {group}",
     groupDefaultsMenu: "New session defaults",
-    groupDefaultsTitle: 'New session defaults for "{group}"',
-    groupDefaultsDescription: "Choose where new sessions in this group start.",
-    groupDefaultsCwd: "Working directory",
-    groupDefaultsCwdPlaceholder: "Use the agent workspace",
-    groupDefaultsCwdHint: "Leave empty to use the selected agent's workspace.",
-    groupDefaultsMode: "Environment",
-    groupDefaultsLocal: "Current checkout",
-    groupDefaultsWorktree: "New worktree",
-    groupDefaultsWorktreeHint: "Runs each session in an isolated Git worktree.",
     groupDefaultsFailed: "Could not save the group defaults.",
-    groupDefaultsRequiresAdmin:
-      "This folder is outside agent workspaces. Saving defaults for it requires operator.admin. Open Inbox, select Limited access, request admin, then approve in Devices.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     renameGroupMenu: "Rename group",
     renameGroupTitle: 'Rename group "{group}"',
@@ -2901,7 +2872,6 @@ export const en: TranslationMap & {
       empty: "No subagents in this conversation.",
       noRunning: "No running subagents",
       refresh: "Refresh subagents",
-      loadMore: "Show more subagents",
       stop: "Stop {name}",
       stopping: "Stopping…",
       elapsed: "Elapsed time",

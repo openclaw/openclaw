@@ -216,11 +216,12 @@ for the wire controls.
 not sign in to providers, test credentials, or activate downloaded rows in a
 running Gateway. It rejects `--agent` because the hosted catalog is global.
 
-The Gateway applies compatible downloads at its next background catalog check
-or after an explicit model-list refresh, without restarting. Refresh requests
-return current rows without waiting for the replacement generation.
-A failed preparation leaves the previous generation active. A successful CLI
-refresh result describes the download, not live activation.
+The command requires the local Gateway to be stopped. Stop it through its
+service owner, run the refresh, then start it again. It takes exclusive offline
+ownership through download and write settlement, and refuses while a Gateway
+owns the state directory. A successful result describes the saved download;
+the next Gateway start loads compatible metadata. The running Gateway continues
+to perform its own scheduled catalog refreshes.
 If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
 is disabled.
 

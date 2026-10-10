@@ -253,6 +253,10 @@ export const validateSecretsStoreListParams = compile(S.SecretsStoreListParamsSc
 export const validateSecretsStoreListResult = compile(S.SecretsStoreListResultSchema);
 export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSchema);
 export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
+export const validateSecretsStoreImportParams = compile(S.SecretsStoreImportParamsSchema);
+export const validateSecretsStoreAllowedHostsParams = compile(
+  S.SecretsStoreAllowedHostsParamsSchema,
+);
 export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
 // Runs before the schema: compare only numeric boundaries and leave type errors to the schema.
 function checkPulseBoundaries(data: unknown) {

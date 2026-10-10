@@ -606,7 +606,7 @@ suite.define(() => {
     }
   });
 
-  it("preserves accepted steering before later activity through a full reload", async () => {
+  it("preserves accepted steer order through a full reload", async () => {
     const runId = "run-steer-refresh";
     const texts = {
       original: "Review the fixture.",
