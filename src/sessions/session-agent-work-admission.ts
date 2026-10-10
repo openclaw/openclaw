@@ -47,7 +47,7 @@ export function publishAgentDeletionWorkAdmission(
   const agent = agentWorkAdmissionIdentity(target);
   for (const owner of sessionWorkAdmissionClosures) {
     if (
-      owner.deletionOperationId &&
+      owner.deletionOperationId !== undefined &&
       matchesAgentWorkAdmission(owner.agent, agent) &&
       (pending || owner.deletionOperationId === operationId)
     ) {

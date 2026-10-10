@@ -22,7 +22,10 @@ import {
   withConfigMutationExclusive,
 } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
 import type {
   NativeBindingTestApi,
@@ -650,15 +653,9 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               );
               legacy
                 .prepare(`INSERT INTO agent_deletion_journal
-                (agent_id, operation_id, agent_dir, workspace_dir, sessions_dir, created_at)
-                VALUES (?, ?, ?, ?, ?, 1)`)
-                .run(
-                  pending.agentId,
-                  pending.operationId,
-                  pending.agentDir,
-                  pending.workspaceDir,
-                  pending.sessionsDir,
-                );
+                (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
+                VALUES (?, ?, ?, ?, 1)`)
+                .run(pending.agentId, pending.agentDir, pending.workspaceDir, pending.sessionsDir);
             } finally {
               legacy.close();
             }
@@ -703,6 +700,12 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             agentId,
           });
           expect(readAgentDeletionJournal(agentId)).toBeUndefined();
+          await expect(
+            replaceSessionEntry(
+              { agentId, env: state.env, sessionKey },
+              { sessionId: "recreated-after-recovery", updatedAt: 2 },
+            ),
+          ).resolves.toMatchObject({ sessionId: "recreated-after-recovery" });
           if (scenario === "legacy-retiring") {
             await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
             const upgraded = new DatabaseSync(sharedDatabasePath);
