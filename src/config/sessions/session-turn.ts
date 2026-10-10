@@ -525,6 +525,7 @@ export async function appendSessionTurnInWorker(
             checkAuthority(() => {
               operation.onTransactionFacts(publication);
               if (isRecord(publication) && publication.kind === "session-turn") {
+                // SAFETY: the actor's typed phase kernel publishes this discriminated commit.
                 operation.assertCandidate(publication as SessionTurnCommitted);
               }
               assertCurrent();

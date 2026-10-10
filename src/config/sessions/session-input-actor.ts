@@ -7,8 +7,6 @@ import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-wo
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type { SessionActor, SessionActorLifetime } from "./session-actor-contract.js";
-import { createSessionActorFactory } from "./session-actor-durable.js";
-import { captureNativeIncognitoSessionActorTarget } from "./session-actor-native-incognito.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 
 export type SessionInputActorBinding = {
@@ -34,6 +32,13 @@ export async function acquireSessionInputActor(
     path: target.readSource?.path ?? target.storePath,
     env: target.env,
   };
+  lifetime.assertCurrent();
+  const [{ createSessionActorFactory }, { captureNativeIncognitoSessionActorTarget }] =
+    await Promise.all([
+      import("./session-actor-durable.js"),
+      import("./session-actor-native-incognito.js"),
+    ]);
+  lifetime.assertCurrent();
   const bound = captureIncognitoSessionOperation({
     ...database,
     storePath: database.path,
