@@ -12,7 +12,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as implicitCatalog from "./models-config.providers.implicit.js";
+import * as ambientAuth from "./agent-auth-discovery.js";
+import * as agentFacts from "./prepared-model-runtime.agent-facts.js";
+import * as inboundRegistry from "./prepared-model-runtime.inbound-registry.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import * as sqliteReads from "../infra/sqlite-readonly-worker.js";
+import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -28,8 +34,10 @@ import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   prepareConfiguredRuntimeFactsBatch,
+  prepareWorkspaceBuildGroup,
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
+import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
@@ -141,6 +149,55 @@ function persistedFixture() {
 }
 
 describe("prepared catalog source composition", () => {
+  it("resolves a persisted account-listed model without a configured model or metadata row", async () => {
+    const { facts, generation } = persistedFixture();
+    await using cache = createPluginCache();
+    bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
+    facts.input = { ...facts.input, config: {} };
+    facts.providerIds = [];
+    facts.credentials = { [providerId]: { type: "api_key", key: "synthetic-key" } };
+    facts.templateAuthStorage = AuthStorage.inMemory(facts.credentials);
+    vi.spyOn(agentFacts, "prepareAgentFacts").mockResolvedValue(facts);
+    vi.spyOn(ambientAuth, "prepareAmbientAgentCredentialsForDiscovery").mockResolvedValue({});
+    vi.spyOn(inboundRegistry, "prepareWorkspacePluginRegistries").mockResolvedValue({
+      inboundPluginRegistry: undefined,
+      runtimePluginRegistry: undefined,
+      primaryRegistry: undefined,
+    });
+    vi.spyOn(implicitCatalog, "prepareImplicitProviderStaticCatalog").mockResolvedValue({
+      entries: [],
+      providers: [],
+    });
+    try {
+      const prepared = await prepareWorkspaceBuildGroup(
+        [facts.input],
+        "static",
+        {},
+        undefined,
+        undefined,
+        generation.pluginMetadataSnapshot,
+      );
+      await using generationLease = {
+        [Symbol.asyncDispose]: () => discardPreparedPluginGeneration(prepared.pluginGeneration),
+      };
+      const batch = await prepareConfiguredRuntimeFactsBatch(prepared);
+      const registry = batch.catalogs.get(facts.input)!.templateModelRegistry;
+      const result = await resolveModelAsync(providerId, "persisted-only", facts.input.agentDir, {}, {
+        authStorage: facts.templateAuthStorage,
+        modelRegistry: registry,
+        authProfileMode: "api_key",
+        skipProviderRuntimeHooks: true,
+      });
+      expect(result.model).toMatchObject({
+        provider: providerId,
+        id: "persisted-only",
+        baseUrl: endpoint,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("prepares persisted catalog sources, fingerprints, and queued plans without caller-thread SQLite", async () => {
     const { facts, generation, catalogs, modelsJsonContents } = persistedFixture();
     const planner = vi
