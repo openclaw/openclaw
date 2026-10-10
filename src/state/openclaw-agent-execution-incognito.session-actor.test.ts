@@ -92,7 +92,7 @@ it("shares the memory owner while fencing both legacy and phase snapshots withou
     },
     authority,
   );
-  expect(refused.kind).toBe("rolled-back");
+  expect(refused.kind).toBe("stale-version");
   expect((await actor.read(authority)).entry?.updatedAt).toBe(legacy?.updatedAt);
 
   const denied = await actor.patch(
@@ -114,6 +114,92 @@ it("shares the memory owner while fencing both legacy and phase snapshots withou
   expect(denied.kind).toBe("rolled-back");
   expect((await actor.read(authority)).entry?.updatedAt).toBe(legacy?.updatedAt);
   await actor.release();
+});
+
+it("retains sibling replicas across legacy work and writes from a stale postimage without a read", async () => {
+  const firstKey = "agent:main:dashboard:incognito-scoped-first";
+  const secondKey = "agent:main:dashboard:incognito-scoped-second";
+  for (const [sessionKey, sessionId] of [
+    [firstKey, "scoped-first"],
+    [secondKey, "scoped-second"],
+  ] as const) {
+    await execution.sessions.create(authority, {
+      sessionKey,
+      entry: { sessionId, incognito: true, updatedAt: 10 },
+    });
+  }
+  const first = await execution.sessionActors.acquire(
+    { database: execution.identity, sessionKey: firstKey },
+    execution,
+  );
+  const second = await execution.sessionActors.acquire(
+    { database: execution.identity, sessionKey: secondKey },
+    execution,
+  );
+  try {
+    const initial = await first.patch(
+      { commandId: "cold-first", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 20 }] },
+      authority,
+    );
+    if (initial.kind !== "committed") {
+      throw new Error("Expected cold first command to commit");
+    }
+    const beforeSecond = await second.read(authority);
+    expect(first.snapshot(authority)).toEqual(initial.receipt.postimage);
+    await execution.sessions.read(authority, { sessionKey: secondKey });
+    expect(first.snapshot(authority)).toEqual(initial.receipt.postimage);
+    await withIncognitoSessionActor(execution, () =>
+      patchSessionEntryCore(
+        { agentId: "main", sessionKey: secondKey, storePath: execution.path, env },
+        () => ({ label: "legacy second" }),
+      ),
+    );
+    expect(first.snapshot(authority)).toEqual(initial.receipt.postimage);
+    expect(second.snapshot(authority)).toBeUndefined();
+    expect(
+      (
+        await first.patch(
+          {
+            commandId: "warm-first",
+            phaseId: "turn",
+            expected: initial.receipt.afterVersion,
+            reducers: [{ kind: "activity", updatedAt: 30 }],
+          },
+          authority,
+        )
+      ).kind,
+    ).toBe("committed");
+    const stale = await second.patch(
+      {
+        commandId: "stale-second",
+        phaseId: "turn",
+        expected: beforeSecond.version,
+        reducers: [{ kind: "activity", updatedAt: 40 }],
+      },
+      authority,
+    );
+    if (stale.kind !== "stale-version") {
+      throw new Error("Expected same-command refresh after legacy write");
+    }
+    expect(stale.postimage.entry?.label).toBe("legacy second");
+    expect(second.snapshot(authority)).toEqual(stale.postimage);
+    expect(
+      (
+        await second.patch(
+          {
+            commandId: "retry-second",
+            phaseId: "turn",
+            expected: stale.postimage.version,
+            reducers: [{ kind: "activity", updatedAt: 40 }],
+          },
+          authority,
+        )
+      ).kind,
+    ).toBe("committed");
+  } finally {
+    await first.release();
+    await second.release();
+  }
 });
 
 it("retains a phase through borrow release without holding the command FIFO across an await", async () => {

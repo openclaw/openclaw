@@ -4,6 +4,11 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withoutSqliteDatabaseWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
@@ -86,131 +91,145 @@ export function mutatePendingInput(
   { writeTransaction, admit }: Pick<AgentWorkerOperationContext, "writeTransaction" | "admit">,
   publish: (database: OpenClawAgentDatabase["db"], receipt: PendingInputMutationReceipt) => void,
 ): PendingInputMutationReceipt {
-  return writeTransaction(`session.pending-input.${input.kind}`, "Pending input", (current) => {
-    const actor = readSessionActorTransactionState(current, input);
-    const row = readSessionPendingInputByKey(current, input, input.idempotencyKey);
-    const receipt: PendingInputMutationReceipt = {
-      kind: "pending-input-settlement",
-      operation: input.kind,
-      sessionKey: input.sessionKey,
-      sessionId: input.sessionId,
-      idempotencyKey: input.idempotencyKey,
-      runId: input.runId,
-      requestHash: input.requestHash,
-      lifecycleGeneration: input.lifecycleGeneration,
-    };
-    const grant: PendingInputCustodyGrant = {
-      kind: "pending-input-settlement-custody",
-      candidate: row,
-      receipt,
-      ...(input.kind !== "finish" && input.authorityAgentId
-        ? {
-            authority: readSessionPendingInputAuthorityFacts(
-              current,
-              input.sessionKey,
-              input.authorityAgentId,
-            ),
+  return writeTransaction(`session.pending-input.${input.kind}`, "Pending input", (current) =>
+    withSqliteDatabaseWriteScope(
+      current.db,
+      [input.sessionKey, sqliteSessionIdWriteScope(input.sessionId)],
+      () => {
+        const actor = readSessionActorTransactionState(current, input);
+        const row = readSessionPendingInputByKey(current, input, input.idempotencyKey);
+        const receipt: PendingInputMutationReceipt = {
+          kind: "pending-input-settlement",
+          operation: input.kind,
+          sessionKey: input.sessionKey,
+          sessionId: input.sessionId,
+          idempotencyKey: input.idempotencyKey,
+          runId: input.runId,
+          requestHash: input.requestHash,
+          lifecycleGeneration: input.lifecycleGeneration,
+        };
+        const grant: PendingInputCustodyGrant = {
+          kind: "pending-input-settlement-custody",
+          candidate: row,
+          receipt,
+          ...(input.kind !== "finish" && input.authorityAgentId
+            ? {
+                authority: readSessionPendingInputAuthorityFacts(
+                  current,
+                  input.sessionKey,
+                  input.authorityAgentId,
+                ),
+              }
+            : {}),
+        };
+        if (input.kind !== "finish") {
+          if (readSessionEntryRow(current, input.sessionKey)?.entry.sessionId !== input.sessionId) {
+            throw new SessionPendingInputCustodyError(
+              "Pending input no longer owns the admitted session",
+            );
           }
-        : {}),
-    };
-    if (input.kind !== "finish") {
-      if (readSessionEntryRow(current, input.sessionKey)?.entry.sessionId !== input.sessionId) {
-        throw new SessionPendingInputCustodyError(
-          "Pending input no longer owns the admitted session",
-        );
-      }
-    }
-    if (input.kind === "stage") {
-      const snapshot = readPendingInputStage(current, {
-        ...input,
-        kind: "stage",
-      });
-      if (!isDeepStrictEqual(snapshot, input.expected)) {
-        throw new SessionPendingInputCustodyError("Pending input changed before staging committed");
-      }
-    } else if (
-      row &&
-      (row.run_id !== input.runId ||
-        row.request_hash !== input.requestHash ||
-        row.lifecycle_generation !== input.lifecycleGeneration ||
-        (input.kind === "finish" && row.input_id !== input.inputId))
-    ) {
-      throw new SessionPendingInputCustodyError("Pending input settlement lost its accepted owner");
-    }
-    admit("transaction", grant);
-    const schema = getAdmittedSqliteSchemaFacts(current.db);
-    if (input.kind === "stage") {
-      if (!schema?.tables.has("session_pending_inputs")) {
-        ensureSessionPendingInputsSchema(current.db);
-      }
-      if (input.trackCompletion && !schema?.tables.has("session_input_completions")) {
-        ensureSessionInputCompletionsSchema(current.db);
-      }
-      if (row) {
-        executeSqliteQuerySync(
-          current.db,
-          getSessionKysely(current.db)
-            .updateTable("session_pending_inputs")
-            .set({ state: "queued", lifecycle_generation: input.lifecycleGeneration })
-            .where("input_id", "=", row.input_id),
-        );
-        actor?.pendingInputs.set(input.idempotencyKey, {
-          ...row,
-          state: "queued",
-          lifecycle_generation: input.lifecycleGeneration,
-        });
-      } else {
-        const insert = getSessionKysely(current.db).insertInto("session_pending_inputs").values({
-          input_id: input.inputId,
-          session_key: input.sessionKey,
-          session_id: input.sessionId,
-          idempotency_key: input.idempotencyKey,
-          run_id: input.runId,
-          request_hash: input.requestHash,
-          message_json: input.messageJson,
-          lifecycle_generation: input.lifecycleGeneration,
-          state: "queued",
-          accepted_at: Date.now(),
-        });
-        const inserted = executeSqliteQueryTakeFirstSync(current.db, insert.returningAll());
-        if (!inserted) {
-          throw new Error("Pending input insert omitted its committed row");
         }
-        actor?.pendingInputs.set(input.idempotencyKey, inserted);
-      }
-    } else if (input.kind === "complete") {
-      if (!schema?.tables.has("session_input_completions")) {
-        ensureSessionInputCompletionsSchema(current.db);
-      }
-      const previous = readSessionInputCompletion(current, input);
-      if (
-        previous &&
-        (previous.run_id !== input.runId || previous.request_hash !== input.requestHash)
-      ) {
-        throw new SessionPendingInputCustodyError(
-          "Input completion conflicts with the accepted input",
-        );
-      }
-      receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
-    } else if (row) {
-      const result = executeSqliteQuerySync(
-        current.db,
-        getSessionKysely(current.db)
-          .updateTable("session_pending_inputs")
-          .set({ state: input.disposition })
-          .where("input_id", "=", input.inputId)
-          .where("state", "=", "queued")
-          .where("consumed_event_id", "is", null),
-      );
-      if (input.disposition === "cancelled" && result.numAffectedRows === 1n) {
-        receipt.withdrawnInputId = input.inputId;
-      }
-      if (result.numAffectedRows === 1n) {
-        actor?.pendingInputs.set(input.idempotencyKey, { ...row, state: input.disposition });
-      }
-    }
-    publish(current.db, receipt);
-    admit("commit", grant);
-    return receipt;
-  });
+        if (input.kind === "stage") {
+          const snapshot = readPendingInputStage(current, {
+            ...input,
+            kind: "stage",
+          });
+          if (!isDeepStrictEqual(snapshot, input.expected)) {
+            throw new SessionPendingInputCustodyError(
+              "Pending input changed before staging committed",
+            );
+          }
+        } else if (
+          row &&
+          (row.run_id !== input.runId ||
+            row.request_hash !== input.requestHash ||
+            row.lifecycle_generation !== input.lifecycleGeneration ||
+            (input.kind === "finish" && row.input_id !== input.inputId))
+        ) {
+          throw new SessionPendingInputCustodyError(
+            "Pending input settlement lost its accepted owner",
+          );
+        }
+        withoutSqliteDatabaseWriteScope(current.db, () => admit("transaction", grant));
+        const schema = getAdmittedSqliteSchemaFacts(current.db);
+        if (input.kind === "stage") {
+          if (!schema?.tables.has("session_pending_inputs")) {
+            ensureSessionPendingInputsSchema(current.db);
+          }
+          if (input.trackCompletion && !schema?.tables.has("session_input_completions")) {
+            ensureSessionInputCompletionsSchema(current.db);
+          }
+          if (row) {
+            executeSqliteQuerySync(
+              current.db,
+              getSessionKysely(current.db)
+                .updateTable("session_pending_inputs")
+                .set({ state: "queued", lifecycle_generation: input.lifecycleGeneration })
+                .where("input_id", "=", row.input_id),
+            );
+            actor?.pendingInputs.set(input.idempotencyKey, {
+              ...row,
+              state: "queued",
+              lifecycle_generation: input.lifecycleGeneration,
+            });
+          } else {
+            const insert = getSessionKysely(current.db)
+              .insertInto("session_pending_inputs")
+              .values({
+                input_id: input.inputId,
+                session_key: input.sessionKey,
+                session_id: input.sessionId,
+                idempotency_key: input.idempotencyKey,
+                run_id: input.runId,
+                request_hash: input.requestHash,
+                message_json: input.messageJson,
+                lifecycle_generation: input.lifecycleGeneration,
+                state: "queued",
+                accepted_at: Date.now(),
+              });
+            const inserted = executeSqliteQueryTakeFirstSync(current.db, insert.returningAll());
+            if (!inserted) {
+              throw new Error("Pending input insert omitted its committed row");
+            }
+            actor?.pendingInputs.set(input.idempotencyKey, inserted);
+          }
+        } else if (input.kind === "complete") {
+          if (!schema?.tables.has("session_input_completions")) {
+            ensureSessionInputCompletionsSchema(current.db);
+          }
+          const previous = readSessionInputCompletion(current, input);
+          if (
+            previous &&
+            (previous.run_id !== input.runId || previous.request_hash !== input.requestHash)
+          ) {
+            throw new SessionPendingInputCustodyError(
+              "Input completion conflicts with the accepted input",
+            );
+          }
+          receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
+        } else if (row) {
+          const result = executeSqliteQuerySync(
+            current.db,
+            getSessionKysely(current.db)
+              .updateTable("session_pending_inputs")
+              .set({ state: input.disposition })
+              .where("input_id", "=", input.inputId)
+              .where("state", "=", "queued")
+              .where("consumed_event_id", "is", null),
+          );
+          if (input.disposition === "cancelled" && result.numAffectedRows === 1n) {
+            receipt.withdrawnInputId = input.inputId;
+          }
+          if (result.numAffectedRows === 1n) {
+            actor?.pendingInputs.set(input.idempotencyKey, { ...row, state: input.disposition });
+          }
+        }
+        withoutSqliteDatabaseWriteScope(current.db, () => {
+          publish(current.db, receipt);
+          admit("commit", grant);
+        });
+        return receipt;
+      },
+    ),
+  );
 }

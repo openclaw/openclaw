@@ -25,6 +25,11 @@ import {
   parseTranscriptAppendRefusal,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/session-transcript-writer-claim-error.js";
+import {
+  sqliteSessionIdWriteScope,
+  withoutSqliteDatabaseWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type {
   SqliteWorkerBackend,
@@ -70,7 +75,9 @@ export function bindSqliteWorkerBackend(
   const context = {
     ...nativeContext,
     checkMessage: (facts: unknown) =>
-      requestSqliteWorkerOperationAdmission({ stage: "prepare", facts }),
+      withoutSqliteDatabaseWriteScope(nativeContext.database, () =>
+        requestSqliteWorkerOperationAdmission({ stage: "prepare", facts }),
+      ),
     admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction) {
       const transcriptPublication =
         stage === "commit"
@@ -79,7 +86,9 @@ export function bindSqliteWorkerBackend(
       const entryPublication =
         stage === "commit" ? captureSessionEntryMetadataReceipts(entryChanges) : [];
       if (!transcriptPublication.length && !entryPublication.length) {
-        nativeContext.admit(stage, restriction);
+        withoutSqliteDatabaseWriteScope(context.database, () =>
+          nativeContext.admit(stage, restriction),
+        );
         return;
       }
       const publication: SessionManagerAuthorityPublication = {
@@ -89,15 +98,17 @@ export function bindSqliteWorkerBackend(
       };
       boundSessionEntryMetadataReceipts(entryPublication, publication);
       deferSqliteWorkerCommitReceipt(context.database, publication);
-      nativeContext.admit(stage, (request, dispatch) => {
-        const publish = (restricted: typeof request) =>
-          dispatch({ ...restricted, facts: { ...publication, domainFacts: restricted.facts } });
-        if (restriction) {
-          restriction(request, publish);
-        } else {
-          publish(request);
-        }
-      });
+      withoutSqliteDatabaseWriteScope(context.database, () =>
+        nativeContext.admit(stage, (request, dispatch) => {
+          const publish = (restricted: typeof request) =>
+            dispatch({ ...restricted, facts: { ...publication, domainFacts: restricted.facts } });
+          if (restriction) {
+            restriction(request, publish);
+          } else {
+            publish(request);
+          }
+        }),
+      );
     },
   };
   let closed = false;
@@ -307,7 +318,14 @@ export function bindSqliteWorkerBackend(
             captureSessionRowChanges(context.database, (changes) => {
               entryChanges = changes;
               try {
-                return execute(command);
+                return withSqliteDatabaseWriteScope(
+                  context.database,
+                  [
+                    command.input.scope.sessionKey,
+                    sqliteSessionIdWriteScope(command.input.scope.sessionId),
+                  ],
+                  () => execute(command),
+                );
               } finally {
                 entryChanges = [];
               }
