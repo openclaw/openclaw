@@ -22,10 +22,8 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-transcript-suffix-write.js";
-import {
-  appendTranscriptEventSync,
-  replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionActorAuthority, SessionActorReducer } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
@@ -303,14 +301,14 @@ it("retains unrelated session replicas through native entry, sharing, participan
             identity: { type: "agent", id: "helper-agent" },
             promptedAt: 5,
           }),
-        () => {
+        async () => {
           for (const event of [siblingEvent, siblingTailEvent]) {
             expect(
-              appendTranscriptEventSync(
+              await appendTranscriptEvent(
                 { ...siblingScope, sessionId: siblingEntry.sessionId },
                 event,
               ),
-            ).toMatchObject({ ok: true, value: true });
+            ).toBe(true);
           }
         },
         () =>
@@ -335,7 +333,7 @@ it("retains unrelated session replicas through native entry, sharing, participan
       ];
       for (const mutate of mutations) {
         await sibling.read(authority);
-        mutate();
+        await mutate();
         expect(actor.snapshot(authority)).toEqual(retained);
         expect(sibling.snapshot(authority)).toBeUndefined();
       }
