@@ -154,95 +154,15 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
       ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
     };
-    if (request.kind === "summary") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, query: structuredClone(request.params.query) },
-      };
-    }
-    if (request.kind === "artifacts") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, query: structuredClone(request.params.query) },
-      };
-    }
-    if (request.kind === "inline-visibility") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, lookup: { ...request.params.lookup } },
-      };
-    }
-    const captureOptions = <T>(options: T) => ({
+    const captured = { ...request };
+    captured.params = {
+      ...structuredClone({ ...request.params, target: undefined }),
       target: capturedTarget,
-      options: structuredClone(options),
-    });
-    if (request.kind === "active-accounting") {
-      return { kind: request.kind, params: captureOptions(request.params.options) };
+    };
+    if (captured.kind === "recent-page" && captured.params.exactArchivePath) {
+      captured.params.exactArchivePath = path.resolve(captured.params.exactArchivePath);
     }
-    if (request.kind === "bounded-tail") {
-      return { kind: request.kind, params: captureOptions(request.params.options) };
-    }
-    if (request.kind === "message-page") {
-      return { kind: request.kind, params: captureOptions(request.params.options) };
-    }
-    if (request.kind === "around-id") {
-      return { kind: request.kind, params: captureOptions(request.params.options) };
-    }
-    if (request.kind === "source-messages") {
-      return { kind: request.kind, params: captureOptions(request.params.options) };
-    }
-    if (request.kind === "recent-page") {
-      return {
-        kind: request.kind,
-        params: {
-          target: capturedTarget,
-          ...(request.params.exactArchivePath
-            ? { exactArchivePath: path.resolve(request.params.exactArchivePath) }
-            : {}),
-          options: structuredClone(request.params.options),
-        },
-      };
-    }
-    if (request.kind === "conversation-binding") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, conversationRef: request.params.conversationRef },
-      };
-    }
-    if (
-      request.kind === "transcript-binding" ||
-      request.kind === "message-count" ||
-      request.kind === "reactions"
-    ) {
-      return { kind: request.kind, params: { target: capturedTarget } };
-    }
-    if (request.kind === "message-by-id") {
-      return {
-        kind: request.kind,
-        params: {
-          target: capturedTarget,
-          messageId: request.params.messageId,
-          options: request.params.options ? structuredClone(request.params.options) : undefined,
-        },
-      };
-    }
-    if (request.kind === "recent") {
-      return {
-        kind: "recent",
-        params: {
-          target: capturedTarget,
-          maxMessages: request.params.maxMessages,
-          maxLines: request.params.maxLines,
-          allowResetArchiveFallback: request.params.allowResetArchiveFallback,
-        },
-      };
-    }
-    return request.kind === "delta"
-      ? { kind: "delta", params: { target: capturedTarget, limits: { ...request.params.limits } } }
-      : {
-          kind: "message-lookup",
-          params: { target: capturedTarget, messageId: request.params.messageId },
-        };
+    return captured;
   }
   const entry = request.kind === "http" ? request.params.target.sessionEntry : request.params.entry;
   const cliBinding = getCliSessionBinding(entry, "claude-cli");
