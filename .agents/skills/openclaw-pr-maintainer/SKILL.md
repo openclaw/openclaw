@@ -83,6 +83,12 @@ or isolation reason. Unavailable optional live proof may use meaningful boundary
 proof with the limitation stated. Explicit live requests, external API contracts,
 and changes whose risk requires authenticated execution keep their required proof.
 Never describe mocks, skipped checks, or an older head as live evidence.
+For behavioral changes, review the [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary):
+identify the real entry point and unmocked owner, the regression the assertions
+catch, and relevant failure/reconstruction evidence. For provider-facing changes,
+check final requests and permitted differences, paid-attempt accounting, fallback
+diagnostics, and durable replay effects where affected. Reject test-count claims
+and helper-only proof that bypasses the changed boundary; apply `$test-audit`.
 
 ## CODEOWNERS review
 

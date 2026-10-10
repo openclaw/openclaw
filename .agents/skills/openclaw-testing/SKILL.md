@@ -5,10 +5,13 @@ description: Choose proportional OpenClaw tests and checks, diagnose failures, a
 
 # OpenClaw Testing
 
-Prove the changed contract with the smallest meaningful check, complete required
-checks, then finish. Broaden or repeat only for new changes, failures, or
-unresolved risks. Do not add tests that merely mirror reversible, low-impact
-implementation changes; use `$test-audit` when authoring or reviewing tests.
+Prove the changed contract with the smallest meaningful production composition,
+complete required checks, then finish. Prefer focused integration tests through
+real owners over isolated helper/mocked-call assertions for runtime behavior.
+Use the [boundary-proof guide](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary)
+for failure/lifecycle and provider request contracts; use `$test-audit` to reject
+low-value or duplicate proof. Keep independent unit contracts. Broaden or repeat
+only for changed inputs, failures, or unresolved risks.
 
 For ordinary local tests, start at `docs/reference/test.md#routine-local-order`
 and `#core-commands`; read `docs/ci.md` when CI scope or runner behavior matters. Follow the touched subtree's `AGENTS.md`.
