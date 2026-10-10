@@ -7,9 +7,9 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import type * as CommandExec from "../../process/exec.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import type * as UpdateCommandExecutor from "./update-command-executor.js";
 import { recordServiceTimedStep } from "./update-command-result.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
-import type * as UpdateCommandExecutor from "./update-command-executor.js";
 
 const mocks = vi.hoisted(() => ({
   command: vi.fn(),

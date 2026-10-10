@@ -84,6 +84,7 @@ vi.mock("./update-requester-authority.js", () => ({
   createManagedUpdateRequesterAuthority: vi.fn(),
   UpdateRequesterRevokedError: class extends Error {},
 }));
+// mock-isolation: Worker lifecycle tests replace ledger access without opening a real state database.
 vi.mock("./update-run-ledger.js", () => ({
   adoptUpdateRun: fixture.adopt,
   getUpdateRun: fixture.terminal,

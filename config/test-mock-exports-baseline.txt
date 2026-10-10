@@ -8723,7 +8723,6 @@
 ["src/infra/update-migrated-finalize.worker.test.ts","./update-doctor-result.js","17f3009f12e56dd48f5ff6f7593de935919981690db2fd26c91dab41bb67faf1",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","./update-finalization-budget.js","308fe43cf953c0414641af4494a41b64e30e1fdad96ec44e5d3a2d4c599f6813",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","./update-requester-authority.js","6d918b8b6c2fa149b57f297c1099759ed921b6c1e8a14c2f4765d47039a95906",1]
-["src/infra/update-migrated-finalize.worker.test.ts","./update-run-ledger.js","23e916970e0c153e81594a22161c3143fced90455bb7ae2437f180c4a70d6c52",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","./update-run-write.async.js","8f99b9667d956d9eb25c60992db1fe481628d53d6ae159ef59a9bfadef9531e9",1]
 ["src/infra/update-repair-agent.bookkeeping.test.ts","../agents/auth-profiles.js","7fd2630865821e72debc6f6b05294842f77c91077b24e2555083160149bb1010",1]
 ["src/infra/update-repair-agent.e2e.test.ts","./update-repair-agent.runtime.js","171138d022dddbcf4c62a74ec3d82d46734ae9c8ac34691f87f200b5e660ee4f",1]
