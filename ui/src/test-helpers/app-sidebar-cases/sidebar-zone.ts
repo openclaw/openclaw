@@ -13,7 +13,7 @@ import {
 } from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 import "../../plugins/control-ui-view.runtime.ts";
 
 function dispatchDragEvent(

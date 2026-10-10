@@ -38,7 +38,7 @@ type ExecApprovalCardProps = {
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
-type SidebarApprovalRowProps = {
+export type SidebarApprovalRowProps = {
   approval: ExecApprovalRequest;
   busy: boolean;
   canGrant: boolean;
@@ -183,7 +183,10 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
   }`;
 }
 
-function approvalDecisionLabel(decision: ExecApprovalDecision, approval: ExecApprovalRequest) {
+export function approvalDecisionLabel(
+  decision: ExecApprovalDecision,
+  approval: ExecApprovalRequest,
+) {
   if (approval.kind === "plugin" && Array.isArray(approval.pluginActions)) {
     for (const action of approval.pluginActions) {
       if (isRecord(action) && action.kind === "decision" && action.decision === decision) {

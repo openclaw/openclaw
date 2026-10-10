@@ -13,7 +13,7 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 const catalogList = (sessions: Array<Record<string, unknown>>): SessionsCatalogListResult => ({
   catalogs: [

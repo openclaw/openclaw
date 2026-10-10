@@ -174,7 +174,7 @@ class OpenClawShell
     ),
   );
   private readonly sidebarUpdateCardImport = createIdleImport(
-    () => import("../components/sidebar-update-card.ts"),
+    () => import("../components/sidebar-update-card.tsx"),
   );
 
   // Lazy: the pairing modal is opened from Settings, not at

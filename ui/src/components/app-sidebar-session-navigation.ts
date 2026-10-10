@@ -1,6 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PropertyValues } from "lit";
-import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
@@ -84,7 +82,7 @@ import type { SessionOrganizerController } from "./session-organizer-controller.
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import { SidebarEmptyGroupsController } from "./sidebar-empty-groups-controller.ts";
-import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import {
   memoizedSidebarCatalogs,
   memoizedSidebarHome,
@@ -95,12 +93,24 @@ import {
   SidebarProjectionMemo,
 } from "./sidebar-projection-memo.ts";
 
-export class AppSidebarSessionNavigationElement extends AppSidebarBase {
-  @state() rosterSessionSource: {
-    result: SessionsListResult | null;
-    agentIds: readonly string[];
-    collapsedAgentIds: ReadonlySet<string>;
-  } | null = null;
+type SidebarRosterSessionSource = {
+  result: SessionsListResult | null;
+  agentIds: readonly string[];
+  collapsedAgentIds: ReadonlySet<string>;
+} | null;
+
+export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
+  private rosterSource: SidebarRosterSessionSource = null;
+  get rosterSessionSource(): SidebarRosterSessionSource {
+    return this.rosterSource;
+  }
+  set rosterSessionSource(value: SidebarRosterSessionSource) {
+    if (Object.is(this.rosterSource, value)) {
+      return;
+    }
+    this.rosterSource = value;
+    this.requestUpdate();
+  }
 
   protected rosterVisibleSessionLimits = new Map<string, number>();
 
@@ -108,7 +118,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.sidebarAgentsMode === "roster" ? this.rosterSessionSource : null;
   }
 
-  @state() sessionSortMode: SidebarSessionSortMode = loadStoredSidebarSessionSortMode();
+  sessionSortMode: SidebarSessionSortMode = loadStoredSidebarSessionSortMode();
 
   readonly sessionProjection = new SidebarSessionProjection(undefined, this);
   private readonly navigationMemo = new SidebarProjectionMemo<SidebarSessionNavigationState>();
@@ -168,6 +178,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   setSessionSortMode(mode: SidebarSessionSortMode) {
     this.sessionSortMode = storeSidebarSessionSortMode(mode, this.sessionPeopleSortCapability());
+    this.requestUpdate();
   }
 
   private readonly sessionOwnerFilter = new SessionOwnerFilterController(this, () => this.context);
@@ -191,11 +202,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
   sessionOwnershipVisibility = { filters: false, avatars: false };
 
-  @state() selectedSessionKeys: ReadonlySet<string> = new Set();
-  @state() sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
-  @state() sessionsShowCron = loadStoredSidebarSessionsShowCron();
-  @state() sessionsShowPreview = loadStoredSidebarSessionsShowPreview();
-  @state() sessionsShowSystem = loadStoredSidebarSessionsShowSystem();
+  selectedSessionKeys: ReadonlySet<string> = new Set();
+  sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
+  sessionsShowCron: boolean = loadStoredSidebarSessionsShowCron();
+  sessionsShowPreview: boolean = loadStoredSidebarSessionsShowPreview();
+  sessionsShowSystem: boolean = loadStoredSidebarSessionsShowSystem();
   private readonly emptyGroups = new SidebarEmptyGroupsController(this, () => this.context);
 
   get sessionsEmptyGroupsMode(): SidebarEmptyGroupsMode {
@@ -205,9 +216,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void {
     this.emptyGroups.set(mode);
   }
-  @state() sessionsStatusFilter: SidebarSessionStatusFilter =
-    loadStoredSidebarSessionStatusFilter();
-  @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+  sessionsStatusFilter: SidebarSessionStatusFilter = loadStoredSidebarSessionStatusFilter();
+  hiddenSessionCatalogIds: ReadonlySet<string> = loadStoredHiddenSessionCatalogIds();
 
   // Adopted-key exclusion and rendering share this projection so hidden catalogs
   // never remove their adopted rows from the regular session list.
@@ -232,9 +242,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   private readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
   private readonly attention = new SessionAttentionController(this);
 
-  declare readonly sidebarNarrationLines: ReadonlyMap<string, string>;
-  declare readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
-  declare readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  abstract get sidebarNarrationLines(): ReadonlyMap<string, string>;
+  abstract get sidebarTools(): ReadonlyMap<string, SidebarToolActivity>;
+  abstract get sidebarObserverDigests(): ReadonlyMap<string, SessionObserverDigest>;
   declare readonly sessionOrganizer: SessionOrganizerController;
   declare readonly sidebarMenus: SidebarMenusController;
 
@@ -260,11 +270,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
   }
 
-  protected override willUpdate(changedProperties: PropertyValues<this>) {
+  protected override willUpdate() {
     if (this.emptyGroups.reconcile() && this.sidebarMenus.sessionSortMenuPosition) {
       this.sidebarMenus.closePositionedMenu("sessionSort");
     }
-    super.willUpdate(changedProperties);
+    super.willUpdate();
   }
 
   override disconnectedCallback() {
@@ -273,8 +283,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     super.disconnectedCallback();
   }
 
-  override updated(changedProperties: PropertyValues<this>) {
-    super.updated(changedProperties);
+  override updated() {
+    super.updated();
     if (this.sessionSortMode === "people" && this.sessionPeopleSortCapability() === false) {
       this.setSessionSortMode("created");
     }
@@ -501,6 +511,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const selection = toggleSidebarSessionSelection(this.selectedSessionKeys, key);
     this.sessionSelectionAnchor = selection.anchor;
     this.selectedSessionKeys = selection.selectedKeys;
+    this.requestUpdate();
   }
 
   private extendSessionSelection(key: string) {
@@ -511,12 +522,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
     this.sessionSelectionAnchor = selection.anchor;
     this.selectedSessionKeys = selection.selectedKeys;
+    this.requestUpdate();
   }
 
   clearSessionSelection() {
     this.sessionSelectionAnchor = null;
     if (this.selectedSessionKeys.size > 0) {
       this.selectedSessionKeys = new Set();
+      this.requestUpdate();
     }
   }
 

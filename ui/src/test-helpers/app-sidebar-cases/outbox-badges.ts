@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 
 describe("AppSidebar outbox attention badges", () => {

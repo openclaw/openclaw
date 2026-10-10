@@ -10,7 +10,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 // This test owns shell panel routing, not lazy sidebar loading; settle that module at setup.
-import "../components/app-sidebar.ts";
+import "../components/app-sidebar.tsx";
 import "./app-host.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";

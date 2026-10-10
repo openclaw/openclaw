@@ -29,7 +29,7 @@ import {
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { storeSidebarSessionOwnerFilter } from "./app-sidebar-session-types.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mountSessionRoster(request: GatewayRequestHandler) {
   const gateway = createGatewayHarness(createTestGatewayClient(request));

@@ -37,7 +37,7 @@ import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import "./agent-select-registration.ts";
 import "./settings-save-indicator.ts";
 import "../styles/settings.css";
-import "./sidebar-build-chip.ts";
+import "./sidebar-build-chip.tsx";
 
 type AgentRosterRow = AgentsListResult["agents"][number];
 

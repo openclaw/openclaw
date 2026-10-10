@@ -17,7 +17,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { createGateway, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 

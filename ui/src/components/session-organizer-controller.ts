@@ -700,21 +700,25 @@ export class SessionOrganizerController {
   setSessionsGrouping(grouping: SidebarSessionsGrouping) {
     this.host.sessionsGrouping = grouping;
     storeSidebarSessionsGrouping(grouping);
+    this.host.requestUpdate();
   }
 
   setSessionsShowCron(show: boolean) {
     this.host.sessionsShowCron = show;
     storeSidebarSessionsShowCron(show);
+    this.host.requestUpdate();
   }
 
   setSessionsShowPreview(show: boolean) {
     this.host.sessionsShowPreview = show;
     storeSidebarSessionsShowPreview(show);
+    this.host.requestUpdate();
   }
 
   setSessionsShowSystem(show: boolean) {
     this.host.sessionsShowSystem = show;
     storeSidebarSessionsShowSystem(show);
+    this.host.requestUpdate();
   }
 
   setSessionsStatusFilter(statusFilter: SidebarSessionStatusFilter) {

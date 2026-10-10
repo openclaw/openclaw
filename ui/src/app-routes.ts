@@ -7,6 +7,7 @@ import type {
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
@@ -72,7 +73,7 @@ import { page as worktreesPage } from "./pages/worktrees/route.ts";
 type AppRouteModule = {
   render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
-  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,

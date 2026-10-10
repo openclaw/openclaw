@@ -25,9 +25,9 @@ import {
   renderSidebarMentionItem,
   renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
-} from "./sidebar-issue-item.ts";
+} from "./sidebar-issue-item.tsx";
 import { ISSUE_TABS, type IssueTab } from "./sidebar-issues-tabs.ts";
-import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
+import { renderSidebarOutboxItem } from "./sidebar-outbox-item.tsx";
 import "./menu-surface.ts";
 
 registerSidebarAttentionEnglish();

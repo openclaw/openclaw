@@ -13,7 +13,7 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mountTab(
   request = createGatewayRequestMock().mockResolvedValue(

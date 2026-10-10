@@ -21,7 +21,7 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
   teamOnlineExpanded: boolean;

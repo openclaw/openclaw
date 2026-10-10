@@ -3,7 +3,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { icons } from "../components/icons.ts";
-import { SidebarMenusController } from "../components/sidebar-menus-controller.ts";
+import { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import "./control-ui-view.runtime.ts";

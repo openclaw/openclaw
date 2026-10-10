@@ -19,7 +19,7 @@ import {
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { toggleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 import "../../plugins/control-ui-view.runtime.ts";
 
 describe("AppSidebar session-list replacement", () => {

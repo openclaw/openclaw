@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import "../components/sidebar-update-card.ts";
+import "../components/sidebar-update-card.tsx";
 import "../styles.css";
 import { renderFloatingUpdateCard } from "./navigation-surface.ts";
 

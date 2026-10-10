@@ -6,7 +6,7 @@ import type {
   ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import "../components/app-topbar.ts";
-import "../components/sidebar-agent-card.ts";
+import "../components/sidebar-agent-card.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 

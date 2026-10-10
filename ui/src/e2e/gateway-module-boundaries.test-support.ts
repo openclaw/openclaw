@@ -20,7 +20,7 @@ export function defineGatewayModuleBoundaryTests(
           },
           async ({ page }) => {
             let blockedSidebarRequests = 0;
-            await page.route(moduleRequest("ui/src/components/app-sidebar.ts"), async (route) => {
+            await page.route(moduleRequest("ui/src/components/app-sidebar.tsx"), async (route) => {
               blockedSidebarRequests += 1;
               await route.abort("failed");
             });

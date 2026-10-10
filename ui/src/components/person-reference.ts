@@ -1,5 +1,5 @@
 import { ContextConsumer } from "@lit/context";
-import { html, nothing, render, type PropertyValues } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { buildControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
@@ -32,7 +32,7 @@ import {
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
 } from "./identity-avatar-view.ts";
-import { renderPersonActivityCard } from "./person-activity-card.ts";
+import { mountPersonActivityCard, type PersonActivitySurface } from "./person-activity-card.tsx";
 import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
@@ -57,6 +57,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
   private stopRoute: (() => void) | undefined;
   private person: PresenceViewer | null | undefined;
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
+  private cardView: ReturnType<typeof mountPersonActivityCard> | undefined;
   private readonly activityExpiry = createPresenceActivityController(
     this,
     () =>
@@ -112,6 +113,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
     document.removeEventListener("focusin", this.outside, true);
     document.removeEventListener("keydown", this.escape, true);
     this.portal.reset();
+    this.cardView = undefined;
     this.person = undefined;
     this.trigger?.setAttribute("aria-expanded", "false");
     this.trigger?.setAttribute("aria-haspopup", "dialog");
@@ -150,7 +152,9 @@ class PersonReference extends OpenClawLightDomContentsElement {
     );
     this.portal.markTrigger(trigger);
     card.addEventListener("pointerleave", this.portal.handleCardPointerLeave);
-    this.portal.mount(trigger, card, "vertical", true, () => render(nothing, card));
+    const view = mountPersonActivityCard(card, { status: t("common.loading") });
+    this.cardView = view;
+    this.portal.mount(trigger, card, "vertical", true, () => view.dispose());
     document.addEventListener("pointerdown", this.outside, true);
     document.addEventListener("focusin", this.outside, true);
     document.addEventListener("keydown", this.escape, true);
@@ -239,63 +243,61 @@ class PersonReference extends OpenClawLightDomContentsElement {
     };
     const scope = this.connection.capture();
     const route = context?.router.getState().location;
-    this.portal.renderContents(card, () =>
-      render(
-        user && context
-          ? renderPersonActivityCard({
-              user,
-              sessionData: data,
-              watchAgentId: resolveUiDefaultAgentId(defaults),
-              mainKey: resolveUiConfiguredMainKey(defaults),
-              globalScope: isUiGlobalScopeConfigured(defaults),
-              routing: personActivityRouting(context, this.close),
-              openSession: (row, agentId) => {
-                const face = resolveSessionPreferredFace(row);
-                const target = sessionNavigationTarget({
-                  face,
-                  sessionKey: row.key,
-                  row,
-                  fallbackAgentId: agentId,
-                  basePath: context.basePath,
-                  mainKey: resolveUiConfiguredMainKey(defaults),
-                });
-                this.close();
-                runSessionNavigationIntent(this, {
-                  agentId,
-                  face,
-                  sessionKey: row.key,
-                  commit: () => {
-                    if (
-                      !scope ||
-                      this.context.value !== context ||
-                      context.router.getState().location !== route ||
-                      !this.connection.isCurrent(scope)
-                    ) {
-                      return false;
-                    }
-                    prepareSessionNavigationHandoff(
-                      context.gateway,
-                      target.options.pathname,
-                      row.key,
-                    );
-                    context.navigate(face, target.options);
-                    selectApplicationSession({
-                      selection: context.agentSelection,
-                      gateway: context.gateway,
-                      sessionKey: row.key,
-                      agentId,
-                    });
-                    return true;
-                  },
-                });
-              },
-            })
-          : html`<div class="person-reference__status" role="status">
-              ${this.person === undefined ? t("common.loading") : t("chat.mentions.unavailable")}
-            </div>`,
-        card,
-      ),
-    );
+    const input: PersonActivitySurface =
+      user && context
+        ? {
+            user,
+            sessionData: data,
+            watchAgentId: resolveUiDefaultAgentId(defaults),
+            mainKey: resolveUiConfiguredMainKey(defaults),
+            globalScope: isUiGlobalScopeConfigured(defaults),
+            routing: personActivityRouting(context, this.close),
+            openSession: (row, agentId) => {
+              const face = resolveSessionPreferredFace(row);
+              const target = sessionNavigationTarget({
+                face,
+                sessionKey: row.key,
+                row,
+                fallbackAgentId: agentId,
+                basePath: context.basePath,
+                mainKey: resolveUiConfiguredMainKey(defaults),
+              });
+              this.close();
+              runSessionNavigationIntent(this, {
+                agentId,
+                face,
+                sessionKey: row.key,
+                commit: () => {
+                  if (
+                    !scope ||
+                    this.context.value !== context ||
+                    context.router.getState().location !== route ||
+                    !this.connection.isCurrent(scope)
+                  ) {
+                    return false;
+                  }
+                  prepareSessionNavigationHandoff(
+                    context.gateway,
+                    target.options.pathname,
+                    row.key,
+                  );
+                  context.navigate(face, target.options);
+                  selectApplicationSession({
+                    selection: context.agentSelection,
+                    gateway: context.gateway,
+                    sessionKey: row.key,
+                    agentId,
+                  });
+                  return true;
+                },
+              });
+            },
+          }
+        : {
+            status:
+              this.person === undefined ? t("common.loading") : t("chat.mentions.unavailable"),
+          };
+    this.portal.renderContents(card, () => this.cardView?.update(input));
     this.portal.position();
   }
 
