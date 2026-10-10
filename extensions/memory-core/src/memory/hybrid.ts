@@ -269,12 +269,12 @@ export function selectHybridSearchResults<TSource extends HybridSource>(params: 
   }
 
   const keywordKeys = new Set(params.keyword.map((entry) => hybridResultRangeKey(entry)));
+  const isLexicalCandidate = (entry: HybridSearchResult<TSource>) =>
+    entry.score >= 0 && keywordKeys.has(hybridResultRangeKey(entry));
   if (strict.length === 0) {
     // Preserve the established all-lexical fallback when every weighted score
     // is below the configured threshold.
-    return params.merged
-      .filter((entry) => entry.score >= 0 && keywordKeys.has(hybridResultRangeKey(entry)))
-      .slice(0, params.maxResults);
+    return params.merged.filter(isLexicalCandidate).slice(0, params.maxResults);
   }
 
   // Score completion does not turn a keyword-only candidate into a vector
@@ -289,7 +289,7 @@ export function selectHybridSearchResults<TSource extends HybridSource>(params: 
     if (
       entry.score < params.minScore &&
       (entry.vectorScore === 0 || !vectorKeys.has(key)) &&
-      keywordKeys.has(key) &&
+      isLexicalCandidate(entry) &&
       !seen.has(key)
     ) {
       seen.add(key);
