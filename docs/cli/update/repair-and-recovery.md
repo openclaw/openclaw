@@ -846,6 +846,11 @@ eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay
 protected. Old manifests are verified offline where possible; missing evidence
 is a reason to retain an artifact. Cleanup has no automatic expiration policy.
+Immutable release-retention inspection is separate from this migration-backup
+cleanup and remains gated on a compatible serving bridge. Its descriptor policy
+and release-generation inventory record ownership without deleting directories
+or snapshots. They do not make immutable releases eligible for `update cleanup`; see the
+[immutable release-retention inventory](/reference/database-schemas/layout#immutable-release-retention-inventory).
 Doctor's `<database>.pre-startup-migration-<id>.bak` groups become eligible only
 after Doctor verifies migration completion and update history records a successful
 update that started later. Until then they appear as protected. Changed or

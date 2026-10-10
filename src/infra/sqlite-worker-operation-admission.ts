@@ -9,7 +9,6 @@ import {
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -19,6 +18,7 @@ import {
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
   withSqliteDatabaseAdmissionExchange,
+  type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import { SqliteWorkerAdmissionTimeoutError, SqliteWorkerError } from "./sqlite-worker-contract.js";
@@ -29,6 +29,8 @@ import {
 } from "./sqlite-worker-database-admission-relay.js";
 import {
   deferSqliteWorkerNativeCommitReceipt,
+  currentSqliteWorkerOperationAdmission as currentAdmission,
+  type WorkerAdmissionScope,
   readNativeCommitReceipt,
   type NativeCommitReceipt,
   type RetainedWorkerTransactionAdmission,
@@ -571,19 +573,6 @@ function createOperationAdmission(
   return admission;
 }
 
-type WorkerAdmissionScope = {
-  // Published SDK request helpers share these port/active carrier fields.
-  port: MessagePort;
-  owner: SqliteWorkerOperationContext;
-  active: boolean;
-};
-// Source brokers and built plugin backends can load separate module copies in
-// one Worker. Share the carrier, while each operation still owns its private port.
-const currentAdmission = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteWorkerOperationAdmission"),
-  () => new AsyncLocalStorage<WorkerAdmissionScope>(),
-);
-
 /** Install only the private port belonging to the broker's currently executing operation. */
 export function withSqliteWorkerOperationAdmission<T>(
   owner: SqliteWorkerOperationContext,
@@ -591,20 +580,49 @@ export function withSqliteWorkerOperationAdmission<T>(
 ): T {
   const scope = { owner, port: owner.port, active: true };
   try {
-    return currentAdmission.run(scope, () =>
-      withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
-        if (!scope.active) {
-          throw new SqliteWorkerError(
-            "SQLite facts require their retained admission",
-            "unavailable",
-          );
-        }
-        return exchangeSqliteDatabaseAdmissions(scope.port, admissions, location, create);
-      }, operation),
-    );
+    return runSqliteWorkerAdmissionScope(scope, operation);
   } finally {
     scope.active = false;
   }
+}
+
+/** Async factories and cleanup retain the same grant until their accepted work settles. */
+export async function withSqliteWorkerOperationAdmissionAsync<T>(
+  owner: SqliteWorkerOperationContext,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  const scope = { owner, port: owner.port, active: true };
+  try {
+    return await runSqliteWorkerAdmissionScope(scope, operation);
+  } finally {
+    scope.active = false;
+  }
+}
+
+function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation: () => T): T {
+  return currentAdmission.run(scope, () =>
+    withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+      if (!scope.active) {
+        if (!create) {
+          return exchangeSqliteDatabaseLifetimeAdmissions(admissions, location);
+        }
+        throw new SqliteWorkerError("SQLite facts require their retained admission", "unavailable");
+      }
+      return exchangeSqliteDatabaseAdmissions(scope.port, admissions, location, create);
+    }, operation),
+  );
+}
+
+/** Retained cleanup may publish facts after its operation ends; creation still needs a live grant. */
+function exchangeSqliteDatabaseLifetimeAdmissions(
+  admissions: SqliteDatabaseAdmissions,
+  location?: string,
+): SqliteDatabaseAdmissions {
+  const upstream = getSqliteDatabaseAdmissionUpstream();
+  if (!upstream || upstream.closed) {
+    throw new SqliteWorkerError("SQLite facts require their retained admission", "unavailable");
+  }
+  return exchangeDatabaseAdmissions(upstream.port, admissions, location);
 }
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */

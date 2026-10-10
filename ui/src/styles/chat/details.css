@@ -3,12 +3,6 @@ openclaw-chat-details {
   min-width: 0;
 }
 
-.chat-main__conversation--details > :is(.chat-thread, .chat-thread-viewport) {
-  /* Reserve the header outside the scroll viewport so transcript actions cannot
-     slide beneath Details, without shrinking the footer's query container. */
-  margin-top: calc(var(--chat-mobile-pane-header-height, 0px) + 50px);
-}
-
 /* One gutter owns notices, Details, and suggestions so their controls never overlap. */
 .chat-gutter-stack--details {
   width: calc(100% - 28px);

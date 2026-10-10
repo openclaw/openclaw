@@ -11,7 +11,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
-import { hasPendingSqliteDatabaseSchemaMutation } from "./sqlite-database-admission.js";
+import {
+  hasPendingSqliteDatabaseSchemaMutation,
+  readSqliteDatabaseWriteRevision,
+} from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -80,6 +83,8 @@ it.each([
     const reader = openNodeSqliteDatabase(location);
     reader.exec("PRAGMA journal_mode=WAL; CREATE TABLE original(value)");
     admitSqliteSchema(reader);
+    const writeRevision = readSqliteDatabaseWriteRevision(reader);
+    expect(writeRevision).toBeTypeOf("number");
     const broker = new SqliteWorkerBroker();
     let held = false;
     try {
@@ -97,6 +102,7 @@ it.each([
           nativeLocations: [location],
           admission: createSqliteWorkerOperationAdmission((_request, grant) => {
             held = true;
+            expect(readSqliteDatabaseWriteRevision(reader)).toBeUndefined();
             expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
             expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
               !rollback,
@@ -116,6 +122,8 @@ it.each([
         await mutation;
       }
       expect(held).toBe(true);
+      expect(readSqliteDatabaseWriteRevision(reader)).toBeTypeOf("number");
+      expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(writeRevision);
       expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
       expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
         !rollback,

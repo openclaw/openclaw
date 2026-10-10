@@ -8,6 +8,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
+import { tryReadJson } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   packageActivationRuntimeIdentity,
@@ -113,6 +114,21 @@ async function assertImmutableGitConfig(root: string): Promise<void> {
     if (!assignment || !keys[section]?.includes(assignment[1]!.toLowerCase())) {
       throw new Error("Immutable generation contains unsupported Git configuration.");
     }
+  }
+}
+
+/** Check the installed physical generation, never the candidate's claim about its predecessor. */
+export async function assertImmutableGenerationControlVersion(root: string, version: number) {
+  if (version < 3) {
+    return;
+  }
+  const manifest = asNullableRecord(
+    await tryReadJson<unknown>(path.join(root, "package.json"), { maxBytes: 1024 * 1024 }),
+  );
+  if (asNullableRecord(manifest?.openclaw)?.immutableInstallDescriptorVersion !== version) {
+    throw new Error(
+      "Immutable generation cannot read this control format. Select a compatible bridge or newer generation.",
+    );
   }
 }
 
@@ -285,9 +301,11 @@ export async function verifyImmutableGeneration(
   return { buildDigest: artifact.distDigest, identity: `${stat.dev}:${stat.ino}` };
 }
 
-// Exact launcher shipped by slice 1 (99babf272543); only its shebang is installation-specific.
-const IMMUTABLE_V1_LAUNCHER_SHA256 =
-  "7e3bcd5e1143c2b054ab2bd184b159143b2d2a45893fc462741b8f51780ad5d3";
+// Exact shipped launchers; only their shebang is installation-specific.
+const IMMUTABLE_LAUNCHER_SHA256 = {
+  1: "7e3bcd5e1143c2b054ab2bd184b159143b2d2a45893fc462741b8f51780ad5d3",
+  2: "7560684fecb6c47585bb1c87cbdb938c09e7746e1fa4cbf0592acd4833de71bc",
+};
 
 function upgradeImmutableLauncher(params: {
   root: string;
@@ -296,15 +314,17 @@ function upgradeImmutableLauncher(params: {
   content: string;
   previous: string;
   previousStat: Stats;
+  version: 1 | 2;
   assertCurrent: () => void;
 }): void {
   const normalized = params.previous.replace(/^#![^\n]*\n/u, "#!/usr/bin/env node\n");
   if (
     !params.previous.startsWith(`#!${params.runtime}\n`) ||
-    createHash("sha256").update(normalized).digest("hex") !== IMMUTABLE_V1_LAUNCHER_SHA256
+    createHash("sha256").update(normalized).digest("hex") !==
+      IMMUTABLE_LAUNCHER_SHA256[params.version]
   ) {
     throw new Error(
-      "An existing immutable Gateway launcher conflicts with the known v1 upgrade; it was preserved.",
+      `An existing immutable Gateway launcher conflicts with the known v${params.version} upgrade; it was preserved.`,
     );
   }
   const control = resolvePackageActivationControl(resolvePackageActivationAnchor(params.root));
@@ -340,13 +360,13 @@ function upgradeImmutableLauncher(params: {
       fsSync.readFileSync(params.launcher, "utf8") !== params.previous ||
       packageActivationRuntimeIdentity(params.runtime) !== runtimeIdentity
     ) {
-      throw new Error("Immutable launcher changed before its v1 upgrade.");
+      throw new Error(`Immutable launcher changed before its v${params.version} upgrade.`);
     }
   };
   assertUpgrade();
   const stage = fsSync.mkdtempSync(path.join(bin, ".launcher-upgrade-"));
   const stageIdentity = fsSync.lstatSync(stage);
-  const backup = path.join(control, "openclaw-gateway.v1");
+  const backup = path.join(control, `openclaw-gateway.v${params.version}`);
   const isExpectedBackup = (stat: Stats) =>
     stat.isFile() &&
     stat.uid === 0 &&
@@ -367,23 +387,23 @@ function upgradeImmutableLauncher(params: {
     const previousBackup = fsSync.lstatSync(backup, { throwIfNoEntry: false });
     if (previousBackup) {
       if (!isExpectedBackup(previousBackup)) {
-        throw new Error("Existing immutable v1 launcher backup differs; it was preserved.");
+        throw new Error("Existing immutable launcher backup differs; it was preserved.");
       }
     } else {
       const stagedBackup = path.join(stage, "previous");
       writeDurable(stagedBackup, params.previous, 0o444);
       assertUpgrade();
       if (fsSync.lstatSync(backup, { throwIfNoEntry: false })) {
-        throw new Error("Immutable v1 launcher backup appeared during upgrade.");
+        throw new Error("Immutable launcher backup appeared during upgrade.");
       }
       fsSync.renameSync(stagedBackup, backup);
-      requireDirectorySync(syncDirectorySync(control), "Immutable v1 launcher backup");
+      requireDirectorySync(syncDirectorySync(control), "Immutable launcher backup");
     }
     const candidate = path.join(stage, "next");
     writeDurable(candidate, params.content, 0o755);
     assertUpgrade();
     if (!isExpectedBackup(fsSync.lstatSync(backup))) {
-      throw new Error("Immutable v1 launcher backup changed before publication.");
+      throw new Error("Immutable launcher backup changed before publication.");
     }
     fsSync.renameSync(candidate, params.launcher);
     requireDirectorySync(syncDirectorySync(bin), "Immutable launcher upgrade");
@@ -399,7 +419,7 @@ function upgradeImmutableLauncher(params: {
 export async function installImmutableLauncher(params: {
   root: string;
   runtimePath: string;
-  upgradeFromV1?: { assertCurrent: () => void };
+  upgrade?: { version: 1 | 2; assertCurrent: () => void };
 }): Promise<string> {
   const root = await fs.realpath(params.root);
   const rootStat = await fs.lstat(root);
@@ -453,7 +473,7 @@ export async function installImmutableLauncher(params: {
     }
     const previous = await fs.readFile(launcher, "utf8");
     if (previous !== content) {
-      if (!params.upgradeFromV1) {
+      if (!params.upgrade) {
         throw new Error(
           "An existing immutable Gateway launcher conflicts with this adoption; it was preserved.",
         );
@@ -465,7 +485,8 @@ export async function installImmutableLauncher(params: {
         content,
         previous,
         previousStat: existing,
-        assertCurrent: params.upgradeFromV1.assertCurrent,
+        version: params.upgrade.version,
+        assertCurrent: params.upgrade.assertCurrent,
       });
     }
     return null;

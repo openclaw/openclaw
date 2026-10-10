@@ -8,6 +8,7 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { captureRuntimeStateEnvironment } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -31,6 +32,13 @@ export function resolveWorkerPlacementSessionRuntime(params: {
     source: {
       entry: params.entry,
       readSourceEntry: (key) => {
+        const metadata = captureSessionEntryMetadataRead({
+          sessionKey: key,
+          agentId: params.agentId,
+        });
+        if (metadata) {
+          return metadata.readCurrent();
+        }
         const target = resolveGatewaySessionStoreTargetWithStore({
           ...params,
           key: params.sessionKey,
