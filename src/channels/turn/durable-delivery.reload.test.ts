@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import { clearPendingFinalDeliveryAfterSuccess } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
@@ -27,12 +28,19 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import type * as SleepModule from "../../utils/sleep.js";
+import { sendDurableMessageBatchCore } from "../message/send.js";
 import type { ChannelMessageSendTextContext } from "../message/types.js";
 import {
   deliverInboundReplyWithMessageSendContextCore,
   deliverStructuredInboundReplyWithMessageSendContextCore,
   type DurableInboundReplyDeliveryParams,
 } from "./durable-delivery.js";
+
+vi.mock("../../utils/sleep.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof SleepModule>()),
+  sleep: vi.fn(async () => {}),
+}));
 
 const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
 
@@ -62,8 +70,15 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
         ...createChannelTestPluginBase({ id: "telegram" }),
         message: {
           id: "telegram",
-          durableFinal: { capabilities: { text: true, messageSendingHooks: true } },
-          send: { text: sendText, lifecycle: { beforeSendAttempt } },
+          durableFinal: {
+            capabilities: { text: true, media: true, payload: true, messageSendingHooks: true },
+          },
+          send: {
+            text: sendText,
+            media: sendText,
+            payload: sendText,
+            lifecycle: { beforeSendAttempt },
+          },
         },
       },
     },
@@ -136,12 +151,107 @@ describe("final delivery after plugin replacement", () => {
     vi.unstubAllEnvs();
   });
 
+  it("keeps the final caller pending until saved rich text is recovered", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.request.payload = { text: "**Saved final** with [a link](https://example.com)" };
+    const retryStarted = createDeferred<void>();
+    const retryResult = createDeferred<{ messageId: string }>();
+    fixture.sendText
+      .mockRejectedValueOnce(
+        new Error("network request failed", {
+          cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+        }),
+      )
+      .mockImplementationOnce(async () => {
+        retryStarted.resolve();
+        return await retryResult.promise;
+      });
+    let settled = false;
+    const delivery = fixture.deliver(true).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        retryStarted.promise,
+        delivery,
+        "The final caller settled before automatic recovery",
+      );
+      expect(await loadPendingDeliveries(state.tmpDir())).toMatchObject([
+        { maxRetries: 2, attemptCount: 2 },
+      ]);
+      expect(settled).toBe(false);
+      expect(fixture.sendText).toHaveBeenCalledTimes(2);
+      expect(fixture.sendText.mock.calls.map(([ctx]) => ctx.text)).toEqual([
+        fixture.request.payload.text,
+        fixture.request.payload.text,
+      ]);
+    } finally {
+      retryResult.resolve({ messageId: "recovered-final" });
+    }
+    await expect(delivery).resolves.toMatchObject({
+      status: "handled_visible",
+      delivery: { messageIds: ["recovered-final"] },
+    });
+    expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
+  });
+
+  it("returns terminal failure only after its one automatic retry is exhausted", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.sendText.mockRejectedValue(
+      Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+    );
+    await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
+    expect(fixture.sendText).toHaveBeenCalledTimes(2);
+    expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
+  });
+
   it.each([
-    { sameGeneration: true, structured: false },
-    { sameGeneration: false, structured: true },
+    { text: "A photo", mediaUrl: "https://example.com/photo.png" },
+    { text: "Pinned reply", delivery: { pin: true } },
+    { text: "Choose", channelData: { buttons: [["yes"]] } },
+  ])("does not replay side-effect or media finals: $text", async (payload) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.request.payload = payload;
+    fixture.sendText.mockRejectedValue(
+      Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+    );
+    await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
+    expect(fixture.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay a final with an already accepted chunk", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.sendText.mockRejectedValue(
+      Object.assign(new Error("later chunk failed"), {
+        cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+        deliveryResult: { visibleReplySent: true, messageIds: ["accepted-chunk"] },
+      }),
+    );
+    await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
+    expect(fixture.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not infer transport ambiguity from an error message", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.sendText.mockRejectedValue(new Error("Network request failed for sendMessage"));
+    await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
+    expect(fixture.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { sameGeneration: true, structured: false, retry: false, tool: false },
+    { sameGeneration: false, structured: true, retry: false, tool: false },
+    { sameGeneration: true, structured: false, retry: true, tool: false },
+    { sameGeneration: true, structured: false, retry: true, tool: true },
   ])(
-    "settles final custody through its Gateway without sender preparation (sameGeneration=$sameGeneration, structured=$structured)",
-    async ({ sameGeneration, structured }) => {
+    "preserves final custody (sameGeneration=$sameGeneration, structured=$structured, retry=$retry, tool=$tool)",
+    async ({ sameGeneration, structured, retry, tool }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
       const fixture = await replacementFixture({ sameGeneration });
       const successorConfig: OpenClawConfig = { ...cfg, logging: { level: "debug" } };
@@ -171,6 +281,28 @@ describe("final delivery after plugin replacement", () => {
       expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
         { id: completion.deliveryId, state: "prepared" },
       ]);
+      if (retry) {
+        fixture.sendText.mockRejectedValueOnce(
+          Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+        );
+      }
+      if (tool) {
+        const result = await withPluginRuntimeRegistryScope(fixture.current, () =>
+          sendDurableMessageBatchCore({
+            cfg,
+            channel: "telegram",
+            accountId: "default",
+            to: "12345",
+            payloads: [fixture.request.payload],
+          }),
+        );
+        expect(result.status).toBe("failed");
+        expect(fixture.sendText).toHaveBeenCalledTimes(1);
+        expect(
+          (await loadPendingDeliveries(state.tmpDir()))[0]?.retryAmbiguousFinalText,
+        ).toBeUndefined();
+        return;
+      }
       const result = await fixture.deliver(structured);
       if (result.status === "failed") {
         throw result.error;
@@ -183,7 +315,8 @@ describe("final delivery after plugin replacement", () => {
           receipt: { platformMessageIds: ["accepted-final"] },
         },
       });
-      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+      expect(fixture.sendText).toHaveBeenCalledTimes(retry ? 2 : 1);
+      expect(fixture.sendText).toHaveBeenLastCalledWith(
         expect.objectContaining({
           cfg: sameGeneration ? cfg : successorConfig,
           to: "12345",

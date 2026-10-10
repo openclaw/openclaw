@@ -165,7 +165,7 @@ export async function sendPayload(
   options?: TelegramSendPayloadOptions,
 ): Promise<LivePreviewDeliveryResult> {
   if (options?.durable) {
-    sourceTurn.finalDeliveryNotDispatched = false;
+    sourceTurn.finalDeliveryError = undefined;
   }
   if (sourceTurn.isSuperseded()) {
     await options?.promptContextSequence?.fail();
@@ -269,7 +269,7 @@ export async function sendPayload(
       }),
     });
     if (durable.status === "failed") {
-      sourceTurn.finalDeliveryNotDispatched = durable.sentBeforeError === false;
+      sourceTurn.finalDeliveryError = durable.error;
       return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {
