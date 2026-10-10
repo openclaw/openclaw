@@ -53,7 +53,10 @@ import type { loadMemorySourceFileState } from "./manager-source-state.js";
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
-  store: Pick<OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>, "run" | "close">;
+  store: Pick<
+    OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>,
+    "execute" | "run" | "close"
+  >;
   busyTimeoutMs: number;
 };
 
@@ -393,21 +396,27 @@ export class MemoryIndexDatabase {
     store: SqliteWorkerStore<MemoryPublicationOperations>,
     busyTimeoutMs: number,
   ): PublicationWorker {
+    const run = <T>(
+      operation: (scope: PublicationScope) => Promise<T>,
+      assertCurrent: () => void,
+    ) =>
+      runSqliteWorkerStoreWrite(
+        store,
+        operation,
+        () => {
+          if (this.closed || !this.db.isOpen) {
+            throw new Error("Memory shadow owner closed");
+          }
+          this.assertShadowPath();
+          assertCurrent();
+        },
+        [this.shadow!.path],
+      );
     return {
       store: {
-        run: <T>(operation: (scope: PublicationScope) => Promise<T>, assertCurrent: () => void) =>
-          runSqliteWorkerStoreWrite(
-            store,
-            operation,
-            () => {
-              if (this.closed || !this.db.isOpen) {
-                throw new Error("Memory shadow owner closed");
-              }
-              this.assertShadowPath();
-              assertCurrent();
-            },
-            [this.shadow!.path],
-          ),
+        run,
+        execute: (command, assertCurrent, options) =>
+          run((scope) => scope.execute(command, options), assertCurrent),
         close: () => store.close(),
       },
       busyTimeoutMs,
@@ -417,12 +426,17 @@ export class MemoryIndexDatabase {
   private runPublication<T>(
     operation: (scope: PublicationScope) => Promise<T>,
     assertCurrent: () => void,
+    binding: "retained" | "single" = "retained",
   ): Promise<T> {
     const run = async () => {
       assertCurrent();
       try {
         const worker = await this.getPublicationWorker();
-        return await worker.store.run(operation, assertCurrent);
+        return await (binding === "single"
+          ? operation({
+              execute: (command, options) => worker.store.execute(command, assertCurrent, options),
+            })
+          : worker.store.run(operation, assertCurrent));
       } catch (error) {
         const [cleanup] = await Promise.allSettled([this.closePublicationWorker()]);
         if (cleanup.status === "rejected") {
@@ -646,6 +660,7 @@ export class MemoryIndexDatabase {
     return this.runPublication(
       (scope) => this.retryPublication<boolean | void>(() => scope.execute(command)),
       assertCurrent,
+      "single",
     );
   }
 

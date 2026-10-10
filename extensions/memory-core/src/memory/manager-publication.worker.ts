@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
@@ -142,14 +142,9 @@ export function bindSqliteWorkerBackend(
           pragmas: readConnectionPragmas(db),
         }
       : input;
-  return {
-    ...createPublicationBackend(connection, context.databasePath, db, false, (stage) =>
-      context.admit(stage),
-    ),
-    close() {
-      db.exec("DROP TABLE temp.memory_publication_input");
-    },
-  };
+  return createPublicationBackend(connection, context.databasePath, db, false, (stage) =>
+    context.admit(stage),
+  );
 }
 
 function readConnectionPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"] {
@@ -204,12 +199,8 @@ function createPublicationBackend(
   if (ownsConnection) {
     db.exec("PRAGMA temp_store = FILE");
   }
-  db.exec(
-    "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
-  );
-  const insert = db.prepare(
-    "INSERT INTO temp.memory_publication_input (row, part, json) VALUES (?, ?, ?)",
-  );
+  let inputTableCreated = false;
+  let insert: StatementSync | undefined;
   const discard = () => {
     db.exec("DELETE FROM temp.memory_publication_input");
     staged = undefined;
@@ -332,6 +323,12 @@ function createPublicationBackend(
         if (staged) {
           throw new Error("Memory publication input already belongs to another operation");
         }
+        if (!inputTableCreated) {
+          db.exec(
+            "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
+          );
+          inputTableCreated = true;
+        }
         staged =
           command.type === "stage.start"
             ? { ...command.input, kind: "source", row: 0, part: 0 }
@@ -356,7 +353,9 @@ function createPublicationBackend(
           ) {
             throw new Error("Memory publication input is incomplete or out of order");
           }
-          insert.run(fragment.row, fragment.part, fragment.json);
+          (insert ??= db.prepare(
+            "INSERT INTO temp.memory_publication_input (row, part, json) VALUES (?, ?, ?)",
+          )).run(fragment.row, fragment.part, fragment.json);
           if (fragment.last) {
             staged.row++;
             staged.part = 0;
@@ -509,7 +508,13 @@ function createPublicationBackend(
       });
       return finish(outcome);
     },
-  } satisfies Omit<SqliteWorkerBackend<MemoryPublicationOperations>, "close">;
+    close() {
+      if (inputTableCreated) {
+        db.exec("DROP TABLE temp.memory_publication_input");
+        inputTableCreated = false;
+      }
+    },
+  } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
 }
 
 function* readStagedRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(

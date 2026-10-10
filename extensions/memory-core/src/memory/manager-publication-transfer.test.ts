@@ -129,6 +129,62 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("allocates temporary input only for staged publications", () => {
+    const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
+    const db = new DatabaseSync(filename);
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec("CREATE TABLE chunks_vec (id TEXT)");
+      const sql = vi.spyOn(db, "exec");
+      const bind = () =>
+        bindSqliteWorkerBackend(
+          { kind: "agent" },
+          { databasePath: filename, database: db, admit: () => undefined },
+        );
+      const state = {
+        vector: { enabled: false, available: false },
+        fts: { enabled: false, available: false },
+      };
+      const scalar = bind();
+      expect(scalar.execute({ type: "vector.retireLegacy", input: { state } })).toEqual({
+        ok: true,
+        value: true,
+      });
+      scalar.close();
+      expect(
+        sql.mock.calls.filter(([statement]) => /memory_publication_input/u.test(statement)),
+      ).toEqual([]);
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_vec'").all()).toEqual(
+        [],
+      );
+
+      const staged = bind();
+      const input = replacement("staged text survives scalar cleanup");
+      const { chunks, embeddings: _embeddings, ...header } = input;
+      staged.execute({
+        type: "stage.start",
+        input: { operation: "staged", header, rows: chunks.length },
+      });
+      for (const fragments of memoryPublicationBatches(input)) {
+        staged.execute({ type: "stage.append", input: { operation: "staged", fragments } });
+      }
+      expect(
+        staged.execute({ type: "source.replace", input: { operation: "staged", state } }),
+      ).toMatchObject({ ok: true });
+      staged.close();
+      expect(db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+        { text: "staged text survives scalar cleanup" },
+      ]);
+      expect(
+        db
+          .prepare("SELECT name FROM sqlite_temp_master WHERE name = 'memory_publication_input'")
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each(["success", "begin", "write", "transaction", "commit"] as const)(
     "restores publication timeout once through %s settlement",
     async (fault) => {
