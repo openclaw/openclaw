@@ -1,4 +1,5 @@
 // Memory Wiki tests cover index plugin behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
@@ -6,13 +7,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
 import {
-  createMemoryWikiCompiledCachePublicationId,
   loadMemoryWikiCompiledCache,
   resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./src/compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./src/config.js";
+import { deferred } from "./src/deferred.test-helpers.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -69,14 +70,6 @@ function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
   };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 describe("memory-wiki plugin", () => {
   it("registers prompt supplement, gateway methods, tools, and wiki cli surface", () => {
     const {
@@ -127,13 +120,9 @@ describe("memory-wiki plugin", () => {
       "wiki_search",
       "wiki_get",
     ]);
-    expect(registerTool.mock.calls.map((call) => typeof call[0])).toEqual([
-      "function",
-      "function",
-      "function",
-      "function",
-      "function",
-    ]);
+    for (const [registration] of registerTool.mock.calls) {
+      expect(registration).toMatchObject({ contextVersion: 2, create: expect.any(Function) });
+    }
     expect(registerCli).toHaveBeenCalledTimes(1);
     expect(registerCli.mock.calls[0]?.[1]).toStrictEqual({
       descriptors: [
@@ -152,9 +141,10 @@ describe("memory-wiki plugin", () => {
 
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       plugin.register(api);
-      const statusFactory = registerTool.mock.calls.find(
+      const registered = registerTool.mock.calls.find(
         ([, registration]) => registration.name === "wiki_status",
       )?.[0];
+      const statusFactory = typeof registered === "function" ? registered : registered?.create;
 
       expect(statusFactory?.({ agentId: "main" })).toMatchObject({
         testConfig: { vault: { path: path.join(stateDir, "wiki", "main") } },
@@ -165,7 +155,7 @@ describe("memory-wiki plugin", () => {
   it("resolves every tool factory from keyed agent entries", async () => {
     const rootDir = await createTempDir("memory-wiki-index-agents-");
     const appConfig = {
-      agents: { entries: { support: { default: true }, marketing: {} } },
+      agents: { entries: { support: {}, marketing: {} } },
     } as OpenClawConfig;
     const { api, registerTool } = createPluginApi();
     api.config = appConfig;
@@ -180,7 +170,8 @@ describe("memory-wiki plugin", () => {
 
     plugin.register(api);
 
-    for (const [factory, registration] of registerTool.mock.calls) {
+    for (const [registered, registration] of registerTool.mock.calls) {
+      const factory = typeof registered === "function" ? registered : registered.create;
       expect(factory).toEqual(expect.any(Function));
       expect(factory({})).toBeNull();
       const supportTool = factory({ agentId: "support" });
@@ -218,13 +209,15 @@ describe("memory-wiki plugin", () => {
 
     for (const toolName of ["wiki_search", "wiki_get"]) {
       const registration = registerTool.mock.calls.find((call) => call[1]?.name === toolName);
-      const factory = registration?.[0];
+      const registered = registration?.[0];
+      const factory = typeof registered === "function" ? registered : registered?.create;
       expect(
         factory?.({
           agentId: "main",
           sessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
           sandboxed: false,
           conversationRecall,
+          assertInvocationCurrent: () => {},
         }),
       ).toMatchObject({
         testMemoryContext: {
@@ -232,6 +225,13 @@ describe("memory-wiki plugin", () => {
           agentSessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
           sandboxed: false,
           conversationRecall,
+          memoryContext: {
+            authority: {
+              kind: "session",
+              sessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
+              conversationRecall,
+            },
+          },
         },
       });
     }
@@ -271,7 +271,7 @@ describe("memory-wiki plugin", () => {
     const validationEntered = deferred();
     const releaseValidation = deferred();
     const commitPublication = vi.fn();
-    const publicationId = createMemoryWikiCompiledCachePublicationId();
+    const publicationId = randomUUID();
     const publication = writeMemoryWikiCompiledCache(
       config,
       snapshot,
@@ -343,7 +343,7 @@ describe("memory-wiki plugin", () => {
           config,
           snapshot,
           resolveMemoryWikiCompiledCacheGeneration(snapshot),
-          createMemoryWikiCompiledCachePublicationId(),
+          randomUUID(),
           null,
           async () => {},
           async () => {},
@@ -366,8 +366,8 @@ describe("memory-wiki plugin", () => {
     await service?.start?.();
 
     const snapshot = emptyCompiledSnapshot();
-    const publicationId = createMemoryWikiCompiledCachePublicationId();
-    const reservationId = createMemoryWikiCompiledCachePublicationId();
+    const publicationId = randomUUID();
+    const reservationId = randomUUID();
     const parentPublicationId = (await loadMemoryWikiVaultIdentity(rootDir))
       .compiledCachePublicationId;
     await appendMemoryWikiLog(rootDir, {

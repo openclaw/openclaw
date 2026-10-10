@@ -2,8 +2,10 @@ package ai.openclaw.app.node
 
 import android.Manifest
 import android.app.Application
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.BatteryManager
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -12,6 +14,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -84,7 +87,12 @@ class DeviceHandlerTest {
     val state = battery.getValue("state").jsonPrimitive.content
     assertTrue(state in setOf("unknown", "unplugged", "charging", "full"))
     battery["level"]?.jsonPrimitive?.double?.let { level ->
+      // level is a normalized 0.0–1.0 fraction of full charge, never a percentage.
       assertTrue(level in 0.0..1.0)
+    }
+    battery["levelPercent"]?.jsonPrimitive?.content?.toLong()?.let { levelPercent ->
+      // levelPercent mirrors level as an integer 0–100 percentage.
+      assertTrue(levelPercent in 0L..100L)
     }
     battery.getValue("lowPowerModeEnabled").jsonPrimitive.boolean
 
@@ -117,6 +125,68 @@ class DeviceHandlerTest {
     assertTrue(interfaces.all { it in setOf("wifi", "cellular", "wired", "other") })
 
     assertTrue(payload.getValue("uptimeSeconds").jsonPrimitive.double >= 0.0)
+  }
+
+  @Test
+  fun handleDeviceStatus_reportsBatteryLevelAsFractionAndPercent() {
+    val readings =
+      listOf(
+        Triple(0 to 100, 0.0, 0L),
+        Triple(1 to 8, 0.125, 13L),
+        Triple(50 to 100, 0.5, 50L),
+        Triple(100 to 100, 1.0, 100L),
+      )
+
+    for ((reading, expectedLevel, expectedPercent) in readings) {
+      val battery = batteryStatus(reading.first, reading.second)
+
+      assertEquals(expectedLevel, battery.getValue("level").jsonPrimitive.double, 0.0)
+      assertEquals(
+        expectedPercent,
+        battery
+          .getValue("levelPercent")
+          .jsonPrimitive
+          .content
+          .toLong(),
+      )
+      assertEquals("unplugged", battery.getValue("state").jsonPrimitive.content)
+      assertFalse(battery.getValue("lowPowerModeEnabled").jsonPrimitive.boolean)
+    }
+  }
+
+  @Test
+  fun handleDeviceStatus_omitsUnavailableBatteryLevelAndPercent() {
+    for ((level, scale) in listOf(null to 100, -1 to 100, 50 to null, 50 to 0, 50 to -1)) {
+      val battery = batteryStatus(level, scale)
+
+      assertFalse("level=$level scale=$scale", battery.containsKey("level"))
+      assertFalse("level=$level scale=$scale", battery.containsKey("levelPercent"))
+      assertEquals("unplugged", battery.getValue("state").jsonPrimitive.content)
+      assertFalse(battery.getValue("lowPowerModeEnabled").jsonPrimitive.boolean)
+    }
+  }
+
+  private fun batteryStatus(
+    level: Int?,
+    scale: Int?,
+  ): JsonObject {
+    val app = appContext()
+    val batteryIntent =
+      Intent(Intent.ACTION_BATTERY_CHANGED)
+        .putExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_DISCHARGING)
+    level?.let { batteryIntent.putExtra(BatteryManager.EXTRA_LEVEL, it) }
+    scale?.let { batteryIntent.putExtra(BatteryManager.EXTRA_SCALE, it) }
+    // Seed the sticky ACTION_BATTERY_CHANGED broadcast that readBatterySnapshot()
+    // consumes via registerReceiver(null, ...). Context.sendStickyBroadcast is the
+    // only non-reflection way to populate that sticky state under Robolectric.
+    @Suppress("DEPRECATION")
+    app.sendStickyBroadcast(batteryIntent)
+    val handler = DeviceHandler(app)
+
+    val result = handler.handleDeviceStatus(null)
+
+    assertTrue(result.ok)
+    return parsePayload(result.payloadJson).getValue("battery").jsonObject
   }
 
   @Test

@@ -17,7 +17,7 @@ public final class GatewayDiscoveryModel {
         }
     }
 
-    public struct DiscoveredGateway: Identifiable, Equatable, Sendable {
+    public struct DiscoveredGateway: Identifiable, Equatable, Encodable, Sendable {
         public var id: String {
             self.stableID
         }
@@ -36,6 +36,11 @@ public final class GatewayDiscoveryModel {
         public var stableID: String
         public var debugID: String
         public var isLocal: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case displayName, lanHost, tailnetDns, sshPort, gatewayPort, gatewayTls
+            case gatewayDirectReachable, cliPath, stableID, debugID, isLocal
+        }
 
         public init(
             displayName: String,
@@ -71,19 +76,19 @@ public final class GatewayDiscoveryModel {
     public var gateways: [DiscoveredGateway] = []
     public var statusText: String = GatewayDiscoveryStatusText.idle
 
-    private var browsers: [String: NWBrowser] = [:]
+    private let browserSession = GatewayDiscoveryBrowserSession()
+    private var generation: UInt64 = 0
     private var resultsByDomain: [String: Set<NWBrowser.Result>] = [:]
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
-    private var statesByDomain: [String: NWBrowser.State] = [:]
     private var localIdentity: LocalIdentity
     @ObservationIgnored private var localIdentityTask: Task<Void, Never>?
     private let filterLocalGateways: Bool
     private var resolvedServiceByID: [String: ResolvedGatewayService] = [:]
-    private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
+    private var pendingServiceResolvers: [String: BonjourServiceResolver<ResolvedGatewayService>] = [:]
     private var wideAreaFallbackTask: Task<Void, Never>?
-    private var wideAreaFallbackGateways: [DiscoveredGateway] = []
+    private var wideAreaFallback: (domain: String, beacons: [WideAreaGatewayBeacon])?
     private var tailscaleServeFallbackTask: Task<Void, Never>?
-    private var tailscaleServeFallbackGateways: [DiscoveredGateway] = []
+    private var tailscaleServeFallbackBeacons: [TailscaleServeGatewayBeacon] = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway-discovery")
 
     public init(
@@ -91,7 +96,8 @@ public final class GatewayDiscoveryModel {
         filterLocalGateways: Bool = true)
     {
         self.filterLocalGateways = filterLocalGateways
-        self.localIdentity = Self.buildLocalIdentityFast(displayName: localDisplayName)
+        self.localIdentity = Self.localIdentity(
+            hostName: ProcessInfo.processInfo.hostName, displayName: localDisplayName)
     }
 
     deinit {
@@ -100,28 +106,21 @@ public final class GatewayDiscoveryModel {
     }
 
     public func start() {
-        if !self.browsers.isEmpty { return }
+        if self.browserSession.isRunning { return }
         // Host resolution belongs to active discovery, not discarded SwiftUI models.
         self.refreshLocalIdentity()
 
-        for domain in OpenClawBonjour.gatewayServiceDomains {
-            let browser = GatewayDiscoveryBrowserSupport.makeBrowser(
-                serviceType: OpenClawBonjour.gatewayServiceType,
-                domain: domain,
-                queueLabelPrefix: "ai.openclaw.macos.gateway-discovery",
-                onState: { [weak self] state in
-                    guard let self else { return }
-                    self.statesByDomain[domain] = state
-                    self.updateStatusText()
-                },
-                onResults: { [weak self] results in
-                    guard let self else { return }
-                    self.resultsByDomain[domain] = results
-                    self.updateGateways(for: domain)
-                    self.recomputeGateways()
-                })
-            self.browsers[domain] = browser
-        }
+        self.browserSession.start(
+            queueLabelPrefix: "ai.openclaw.macos.gateway-discovery",
+            onState: { [weak self] _, _, status in
+                self?.statusText = status
+            },
+            onResults: { [weak self] domain, results in
+                guard let self else { return }
+                self.resultsByDomain[domain] = results
+                self.updateGateways(for: domain, results: results)
+                self.recomputeGateways()
+            })
 
         self.scheduleWideAreaFallback()
         self.scheduleTailscaleServeFallback()
@@ -129,24 +128,28 @@ public final class GatewayDiscoveryModel {
 
     public func refreshWideAreaFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
+        self.wideAreaFallbackTask?.cancel()
+        let generation = self.generation
+        self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
+            guard !Task.isCancelled else { return }
             let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
             await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
+                guard let self, self.generation == generation, !Task.isCancelled else { return }
+                self.wideAreaFallback = (domain, beacons)
                 self.recomputeGateways()
             }
         }
     }
 
     public func refreshTailscaleServeFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
+        self.tailscaleServeFallbackTask?.cancel()
+        let generation = self.generation
+        self.tailscaleServeFallbackTask = Task.detached(priority: .utility) { [weak self] in
+            guard !Task.isCancelled else { return }
             let beacons = await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
             await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.tailscaleServeFallbackGateways = self.mapTailscaleServeBeacons(beacons)
+                guard let self, self.generation == generation, !Task.isCancelled else { return }
+                self.tailscaleServeFallbackBeacons = beacons
                 self.recomputeGateways()
             }
         }
@@ -158,31 +161,29 @@ public final class GatewayDiscoveryModel {
     }
 
     public func stop() {
+        self.generation &+= 1
         self.localIdentityTask?.cancel()
         self.localIdentityTask = nil
-        for browser in self.browsers.values {
-            browser.cancel()
-        }
-        self.browsers = [:]
+        self.browserSession.stop()
         self.resultsByDomain = [:]
         self.gatewaysByDomain = [:]
-        self.statesByDomain = [:]
         self.resolvedServiceByID = [:]
         self.pendingServiceResolvers.values.forEach { $0.cancel() }
         self.pendingServiceResolvers = [:]
         self.wideAreaFallbackTask?.cancel()
         self.wideAreaFallbackTask = nil
-        self.wideAreaFallbackGateways = []
+        self.wideAreaFallback = nil
         self.tailscaleServeFallbackTask?.cancel()
         self.tailscaleServeFallbackTask = nil
-        self.tailscaleServeFallbackGateways = []
+        self.tailscaleServeFallbackBeacons = []
         self.gateways = []
         self.statusText = GatewayDiscoveryStatusText.stopped
     }
 
-    private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
-        beacons.map { beacon in
-            let stableID = "wide-area|\(domain)|\(beacon.instanceName)"
+    private var wideAreaFallbackGateways: [DiscoveredGateway] {
+        guard let fallback = self.wideAreaFallback else { return [] }
+        return fallback.beacons.map { beacon in
+            let stableID = "wide-area|\(fallback.domain)|\(beacon.instanceName)"
             let isLocal = Self.isLocalGateway(
                 lanHost: beacon.lanHost,
                 tailnetDns: beacon.tailnetDns,
@@ -206,10 +207,8 @@ public final class GatewayDiscoveryModel {
         }
     }
 
-    private func mapTailscaleServeBeacons(
-        _ beacons: [TailscaleServeGatewayBeacon]) -> [DiscoveredGateway]
-    {
-        beacons.map { beacon in
+    private var tailscaleServeFallbackGateways: [DiscoveredGateway] {
+        self.tailscaleServeFallbackBeacons.map { beacon in
             let stableID = "tailscale-serve|\(beacon.tailnetDns.lowercased())"
             let isLocal = Self.isLocalGateway(
                 lanHost: nil,
@@ -236,26 +235,14 @@ public final class GatewayDiscoveryModel {
 
     private func recomputeGateways() {
         let primary = self.sortedDeduped(gateways: self.gatewaysByDomain.values.flatMap(\.self))
-        let primaryFiltered = self.filterLocalGateways ? primary.filter { !$0.isLocal } : primary
-
         // Bonjour can return only "local" results for the wide-area domain (or no results at all),
         // and cross-network setups may rely on Tailscale Serve without DNS-SD.
         let fallback = self.wideAreaFallbackGateways + self.tailscaleServeFallbackGateways
-        guard !fallback.isEmpty else {
-            self.gateways = primaryFiltered
-            return
-        }
-
-        let combined = self.sortedDeduped(gateways: primary + fallback)
+        let combined = fallback.isEmpty ? primary : self.sortedDeduped(gateways: primary + fallback)
         self.gateways = self.filterLocalGateways ? combined.filter { !$0.isLocal } : combined
     }
 
-    private func updateGateways(for domain: String) {
-        guard let results = self.resultsByDomain[domain] else {
-            self.gatewaysByDomain[domain] = []
-            return
-        }
-
+    private func updateGateways(for domain: String, results: Set<NWBrowser.Result>) {
         self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
             guard case let .service(name, type, resultDomain, _) = result.endpoint else { return nil }
 
@@ -268,7 +255,7 @@ public final class GatewayDiscoveryModel {
                 uniquingKeysWith: { _, new in new })
 
             let advertisedName = txt["displayName"]
-                .map(Self.prettifyInstanceName)
+                .map(GatewayDiscoveryText.prettifyInstanceName)
                 .flatMap { $0.isEmpty ? nil : $0 }
             let prettyName =
                 advertisedName ?? Self.prettifyServiceName(decodedName)
@@ -312,7 +299,7 @@ public final class GatewayDiscoveryModel {
            domain == wideAreaDomain,
            self.hasUsableWideAreaResults
         {
-            self.wideAreaFallbackGateways = []
+            self.wideAreaFallback = nil
         }
     }
 
@@ -320,63 +307,54 @@ public final class GatewayDiscoveryModel {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
         if Self.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
-        self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
-            var attempt = 0
-            let startedAt = Date()
-            while !Task.isCancelled, Date().timeIntervalSince(startedAt) < 35.0 {
-                let hasResults = await MainActor.run {
-                    self.hasUsableWideAreaResults
-                }
-                if hasResults { return }
-
-                // Wide-area discovery can be racy (Tailscale not yet up, DNS zone not
-                // published yet). Retry with a short backoff while onboarding is open.
-                let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
-                if !beacons.isEmpty {
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
-                        self.recomputeGateways()
-                    }
-                    return
-                }
-
-                attempt += 1
-                let backoff = min(8.0, 0.6 + (Double(attempt) * 0.7))
-                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
-            }
-        }
+        self.wideAreaFallbackTask = self.scheduleFallback(
+            discover: { await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0) },
+            shouldContinue: { !$0.hasUsableWideAreaResults },
+            backoff: { min(8.0, 0.6 + (Double($0) * 0.7)) },
+            publish: { $0.wideAreaFallback = (domain, $1) })
     }
 
     private func scheduleTailscaleServeFallback() {
         if Self.isRunningTests { return }
         guard self.tailscaleServeFallbackTask == nil else { return }
-        self.tailscaleServeFallbackTask = Task.detached(priority: .utility) { [weak self] in
+        self.tailscaleServeFallbackTask = self.scheduleFallback(
+            discover: { await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4) },
+            shouldContinue: {
+                Self.shouldContinueTailscaleServeDiscovery(
+                    currentGateways: $0.gateways,
+                    tailscaleServeGateways: $0.tailscaleServeFallbackGateways)
+            },
+            backoff: { min(8.0, 0.8 + (Double($0) * 0.8)) },
+            publish: { $0.tailscaleServeFallbackBeacons = $1 })
+    }
+
+    private func scheduleFallback<Beacon: Sendable>(
+        discover: @escaping @Sendable () async -> [Beacon],
+        shouldContinue: @escaping @MainActor @Sendable (GatewayDiscoveryModel) -> Bool,
+        backoff: @escaping @Sendable (Int) -> TimeInterval,
+        publish: @escaping @MainActor @Sendable (GatewayDiscoveryModel, [Beacon]) -> Void) -> Task<Void, Never>
+    {
+        let generation = self.generation
+        return Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             var attempt = 0
             let startedAt = Date()
             while !Task.isCancelled, Date().timeIntervalSince(startedAt) < 35.0 {
-                let shouldContinue = await MainActor.run {
-                    Self.shouldContinueTailscaleServeDiscovery(
-                        currentGateways: self.gateways,
-                        tailscaleServeGateways: self.tailscaleServeFallbackGateways)
-                }
-                if !shouldContinue { return }
+                guard await shouldContinue(self) else { return }
 
-                let beacons = await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4)
+                // Remote discovery can race Tailscale startup or DNS publication.
+                let beacons = await discover()
                 if !beacons.isEmpty {
                     await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.tailscaleServeFallbackGateways = self.mapTailscaleServeBeacons(beacons)
+                        guard let self, self.generation == generation, !Task.isCancelled else { return }
+                        publish(self, beacons)
                         self.recomputeGateways()
                     }
                     return
                 }
 
                 attempt += 1
-                let backoff = min(8.0, 0.8 + (Double(attempt) * 0.8))
-                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(backoff(attempt) * 1_000_000_000))
             }
         }
     }
@@ -414,9 +392,7 @@ public final class GatewayDiscoveryModel {
         var seen = Set<String>()
         let deduped = gateways.filter { gateway in
             let key = Self.dedupeKey(for: gateway)
-            if seen.contains(key) { return false }
-            seen.insert(key)
-            return true
+            return seen.insert(key).inserted
         }
         return deduped.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
@@ -434,15 +410,9 @@ public final class GatewayDiscoveryModel {
     }
 
     private func updateGatewaysForAllDomains() {
-        for domain in self.resultsByDomain.keys {
-            self.updateGateways(for: domain)
+        for (domain, results) in self.resultsByDomain {
+            self.updateGateways(for: domain, results: results)
         }
-    }
-
-    private func updateStatusText() {
-        self.statusText = GatewayDiscoveryStatusText.make(
-            states: Array(self.statesByDomain.values),
-            hasBrowsers: !self.browsers.isEmpty)
     }
 
     private static func txtDictionary(from result: NWBrowser.Result) -> [String: String] {
@@ -470,32 +440,23 @@ public final class GatewayDiscoveryModel {
     }
 
     public static func parseGatewayTXT(_ txt: [String: String]) -> GatewayTXT {
-        func nonEmptyString(_ key: String) -> String? {
-            guard let value = txt[key]?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-            return value.isEmpty ? nil : value
-        }
-
         func positiveInteger(_ key: String) -> Int? {
-            guard let value = nonEmptyString(key), let parsed = Int(value), parsed > 0 else { return nil }
+            guard let value = GatewayDiscoveryText.txtValue(txt, key: key), let parsed = Int(value),
+                  parsed > 0 else { return nil }
             return parsed
         }
 
-        func booleanValue(_ key: String) -> Bool {
-            guard let normalized = nonEmptyString(key)?.lowercased() else { return false }
-            return normalized == "1" || normalized == "true" || normalized == "yes"
-        }
-
         return GatewayTXT(
-            lanHost: nonEmptyString("lanHost"),
-            tailnetDns: nonEmptyString("tailnetDns"),
+            lanHost: GatewayDiscoveryText.txtValue(txt, key: "lanHost"),
+            tailnetDns: GatewayDiscoveryText.txtValue(txt, key: "tailnetDns"),
             sshPort: positiveInteger("sshPort") ?? 22,
             gatewayPort: positiveInteger("gatewayPort"),
-            gatewayTls: booleanValue("gatewayTls"),
-            gatewayDirectReachable: booleanValue("gatewayDirectReachable"),
-            cliPath: nonEmptyString("cliPath"))
+            gatewayTls: GatewayDiscoveryText.txtBoolValue(txt, key: "gatewayTls"),
+            gatewayDirectReachable: GatewayDiscoveryText.txtBoolValue(txt, key: "gatewayDirectReachable"),
+            cliPath: GatewayDiscoveryText.txtValue(txt, key: "cliPath"))
     }
 
-    public static func buildSSHTarget(user: String, host: String, port: Int) -> String {
+    public nonisolated static func buildSSHTarget(user: String, host: String, port: Int) -> String {
         var target = "\(user)@\(host)"
         if port != 22 {
             target += ":\(port)"
@@ -509,42 +470,45 @@ public final class GatewayDiscoveryModel {
         type: String,
         domain: String)
     {
-        guard self.resolvedServiceByID[stableID] == nil else { return }
         guard self.pendingServiceResolvers[stableID] == nil else { return }
+        let generation = self.generation
 
-        let resolver = GatewayServiceResolver(
+        let resolver = BonjourServiceResolver(
             name: serviceName,
             type: type,
             domain: domain,
-            logger: self.logger)
-        { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                self.pendingServiceResolvers[stableID] = nil
-                switch result {
-                case let .success(resolved):
+            resolve: { [logger] service in
+                let txt = service.txtRecordData().map {
+                    NetService.dictionary(fromTXTRecord: $0).compactMapValues { String(data: $0, encoding: .utf8) }
+                } ?? [:]
+                let host = BonjourServiceResolverSupport.normalizeHost(service.hostName)
+                let port = service.port > 0 ? service.port : nil
+                if !txt.isEmpty {
+                    let payload = txt.sorted(by: { $0.key < $1.key })
+                        .map { "\($0.key)=\($0.value)" }
+                        .joined(separator: " ")
+                    logger.debug(
+                        "discovery: resolved TXT for \(service.name, privacy: .public): \(payload, privacy: .public)")
+                }
+                return ResolvedGatewayService(txt: txt, host: host, port: port)
+            },
+            completion: { [weak self] resolved in
+                Task { @MainActor in
+                    guard let self, self.generation == generation else { return }
+                    self.pendingServiceResolvers[stableID] = nil
+                    guard let resolved else { return }
                     self.resolvedServiceByID[stableID] = resolved
                     self.updateGatewaysForAllDomains()
                     self.recomputeGateways()
-                case .failure:
-                    break
                 }
-            }
-        }
+            })
 
         self.pendingServiceResolvers[stableID] = resolver
         resolver.start()
     }
 
-    private nonisolated static func prettifyInstanceName(_ decodedName: String) -> String {
-        let normalized = decodedName.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let stripped = normalized.replacingOccurrences(of: " (OpenClaw)", with: "")
-            .replacingOccurrences(of: #"\s+\(\d+\)$"#, with: "", options: .regularExpression)
-        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private nonisolated static func prettifyServiceName(_ decodedName: String) -> String {
-        let normalized = Self.prettifyInstanceName(decodedName)
+        let normalized = GatewayDiscoveryText.prettifyInstanceName(decodedName)
         var cleaned = normalized.replacingOccurrences(of: #"\s*-?gateway$"#, with: "", options: .regularExpression)
         cleaned = cleaned
             .replacingOccurrences(of: "_", with: " ")
@@ -557,8 +521,7 @@ public final class GatewayDiscoveryModel {
         let words = cleaned.split(separator: " ")
         let titled = words.map { word -> String in
             let lower = word.lowercased()
-            guard let first = lower.first else { return "" }
-            return String(first).uppercased() + lower.dropFirst()
+            return lower.prefix(1).uppercased() + lower.dropFirst()
         }.joined(separator: " ")
         return titled.isEmpty ? normalized : titled
     }
@@ -570,34 +533,19 @@ public final class GatewayDiscoveryModel {
         serviceName: String?,
         local: LocalIdentity) -> Bool
     {
-        if let host = normalizeHostToken(lanHost),
-           local.hostTokens.contains(host)
-        {
-            return true
-        }
-        if let host = normalizeHostToken(tailnetDns),
-           local.hostTokens.contains(host)
-        {
-            return true
-        }
-        if let name = normalizeDisplayToken(displayName),
-           local.displayTokens.contains(name)
-        {
-            return true
-        }
-        if let serviceHost = normalizeServiceHostToken(serviceName),
-           local.hostTokens.contains(serviceHost)
-        {
-            return true
-        }
-        return false
+        self.normalizeHostToken(lanHost).map(local.hostTokens.contains) == true ||
+            self.normalizeHostToken(tailnetDns).map(local.hostTokens.contains) == true ||
+            self.normalizeDisplayToken(displayName).map(local.displayTokens.contains) == true ||
+            self.normalizeServiceHostToken(serviceName).map(local.hostTokens.contains) == true
     }
 
     private func refreshLocalIdentity() {
         let fastIdentity = self.localIdentity
         self.localIdentityTask = Task.detached(priority: .utility) { [weak self] in
             guard !Task.isCancelled else { return }
-            let slowIdentity = Self.buildLocalIdentitySlow()
+            let slowIdentity = Self.localIdentity(
+                hostName: Host.current().name,
+                displayName: Host.current().localizedName)
             let merged = LocalIdentity(
                 hostTokens: fastIdentity.hostTokens.union(slowIdentity.hostTokens),
                 displayTokens: fastIdentity.displayTokens.union(slowIdentity.displayTokens))
@@ -605,42 +553,16 @@ public final class GatewayDiscoveryModel {
                 guard !Task.isCancelled, let self else { return }
                 guard self.localIdentity != merged else { return }
                 self.localIdentity = merged
+                self.updateGatewaysForAllDomains()
                 self.recomputeGateways()
             }
         }
     }
 
-    private nonisolated static func buildLocalIdentityFast(displayName: String?) -> LocalIdentity {
-        var hostTokens: Set<String> = []
-        var displayTokens: Set<String> = []
-
-        let hostName = ProcessInfo.processInfo.hostName
-        if let token = normalizeHostToken(hostName) {
-            hostTokens.insert(token)
-        }
-
-        if let token = normalizeDisplayToken(displayName) {
-            displayTokens.insert(token)
-        }
-
-        return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
-    }
-
-    private nonisolated static func buildLocalIdentitySlow() -> LocalIdentity {
-        var hostTokens: Set<String> = []
-        var displayTokens: Set<String> = []
-
-        if let host = Host.current().name,
-           let token = normalizeHostToken(host)
-        {
-            hostTokens.insert(token)
-        }
-
-        if let token = normalizeDisplayToken(Host.current().localizedName) {
-            displayTokens.insert(token)
-        }
-
-        return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
+    private nonisolated static func localIdentity(hostName: String?, displayName: String?) -> LocalIdentity {
+        LocalIdentity(
+            hostTokens: Set(self.normalizeHostToken(hostName).map { [$0] } ?? []),
+            displayTokens: Set(self.normalizeDisplayToken(displayName).map { [$0] } ?? []))
     }
 
     private nonisolated static func normalizeHostToken(_ raw: String?) -> String? {
@@ -661,7 +583,7 @@ public final class GatewayDiscoveryModel {
 
     private nonisolated static func normalizeDisplayToken(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        let prettified = Self.prettifyInstanceName(raw)
+        let prettified = GatewayDiscoveryText.prettifyInstanceName(raw)
         let trimmed = prettified.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
         return trimmed.lowercased()
@@ -669,7 +591,7 @@ public final class GatewayDiscoveryModel {
 
     private nonisolated static func normalizeServiceHostToken(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        let prettified = Self.prettifyInstanceName(raw)
+        let prettified = GatewayDiscoveryText.prettifyInstanceName(raw)
         let strippedGateway = prettified.replacingOccurrences(
             of: #"\s*-?\s*gateway$"#,
             with: "",
@@ -682,86 +604,4 @@ struct ResolvedGatewayService: Equatable {
     var txt: [String: String]
     var host: String?
     var port: Int?
-}
-
-final class GatewayServiceResolver: NSObject, NetServiceDelegate {
-    private let service: NetService
-    private let completion: (Result<ResolvedGatewayService, Error>) -> Void
-    private let logger: Logger
-    private var didFinish = false
-
-    init(
-        name: String,
-        type: String,
-        domain: String,
-        logger: Logger,
-        completion: @escaping (Result<ResolvedGatewayService, Error>) -> Void)
-    {
-        self.service = NetService(domain: domain, type: type, name: name)
-        self.completion = completion
-        self.logger = logger
-        super.init()
-        self.service.delegate = self
-    }
-
-    func start(timeout: TimeInterval = 2.0) {
-        BonjourServiceResolverSupport.start(self.service, timeout: timeout)
-    }
-
-    func cancel() {
-        self.finish(result: .failure(GatewayServiceResolverError.cancelled))
-    }
-
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        let txt = Self.decodeTXT(sender.txtRecordData())
-        let host = Self.normalizeHost(sender.hostName)
-        let port = sender.port > 0 ? sender.port : nil
-        if !txt.isEmpty {
-            let payload = self.formatTXT(txt)
-            self.logger.debug(
-                "discovery: resolved TXT for \(sender.name, privacy: .public): \(payload, privacy: .public)")
-        }
-        let resolved = ResolvedGatewayService(txt: txt, host: host, port: port)
-        self.finish(result: .success(resolved))
-    }
-
-    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-        self.finish(result: .failure(GatewayServiceResolverError.resolveFailed(errorDict)))
-    }
-
-    private func finish(result: Result<ResolvedGatewayService, Error>) {
-        guard !self.didFinish else { return }
-        self.didFinish = true
-        self.service.stop()
-        self.service.remove(from: .main, forMode: .common)
-        self.completion(result)
-    }
-
-    private static func decodeTXT(_ data: Data?) -> [String: String] {
-        guard let data else { return [:] }
-        let dict = NetService.dictionary(fromTXTRecord: data)
-        var out: [String: String] = [:]
-        out.reserveCapacity(dict.count)
-        for (key, value) in dict {
-            if let str = String(data: value, encoding: .utf8) {
-                out[key] = str
-            }
-        }
-        return out
-    }
-
-    private static func normalizeHost(_ raw: String?) -> String? {
-        BonjourServiceResolverSupport.normalizeHost(raw)
-    }
-
-    private func formatTXT(_ txt: [String: String]) -> String {
-        txt.sorted(by: { $0.key < $1.key })
-            .map { "\($0.key)=\($0.value)" }
-            .joined(separator: " ")
-    }
-}
-
-enum GatewayServiceResolverError: Error {
-    case cancelled
-    case resolveFailed([String: NSNumber])
 }

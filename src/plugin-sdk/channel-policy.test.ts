@@ -222,7 +222,7 @@ describe("createRestrictSendersChannelSecurity", () => {
     ).toEqual([
       {
         checkId: "channels.line.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "LINE security warning",
         detail:
           'LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.',

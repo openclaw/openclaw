@@ -115,6 +115,8 @@ export const SessionGitHubPublicationResultSchema = Type.Union([
 export const SessionGitHubOptionsParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  // Narrows shared receipt recovery to the original invocation after a lost acknowledgement.
+  idempotencyKey: Type.Optional(NonEmptyString),
 });
 export const SessionGitHubStatusParamsSchema = closedObject({
   sessionKey: NonEmptyString,
@@ -151,12 +153,23 @@ export const SessionGitHubStatusResultSchema = closedObject({
 export const SessionGitHubOptionsResultSchema = closedObject({
   personal: Type.Union([PersonalGitHubStatusSchema, Type.Null()]),
   shared: Type.Union([SharedGitHubPublicationPublisherSchema, Type.Null()]),
+  sharedUnavailableReason: Type.Optional(
+    Type.Union([
+      Type.Literal("unavailable"),
+      Type.Literal("changed"),
+      Type.Literal("rate_limited"),
+      Type.Literal("unverified"),
+      Type.Literal("unsupported_workspace"),
+    ]),
+  ),
   pendingPersonal: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
+  latestShared: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
 });
 
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationSelection = Static<typeof GitHubPublicationSelectionSchema>;
 export type SessionGitHubConfirmParams = Static<typeof SessionGitHubConfirmParamsSchema>;
+export type SessionGitHubOptionsResult = Static<typeof SessionGitHubOptionsResultSchema>;
 export type SessionGitHubStatusResult = Static<typeof SessionGitHubStatusResultSchema>;
 
 export type SessionGitHubPublishParams = Static<typeof SessionGitHubPublishParamsSchema>;

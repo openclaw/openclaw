@@ -83,36 +83,16 @@ describe("ingress retry policy", () => {
     expect(resolveIngressRetryDelayMs(event, undefined, now)).toBe(expected);
   });
 
-  it.each([
-    {
-      name: "attempts below floor",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS + 1,
-      expected: false,
-    },
-    {
-      name: "age below gate",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
-      expected: false,
-    },
-    {
-      name: "both attempt floor and age met",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      expected: true,
-    },
-    {
-      name: "over floor and over age",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 3,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS * 2,
-      expected: true,
-    },
-  ])("dead-letter requires both gates: $name", ({ attempt, ageMs, expected }) => {
+  it("does not dead-letter an old event below the attempt floor", () => {
     const receivedAt = 1_000;
     expect(
-      shouldDeadLetterRetryableIngressEvent({ receivedAt }, attempt, undefined, receivedAt + ageMs),
-    ).toBe(expected);
+      shouldDeadLetterRetryableIngressEvent(
+        { receivedAt },
+        DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+        undefined,
+        receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS + 1,
+      ),
+    ).toBe(false);
   });
 
   it("disposition prefers non-retryable fail", () => {
@@ -161,6 +141,104 @@ describe("ingress retry policy", () => {
       kind: "fail",
       reason: "retry-limit-exceeded",
       attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+    });
+  });
+
+  it("dead-letters a restart tombstone by structured code instead of wording", () => {
+    const message = "This generation is terminal.";
+    const wrapped = Object.assign(new Error("BotError in middleware"), {
+      error: new Error("telegram spooled update processing failed", {
+        cause: Object.assign(new Error(message), {
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        }),
+      }),
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err: wrapped,
+        event: { receivedAt: 1_000, attempts: 0 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts: 8, deadLetterMinAgeMs: 24 * 60 * 60 * 1000 },
+        now: 2_000,
+      }),
+    ).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      message: wrapped.message,
+      attempt: 1,
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err: Object.assign(new Error(message), {
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        }),
+        event: { receivedAt: 1_000, attempts: 425 },
+        formatError: coerceErrorMessage,
+        now: 2_000,
+      }),
+    ).toMatchObject({ kind: "fail", reason: "restart-recovery-tombstone", attempt: 426 });
+  });
+
+  it.each([undefined, "SESSION_WORK_START_INVALIDATED"])(
+    "keeps tombstone-like text retryable without its code: %s",
+    (code) => {
+      const err = Object.assign(
+        new Error("Session ended during restart recovery. Use /new or /reset."),
+        { code },
+      );
+      expect(
+        resolveIngressFailureDisposition({
+          err,
+          event: { receivedAt: 1_000, attempts: 0 },
+          formatError: coerceErrorMessage,
+          now: 2_000,
+        }),
+      ).toEqual({ kind: "release", attempt: 1, message: err.message });
+    },
+  );
+
+  it.each(["code", "cause", "errors"])(
+    "releases a transient failure when its %s getter throws",
+    (field) => {
+      const err = Object.defineProperty(new Error("temporary failure"), field, {
+        get() {
+          throw new Error("unavailable diagnostic field");
+        },
+      });
+      expect(
+        resolveIngressFailureDisposition({
+          err,
+          event: { receivedAt: 1_000, attempts: 0 },
+          formatError: coerceErrorMessage,
+          now: 2_000,
+        }),
+      ).toEqual({ kind: "release", attempt: 1, message: "temporary failure" });
+    },
+  );
+
+  it("finds the terminal code beside an inaccessible wrapper field", () => {
+    const err = Object.assign(new Error("reply admission refused"), {
+      error: Object.assign(new Error("terminal generation"), {
+        code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+      }),
+    });
+    Object.defineProperty(err, "cause", {
+      get() {
+        throw new Error("unavailable diagnostic field");
+      },
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err,
+        event: { receivedAt: 1_000, attempts: 0 },
+        formatError: coerceErrorMessage,
+        now: 2_000,
+      }),
+    ).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      attempt: 1,
+      message: "reply admission refused",
     });
   });
 

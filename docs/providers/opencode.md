@@ -18,6 +18,19 @@ alias `OPENCODE_ZEN_API_KEY`). Go still requires its own paid subscription;
 having a Zen key does not by itself grant Go access. OpenClaw keeps the runtime
 provider ids split so upstream per-model routing stays correct.
 
+OpenClaw sends a stable `x-opencode-session` conversation header on requests to
+`https://opencode.ai` across the Anthropic, Gemini, OpenAI Chat Completions, and
+OpenAI Responses transports. This header remains enabled when prompt caching is
+disabled. Low-level SDK stream callers should supply `sessionId` in their stream
+options.
+
+Standalone `openclaw infer model run --local` calls and the
+[prepared completion helper](/plugins/sdk-runtime/models#prepared-completion-sdk-compatibility)
+generate a fresh routing header per invocation when no explicit routing header
+or session identifier is supplied. This generated value stays in the header and
+does not create a conversation or enable session-based caching. Explicit model
+or caller routing headers are preserved regardless of header name casing.
+
 ## Getting started
 
 <Tabs>
@@ -57,7 +70,7 @@ provider ids split so upstream per-model routing stays correct.
 
     <Steps>
       <Step title="Use the bundled Go catalog">
-        OpenCode Go is included with OpenClaw for this release, so no separate
+        OpenCode Go is included with OpenClaw, so no separate
         plugin installation or Gateway restart is required.
       </Step>
       <Step title="Run onboarding">
@@ -187,5 +200,8 @@ a model does not prove your account can run it.
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config reference for agents, models, and providers.
+  </Card>
+  <Card title="OpenCode plugin reference" href="/plugins/reference/opencode" icon="plug">
+    Native sessions, the session catalog toggle, and plugin config keys.
   </Card>
 </CardGroup>

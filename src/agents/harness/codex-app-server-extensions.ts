@@ -1,9 +1,3 @@
-/**
- * Codex app-server extension runner.
- *
- * Harness integration uses this to let registered extensions observe and adjust
- * tool results before they are returned to the agent runtime.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listCodexAppServerExtensionFactories } from "../../plugins/codex-app-server-extension-factory.js";
 import type {
@@ -12,28 +6,33 @@ import type {
   CodexAppServerExtensionRuntime,
   CodexAppServerToolResultEvent,
 } from "../../plugins/codex-app-server-extension-types.js";
+import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { AgentToolResult } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
 
 type CodexToolResultHandler = Parameters<CodexAppServerExtensionRuntime["on"]>[1];
 
-/** Creates a runner that applies registered Codex app-server tool-result extensions. */
 export function createCodexAppServerToolResultExtensionRunner(
   ctx: CodexAppServerExtensionContext,
   factories: CodexAppServerExtensionFactory[] = listCodexAppServerExtensionFactories(),
 ) {
   const handlers: CodexToolResultHandler[] = [];
-  const runtime: CodexAppServerExtensionRuntime = {
-    on(event, handler) {
-      if (event === "tool_result") {
-        handlers.push(handler);
-      }
-    },
-  };
   const initPromise = (async () => {
     for (const factory of factories) {
-      await factory(runtime);
+      const instance = getPluginValueInstance(factory);
+      await factory({
+        on(event, handler) {
+          if (event === "tool_result") {
+            // Retained registrations and callbacks belong to the exact factory instance.
+            if (instance) {
+              instance.run(() => handlers.push(instance.wrap(handler)));
+            } else {
+              handlers.push(handler);
+            }
+          }
+        },
+      });
     }
   })();
 

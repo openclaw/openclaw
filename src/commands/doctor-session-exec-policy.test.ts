@@ -48,7 +48,7 @@ describe("doctor legacy session exec policy", () => {
       name: "partial ask under agent deny overriding global full",
       cfg: {
         tools: { exec: { mode: "full" } },
-        agents: { list: [{ id: "worker", tools: { exec: { mode: "deny" } } }] },
+        agents: { entries: { worker: { tools: { exec: { mode: "deny" } } } } },
       },
       legacy: { execAsk: "off" },
       oldPolicy: { security: "deny", ask: "off" },
@@ -79,7 +79,7 @@ describe("doctor legacy session exec policy", () => {
       name: "partial security inherits agent ask always",
       cfg: {
         tools: { exec: { mode: "full" } },
-        agents: { list: [{ id: "worker", tools: { exec: { ask: "always" } } }] },
+        agents: { entries: { worker: { tools: { exec: { ask: "always" } } } } },
       },
       legacy: { execSecurity: "full" },
       oldPolicy: { security: "full", ask: "always" },
@@ -121,8 +121,6 @@ describe("doctor legacy session exec policy", () => {
     await noteSessionTranscriptHealth({
       cfg: { ...cfg, plugins: { enabled: false } },
       env: state.env,
-      sessionDirs: [],
-      sessionSqlite: true,
       shouldRepair: true,
     });
     closeOpenClawAgentDatabasesForTest();
@@ -214,8 +212,6 @@ describe("doctor legacy session exec policy", () => {
       noteSessionTranscriptHealth({
         cfg: { plugins: { enabled: false } },
         env,
-        sessionDirs: [],
-        sessionSqlite: true,
         shouldRepair,
       });
     const read = () => listSessionEntriesCore({ agentId: "main", env });

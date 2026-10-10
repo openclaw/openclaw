@@ -1,3 +1,4 @@
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveDateTimestampMs,
@@ -130,9 +131,9 @@ function nestedErrorCandidates(current: Record<string, unknown>): unknown[] {
   return [...retryBranches, ...aggregateBranches, ...nestedObjects];
 }
 
-export function isProvenDeliveryNotSentError(err: unknown): boolean {
+function hasDeliveryNotSentProof(candidates: readonly unknown[]): boolean {
   let foundNotSentProof = false;
-  for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
+  for (const candidate of candidates) {
     // A cause describes its attempt, not earlier sends in the enclosing batch.
     if (isOutboundDeliveryError(candidate) && candidate.sentBeforeError) {
       return false;
@@ -167,16 +168,17 @@ export function isProvenDeliveryNotSentError(err: unknown): boolean {
   return foundNotSentProof;
 }
 
+export function isProvenDeliveryNotSentError(err: unknown): boolean {
+  return hasDeliveryNotSentProof(collectErrorGraphCandidates(err, nestedErrorCandidates));
+}
+
 /** Finds a provider's permanent pre-dispatch rejection through delivery wrappers. */
 export function findPlatformMessageRejectedError(
   err: unknown,
 ): (PlatformMessageNotDispatchedError & { readonly retryable: false }) | undefined {
-  for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
-    if (isPlatformMessageRejectedError(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return collectErrorGraphCandidates(err, nestedErrorCandidates).find(
+    isPlatformMessageRejectedError,
+  );
 }
 
 /**
@@ -184,15 +186,19 @@ export function findPlatformMessageRejectedError(
  * Untyped pre-connect proof stays undefined so caller-specific text policy keeps precedence.
  */
 export function resolveDeliveryNotSentRetryability(err: unknown): boolean | undefined {
+  return deliveryNotSentRetryability(err, true);
+}
+
+function deliveryNotSentRetryability(err: unknown, requireMarker: boolean): boolean | undefined {
   const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
   if (
-    !candidates.some(isPlatformMessageNotDispatchedError) ||
-    !isProvenDeliveryNotSentError(err) ||
+    (requireMarker && !candidates.some(isPlatformMessageNotDispatchedError)) ||
+    !hasDeliveryNotSentProof(candidates) ||
     hasDeliverySendEvidence(candidates)
   ) {
     return undefined;
   }
-  return findPlatformMessageRejectedError(err) === undefined;
+  return !candidates.some(isPlatformMessageRejectedError);
 }
 
 function hasDeliverySendEvidence(candidates: readonly unknown[]): boolean {
@@ -207,11 +213,13 @@ function hasDeliverySendEvidence(candidates: readonly unknown[]): boolean {
 
 /** True only when the complete error graph proves a retryable recipient no-send. */
 export function isRetryableDeliveryNotSentError(err: unknown): boolean {
-  const typedRetryability = resolveDeliveryNotSentRetryability(err);
-  return (
-    typedRetryability ??
-    (isProvenDeliveryNotSentError(err) &&
-      !hasDeliverySendEvidence(collectErrorGraphCandidates(err, nestedErrorCandidates)))
+  return deliveryNotSentRetryability(err, false) ?? false;
+}
+
+/** True when the durable queue retained the exact failed attempt for recovery. */
+export function isDeliveryRecoveryOwnedRetry(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, nestedErrorCandidates).some(
+    (candidate) => isOutboundDeliveryError(candidate) && candidate.queueCustody === "held",
   );
 }
 
@@ -225,57 +233,38 @@ export function getErrnoCode(err: unknown): string | null {
     : null;
 }
 
-function createRecoveryReplayPacer(): {
-  wait(deadlineMs?: number): Promise<"ready" | "deadline-exceeded">;
-} {
+function createRecoveryReplayPacer() {
   let lastReplayStartedAt = 0;
-  let waitQueue = Promise.resolve();
+  const withLock = createAsyncLock();
 
-  return {
-    async wait(deadlineMs) {
-      let releaseWaiter: () => void = () => {};
-      const previousWaiter = waitQueue;
-      waitQueue = new Promise<void>((resolve) => {
-        releaseWaiter = resolve;
-      });
-      await previousWaiter;
-
-      try {
-        const now = Date.now();
-        if (deadlineMs !== undefined && now >= deadlineMs) {
-          return "deadline-exceeded";
-        }
-        // Clock rollback starts a fresh pacing epoch. Otherwise concurrent startup
-        // and reconnect drains serialize here so neither can bypass the spacing floor.
-        const elapsedMs = now - lastReplayStartedAt;
-        const waitMs = elapsedMs < 0 ? 0 : Math.max(0, RECOVERY_REPLAY_SPACING_MS - elapsedMs);
-        if (waitMs > 0) {
-          const remainingBudgetMs =
-            deadlineMs === undefined ? waitMs : Math.max(0, deadlineMs - now);
-          await sleep(Math.min(waitMs, remainingBudgetMs));
-        }
-        if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
-          return "deadline-exceeded";
-        }
-        lastReplayStartedAt = Date.now();
-        return "ready";
-      } finally {
-        releaseWaiter();
+  return (deadlineMs?: number): Promise<"ready" | "deadline-exceeded"> =>
+    withLock(async () => {
+      const now = Date.now();
+      if (deadlineMs !== undefined && now >= deadlineMs) {
+        return "deadline-exceeded";
       }
-    },
-  };
+      // Clock rollback starts a fresh pacing epoch. Otherwise concurrent startup
+      // and reconnect drains serialize here so neither can bypass the spacing floor.
+      const elapsedMs = now - lastReplayStartedAt;
+      const waitMs = elapsedMs < 0 ? 0 : Math.max(0, RECOVERY_REPLAY_SPACING_MS - elapsedMs);
+      if (waitMs > 0) {
+        const remainingBudgetMs = deadlineMs === undefined ? waitMs : Math.max(0, deadlineMs - now);
+        await sleep(Math.min(waitMs, remainingBudgetMs));
+      }
+      if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+        return "deadline-exceeded";
+      }
+      lastReplayStartedAt = Date.now();
+      return "ready";
+    });
 }
 
-/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
-export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
-  const activeDrains = new Set<string>();
+function createRecoveryClaim() {
   const activeEntries = new Set<string>();
-  const replayPacer = createRecoveryReplayPacer();
-
-  async function withClaim<Result>(
+  return async <Result>(
     entryId: string,
     run: () => Promise<Result>,
-  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> {
+  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> => {
     if (activeEntries.has(entryId)) {
       return { status: "claimed-by-other-owner" };
     }
@@ -285,22 +274,19 @@ export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntr
     } finally {
       activeEntries.delete(entryId);
     }
-  }
+  };
+}
+
+/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
+export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
+  const withClaim = createRecoveryClaim();
+  const withDrainClaim = createRecoveryClaim();
 
   return {
     withClaim,
 
     async withDrain(drainKey: string, run: () => Promise<void>): Promise<boolean> {
-      if (activeDrains.has(drainKey)) {
-        return false;
-      }
-      activeDrains.add(drainKey);
-      try {
-        await run();
-        return true;
-      } finally {
-        activeDrains.delete(drainKey);
-      }
+      return (await withDrainClaim(drainKey, run)).status === "claimed";
     },
 
     async scan(options: DeliveryRecoveryScanOptions<T>): Promise<void> {
@@ -330,8 +316,6 @@ export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntr
       }
     },
 
-    waitForReplay(deadlineMs?: number): Promise<"ready" | "deadline-exceeded"> {
-      return replayPacer.wait(deadlineMs);
-    },
+    waitForReplay: createRecoveryReplayPacer(),
   };
 }

@@ -13,16 +13,13 @@ function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
   );
 }
 
-function findMcpAppUnmountTargets(
-  roots: Iterable<ParentNode>,
-  selector = "mcp-app-view",
-): McpAppUnmountTarget[] {
+function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
   const targets = new Set<McpAppUnmountTarget>();
   for (const root of roots) {
-    if (root instanceof Element && root.matches(selector) && isMcpAppUnmountTarget(root)) {
+    if (root instanceof Element && root.matches("mcp-app-view") && isMcpAppUnmountTarget(root)) {
       targets.add(root);
     }
-    for (const candidate of root.querySelectorAll(selector)) {
+    for (const candidate of root.querySelectorAll("mcp-app-view")) {
       if (isMcpAppUnmountTarget(candidate)) {
         targets.add(candidate);
       }
@@ -38,10 +35,11 @@ export class McpAppUnmountGate {
   private pending = false;
   private restartTargets: McpAppUnmountTarget[] | null = null;
 
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly selector = "mcp-app-view",
-  ) {}
+  constructor(private readonly host: ReactiveControllerHost) {}
+
+  get retiring(): boolean {
+    return this.pending || this.restartTargets !== null;
+  }
 
   private apply(key: McpAppUnmountKey, renderValue: () => unknown): unknown {
     this.renderedValue = renderValue();
@@ -81,7 +79,7 @@ export class McpAppUnmountGate {
       return this.apply(key, renderValue);
     }
 
-    const targets = findMcpAppUnmountTargets(leavingRoots(), this.selector);
+    const targets = findMcpAppUnmountTargets(leavingRoots());
     if (targets.length === 0) {
       return this.apply(key, renderValue);
     }

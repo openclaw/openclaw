@@ -3,7 +3,7 @@ import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { parseDateStringTimestampMs as readTimestamp } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readText } from "./helpers.js";
+import { readJsonObject } from "./helpers.js";
 import type { HermesSource } from "./source.js";
 
 const HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID = "openai-codex";
@@ -92,19 +92,10 @@ function readHermesPoolCandidates(
 export async function readHermesCodexAuthCandidates(
   authPath: string | undefined,
 ): Promise<HermesCodexAuthCandidate[]> {
-  const raw = await readText(authPath);
-  if (!raw || !authPath) {
+  if (!authPath) {
     return [];
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed)) {
-    return [];
-  }
+  const parsed = await readJsonObject(authPath);
   const candidates = [
     readHermesProviderCandidate(parsed, authPath),
     ...readHermesPoolCandidates(parsed, authPath),
@@ -118,36 +109,24 @@ export async function readHermesCodexAuthCandidates(
 }
 
 async function readHermesOAuthProviderIds(authPath: string | undefined): Promise<Set<string>> {
-  const raw = await readText(authPath);
-  if (!raw) {
-    return new Set();
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) {
-      return new Set();
-    }
-    const providers = isRecord(parsed.providers)
-      ? Object.keys(parsed.providers).filter((provider) =>
-          HERMES_REAUTH_SOURCE_PROVIDERS.has(provider),
+  const parsed = await readJsonObject(authPath);
+  const providers = isRecord(parsed.providers)
+    ? Object.keys(parsed.providers).filter((provider) =>
+        HERMES_REAUTH_SOURCE_PROVIDERS.has(provider),
+      )
+    : [];
+  const pool = isRecord(parsed.credential_pool)
+    ? Object.entries(parsed.credential_pool).flatMap(([provider, entries]) =>
+        Array.isArray(entries) &&
+        entries.some(
+          (entry) =>
+            isRecord(entry) && normalizeOptionalString(entry.auth_type)?.toLowerCase() === "oauth",
         )
-      : [];
-    const pool = isRecord(parsed.credential_pool)
-      ? Object.entries(parsed.credential_pool).flatMap(([provider, entries]) =>
-          Array.isArray(entries) &&
-          entries.some(
-            (entry) =>
-              isRecord(entry) &&
-              normalizeOptionalString(entry.auth_type)?.toLowerCase() === "oauth",
-          )
-            ? [provider]
-            : [],
-        )
-      : [];
-    return new Set([...providers, ...pool]);
-  } catch {
-    return new Set();
-  }
+          ? [provider]
+          : [],
+      )
+    : [];
+  return new Set([...providers, ...pool]);
 }
 
 export async function buildReauthenticationItems(source: HermesSource): Promise<MigrationItem[]> {

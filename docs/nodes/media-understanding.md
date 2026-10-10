@@ -7,7 +7,7 @@ title: "Media understanding"
 sidebarTitle: "Media understanding"
 ---
 
-OpenClaw can summarize inbound media (image/audio/video) before the reply pipeline runs, so command parsing and routing work off short text instead of raw bytes. Understanding auto-detects local tools or provider keys, or you can configure explicit models. Original media is always delivered to the model as usual; when understanding fails or is disabled, the reply flow continues unchanged.
+OpenClaw can summarize inbound media (image/audio/video) before the reply pipeline runs, so command parsing and routing work off short text instead of raw bytes. Understanding auto-detects local tools or provider keys, or you can configure explicit models. In the OpenClaw-managed reply path, successfully described images are represented by text instead of being attached again as native images. Failed, disabled, or unselected images remain eligible for normal native image delivery; understanding errors do not block the reply.
 
 Vendor plugins register capability metadata (which provider supports which media type, default model, priority). OpenClaw core owns the shared `tools.media` config, fallback order, and reply-pipeline integration.
 
@@ -68,7 +68,7 @@ Per-capability (`image`/`audio`/`video`) keys:
 | `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
 | `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
 
-Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured.
+Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured. A model list selects which entries run; it does not hide other enabled providers from provider discovery.
 
 ### Model entries
 
@@ -80,7 +80,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     {
       type: "provider", // default if omitted
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
       prompt: "Describe the image in <= 500 chars.",
       maxChars: 500,
       maxBytes: 10485760,
@@ -110,10 +110,16 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
-    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` names remain deprecated compatibility aliases.
+    Placeholders are substituted literally into each argument, and an unset one becomes an **empty argument** rather than being dropped. `{{Language}}` is only populated for audio, when a language is resolved from the request, the entry's `language`, or `tools.media.audio.language`; with none set, `["--language", "{{Language}}"]` runs as `--language ""`. Transcribers that reject an empty language should omit the flag and its value together and rely on autodetection. `{{Prompt}}` falls back to the built-in default prompt, so it is normally populated. The same empty substitution applies to any other placeholder without a value, such as `{{AttachmentContentType}}` for an attachment with no MIME type.
+
+    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The `{{Attachment*}}` names replaced `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` in 2026.8.1. The older names remain deprecated compatibility aliases under the `media-legacy-projection` record: its approved `removeAfter` date is 2026-10-01, with removal additionally gated on a clean published-plugin artifact sweep. Migrate before that date - see [Media legacy projection](/plugins/sdk-migration/compatibility-policy#media-legacy-projection).
 
   </Tab>
 </Tabs>
+
+CLI entries need a nonblank `command` and a nonempty `args` list. Arguments remain literal strings with optional template interpolation; existing literal file paths and custom wrapper arguments are supported. Pass the attachment through a template such as `{{AttachmentPath}}` or your command's existing input contract. Empty argument lists are not supported because OpenClaw does not feed attachments to CLI stdin. `openclaw doctor` reports missing commands or args with the exact config path and a manual fix; it does not invent commands or rewrite these entries. At runtime, an incomplete entry records a failure without launching the binary, and the next configured model is tried. If none succeeds, the attachment gets a failure outcome and a warning is logged. Config validation remains permissive for these fields so an existing config can still start the Gateway after an update.
+
+Remote attachments are staged as temporary files only when a CLI needs a file path. The media-understanding run owns those files and removes them after processing; a failed staging attempt leaves other staged attachments available. Existing local attachments are read in place and retained.
 
 ### Provider credentials
 
@@ -216,7 +222,7 @@ Set `capabilities` on a `models[]` entry to restrict it to specific media types.
 | `groq`, `xai`, `deepgram`, `senseaudio`                                  | audio                 |
 | Any `models.providers.<id>.models[]` catalog with an image-capable model | image                 |
 
-For CLI entries, set `capabilities` explicitly to avoid surprising matches; if omitted, the entry is eligible for every capability list it appears in.
+CLI entries require explicit `capabilities`; entries without valid capability tags are skipped. Provider entries without valid explicit tags use their registered capability metadata.
 
 ## Provider support matrix
 
@@ -255,11 +261,13 @@ Per-capability `attachments` controls which attachments are processed:
 
 When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
+Local attachments stay within the session's allowed media roots. Directory aliases such as macOS `/tmp` and `/private/tmp` are accepted when the opened file remains inside those roots; they do not grant access to sibling sandbox workspaces.
+
 ### File-attachment extraction
 
 - Every inbound document attachment ends in a model-visible file block. Attachments routed to image, audio, or video understanding are outside this contract; those stages own their outcomes.
 - Extracted file text is wrapped as untrusted external content before it's appended to the media prompt, using boundary markers like `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` plus a `Source: External` metadata line.
-- This path intentionally omits the long `SECURITY NOTICE:` banner to keep the media prompt short; the boundary markers and metadata still apply.
+- This path intentionally omits the one-line data-boundary note to keep the media prompt short; the boundary markers and metadata still apply.
 - Unsupported files saved on local disk get self-serve guidance only when the reply runtime proves it can read host-local paths (currently non-sandboxed embedded sessions). The path is fenced as untrusted external metadata; the trusted guidance tells the agent to extract the file with its own tools, and modern Office files get an unzip hint. Generic ACP backends, URL-only attachments, and sandboxed sessions keep the plain `[Unsupported document format: <mime>. PDF and plain-text attachments can be read.]` marker.
 - Files rejected by an operator-configured allowlist never include the self-serve path; a policy rejection must not coach the agent around the operator's decision.
 - Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
@@ -268,8 +276,33 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 - A file with no extractable text, including an empty local text file, gets `[No extractable text]` and does not consume the skip-marker budget.
 - At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
+- If page, text, or image limits make document extraction partial, the file block starts with a bounded `[Partial document: ...]` marker so the reply model does not mistake the visible prefix for the complete attachment.
 - Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
 - Unhandled media gets a bounded model-visible marker. Images handed to native vision do not add markers. When a native harness owns the turn and OpenClaw runs only audio preprocessing, failed or skipped audio still gets a marker; image, video, and document inputs remain owned by the harness. Too-small audio keeps its placeholder transcript without a duplicate marker.
+
+## Vision models and image replay cost
+
+In the OpenClaw-managed reply path, a vision-capable reply model normally receives native images without a separate description pass. Images retained in later requests can contribute to input cost; the amount depends on the provider and the active runtime's context handling. See [Session pruning](/concepts/session-pruning#legacy-image-cleanup) for the applicable cleanup behavior.
+
+For identification or extraction tasks that do not need continued pixel access, an image-capable entry in `tools.media.models[]` opts into image understanding even when the reply model supports vision. For each selected image that is successfully described, the reply receives description text in place of that native image. This is not a guarantee that every attached image is converted or that later requests contain no images.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [{ provider: "google", model: "gemini-3-flash-preview", capabilities: ["image"] }],
+    },
+  },
+}
+```
+
+Tradeoffs and boundaries:
+
+- Selection defaults to the first matching image only. Use the existing `tools.media.image.attachments` policy to select more, with an explicit `maxAttachments` cap. Failed or unselected images can still be delivered natively.
+- A successful description replaces that image's pixels on the current reply turn. Avoid this when the reply model needs to inspect pixels directly, such as screenshots, UI review, or visual debugging.
+- An explicit image-capable `tools.media.models[]` entry overrides the native-vision skip, subject to the existing enablement, scope, size, and attachment limits. `tools.media.image.preferredModel` alone does not override that skip.
+- `tools.media.image.enabled: false` disables image understanding; it does not disable native image delivery.
+- This describes OpenClaw-managed preprocessing. A native harness that owns image handling has its own delivery and context rules; do not assume this setting controls its image replay or billing.
 
 ## Config examples
 
@@ -280,7 +313,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-6-astra", capabilities: ["image"] },
             {
               provider: "google",
               model: "gemini-3-flash-preview",
@@ -363,7 +396,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-6-astra", capabilities: ["image"] },
             { provider: "anthropic", model: "claude-opus-5", capabilities: ["image"] },
             {
               type: "cli",
@@ -412,8 +445,13 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a per-capability summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.6-sol) · audio ok (whisper-cli observed=metal)
+📎 Media: image ok (openai/gpt-6-astra) · audio ok (whisper-cli observed=metal)
 ```
+
+Auto-detected local audio tools report their resolved executable path as the
+result's `model`, so status and verbose summaries can include that path alongside
+the tool family and backend. Explicit CLI entries retain their authored command;
+preflight inventory keeps the logical tool names.
 
 For preflight inventory, run `openclaw capability audio providers`. Local rows show the local fallback winner separately from global provider selection, readiness, and separate capable/requested/observed backend fields. The same local selection is available as an informational doctor finding:
 
@@ -431,3 +469,10 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 
 - [Configuration](/gateway/configuration)
 - [Image & media support](/nodes/images)
+- [Audio and voice notes](/nodes/audio)
+- [Camera capture](/nodes/camera)
+- [Media playback](/nodes/media-playback)
+- [Talk mode](/nodes/talk)
+- [Voice wake](/nodes/voicewake)
+- [Mistral](/providers/mistral) — Voxtral audio transcription, one of the audio-capable providers above
+- [Media overview](/tools/media-overview) — how the media tools fit together

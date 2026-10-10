@@ -27,14 +27,16 @@ assembly, and contract enforcement.
   belongs to runtime resolution.
 - Preserve manifest-first behavior: discovery, config validation, and setup
   should work from metadata before plugin runtime executes.
-- Cache concept: gateway plugin metadata is stable while gateway runs. Reuse
-  current snapshots, install records, discovery, lookup tables, and bounded
-  process caches; avoid per-call stat/read/hash freshness. Plugin metadata
-  changes require restart or explicit plugin owner reload/install/doctor flow.
-  No broad persistent caches; lifecycle-owned facts only, test-clearable.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
   contracts. Do not create private backdoors that bundled plugins can use but
   external plugins cannot.
+- Admit plugins once at load/registration through the existing manifest,
+  provenance, and load-policy owners. All loaded plugins pass results and stream
+  events by reference; never add per-value copying, deep validation, or a second
+  boundary. Plugins must not mutate values after handing them to the host. Keep
+  managed callables scoped and bind each stream's scope, abort propagation, and
+  lease once for its lifetime; see the
+  [SDK contract](../../docs/plugins/sdk-runtime.md#plugin-value-boundary).
 - Preserve laziness in discovery and activation flows. Loader, registry, and
   public-artifact changes must not eagerly import bundled plugin runtime barrels
   when metadata, light exports, or typed contracts are sufficient.
@@ -76,6 +78,22 @@ assembly, and contract enforcement.
 - Resolver and public-surface loader tests must use generated tiny plugin
   fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Do not point
   those tests at real bundled plugin source APIs just to prove path resolution.
+
+## Availability And Selection
+
+- Gateway plugin metadata is stable while the Gateway runs. Reuse current
+  snapshots, install records, discovery, lookup tables, and bounded process
+  caches; avoid per-call stat/read/hash freshness. Metadata changes require
+  restart or the plugin owner's explicit reload/install/doctor flow. Keep caches
+  lifecycle-owned and test-clearable, not broad persistent stores.
+- Repeated availability checks and catalog selection consume prepared local
+  facts. Remote catalog discovery and provider probes belong to initialization
+  or the owner's refresh operation, not each request or UI render. A second
+  request-time cache or polling loop is not the fix for repeated discovery.
+- Keep configured/eligible state distinct from live health. A present credential
+  or cached descriptor does not prove a service is reachable. Explicit health
+  probes, credential refresh, and actual provider/tool execution retain their
+  network contracts.
 
 ## Verification
 

@@ -60,8 +60,8 @@ function scenario(): ControlUiMockGatewayScenario {
       "browser.request",
       "desktop.observe",
       "environments.list",
+      "environments.status",
       "sessions.diff",
-      "tasks.list",
       "terminal.open",
     ],
     historyMessages,
@@ -77,9 +77,7 @@ function scenario(): ControlUiMockGatewayScenario {
         control: false,
         auth: "vnc-password",
       },
-      "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
-      },
+      "environments.status": { id: "gateway", type: "local", status: "available", desktop: true },
       "sessions.diff": {
         sessionKey,
         root: "/workspace/openclaw",
@@ -141,25 +139,6 @@ function scenario(): ControlUiMockGatewayScenario {
         ],
         root: "/workspace/openclaw",
         sessionKey,
-      },
-      "tasks.list": {
-        tasks: [
-          {
-            agentId: "main",
-            createdAt: Date.now() - 240_000,
-            id: "task-navigation",
-            kind: "subagent",
-            ownerKey: sessionKey,
-            sessionKey,
-            progressSummary: "Checking panel navigation and persisted state",
-            runtime: "subagent",
-            startedAt: Date.now() - 210_000,
-            status: "running",
-            taskId: "task-navigation",
-            title: "Verify tab navigation",
-            updatedAt: Date.now(),
-          },
-        ],
       },
       "terminal.list": { sessions: [] },
       "terminal.open": {
@@ -230,11 +209,8 @@ function sidePanelBody(page: Page): Locator {
   return page.locator('.sidebar-region [data-region="side"]:not([hidden])');
 }
 
-// Scope tab queries to the panel's own header: Terminal and Browser render the
-// same strip inside the panel body, so an unscoped descendant match would also
-// collect their inner rails. Match descendants of that header rather than a
-// direct child, so header layout wrappers can change without silently emptying
-// every tab assertion.
+// Scope tab queries to the side header so a panel promoted to main cannot add
+// its own strip to the side-panel assertions.
 const sidePanelTabLabelSelector = '[data-region-header="side"] .tabstrip-tab__label';
 
 async function openFromEmpty(page: Page, label: string) {
@@ -348,12 +324,9 @@ suite.define(() => {
                 marginRight: getComputedStyle(
                   document.querySelector<HTMLElement>(".content--chat")!,
                 ).marginRight,
-                reservation: document.documentElement.style.getPropertyValue(
-                  "--oc-browser-reserve-right",
-                ),
               })),
             )
-            .toEqual({ marginRight: "0px", reservation: "0px" });
+            .toEqual({ marginRight: "0px" });
           await expect
             .poll(() =>
               page
@@ -362,8 +335,8 @@ suite.define(() => {
             )
             .toBe(dock === "bottom");
 
-          await page.locator(".chat-tasks-toggle").click();
-          await sidePanel(page).locator('[data-panel-slot="tasks"]:not([hidden])').waitFor();
+          await openFromPlus(page, "Files");
+          await sidePanel(page).locator('[data-panel-slot="workspace"]:not([hidden])').waitFor();
           await expect
             .poll(() =>
               page.evaluate(() => {
@@ -374,9 +347,6 @@ suite.define(() => {
                 const region = document.querySelector<HTMLElement>(".sidebar-region")!;
                 return {
                   marginRight: getComputedStyle(content).marginRight,
-                  reservation: document.documentElement.style.getPropertyValue(
-                    "--oc-browser-reserve-right",
-                  ),
                   spansRegion:
                     Math.abs(
                       panel.getBoundingClientRect().width - region.getBoundingClientRect().width,
@@ -386,7 +356,6 @@ suite.define(() => {
             )
             .toEqual({
               marginRight: "0px",
-              reservation: "0px",
               spansRegion: dock === "bottom",
             });
         },
@@ -414,7 +383,7 @@ suite.define(() => {
           await page.locator(".chat-group").first().waitFor();
 
           const topbarButtons = page.locator(".chat-pane__actions .chat-icon-btn");
-          await expect.poll(() => topbarButtons.count()).toBe(5);
+          await expect.poll(() => topbarButtons.count()).toBe(4);
           await expect
             .poll(async () => {
               const buttons = (await topbarButtons.all()).map(async (button) => ({
@@ -428,9 +397,6 @@ suite.define(() => {
               const glyphCenters = geometry.map(
                 ({ glyph }) => (glyph?.y ?? 0) + (glyph?.height ?? 0) / 2,
               );
-              const taskBadge = await page.locator(".chat-tasks-toggle__badge").boundingBox();
-              const taskButton = geometry[1]!.button;
-              const taskGlyph = geometry[1]!.glyph;
               const gaps = geometry.slice(1).map(({ button }, index) => {
                 const previous = geometry[index]!.button;
                 return (button?.x ?? 0) - ((previous?.x ?? 0) + (previous?.width ?? 0));
@@ -442,20 +408,11 @@ suite.define(() => {
                 gapSpread: spread(gaps),
                 glyphCenterSpread: spread(glyphCenters),
                 glyphSizes: geometry.map(({ glyph }) => [glyph?.width, glyph?.height]),
-                taskBadgeCenterDelta: Math.abs(
-                  (taskBadge?.y ?? 0) +
-                    (taskBadge?.height ?? 0) / 2 -
-                    ((taskGlyph?.y ?? 0) + (taskGlyph?.height ?? 0) / 2),
-                ),
-                taskBadgeContained:
-                  (taskBadge?.x ?? 0) >= (taskButton?.x ?? 0) &&
-                  (taskBadge?.x ?? 0) + (taskBadge?.width ?? 0) <=
-                    (taskButton?.x ?? 0) + (taskButton?.width ?? 0),
               };
             })
             .toEqual({
               buttonCenterSpread: 0,
-              buttonHeights: [28, 28, 28, 28, 28],
+              buttonHeights: [28, 28, 28, 28],
               gapSpread: 0,
               glyphCenterSpread: 0,
               glyphSizes: [
@@ -463,10 +420,7 @@ suite.define(() => {
                 [16, 16],
                 [16, 16],
                 [16, 16],
-                [16, 16],
               ],
-              taskBadgeCenterDelta: 6,
-              taskBadgeContained: false,
             });
 
           await page.locator(".chat-side-panel-toggle").click();
@@ -487,8 +441,6 @@ suite.define(() => {
           const terminalOpen = await gateway.waitForRequest("terminal.open");
           expect(terminalOpen.params).toMatchObject({ agentId: "main", sessionKey });
           await sidePanel(page).locator('[data-panel-slot="terminal"]:not([hidden])').waitFor();
-          await openFromPlus(page, "Tasks");
-          await expect.poll(() => sidePanel(page).textContent()).toContain("Verify tab navigation");
           await openFromPlus(page, "Browser");
           await sidePanel(page).locator('[data-panel-slot="browser"]:not([hidden])').waitFor();
           await captureRichPanel(page, `rails-tabs-browser-${themeMode}`);
@@ -500,15 +452,9 @@ suite.define(() => {
           expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
           await sidePanel(page).getByLabel("VNC password", { exact: true }).waitFor();
           await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
-          expect(await tabLabels(page)).toEqual([
-            "Files",
-            "Review",
-            "Terminal",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-          ]);
+          await expect
+            .poll(() => tabLabels(page))
+            .toEqual(["Files", "Review", "zsh", "Browser", "Side chat", "Desktop"]);
           await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
           await expect
             .poll(() =>
@@ -543,10 +489,10 @@ suite.define(() => {
                 }),
             )
             .toEqual({
-              baseDeltas: [0, 0, 0, 0, 0, 0, 0],
-              boxes: Array.from({ length: 7 }, () => [16, 16]),
+              baseDeltas: [0, 0, 0, 0, 0, 0],
+              boxes: Array.from({ length: 6 }, () => [16, 16]),
               centerSpread: 0,
-              glyphs: Array.from({ length: 7 }, () => [15, 15]),
+              glyphs: Array.from({ length: 6 }, () => [15, 15]),
             });
           const filesTab = sidePanel(page).locator("wa-tab").filter({ hasText: "Files" });
           const filesClose = sidePanel(page).getByRole("button", {
@@ -806,15 +752,9 @@ suite.define(() => {
           await page.reload();
           await page.locator(".chat-group").first().waitFor();
           await sidePanel(page).locator('[data-region-header="side"]').waitFor();
-          expect(await tabLabels(page)).toEqual([
-            "Files",
-            "Review",
-            "Terminal",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-          ]);
+          await expect
+            .poll(() => tabLabels(page))
+            .toEqual(["Files", "Review", "zsh", "Browser", "Side chat", "Desktop"]);
           await expect
             .poll(() =>
               sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
@@ -837,11 +777,11 @@ suite.define(() => {
                 .locator('[data-region-header="side"] wa-tab[active] .tabstrip-tab__label')
                 .textContent(),
             )
-            .toContain("Terminal");
+            .toBe("zsh");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
+          await expect.poll(async () => (await tabLabels(page)).includes("zsh")).toBe(false);
 
-          for (const label of ["Review", "Tasks", "Browser", "Side chat", "Desktop", "Files"]) {
+          for (const label of ["Review", "Browser", "Side chat", "Desktop", "Files"]) {
             await sidePanel(page)
               .locator('[data-region-header="side"]')
               .getByRole("button", { name: `Close ${label}`, exact: true })
@@ -865,8 +805,9 @@ suite.define(() => {
             emptyDividerBox!.y + emptyDividerBox!.height / 2,
           );
           await page.mouse.down();
+          // Shrink here: the wider Browser default can leave this saved column near its maximum.
           await page.mouse.move(
-            emptyDividerBox!.x - 70,
+            emptyDividerBox!.x + 70,
             emptyDividerBox!.y + emptyDividerBox!.height / 2,
           );
           await page.mouse.up();
@@ -874,7 +815,7 @@ suite.define(() => {
             .poll(() =>
               sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
-            .toBeGreaterThan(resizedWidth + 50);
+            .toBeLessThan(resizedWidth - 50);
           const emptyResizedWidth = await sidePanelBody(page).evaluate(
             (element) => element.getBoundingClientRect().width,
           );
@@ -898,7 +839,7 @@ suite.define(() => {
             .toBeCloseTo(emptyResizedWidth, 0);
           const terminalLabel = sidePanel(page)
             .locator(sidePanelTabLabelSelector)
-            .filter({ hasText: "Terminal" });
+            .filter({ hasText: "shell 1" });
           await expect
             .poll(() =>
               terminalLabel.evaluate((label) => {
@@ -926,17 +867,13 @@ suite.define(() => {
           const terminalTooltip = terminalLabel.locator("../..");
           await terminalLabel.locator("..").hover();
           await page.waitForTimeout(200);
-          expect(
-            await terminalTooltip
-              .locator("wa-tooltip")
-              .evaluate((tooltip) => Reflect.get(tooltip, "open")),
-          ).toBe(false);
+          expect(await terminalTooltip.getAttribute("open")).toBeNull();
           await openFromPlus(page, "Review");
-          await openFromPlus(page, "Tasks");
           await sidePanel(page)
-            .getByRole("button", { name: "Close Terminal", exact: true })
+            .getByRole("button", { name: "Close tab: shell 1", exact: true })
             .click();
-          await expect.poll(() => tabLabels(page)).toEqual(["Review", "Tasks"]);
+          // Closing the last terminal tab removes the Terminal slot; Review stays.
+          await expect.poll(() => tabLabels(page)).toEqual(["Review"]);
           // Closing back down to a strip that fits must release the shrink state:
           // the in-pill fade is a symptom of overflow, so labels that fit again
           // report their natural width and carry no mask.
@@ -982,7 +919,7 @@ suite.define(() => {
         await openFromPlus(page, "Terminal");
         await openFromPlus(page, "Side chat");
         await selectTab(page, "Side chat");
-        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "Terminal", "Side chat"]);
+        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "zsh", "Side chat"]);
         await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
 
         const geometry = await sidePanelBody(page).evaluate((element) => {

@@ -1,21 +1,11 @@
-// Renders the standard `openclaw status` report from prebuilt section data.
-// Report data assembly stays separate so tests can validate rows without terminal formatting.
-
-import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
+import type { TableColumn } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { statusOverviewTableColumns } from "./status-all/report-tables.js";
-import { appendStatusReportSections } from "./status-all/text-report.js";
+import { appendStatusReportLines, appendStatusReportTable } from "./status-all/text-report.js";
 
-/** Builds terminal lines for the standard status report. */
 export async function buildStatusCommandReportLines(params: {
-  heading: (text: string) => string;
-  muted: (text: string) => string;
-  renderTable: (input: RenderTableOptions) => string;
   width: number;
   overviewRows: Array<{ Item: string; Value: string }>;
-  showTaskMaintenanceHint: boolean;
-  taskMaintenanceHint: string;
-  taskRegistryMigrationHint?: string | null;
-  retainedLostTaskLine?: string | null;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
   modelSelectionLines: string[];
@@ -32,110 +22,54 @@ export async function buildStatusCommandReportLines(params: {
   footerLines: string[];
 }) {
   const lines: string[] = [];
-  lines.push(params.heading("OpenClaw status"));
+  lines.push(theme.heading("OpenClaw status"));
 
-  appendStatusReportSections({
+  const report = {
     lines,
-    heading: params.heading,
+    heading: theme.heading,
     width: params.width,
-    renderTable: params.renderTable,
-    sections: [
-      {
-        kind: "table",
-        title: "Overview",
-        columns: [...statusOverviewTableColumns],
-        rows: params.overviewRows,
-      },
-      {
-        kind: "raw",
-        body:
-          params.showTaskMaintenanceHint ||
-          params.taskRegistryMigrationHint ||
-          params.retainedLostTaskLine
-            ? [
-                "",
-                // Raw section keeps maintenance hints directly below the overview table.
-                ...(params.showTaskMaintenanceHint
-                  ? [params.muted(params.taskMaintenanceHint)]
-                  : []),
-                ...(params.taskRegistryMigrationHint ? [params.taskRegistryMigrationHint] : []),
-                ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
-              ]
-            : [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Plugin compatibility",
-        body: params.pluginCompatibilityLines,
-        skipIfEmpty: true,
-      },
-      {
-        kind: "raw",
-        body: params.pairingRecoveryLines.length > 0 ? ["", ...params.pairingRecoveryLines] : [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Model selection",
-        body: params.modelSelectionLines,
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Security audit",
-        body: params.securityAuditLines,
-      },
-      params.channelsRows.length === 0
-        ? {
-            kind: "lines",
-            title: "Channels",
-            body: [params.muted("No channels configured")],
-          }
-        : {
-            kind: "table",
-            title: "Channels",
-            columns: [...params.channelsColumns],
-            rows: params.channelsRows,
-          },
-      params.sessionsRows.length === 0
-        ? {
-            kind: "lines",
-            title: "Sessions",
-            body: [params.muted("No sessions")],
-          }
-        : {
-            kind: "table",
-            title: "Sessions",
-            columns: [...params.sessionsColumns],
-            rows: params.sessionsRows,
-          },
-      {
-        kind: "table",
-        title: "System events",
-        columns: [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
-        rows: params.systemEventsRows ?? [],
-        trailer: params.systemEventsTrailer,
-        skipIfEmpty: true,
-      },
-      {
-        kind: "table",
-        title: "Health",
-        columns: [...(params.healthColumns ?? [])],
-        rows: params.healthRows ?? [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Usage",
-        body: params.usageLines ?? [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "raw",
-        body: ["", ...params.footerLines],
-      },
-    ],
-  });
+  };
+  // Prepare empty-state styling before rendering any table.
+  const channelsMessage =
+    params.channelsRows.length === 0 ? theme.muted("No channels configured") : undefined;
+  const sessionsMessage = params.sessionsRows.length === 0 ? theme.muted("No sessions") : undefined;
+
+  appendStatusReportTable(report, "Overview", [...statusOverviewTableColumns], params.overviewRows);
+  if (params.pluginCompatibilityLines.length > 0) {
+    appendStatusReportLines(report, "Plugin compatibility", params.pluginCompatibilityLines);
+  }
+  if (params.pairingRecoveryLines.length > 0) {
+    lines.push("", ...params.pairingRecoveryLines);
+  }
+  if (params.modelSelectionLines.length > 0) {
+    appendStatusReportLines(report, "Model selection", params.modelSelectionLines);
+  }
+  appendStatusReportLines(report, "Security audit", params.securityAuditLines);
+  if (channelsMessage !== undefined) {
+    appendStatusReportLines(report, "Channels", [channelsMessage]);
+  } else {
+    appendStatusReportTable(report, "Channels", [...params.channelsColumns], params.channelsRows);
+  }
+  if (sessionsMessage !== undefined) {
+    appendStatusReportLines(report, "Sessions", [sessionsMessage]);
+  } else {
+    appendStatusReportTable(report, "Sessions", [...params.sessionsColumns], params.sessionsRows);
+  }
+  if (params.systemEventsRows?.length) {
+    appendStatusReportTable(
+      report,
+      "System events",
+      [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
+      params.systemEventsRows,
+      params.systemEventsTrailer,
+    );
+  }
+  if (params.healthRows?.length) {
+    appendStatusReportTable(report, "Health", [...(params.healthColumns ?? [])], params.healthRows);
+  }
+  if (params.usageLines?.length) {
+    appendStatusReportLines(report, "Usage", params.usageLines);
+  }
+  lines.push("", ...params.footerLines);
   return lines;
 }

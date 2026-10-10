@@ -12,6 +12,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
+import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
 
 const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
   setActivePluginRegistry(registry);
@@ -186,72 +187,6 @@ describe("sendMessage channel normalization", () => {
     expect(seen.sendCfg).toBe(resolvedCfg);
     expect(seen.to).toBe("+15551234567");
   });
-
-  it.each([
-    {
-      name: "normalizes plugin aliases",
-      registry: createTestRegistry([
-        {
-          pluginId: "demo-alias-channel",
-          source: "test",
-          plugin: createDemoAliasPlugin({
-            outbound: createDemoAliasOutbound(),
-            aliases: ["workspace-chat"],
-          }),
-        },
-      ]),
-      params: {
-        to: "conversation:demo-target",
-        channel: "workspace-chat",
-        deps: {
-          "demo-alias-channel": vi.fn(async () => ({
-            messageId: "m1",
-            conversationId: "c1",
-          })),
-        },
-      },
-      assertDeps: (deps: { "demo-alias-channel"?: ReturnType<typeof vi.fn> }) => {
-        expect(deps["demo-alias-channel"]).toHaveBeenCalledWith("conversation:demo-target", "hi");
-      },
-      expectedChannel: "demo-alias-channel",
-    },
-    {
-      name: "normalizes direct local aliases",
-      registry: createTestRegistry([
-        {
-          pluginId: "localchat",
-          source: "test",
-          plugin: createLocalChatAliasPlugin(),
-        },
-      ]),
-      params: {
-        to: "someone@example.com",
-        channel: "localmsg",
-        deps: {
-          localchat: vi.fn(async () => ({ messageId: "local1" })),
-        },
-      },
-      assertDeps: (deps: { localchat?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.localchat).toHaveBeenCalledTimes(1);
-        const [to, text, options] = deps.localchat?.mock.calls[0] ?? [];
-        expect(to).toBe("someone@example.com");
-        expect(text).toBe("hi");
-        expect(typeof options).toBe("object");
-      },
-      expectedChannel: "localchat",
-    },
-  ])("$name", async ({ registry, params, assertDeps, expectedChannel }) => {
-    setRegistry(registry);
-
-    const result = await sendMessage({
-      cfg: {},
-      content: "hi",
-      ...params,
-    });
-
-    assertDeps(params.deps);
-    expect(result.channel).toBe(expectedChannel);
-  });
 });
 
 describe("sendMessage replyToId threading", () => {
@@ -310,6 +245,46 @@ function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasO
 }
 
 describe("sendPoll channel normalization", () => {
+  it.each(["send", "poll"] as const)(
+    "keeps hosted %s delivery on its bound Gateway",
+    async (method) => {
+      setDemoPollRegistry({ deliveryMode: "gateway" });
+      const resolveAgentRuntimeIdentityToken = vi.fn();
+      const gateway: OutboundMessageGatewayOptionsInput = {
+        request: async () => {
+          throw new Error("unexpected unconfigured Gateway request");
+        },
+        resolveAgentRuntimeIdentityToken,
+      };
+      const request = vi.spyOn(gateway, "request").mockResolvedValue({ messageId: "owned-1" });
+      const common = {
+        cfg: {},
+        to: "conversation:demo-target",
+        channel: "workspace-chat",
+        idempotencyKey: "owned-delivery",
+        gateway,
+      };
+      const result =
+        method === "send"
+          ? await sendMessage({ ...common, content: "hello" })
+          : await sendPoll({ ...common, question: "Lunch?", options: ["Pizza", "Sushi"] });
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method,
+          params: expect.objectContaining({
+            channel: "demo-alias-channel",
+            idempotencyKey: "owned-delivery",
+          }),
+        }),
+      );
+      expect(result.result).toMatchObject({ messageId: "owned-1" });
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    },
+  );
+
   it("normalizes plugin aliases for gateway polls", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1", channelId: "channel-1" });
     setDemoPollRegistry({ deliveryMode: "gateway" });
@@ -440,6 +415,25 @@ describe("gateway url override hardening", () => {
   };
 
   it.each([
+    {
+      name: "preserves the prepared local connection for a hosted Gateway send",
+      params: {
+        gateway: {
+          config: { gateway: { mode: "remote" as const, port: 18789 } },
+          localPortOverride: 18789,
+          ignoreEnvUrlOverride: true,
+          tlsFingerprint: "fixture-fingerprint",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+      },
+      expected: {
+        config: { gateway: { mode: "remote", port: 18789 } },
+        localPortOverride: 18789,
+        ignoreEnvUrlOverride: true,
+        tlsFingerprint: "fixture-fingerprint",
+      },
+    },
     {
       name: "drops gateway url overrides in backend mode (SSRF hardening)",
       params: {
@@ -635,36 +629,6 @@ const createDemoAliasPlugin = (params?: {
     ...(params?.outbound ? { outbound: params.outbound } : {}),
   };
 };
-
-const createLocalChatAliasPlugin = (): ChannelPlugin => ({
-  id: "localchat",
-  meta: {
-    id: "localchat",
-    label: "LocalChat",
-    selectionLabel: "LocalChat (localmsg)",
-    docsPath: "/channels/localchat",
-    blurb: "LocalChat test stub.",
-    aliases: ["localmsg"],
-  },
-  capabilities: { chatTypes: ["direct", "group"], media: true },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async ({ deps, to, text }) => {
-      const send = deps?.localchat as
-        | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
-        | undefined;
-      if (!send) {
-        throw new Error("localchat missing");
-      }
-      const result = await send(to, text, {});
-      return { channel: "localchat", ...result };
-    },
-  },
-});
 
 const createDemoAliasOutbound = (opts?: {
   deliveryMode?: ChannelOutboundAdapter["deliveryMode"];

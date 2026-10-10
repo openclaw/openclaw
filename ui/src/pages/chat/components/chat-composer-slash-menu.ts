@@ -1,6 +1,11 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
+import {
+  handleComposerMenuKeydown,
+  renderComposerMenu,
+  renderComposerMenuOption,
+} from "../../../components/composer-menu.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -14,11 +19,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import {
-  paneDomId,
-  scrollActiveMenuOptionIntoView,
-  syncComposerMenuScroll,
-} from "./chat-composer-dom.ts";
+import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
   commitInlineSlashSelection,
@@ -26,12 +27,12 @@ import {
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
 } from "./chat-composer-inline-slash.ts";
+import type { SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import {
   getSlashArgOptionId,
   getSlashCommandOptionId,
   getSlashCommandOptionLabel,
   renderSlashMatchedName,
-  renderSlashIcon,
 } from "./chat-composer-slash-menu-dom.ts";
 
 export type SlashMenuState = {
@@ -46,16 +47,11 @@ export type SlashMenuState = {
   slashCommandRefreshPending: boolean;
 };
 
-export type SlashMenuHost = {
-  paneId: string;
-  getDraft: () => string;
-  commitDraft: (next: string) => void;
-  getTextarea: () => HTMLTextAreaElement | null;
+export type SlashMenuHost = SkillMenuHost & {
   resolveArgOptions: (command: SlashCommandDef) => string[];
   runCommand: () => void;
-  canRun: (inline: boolean) => boolean;
+  canRun: (inline: boolean, command?: SlashCommandDef, args?: string) => boolean;
   runInlineCommand?: (command: string) => void;
-  refreshCommands?: () => void | Promise<void>;
   commandFilter?: (command: SlashCommandDef) => boolean;
   activateComposerMode?: (command: SlashCommandDef) => boolean;
 };
@@ -83,22 +79,26 @@ export function resetSlashMenuState(state: SlashMenuState): void {
   state.slashMenuCompletion = null;
 }
 
-function hasVisibleSlashMenuState(state: SlashMenuState): boolean {
-  return (
+function closeSlashMenuIfNeeded(state: SlashMenuState, requestUpdate: () => void): void {
+  if (
     state.slashMenuOpen ||
     state.slashMenuMode !== "command" ||
     state.slashMenuCommand !== null ||
     state.slashMenuArgItems.length > 0 ||
     state.slashMenuItems.length > 0
-  );
+  ) {
+    resetSlashMenuState(state);
+    requestUpdate();
+  }
 }
 
-function closeSlashMenuIfNeeded(state: SlashMenuState, requestUpdate: () => void): void {
-  if (!hasVisibleSlashMenuState(state)) {
-    return;
-  }
-  resetSlashMenuState(state);
-  requestUpdate();
+function openSlashArgumentMenu(state: SlashMenuState, command: SlashCommandDef, args: string[]) {
+  state.slashMenuMode = "args";
+  state.slashMenuCommand = command;
+  state.slashMenuArgItems = args;
+  state.slashMenuOpen = true;
+  state.slashMenuIndex = 0;
+  state.slashMenuItems = [];
 }
 
 function requestSlashCommandRefresh(
@@ -110,28 +110,24 @@ function requestSlashCommandRefresh(
     return;
   }
   const refresh = host.refreshCommands();
-  if (!refresh || typeof refresh.then !== "function") {
+  if (!refresh) {
     return;
   }
   state.slashCommandRefreshPending = true;
-  void Promise.resolve(refresh)
+  void refresh
     .catch(() => undefined)
     .finally(() => {
       state.slashCommandRefreshPending = false;
-      const nextValue = host.getDraft();
-      if (state.slashMenuMode === "freeform-args" && state.slashMenuCompletion?.inline) {
-        updateSlashMenu(nextValue, state, host, requestUpdate, { skipSlashIntent: true });
+      // Dismissal clears both the menu and completion intent while refresh is pending.
+      if (!state.slashMenuOpen && !state.slashMenuCompletion) {
         return;
       }
       if (state.slashMenuMode === "args" && state.slashMenuCompletion?.inline) {
         return;
       }
-      const caret = host.getTextarea()?.selectionStart ?? nextValue.length;
-      if (!findInlineSlashCompletion(nextValue, caret)) {
-        closeSlashMenuIfNeeded(state, requestUpdate);
-        return;
-      }
-      updateSlashMenu(nextValue, state, host, requestUpdate, { skipSlashIntent: true });
+      // The input parser owns command tokens and argument drafts; a token-only
+      // check would discard an argument menu when this refresh settles late.
+      updateSlashMenu(host.getDraft(), state, host, requestUpdate, { skipSlashIntent: true });
     });
 }
 
@@ -162,12 +158,8 @@ export function updateSlashMenu(
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(state, host, requestUpdate);
     }
-    const cmdName = argMatch[1]?.toLowerCase();
-    const argFilter = argMatch[2]?.toLowerCase();
-    if (cmdName === undefined || argFilter === undefined) {
-      closeSlashMenuIfNeeded(state, requestUpdate);
-      return;
-    }
+    const cmdName = argMatch[1]!.toLowerCase();
+    const argFilter = argMatch[2]!.toLowerCase();
     const cmd = SLASH_COMMANDS.find(
       (entry) => entry.name === cmdName && (host.commandFilter?.(entry) ?? true),
     );
@@ -177,12 +169,7 @@ export function updateSlashMenu(
         ? argOptions.filter((arg) => arg.toLowerCase().startsWith(argFilter))
         : argOptions;
       if (filtered.length > 0) {
-        state.slashMenuMode = "args";
-        state.slashMenuCommand = cmd;
-        state.slashMenuArgItems = filtered;
-        state.slashMenuOpen = true;
-        state.slashMenuIndex = 0;
-        state.slashMenuItems = [];
+        openSlashArgumentMenu(state, cmd, filtered);
         state.slashMenuCompletion = null;
         requestUpdate();
         return;
@@ -204,8 +191,12 @@ export function updateSlashMenu(
   const items = getSlashCommandCompletions(completion.query, {
     showAll: true,
     inlineOnly: completion.inline,
-    allowImmediateInlineCommands: host.canRun(true) && !completion.skillOnly,
-  }).filter((command) => host.commandFilter?.(command) ?? true);
+    allowImmediateInlineCommands: !completion.skillOnly,
+  }).filter(
+    (command) =>
+      (host.commandFilter?.(command) ?? true) &&
+      (!completion.inline || command.source === "skill" || host.canRun(true, command)),
+  );
   state.slashMenuCompletion = completion;
   state.slashMenuItems = [
     ...items.filter((command) => command.source !== "skill"),
@@ -229,7 +220,7 @@ function beginInlineSlashArguments(
     !state.slashMenuCompletion?.inline ||
     cmd.source === "skill" ||
     !cmd.args ||
-    !host.canRun(true) ||
+    !host.canRun(true, cmd) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -260,11 +251,17 @@ function selectSlashCommand(
   state: SlashMenuState,
   host: SlashMenuHost,
   requestUpdate: () => void,
+  completeOnly = false,
 ): void {
   if (host.activateComposerMode?.(cmd)) {
     return;
   }
-  if (cmd.source !== "skill" && !host.canRun(true) && state.slashMenuCompletion?.inline) {
+  if (
+    !completeOnly &&
+    cmd.source !== "skill" &&
+    !host.canRun(true, cmd) &&
+    state.slashMenuCompletion?.inline
+  ) {
     return;
   }
   const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
@@ -272,9 +269,10 @@ function selectSlashCommand(
     return;
   }
   if (
+    !completeOnly &&
     state.slashMenuCompletion?.inline &&
     executesInlineImmediately(cmd) &&
-    host.canRun(true) &&
+    host.canRun(true, cmd) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -292,16 +290,20 @@ function selectSlashCommand(
   const argOptions = host.resolveArgOptions(cmd);
   if (argOptions.length > 0) {
     host.commitDraft(`/${cmd.name} `);
-    state.slashMenuMode = "args";
-    state.slashMenuCommand = cmd;
-    state.slashMenuArgItems = argOptions;
-    state.slashMenuOpen = true;
-    state.slashMenuIndex = 0;
-    state.slashMenuItems = [];
+    openSlashArgumentMenu(state, cmd, argOptions);
     requestUpdate();
     return;
   }
-  if (cmd.executeLocal && !cmd.args) {
+  if (completeOnly) {
+    host.commitDraft(cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
+    resetSlashMenuState(state);
+    requestUpdate();
+  } else if (
+    cmd.executeLocal &&
+    !cmd.args &&
+    // Catalog continuations and viewer suggestions do not dispatch live chat commands.
+    (cmd.key !== "btw" || host.canRun(true, cmd))
+  ) {
     resetSlashMenuState(state);
     host.commitDraft(`/${cmd.name}`);
     host.runCommand();
@@ -309,38 +311,6 @@ function selectSlashCommand(
     host.commitDraft(`/${cmd.name} `);
     closeSlashMenuIfNeeded(state, requestUpdate);
   }
-}
-
-function tabCompleteSlashCommand(
-  cmd: SlashCommandDef,
-  state: SlashMenuState,
-  host: SlashMenuHost,
-  requestUpdate: () => void,
-): void {
-  const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
-  if (beginInlineSlashArguments(cmd, state, host, requestUpdate)) {
-    return;
-  }
-  if (commitInlineSlashSelection(inlineReplacement, state, host)) {
-    resetSlashMenuState(state);
-    requestUpdate();
-    return;
-  }
-  const argOptions = host.resolveArgOptions(cmd);
-  if (argOptions.length > 0) {
-    host.commitDraft(`/${cmd.name} `);
-    state.slashMenuMode = "args";
-    state.slashMenuCommand = cmd;
-    state.slashMenuArgItems = argOptions;
-    state.slashMenuOpen = true;
-    state.slashMenuIndex = 0;
-    state.slashMenuItems = [];
-    requestUpdate();
-    return;
-  }
-  host.commitDraft(cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
-  resetSlashMenuState(state);
-  requestUpdate();
 }
 
 function selectSlashArg(
@@ -351,7 +321,10 @@ function selectSlashArg(
   run: boolean,
 ): void {
   const { slashMenuCommand: command, slashMenuCompletion: completion } = state;
-  if (command?.source !== "skill" && !host.canRun(completion?.inline === true)) {
+  if (
+    command?.source !== "skill" &&
+    !host.canRun(completion?.inline === true, command ?? undefined, arg)
+  ) {
     return;
   }
   const cmdName = command?.name ?? "";
@@ -360,7 +333,7 @@ function selectSlashArg(
     state.slashMenuCompletion?.inline &&
     command &&
     executesInlineImmediately(command) &&
-    host.canRun(true) &&
+    host.canRun(true, command, arg) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -398,7 +371,6 @@ function submitInlineSlashArgument(
     !completion?.inline ||
     !command ||
     !executesInlineImmediately(command) ||
-    !host.canRun(true) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -406,7 +378,7 @@ function submitInlineSlashArgument(
   const current = host.getTextarea()?.value ?? host.getDraft();
   const argumentStart = completion.argumentStart ?? completion.start + `/${command.name} `.length;
   const args = current.slice(argumentStart, completion.end).trim();
-  if (!removeInlineSlashSelection(state, host)) {
+  if (!host.canRun(true, command, args) || !removeInlineSlashSelection(state, host)) {
     return false;
   }
   resetSlashMenuState(state);
@@ -416,7 +388,7 @@ function submitInlineSlashArgument(
 }
 
 function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHost): boolean {
-  if (!host.canRun(true) || !host.runInlineCommand) {
+  if (!host.runInlineCommand) {
     return false;
   }
   const current = host.getTextarea()?.value ?? host.getDraft();
@@ -461,7 +433,8 @@ export function handleInlineSlashArgKeydown(
     return false;
   }
   event.preventDefault();
-  return submitInlineSlashArgument(state, host, requestUpdate);
+  submitInlineSlashArgument(state, host, requestUpdate);
+  return true;
 }
 
 export function handleSlashMenuKeydown(
@@ -473,58 +446,43 @@ export function handleSlashMenuKeydown(
   if (!state.slashMenuOpen) {
     return false;
   }
-  if (event.key === "Escape") {
-    event.preventDefault();
-    resetSlashMenuState(state);
-    requestUpdate();
-    return true;
-  }
   const items = state.slashMenuMode === "args" ? state.slashMenuArgItems : state.slashMenuItems;
-  if (items.length === 0) {
-    return false;
-  }
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    event.preventDefault();
-    const offset = event.key === "ArrowDown" ? 1 : items.length - 1;
-    state.slashMenuIndex = (state.slashMenuIndex + offset) % items.length;
-    requestUpdate();
-    scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(state, host.paneId));
-    return true;
-  }
-  if (event.key !== "Tab" && event.key !== "Enter") {
-    return false;
-  }
-  event.preventDefault();
-  if (state.slashMenuMode === "args") {
-    const arg = state.slashMenuArgItems[state.slashMenuIndex];
-    if (arg !== undefined) {
-      selectSlashArg(arg, state, host, requestUpdate, event.key === "Enter");
-    }
-  } else {
-    const command = state.slashMenuItems[state.slashMenuIndex];
-    if (command) {
-      if (event.key === "Enter") {
-        selectSlashCommand(command, state, host, requestUpdate);
+  return handleComposerMenuKeydown(event, {
+    count: items.length,
+    index: state.slashMenuIndex,
+    consumeEmpty: false,
+    close: () => {
+      resetSlashMenuState(state);
+      requestUpdate();
+    },
+    move: (index) => {
+      state.slashMenuIndex = index;
+      requestUpdate();
+      return getActiveSlashMenuOptionId(state, host.paneId);
+    },
+    select: (key) => {
+      if (state.slashMenuMode === "args") {
+        const arg = state.slashMenuArgItems[state.slashMenuIndex];
+        if (arg !== undefined) {
+          selectSlashArg(arg, state, host, requestUpdate, key === "Enter");
+        }
       } else {
-        tabCompleteSlashCommand(command, state, host, requestUpdate);
+        const command = state.slashMenuItems[state.slashMenuIndex];
+        if (command) {
+          selectSlashCommand(command, state, host, requestUpdate, key === "Tab");
+        }
       }
-    }
-  }
-  return true;
-}
-
-function syncComposerMenuScrollEvent(event: Event): void {
-  syncComposerMenuScroll(event.currentTarget instanceof Element ? event.currentTarget : undefined);
+    },
+  });
 }
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {
-  if (!state.slashMenuOpen) {
-    return false;
-  }
-  if (state.slashMenuMode === "args") {
-    return Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0);
-  }
-  return state.slashMenuItems.length > 0;
+  return (
+    state.slashMenuOpen &&
+    (state.slashMenuMode === "args"
+      ? Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0)
+      : state.slashMenuItems.length > 0)
+  );
 }
 
 export function getActiveSlashMenuOptionId(state: SlashMenuState, paneId: string): string | null {
@@ -552,114 +510,52 @@ export function getActiveSlashMenuOptionLabel(state: SlashMenuState): string {
   return getSlashCommandOptionLabel(state.slashMenuItems[state.slashMenuIndex]);
 }
 
-function renderSlashCommandOption(params: {
-  cmd: SlashCommandDef;
-  index: number;
-  query: string;
-  requestUpdate: () => void;
-  host: SlashMenuHost;
-  state: SlashMenuState;
-}): TemplateResult {
-  const { cmd, index, query, requestUpdate, host, state } = params;
-  return html`
-    <div
-      id=${getSlashCommandOptionId(host.paneId, cmd)}
-      class="slash-menu-item ${index === state.slashMenuIndex ? "slash-menu-item--active" : ""}"
-      role="option"
-      aria-selected=${index === state.slashMenuIndex}
-      @mousedown=${(event: MouseEvent) => event.preventDefault()}
-      @click=${() => selectSlashCommand(cmd, state, host, requestUpdate)}
-      @mouseenter=${() => {
-        state.slashMenuIndex = index;
-        requestUpdate();
-      }}
-    >
-      <span class="slash-menu-icon"
-        >${
-          cmd.source === "skill"
-            ? icons.pencilSparkles
-            : cmd.icon
-              ? renderSlashIcon(cmd.icon)
-              : icons.terminal
-        }</span
-      >
-      <span class="slash-menu-copy">
-        <span class="slash-menu-name"
-          >/${renderSlashMatchedName(cmd.name, query)}${
-            cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing
-          }</span
-        >
-        <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
-      </span>
-    </div>
-  `;
-}
-
 export function renderSlashMenu(
   state: SlashMenuState,
   host: SlashMenuHost,
   draft: string,
   requestUpdate: () => void,
-): TemplateResult | typeof nothing {
+): ReturnType<typeof keyed> | typeof nothing {
   const listboxId = paneDomId(host.paneId, "slash-menu-listbox");
   if (!state.slashMenuOpen) {
     return nothing;
   }
 
+  // Each mode owns its scroll viewport; switching modes starts at the first option.
   if (
     state.slashMenuMode === "args" &&
     state.slashMenuCommand &&
     state.slashMenuArgItems.length > 0
   ) {
-    return html`
-      <div
-        id=${listboxId}
-        class="slash-menu"
-        role="listbox"
-        aria-label=${t("chat.commands.arguments")}
-      >
-        <div
-          class="slash-menu__scroll"
-          ${ref(syncComposerMenuScroll)}
-          @scroll=${syncComposerMenuScrollEvent}
-        >
-          <div class="slash-menu-group">
-            <div class="slash-menu-group__label">
-              /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
-            </div>
-            ${state.slashMenuArgItems.map(
-              (arg, i) => html`
-                <div
-                  id=${getSlashArgOptionId(host.paneId, state.slashMenuCommand?.name ?? "", arg)}
-                  class="slash-menu-item ${
-                    i === state.slashMenuIndex ? "slash-menu-item--active" : ""
-                  }"
-                  role="option"
-                  aria-selected=${i === state.slashMenuIndex}
-                  @click=${() => selectSlashArg(arg, state, host, requestUpdate, true)}
-                  @mouseenter=${() => {
-                    state.slashMenuIndex = i;
-                    requestUpdate();
-                  }}
-                >
-                  <span class="slash-menu-icon"
-                    >${
-                      state.slashMenuCommand?.icon
-                        ? renderSlashIcon(state.slashMenuCommand.icon)
-                        : icons.terminal
-                    }</span
-                  >
-                  <span class="slash-menu-copy">
-                    <span class="slash-menu-name">${arg}</span>
-                    <span class="slash-menu-desc">/${state.slashMenuCommand?.name} ${arg}</span>
-                  </span>
-                </div>
-              `,
-            )}
+    return keyed(
+      "args",
+      renderComposerMenu({
+        id: listboxId,
+        label: t("chat.commands.arguments"),
+        content: html` <div class="slash-menu-group">
+          <div class="slash-menu-group__label">
+            /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
           </div>
-        </div>
-      </div>
-    `;
+          ${state.slashMenuArgItems.map((arg, i) =>
+            renderComposerMenuOption({
+              id: getSlashArgOptionId(host.paneId, state.slashMenuCommand?.name ?? "", arg),
+              active: i === state.slashMenuIndex,
+              preserveFocus: false,
+              select: () => selectSlashArg(arg, state, host, requestUpdate, true),
+              hover: () => {
+                state.slashMenuIndex = i;
+                requestUpdate();
+              },
+              icon: state.slashMenuCommand?.icon
+                ? icons[state.slashMenuCommand.icon]
+                : icons.terminal,
+              name: arg,
+              description: html`/${state.slashMenuCommand?.name} ${arg}`,
+            }),
+          )}
+        </div>`,
+      }),
+    );
   }
 
   if (state.slashMenuItems.length === 0) {
@@ -667,6 +563,20 @@ export function renderSlashMenu(
   }
 
   const query = draft.slice(1);
+  const renderCommandOption = (cmd: SlashCommandDef, index: number) =>
+    renderComposerMenuOption({
+      id: getSlashCommandOptionId(host.paneId, cmd),
+      active: index === state.slashMenuIndex,
+      select: () => selectSlashCommand(cmd, state, host, requestUpdate),
+      hover: () => {
+        state.slashMenuIndex = index;
+        requestUpdate();
+      },
+      icon:
+        cmd.source === "skill" ? icons.pencilSparkles : cmd.icon ? icons[cmd.icon] : icons.terminal,
+      name: html`/${renderSlashMatchedName(cmd.name, query)}${cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing}`,
+      description: getSlashCommandDescription(cmd),
+    });
   const commands = state.slashMenuItems.filter((command) => command.source !== "skill");
   const skills = state.slashMenuItems.filter((command) => command.source === "skill");
   const groups: Array<[SlashCommandCategory, Array<{ command: SlashCommandDef; index: number }>]> =
@@ -682,46 +592,27 @@ export function renderSlashMenu(
     }
   }
 
-  return html`
-    <div id=${listboxId} class="slash-menu" role="listbox" aria-label=${t("chat.commands.menu")}>
-      <div
-        class="slash-menu__scroll"
-        ${ref(syncComposerMenuScroll)}
-        @scroll=${syncComposerMenuScrollEvent}
-      >
+  return keyed(
+    "command",
+    renderComposerMenu({
+      id: listboxId,
+      label: t("chat.commands.menu"),
+      content: html`
         ${groups.map(
           ([category, entries]) => html`<div class="slash-menu-group">
             <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(category)}</div>
-            ${entries.map(({ command, index }) =>
-              renderSlashCommandOption({
-                cmd: command,
-                index,
-                query,
-                requestUpdate,
-                host,
-                state,
-              }),
-            )}
+            ${entries.map(({ command, index }) => renderCommandOption(command, index))}
           </div>`,
         )}
         ${
           skills.length > 0
             ? html`<div class="slash-menu-group slash-menu-group--skills">
                 <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
-                ${skills.map((cmd, index) =>
-                  renderSlashCommandOption({
-                    cmd,
-                    index: commands.length + index,
-                    query,
-                    requestUpdate,
-                    host,
-                    state,
-                  }),
-                )}
+                ${skills.map((cmd, index) => renderCommandOption(cmd, commands.length + index))}
               </div>`
             : nothing
         }
-      </div>
-    </div>
-  `;
+      `,
+    }),
+  );
 }

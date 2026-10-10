@@ -1,8 +1,13 @@
 import { html, nothing } from "lit";
 import { pathForRoute } from "../app-route-paths.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { icons } from "./icons.ts";
+import { renderShortcutHint } from "./kbd.ts";
 import "./tooltip.ts";
 
 export function renderNewSessionLink(params: {
@@ -12,11 +17,22 @@ export function renderNewSessionLink(params: {
   className: string;
   label: string;
   disabledReason?: string;
+  showShortcut?: boolean;
   onOpen?: (agentId: string, target?: NewSessionTarget) => void;
 }) {
   const disabled = Boolean(params.disabledReason);
   const href = `${pathForRoute("new-session", params.basePath)}${newSessionSearch(params.agentId, params.target)}`;
-  return html`<openclaw-tooltip .content=${params.disabledReason ?? params.label}>
+  const hint = params.showShortcut
+    ? `${params.label} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession)})`
+    : params.label;
+  return html`<openclaw-tooltip
+    .content=${params.disabledReason ?? hint}
+    .contentTemplate=${
+      params.disabledReason == null && params.showShortcut
+        ? renderShortcutHint(params.label, KEYBOARD_SHORTCUT_COMBOS.newSession)
+        : undefined
+    }
+  >
     <a
       class=${params.className}
       role="link"

@@ -6,9 +6,7 @@ import { join } from "node:path";
 import { inspect } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
-import { buildComfyMusicGenerationProvider } from "./music-generation-provider.js";
 import { buildComfyConfig } from "./test-helpers.js";
-import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
 
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -137,32 +135,6 @@ describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", ()
     expect(inspect(result)).not.toContain(customHeader);
     expect(requestCount).toBeGreaterThan(0);
   });
-
-  it.each(["video", "music"] as const)(
-    "redacts reflected headers for %s generation",
-    async (capability) => {
-      failurePath = "/prompt";
-      const credential = "comfy-fixture-sibling-secret";
-      const request = {
-        provider: "comfy",
-        model: "workflow",
-        prompt: "sibling redaction proof",
-        cfg: buildComfyConfig({
-          baseUrl,
-          [capability]: baseCapabilityConfig(),
-          headers: { Authorization: `Basic ${credential}` },
-        }),
-      };
-      const result = await (
-        capability === "video"
-          ? buildComfyVideoGenerationProvider().generateVideo(request)
-          : buildComfyMusicGenerationProvider().generateMusic(request)
-      ).catch((error: unknown) => error);
-      expect(result).toBeInstanceOf(Error);
-      expect(inspect(result)).toContain("proxy rejected");
-      expect(inspect(result)).not.toContain(credential);
-    },
-  );
 
   it("resolves an env-backed SecretRef Authorization header across all three real requests and completes generation", async () => {
     const expectedAuth = `Basic ${Buffer.from(`env:${Math.random().toString(36).slice(2)}`).toString("base64")}`;

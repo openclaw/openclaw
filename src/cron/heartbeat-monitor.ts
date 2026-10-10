@@ -1,11 +1,12 @@
 /** Canonical projection from heartbeat config to system-owned cron monitor jobs. */
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import {
   resolveHeartbeatPhaseMs,
-  resolveHeartbeatSchedulerSeed,
+  resolveHeartbeatSchedulerSeedAsync,
 } from "../infra/heartbeat-schedule.js";
 import type { CronService } from "./service.js";
 import { partitionSystemMonitors } from "./system-monitor-jobs.js";
@@ -71,14 +72,14 @@ function heartbeatMonitorDeclarativeFields(job: CronJob | CronJobCreate) {
 export function resolveHeartbeatMonitorPlan(
   cfg: OpenClawConfig,
   existingJobs: readonly CronJob[],
-  options: { schedulerSeed?: string } = {},
+  options: { schedulerSeed: string },
 ): HeartbeatMonitorPlan {
   const { retained: existingByAgentId, duplicates } = partitionSystemMonitors(
     existingJobs,
     heartbeatMonitorAgentId,
   );
 
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
+  const { schedulerSeed } = options;
   const specs: HeartbeatMonitorSpec[] = resolveHeartbeatAgents(cfg).flatMap((agent) => {
     // Unset config already resolves to the 30m default here, so this is null
     // only for an explicitly disabled cadence ("0m"/invalid). The fallbacks
@@ -164,13 +165,18 @@ export async function applyHeartbeatMonitorJobs(params: {
     return { ok: false, applied: [], failures: [{ error }] };
   }
   params.commitGuard?.();
-
+  const schedulerSeed = await resolveHeartbeatSchedulerSeedAsync(params.schedulerSeed);
+  params.commitGuard?.();
   const { changes } = resolveHeartbeatMonitorPlan(params.cfg, jobs, {
-    schedulerSeed: params.schedulerSeed,
+    schedulerSeed,
   });
   const applied: HeartbeatMonitorChange[] = [];
   const failures: HeartbeatMonitorReconcileResult["failures"] = [];
   for (const change of changes) {
+    // Settled CRUD promises do not yield to I/O; reject a superseded pass
+    // after the event-loop turn, before entering its next mutation wrapper.
+    await yieldToEventLoop();
+    params.commitGuard?.();
     try {
       if (change.kind === "remove") {
         await params.cron.remove(change.job.id, {

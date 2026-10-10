@@ -41,14 +41,14 @@ function metadata(ctx: TemplateContext) {
 
 describe("prepared reply conversation", () => {
   it.each([
+    { name: "matching exec", input: current, inherits: true },
     {
-      name: "matching heartbeat",
-      input: { ...current, InternalTurnSource: "heartbeat" },
+      name: "heartbeat without a current route",
+      input: { InternalTurnSource: "heartbeat" },
       inherits: true,
     },
-    { name: "matching cron", input: { ...current, InternalTurnSource: "cron" }, inherits: true },
-    { name: "matching exec", input: current, inherits: true },
-    { name: "no current route", input: { InternalTurnSource: "exec" }, inherits: true },
+    { name: "cron without a current route", input: { InternalTurnSource: "cron" }, inherits: true },
+    { name: "exec without a current route", input: { InternalTurnSource: "exec" }, inherits: true },
     {
       name: "different channel",
       input: { ...current, OriginatingChannel: "discord" },
@@ -78,6 +78,16 @@ describe("prepared reply conversation", () => {
         channel: input.OriginatingChannel ?? "slack",
         chat_type: "channel",
       });
+      if (inherits) {
+        expect(conversation.fields).toMatchObject({
+          Provider: "slack",
+          ChatType: "channel",
+          GroupChannel: "#ops",
+          OriginatingTo: input.OriginatingTo ?? "C123",
+          AccountId: "work",
+          MessageThreadId: input.MessageThreadId ?? "42",
+        });
+      }
     },
   );
 

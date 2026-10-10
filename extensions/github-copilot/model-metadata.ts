@@ -1,7 +1,7 @@
 // Github Copilot plugin module implements model metadata behavior.
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -78,9 +78,10 @@ export function resolveCopilotTransportApi(modelId: string): CopilotRuntimeApi {
 
 export function resolveCopilotModelCompat(
   modelId: string,
+  api: CopilotRuntimeApi = resolveCopilotTransportApi(modelId),
 ): ModelDefinitionConfig["compat"] | undefined {
   const normalized = normalizeOptionalLowercaseString(modelId) ?? "";
-  if (isCopilotGeminiModelId(normalized)) {
+  if (api === "openai-completions") {
     return { ...COPILOT_CHAT_COMPLETIONS_COMPAT };
   }
   // Copilot's Claude 4.5 endpoints reject Anthropic's eager tool extension,
@@ -95,6 +96,7 @@ export function resolveCopilotThinkingLevelMap(
   modelId: string,
   compat?: CopilotReasoningCompat | null,
   api?: string | null,
+  params?: Record<string, unknown>,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
   const normalizedModelId = normalizeOptionalLowercaseString(modelId) ?? "";
   const runtimeApi = api ?? resolveCopilotTransportApi(normalizedModelId);
@@ -111,7 +113,7 @@ export function resolveCopilotThinkingLevelMap(
   const supported = new Set(efforts.map(normalizeOptionalLowercaseString));
   const supportsEffort =
     runtimeApi !== "anthropic-messages" ||
-    supportsClaudeAdaptiveThinking({ id: normalizedModelId });
+    supportsClaudeAdaptiveThinking({ id: normalizedModelId, params });
   return {
     // Keep the public minimal setting usable when this route starts its native ladder at low.
     ...(runtimeApi === "openai-responses" && !supported.has("minimal") && supported.has("low")

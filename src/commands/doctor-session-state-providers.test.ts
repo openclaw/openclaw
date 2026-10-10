@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -11,11 +11,13 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-route-sqlite-");
 
 const codexOwner = {
   id: "codex",
@@ -34,7 +36,7 @@ const openAIOwner = {
 const anthropicOwner = {
   id: "anthropic",
   label: "Anthropic",
-  providerIds: ["anthropic"],
+  providerIds: ["anthropic", "claude-cli"],
   runtimeIds: ["claude-cli"],
   cliSessionKeys: ["claude-cli"],
   authProfilePrefixes: ["anthropic:", "claude-cli:"],
@@ -76,7 +78,7 @@ async function runDoctor(params: {
     await runPluginSessionStateDoctorRepairs({
       scan: scanner.result(),
       store: { kind: "legacy", path: storePath },
-      prompter: { confirmRuntimeRepair, note: vi.fn() },
+      prompter: { confirmRuntimeRepair },
       warnings,
       changes,
     });
@@ -132,6 +134,43 @@ describe("doctor session state provider routes", () => {
     expect(result.store).toEqual(store);
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toStrictEqual([]);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "legacy-only", binding: {} },
+    {
+      label: "canonical and legacy",
+      binding: {
+        cliSessionBindings: { "claude-cli": { sessionId: "Canonical-ID" } },
+        cliSessionIds: { "claude-cli": "Map-ID" },
+      },
+    },
+  ])("clears $label conversation state without leaving a migration source", async ({ binding }) => {
+    ownerState.owners = [anthropicOwner];
+    const key = "agent:main:stale-claude";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      store: { [key]: entry({ ...binding, claudeCliSessionId: "Obsolete-ID" }) },
+    });
+
+    expect(result.store[key]?.sessionId).toBe("session-1");
+    expect(result.store[key]?.claudeCliSessionId).toBeUndefined();
+    expect(result.store[key]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(result.store[key]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
+  });
+
+  it("leaves legacy conversation IDs available for migration on a configured Anthropic route", async () => {
+    ownerState.owners = [anthropicOwner];
+    const key = "agent:main:configured-claude";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } } },
+      store: { [key]: entry({ claudeCliSessionId: "Configured-MixedCase-ID" }) },
+    });
+
+    expect(result.store[key]?.claudeCliSessionId).toBe("Configured-MixedCase-ID");
+    expect(result.changes).toEqual([]);
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
@@ -288,8 +327,65 @@ describe("doctor session state provider routes", () => {
     }
   });
 
+  it("preserves an explicit provider's cached local model", async () => {
+    const model = "claude-cli/team/model";
+    ownerState.owners = [anthropicOwner];
+    const store = {
+      "agent:main:canonical-provider": entry({
+        providerOverride: "google",
+        modelOverride: model,
+        modelOverrideSource: "user",
+        modelProvider: "google",
+        model,
+        contextTokens: 128_000,
+        authProfileOverride: "google:chosen",
+        authProfileOverrideSource: "user",
+      }),
+    };
+
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "google/claude-cli/team/model" } } },
+      store,
+    });
+
+    expect(result.store).toEqual(store);
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([]);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { model: "claude-cli/team/model" },
+    { modelProvider: "anthropic", model: "team/model" },
+  ])("clears a genuinely stale owner model $modelProvider/$model", async (runtimeModel) => {
+    ownerState.owners = [anthropicOwner];
+    const sessionKey = "agent:main:stale-runtime";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "google/gemini-2.5-pro" } } },
+      store: {
+        [sessionKey]: entry({
+          ...runtimeModel,
+          contextTokens: 128_000,
+          authProfileOverride: "google:chosen",
+          authProfileOverrideSource: "user",
+        }),
+      },
+    });
+
+    expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+    expect(result.warnings.join("\n")).toContain("runtime model state");
+    expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
+    expect(result.store[sessionKey]).toEqual({
+      sessionId: "session-1",
+      updatedAt: expect.any(Number),
+      delivery: { kind: "none" },
+      authProfileOverride: "google:chosen",
+      authProfileOverrideSource: "user",
+    });
+  });
+
   it("repairs a non-default SQLite row without creating a legacy store", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-route-sqlite-"));
+    const root = sessionDirs.make();
     const legacyStorePath = path.join(root, "sessions.json");
     const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(legacyStorePath, {
       agentId: "ops",
@@ -309,40 +405,35 @@ describe("doctor session state provider routes", () => {
         entries: { main: {}, ops: {} },
       },
     } satisfies OpenClawConfig;
-    try {
-      await upsertSessionEntryCore(
-        {
-          agentId: "ops",
-          defaultAgentId: "ops",
-          sessionKey,
-          storePath: legacyStorePath,
-        },
-        staleEntry,
-      );
-      const scanner = createPluginSessionStateDoctorScanner({ cfg, env: {} });
-      scanner.scanEntry(sessionKey, staleEntry);
-
-      await runPluginSessionStateDoctorRepairs({
-        scan: scanner.result(),
-        store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
-        prompter: { confirmRuntimeRepair: vi.fn(async () => true), note: vi.fn() },
-        warnings: [],
-        changes: [],
-      });
-
-      const repaired = loadSessionEntryReadOnly({
+    await upsertSessionEntryCore(
+      {
         agentId: "ops",
+        defaultAgentId: "ops",
         sessionKey,
-        storePath: sqliteStorePath,
-      });
-      expect(repaired?.providerOverride).toBeUndefined();
-      expect(repaired?.modelOverride).toBeUndefined();
-      expect(repaired?.modelProvider).toBeUndefined();
-      expect(fsSync.existsSync(legacyStorePath)).toBe(false);
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(root, { recursive: true, force: true });
-    }
+        storePath: legacyStorePath,
+      },
+      staleEntry,
+    );
+    const scanner = createPluginSessionStateDoctorScanner({ cfg, env: {} });
+    scanner.scanEntry(sessionKey, staleEntry);
+
+    await runPluginSessionStateDoctorRepairs({
+      scan: scanner.result(),
+      store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
+      prompter: { confirmRuntimeRepair: vi.fn(async () => true) },
+      warnings: [],
+      changes: [],
+    });
+
+    const repaired = loadSessionEntryReadOnly({
+      agentId: "ops",
+      sessionKey,
+      storePath: sqliteStorePath,
+    });
+    expect(repaired?.providerOverride).toBeUndefined();
+    expect(repaired?.modelOverride).toBeUndefined();
+    expect(repaired?.modelProvider).toBeUndefined();
+    expect(fsSync.existsSync(legacyStorePath)).toBe(false);
   });
 
   it("leaves explicit user owner choices for manual review", async () => {

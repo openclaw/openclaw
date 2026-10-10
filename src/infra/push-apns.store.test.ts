@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
@@ -19,6 +19,8 @@ import {
   loadApnsRegistrations,
   registerApnsRegistration,
 } from "./push-apns.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
@@ -52,49 +54,11 @@ function databaseEnv(baseDir: string): NodeJS.ProcessEnv {
 
 afterEach(async () => {
   vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
 describe("push APNs registration store", () => {
-  it("round-trips direct registrations without creating the retired JSON store", async () => {
-    const baseDir = await makeTempDir();
-    const saved = await registerDirectApnsRegistration({
-      nodeId: "ios-node-1",
-      environment: "sandbox",
-      baseDir,
-    });
-
-    await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(saved);
-    await expect(
-      fs.access(path.join(baseDir, "push", "apns-registrations.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("ignores a present valid legacy JSON registration during runtime reads", async () => {
-    const baseDir = await makeTempDir();
-    const legacyPath = path.join(baseDir, "push", "apns-registrations.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify({
-        registrationsByNodeId: {
-          "legacy-node": {
-            nodeId: "legacy-node",
-            [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
-            topic: "ai.openclaw.ios",
-            environment: "sandbox",
-            updatedAtMs: 1,
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    await expect(loadApnsRegistration("legacy-node", baseDir)).resolves.toBeNull();
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-  });
-
   it("round-trips direct and sandbox relay fields including relay origin", async () => {
     const baseDir = await makeTempDir();
     const relay = await registerApnsRegistration({
@@ -205,6 +169,9 @@ describe("push APNs registration store", () => {
     const baseDir = await makeTempDir();
     const stale = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
     const fresh = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
+    await expect(
+      fs.access(path.join(baseDir, "push", "apns-registrations.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(fresh.updatedAtMs).toBe(stale.updatedAtMs + 1);
     await expect(
@@ -335,6 +302,42 @@ describe("push APNs registration store", () => {
     ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
     await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "keeps the prior APNs owner when the connection changes before worker %s admission",
+    async (stage) => {
+      const baseDir = await makeTempDir();
+      const previous = await registerDirectApnsRegistration({ nodeId: "ios-lease", baseDir });
+      let connectionCurrent = true;
+      let reachedStage = false;
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          reachedStage = true;
+          connectionCurrent = false;
+        }
+        admit(request, grant);
+      });
+      try {
+        await expect(
+          registerApnsRegistration({
+            nodeId: "ios-lease",
+            token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+            topic: "ai.openclaw.ios",
+            baseDir,
+            assertCurrent: () => {
+              if (!connectionCurrent) {
+                throw new ApnsRegistrationPairingChangedError();
+              }
+            },
+          }),
+        ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
+        expect(reachedStage).toBe(true);
+        await expect(loadApnsRegistration("ios-lease", baseDir)).resolves.toEqual(previous);
+      } finally {
+        admission.mockRestore();
+      }
+    },
+  );
 
   it("rejects invalid direct and relay inputs", async () => {
     const baseDir = await makeTempDir();

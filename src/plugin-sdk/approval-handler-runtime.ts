@@ -15,7 +15,10 @@ import {
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 import type { SystemAgentApprovalResolved } from "../infra/system-agent-approvals.js";
-import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
+import {
+  buildSystemAgentApprovalResolvedText,
+  SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
+} from "./approval-terminal.js";
 export {
   createChannelApprovalHandler,
   createChannelApprovalNativeRuntimeAdapter,
@@ -52,22 +55,17 @@ export { resolveApprovalOverGateway } from "./approval-gateway-runtime.js";
 type ApprovalRequest = ApprovalRequestInput;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved | SystemAgentApprovalResolved;
 
-/** Builds channel-visible resolved approval text for exec and plugin approvals. */
+/** Builds channel-visible resolved approval text for every approval kind. */
 export function buildChannelApprovalResolvedText(params: {
   request: ApprovalRequest;
   resolved: ApprovalResolved;
   view: ResolvedApprovalView;
 }): string {
   if (params.view.approvalKind === "system-agent") {
-    return params.view.terminalStatus === "cancelled"
-      ? "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry."
-      : params.resolved.decision === "deny"
-        ? "❌ OpenClaw change denied. No change was made."
-        : params.view.applicationStatus === "applied"
-          ? `✅ OpenClaw change approved and applied: ${params.view.operationSummary}`
-          : params.view.applicationStatus === "not-applied"
-            ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
-            : `✅ OpenClaw change approved. Applying: ${params.view.operationSummary}`;
+    return buildSystemAgentApprovalResolvedText({
+      ...params.view,
+      decision: params.resolved.decision,
+    });
   }
   if (params.view.approvalKind === "plugin") {
     return buildPluginApprovalResolvedMessage(params.resolved as PluginApprovalResolved);
@@ -75,12 +73,7 @@ export function buildChannelApprovalResolvedText(params: {
   const resolvedByText = params.resolved.resolvedBy
     ? ` Resolved by ${params.resolved.resolvedBy}.`
     : "";
-  const payload = buildApprovalResolvedReplyPayload({
-    approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
-    text: `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`,
-  });
-  return payload.text ?? "";
+  return `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`;
 }
 
 /** Builds channel-visible expiration text for exec and plugin approvals. */
@@ -90,7 +83,7 @@ export function buildChannelApprovalExpiredText(params: {
 }): string {
   const request = normalizeApprovalRequest(params.request);
   if (request.approvalKind === "system-agent") {
-    return "⏱️ OpenClaw change expired. No change was made.";
+    return SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT;
   }
   if (request.approvalKind === "plugin") {
     return buildPluginApprovalExpiredMessage(request);

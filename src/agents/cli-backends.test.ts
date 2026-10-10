@@ -55,6 +55,7 @@ function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
       sessionArgs: ["--session", "{sessionId}"],
       sessionMode: "existing",
     },
+    ownsNativeCompaction: overrides.ownsNativeCompaction === true,
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     runtimeArtifact,
@@ -71,16 +72,6 @@ function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
   return overrides.ownsNativeCompaction === true
     ? { ...base, ...overrides, ownsNativeCompaction: true }
     : { ...base, ...overrides, ownsNativeCompaction: false };
-}
-
-function createBooleanOwnershipBackend(ownsNativeCompaction: boolean): CliBackendPlugin {
-  return {
-    id: "boolean-ownership-cli",
-    modelProvider: "acme",
-    config: { command: "acme" },
-    bundleMcp: false,
-    ownsNativeCompaction,
-  };
 }
 
 function runtimeEntry(
@@ -123,10 +114,6 @@ afterEach(() => {
 });
 
 describe("resolveCliBackendConfig", () => {
-  it("accepts boolean native-compaction ownership without a manual contract", () => {
-    expect(createBooleanOwnershipBackend(true).ownsNativeCompaction).toBe(true);
-  });
-
   it("returns the plugin-owned command adapter and registration metadata", () => {
     const resolved = requireBackend();
 
@@ -308,12 +295,12 @@ describe("CLI backend metadata and bindings", () => {
 
   it("lists canonical provider to CLI runtime bindings", () => {
     expect(listCliRuntimeModelBackendBindings()).toEqual([
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     ]);
     expect(listCliRuntimeProviderIds()).toEqual(["acme-cli"]);
     expect(resolveCliRuntimeCanonicalProvider({ runtime: "ACME-CLI" })).toBe("acme");
     expect(resolveCliRuntimeModelBackendBinding({ provider: "acme", runtime: "acme-cli" })).toEqual(
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     );
     expect(isCliRuntimeModelBackendForProvider({ provider: "acme", runtime: "acme-cli" })).toBe(
       true,
@@ -330,7 +317,7 @@ describe("CLI backend metadata and bindings", () => {
 
     expect(listCliRuntimeModelBackendBindings()).toEqual([]);
     expect(listCliRuntimeModelBackendBindings({ includeSetupRegistry: true })).toEqual([
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     ]);
   });
 });

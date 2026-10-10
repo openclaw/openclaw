@@ -3,6 +3,29 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
+import { brokerSpawnOptions } from "./spawn-broker/host.js";
+import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
+
+/** Select the process-scoped native spawn transport without changing launch options. */
+export function spawnProcess(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+  initiateSpawn?: SpawnInitiation,
+): ChildProcess {
+  const broker = getSpawnBroker();
+  // Anonymous secret pipes and inherited numeric descriptors belong to this process.
+  const child =
+    broker && brokerSpawnOptions(options)
+      ? broker.spawn(command, args, options, initiateSpawn)
+      : initiateSpawn
+        ? initiateSpawn(() => spawn(command, args, options))
+        : spawn(command, args, options);
+  recordChildProcessSpawn(command, child);
+  return child;
+}
 
 type SpawnWithFallbackResult = {
   child: ChildProcess;
@@ -11,19 +34,12 @@ type SpawnWithFallbackResult = {
 
 type SpawnWithFallbackParams = {
   assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
   argv: string[];
   options: SpawnOptions;
   fallbacks?: SpawnOptions[];
-  spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+  spawnImpl?: typeof spawnProcess;
 };
-
-export function resolveCommandStdio(params: {
-  hasInput: boolean;
-  preferInherit: boolean;
-}): ["pipe" | "inherit" | "ignore", "pipe", "pipe"] {
-  const stdin = params.hasInput ? "pipe" : params.preferInherit ? "inherit" : "pipe";
-  return [stdin, "pipe", "pipe"];
-}
 
 function shouldRetry(err: unknown): boolean {
   const code =
@@ -31,25 +47,10 @@ function shouldRetry(err: unknown): boolean {
   return code === "EBADF";
 }
 
-async function spawnAndWaitForSpawn(
-  spawnImpl: NonNullable<SpawnWithFallbackParams["spawnImpl"]>,
-  argv: string[],
-  options: SpawnOptions,
-): Promise<ChildProcess> {
-  const child = spawnImpl(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), options);
-
-  try {
-    await once(child, "spawn");
-  } catch (err) {
-    throw toErrorObject(err, "Non-Error rejection");
-  }
-  return child;
-}
-
 export async function spawnWithFallback(
   params: SpawnWithFallbackParams,
 ): Promise<SpawnWithFallbackResult> {
-  const spawnImpl = params.spawnImpl ?? spawn;
+  const spawnImpl = params.spawnImpl ?? spawnProcess;
   const baseOptions = { ...params.options };
   const fallbacks = params.fallbacks ?? [];
   const attempts = [baseOptions, ...fallbacks.map((options) => ({ ...baseOptions, ...options }))];
@@ -59,7 +60,15 @@ export async function spawnWithFallback(
     // Caller revocation is not a spawn failure and cannot select a fallback.
     params.assertCurrent?.();
     try {
-      const child = await spawnAndWaitForSpawn(spawnImpl, params.argv, attempt);
+      const child = spawnImpl(
+        expectDefined(params.argv[0], "argv entry at 0"),
+        params.argv.slice(1),
+        attempt,
+        params.initiateSpawn,
+      );
+      await once(child, "spawn").catch((err: unknown) => {
+        throw toErrorObject(err, "Non-Error rejection");
+      });
       return {
         child,
         usedFallback: index > 0,

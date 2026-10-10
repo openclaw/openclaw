@@ -1,5 +1,6 @@
 {
   "id": "cloudflare-ai-gateway",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -8,6 +9,9 @@
   "modelPricing": {
     "providers": {
       "cloudflare-ai-gateway": {
+        "modelsDev": {
+          "passthroughProviderModel": true
+        },
         "openRouter": {
           "passthroughProviderModel": true
         },

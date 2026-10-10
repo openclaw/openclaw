@@ -1,8 +1,10 @@
 // Restores one verified whole-archive backup into a fresh staging directory.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -13,8 +15,7 @@ import {
   resolveRequiredBackupPath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
-import { isPathWithin } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 const BACKUP_RESTORE_WARNINGS = [
   "Restoring an archive is time travel: every restored state surface rolls back to the archive timestamp.",
@@ -24,43 +25,28 @@ const BACKUP_RESTORE_WARNINGS = [
   "Generated plugin-skills links are not archived; after activation, run `openclaw skills list` or start an agent session to rebuild them.",
 ] as const;
 
-type BackupRestoreOptions = {
-  archive: string;
-  target?: string;
-  json?: boolean;
-};
+const BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
-type BackupRestoreResult = {
-  ok: true;
-  archivePath: string;
-  targetPath: string;
-  archiveRoot: string;
-  createdAt: string;
-  runtimeVersion: string;
-  assetCount: number;
-  entryCount: number;
-  symlinkCount: number;
-  warnings: string[];
-};
+type BackupRestoreResult = Awaited<ReturnType<typeof backupRestoreCommand>>;
 
 async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   const [canonicalTarget, canonicalStateDir] = await Promise.all([
     canonicalizePathForContainment(targetPath),
     canonicalizePathForContainment(resolveStateDir()),
   ]);
-  if (isPathWithin(canonicalTarget, canonicalStateDir)) {
+  if (isPathInside(canonicalStateDir, canonicalTarget)) {
     throw new Error(
       `Backup restore target must be outside the live OpenClaw state directory: ${targetPath}`,
     );
   }
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot);
+  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot);
   if (!discoverySnapshot) {
     return;
   }
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
   for (const { sourcePath } of agentRoots) {
-    if (isPathWithin(canonicalTarget, sourcePath)) {
+    if (isPathInside(sourcePath, canonicalTarget)) {
       throw new Error(
         `Backup restore target must be outside the live OpenClaw agent directory: ${targetPath}`,
       );
@@ -88,6 +74,24 @@ async function prepareRestoreTarget(targetPath: string): Promise<{ created: bool
   return { created: true };
 }
 
+function assertRestoreCapacity(targetPath: string, extractionBytes: number): void {
+  const diskSpace = tryReadDiskSpace(targetPath);
+  if (!diskSpace) {
+    return;
+  }
+  const requiredBytes = extractionBytes + BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES;
+  if (requiredBytes <= diskSpace.availableBytes) {
+    return;
+  }
+  const location =
+    path.resolve(targetPath) === path.resolve(diskSpace.checkedPath)
+      ? targetPath
+      : `${targetPath} (volume checked at ${diskSpace.checkedPath})`;
+  throw new Error(
+    `Backup restore requires ${formatDiskSpaceBytes(requiredBytes)} of free space at ${location} (${formatDiskSpaceBytes(extractionBytes)} archive data plus ${formatDiskSpaceBytes(BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES)} reserve), but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available. Choose a target on a volume with enough free space.`,
+  );
+}
+
 async function cleanupFailedRestore(targetPath: string, created: boolean): Promise<void> {
   if (created) {
     await fs.rm(targetPath, { recursive: true, force: true });
@@ -102,6 +106,7 @@ async function extractBackupArchive(
   archivePath: string,
   targetPath: string,
   hardlinkTargets: ReadonlyMap<string, string>,
+  symbolicLinkPaths: ReadonlySet<string>,
 ): Promise<void> {
   let extractionError: Error | undefined;
   await tar.x({
@@ -113,6 +118,8 @@ async function extractBackupArchive(
     // Verification catches fatal archive errors; rethrow recoverable warnings after close.
     strict: false,
     preserveOwner: false,
+    // Create links only after file writes finish; never extract through a link.
+    filter: (entryPath) => !symbolicLinkPaths.has(entryPath),
     // node-tar calls this before its path checks and filesystem reservations.
     onReadEntry: (entry) => {
       const target = hardlinkTargets.get(entry.path);
@@ -147,15 +154,34 @@ function formatRestoreResult(result: BackupRestoreResult): string {
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */
 export async function backupRestoreCommand(
   runtime: RuntimeEnv,
-  options: BackupRestoreOptions,
-): Promise<BackupRestoreResult> {
+  options: { archive: string; target?: string; json?: boolean },
+) {
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
-  const { result: verified, hardlinkTargets } = await prepareBackupArchive(options.archive);
+  const {
+    result: verified,
+    hardlinkTargets,
+    symbolicLinks,
+    regularFileExtractionBytes,
+  } = await prepareBackupArchive(options.archive);
+  assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
 
   try {
-    await extractBackupArchive(verified.archivePath, targetPath, hardlinkTargets);
+    await extractBackupArchive(
+      verified.archivePath,
+      targetPath,
+      hardlinkTargets,
+      new Set(symbolicLinks.map(({ entryPath }) => entryPath)),
+    );
+    // Materialize all parents before links: filesystem aliases then collide with
+    // directories instead of letting an earlier link redirect a later write.
+    for (const { entryPath } of symbolicLinks) {
+      await fs.mkdir(path.dirname(path.join(targetPath, entryPath)), { recursive: true });
+    }
+    for (const { entryPath, linkpath } of symbolicLinks) {
+      await fs.symlink(linkpath, path.join(targetPath, entryPath));
+    }
   } catch (extractionError) {
     try {
       await cleanupFailedRestore(targetPath, target.created);
@@ -173,10 +199,16 @@ export async function backupRestoreCommand(
     });
   }
 
-  const result: BackupRestoreResult = {
+  const result = {
     ...verified,
     targetPath,
-    warnings: [...BACKUP_RESTORE_WARNINGS],
+    warnings: [
+      ...BACKUP_RESTORE_WARNINGS,
+      ...(verified.externalSymbolicLinks ?? []).map(
+        ({ entryPath, linkpath }) =>
+          `External link restored (target not copied through link): ${JSON.stringify(entryPath)} -> ${JSON.stringify(linkpath)}`,
+      ),
+    ],
   };
   if (options.json) {
     writeRuntimeJson(runtime, result);

@@ -1,7 +1,5 @@
 // Shared STT plus agent-consult meeting engine.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSession } from "../realtime-transcription/provider-types.js";
 import {
@@ -12,36 +10,28 @@ import {
   convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
 } from "./realtime-audio-format.js";
-import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import {
   formatMeetingAgentAudioModelLog,
   formatMeetingAgentTtsResultLog,
   formatMeetingTranscriptSummaryLog,
   meetingOutputBytesPerMs,
+  normalizeMeetingTtsPromptText,
+  resolveMeetingRealtimeTranscriptionProvider,
+} from "./realtime-engine-support.js";
+import {
   MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
   MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
   MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-  normalizeMeetingTtsPromptText,
-  resolveMeetingRealtimeTranscriptionProvider,
-  type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHandle,
-  type MeetingRealtimeEngineConfig,
-  type MeetingRuntimePlatform,
+  type startMeetingRealtimeEngine,
 } from "./realtime-engine.js";
 
-export async function startMeetingAgentRealtimeEngine(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
-  platform: MeetingRuntimePlatform;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  logPrefix?: "node";
-  transport: MeetingRealtimeAudioTransport;
-  logger: RuntimeLogger;
-  providers?: RealtimeTranscriptionProviderPlugin[];
-  consultAgent: (params: MeetingAgentConsultParams) => Promise<{ text: string }>;
-}): Promise<MeetingRealtimeAudioEngineHandle> {
+export async function startMeetingAgentRealtimeEngine(
+  params: Omit<
+    Parameters<typeof startMeetingRealtimeEngine>[0],
+    "providers" | "talkSessionId" | "talkContext" | "tools" | "handleToolCall"
+  > & { providers?: RealtimeTranscriptionProviderPlugin[] },
+): Promise<MeetingRealtimeAudioEngineHandle> {
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
   let sttSession: RealtimeTranscriptionSession | null = null;
@@ -77,6 +67,8 @@ export async function startMeetingAgentRealtimeEngine(params: {
           `${params.platform.logScope} ${agentLogScope} transcription bridge close ignored: ${formatErrorMessage(error)}`,
         );
       }
+      harness.finishOutputAudio("stopped");
+      harness.endTurn("stopped");
       harness.emit({
         type: "session.closed",
         final: true,
@@ -135,6 +127,9 @@ export async function startMeetingAgentRealtimeEngine(params: {
           text: normalized,
           cfg: params.fullConfig,
         });
+        if (stopped) {
+          return;
+        }
         if (!result.success || !result.audioBuffer || !result.sampleRate) {
           throw new Error(result.error ?? "TTS conversion failed");
         }
@@ -150,10 +145,16 @@ export async function startMeetingAgentRealtimeEngine(params: {
             params.platform.displayName,
           ),
         );
+        if (stopped) {
+          return;
+        }
         harness.finishOutputAudio("completed");
         harness.endTurn();
       })
       .catch((error: unknown) => {
+        if (stopped) {
+          return;
+        }
         // TTS and sink failures happen after a turn, and sometimes output, has started.
         // Close both spans so later input cannot inherit stale playback suppression.
         harness.finishOutputAudio("failed");
@@ -189,23 +190,26 @@ export async function startMeetingAgentRealtimeEngine(params: {
       }),
       outputAudioDone: () => ({ meetingSessionId: params.meetingSessionId }),
     },
-    echoSuppression: {
-      bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
-      tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
-      transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-    },
+    echoSuppression: params.transport.inputAudioIsolated
+      ? undefined
+      : {
+          bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
+          tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
+          transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
+        },
     talkback: {
       debounceMs: MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
       logger: params.logger,
       logPrefix: `${params.platform.logScope} ${agentLogScope}`,
       responseStyle: "Brief, natural spoken answer for a live meeting.",
       fallbackText: "I hit an error while checking that. Please try again.",
-      consult: ({ question, responseStyle }) =>
+      consult: ({ question, responseStyle, signal }) =>
         params.consultAgent({
           meetingSessionId: params.meetingSessionId,
           requesterSessionKey: params.requesterSessionKey,
           args: { question, responseStyle },
           transcript: harness.transcript,
+          abortSignal: signal,
         }),
       deliver: enqueueSpeakText,
     },

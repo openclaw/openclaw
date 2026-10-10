@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -6,7 +5,6 @@ import type {
   ComputerActParams,
   ComputerActResult,
   ComputerUseCapabilityDescriptor,
-  ComputerUseV2ActionName,
   ScreenSnapshotParams,
 } from "../../plugins/computer-use-contract.js";
 import {
@@ -16,10 +14,13 @@ import {
   parseScreenSnapshotResult,
 } from "../../plugins/computer-use-contract.js";
 import {
-  type EligibleNodeMessages,
-  resolveEligibleNodeFromList,
-} from "../../shared/node-resolve.js";
+  NOT_COMPUTER_CAPABLE_HINT,
+  resolveComputerBinding,
+  type ComputerBinding,
+} from "./computer-tool-bindings.js";
+import type { GatewayComputerStatus } from "./computer-tool-gateway.js";
 import { computerActionNeedsFrame, validateCapabilityBoundInput } from "./computer-tool-request.js";
+import { availableComputerActions, COMPUTER_TOOL_ACTIONS } from "./computer-tool-schema.js";
 import type {
   ComputerContextEpoch,
   ComputerFrame,
@@ -32,19 +33,18 @@ import type {
 } from "./computer-tool-shared.js";
 import {
   COMPUTER_ACT_COMMAND,
+  computerHostKey,
   SCREENSHOT_QUALITY,
   SCREEN_SNAPSHOT_COMMAND,
 } from "./computer-tool-shared.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
-import { listNodes, type NodeListNode } from "./nodes-utils.js";
+import type { GatewayCallOptions } from "./gateway.js";
+import { nodeToolIdempotencyKey } from "./nodes-utils.js";
 
 type ComputerState =
   | { kind: "unbound" }
   | { kind: "target"; target: ComputerTarget }
   | ({ kind: "frame" } & ComputerFrame);
 
-const NOT_COMPUTER_CAPABLE_HINT =
-  "enable Computer Control in the OpenClaw app and approve the pairing update";
 const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.commands.deny";
 const PLATFORM_ALLOWLIST_HINT = "is not in the allowlist for platform";
 const BUTTON_NOT_HELD_HINT = "left button is not held by computer control";
@@ -54,73 +54,6 @@ const DEFINITIVE_NODE_COMMAND_REASONS = new Set([
   "command not declared by node",
   "node did not declare commands",
 ]);
-
-function isEligibleComputerNode(node: NodeListNode): boolean {
-  const commands = Array.isArray(node.commands) ? node.commands : [];
-  // The tool loop authorizes coordinates against captured frames, so screenshot
-  // support is a functional requirement rather than gating by platform name.
-  return (
-    node.connected === true &&
-    commands.includes(COMPUTER_ACT_COMMAND) &&
-    commands.includes(SCREEN_SNAPSHOT_COMMAND)
-  );
-}
-
-const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
-  ineligibleExact: (query, eligibleIds) =>
-    `node "${query}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT}; ` +
-    `eligible node ids: ${eligibleIds})`,
-  nameResolveFailed: (reason, eligibleIds) =>
-    `${reason} (eligible computer-capable node ids: ${eligibleIds})`,
-  noneEligible: () =>
-    `no connected computer-capable node (a node must advertise ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
-  multipleEligible: (eligible) =>
-    `multiple computer-capable nodes connected; pass node explicitly: ${eligible
-      .map((node) => node.nodeId)
-      .join(", ")}`,
-};
-
-async function resolveComputerNode(
-  gatewayOpts: GatewayCallOptions,
-  query?: string,
-  signal?: AbortSignal,
-): Promise<NodeListNode> {
-  const nodes = await listNodes(gatewayOpts, signal);
-  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
-}
-
-async function invokeNodeCommand(params: {
-  gatewayOpts: GatewayCallOptions;
-  nodeId: string;
-  command: string;
-  commandParams: Record<string, unknown>;
-  timeoutMs?: number;
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const raw = await callGatewayTool<{ payload: unknown }>(
-    "node.invoke",
-    params.gatewayOpts,
-    {
-      nodeId: params.nodeId,
-      command: params.command,
-      params: params.commandParams,
-      timeoutMs: params.timeoutMs,
-      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
-    },
-    { signal: params.signal },
-  );
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload")
-    ? (raw as { payload: unknown }).payload
-    : raw;
-}
-
-function createGatewayComputerTransport(gatewayOpts: GatewayCallOptions): ComputerToolTransport {
-  return {
-    resolveNode: (query, signal) => resolveComputerNode(gatewayOpts, query, signal),
-    invoke: (params) => invokeNodeCommand({ ...params, gatewayOpts }),
-  };
-}
 
 function parseComputerActPayload(value: unknown): ComputerActResult {
   if (typeof value !== "string") {
@@ -136,24 +69,6 @@ function parseComputerActPayload(value: unknown): ComputerActResult {
       cause: error,
     });
   }
-}
-
-function computerActIdempotencyKey(params: { scope?: string; toolCallId: string }): string {
-  const stableScope = params.scope?.trim();
-  const stableCallId = params.toolCallId.trim();
-  if (!stableScope || !stableCallId) {
-    // A call id is only unique inside its model response. Without a stable run
-    // scope and provider/fallback id, avoid collapsing unrelated actions.
-    return crypto.randomUUID();
-  }
-  const digest = crypto
-    .createHash("sha256")
-    .update(JSON.stringify([stableScope, stableCallId, COMPUTER_ACT_COMMAND]))
-    .digest("hex");
-  // `v1` versions this key's composition (scope + call id + command), not the
-  // `computer.act` wire contract. Changing what goes into the digest needs a
-  // new prefix so in-flight keys from an older node cannot collide.
-  return `computer.act:v1:${digest}`;
 }
 
 function gatewayRequestDetails(err: unknown): Record<string, unknown> | undefined {
@@ -201,12 +116,12 @@ function isButtonAlreadyReleasedError(err: unknown): boolean {
 }
 
 export class ComputerToolSession {
-  private selectedCapabilities: ComputerUseCapabilityDescriptor | undefined;
-  private selectedCapabilityNodeId: string | undefined;
+  private selectedBinding: ComputerBinding | undefined;
   private observationState: ComputerObservationState | undefined;
   private computerState: ComputerState = { kind: "unbound" };
   private heldButtonTarget: ComputerTarget | undefined;
-  private readonly executionNodes = new Map<string, ComputerToolTransport>();
+  private readonly executionTargets = new Map<string, ComputerBinding>();
+  private readonly cleanupBindings = new Set<ComputerBinding>();
   private disposePromise: Promise<void> | undefined;
 
   constructor(
@@ -215,10 +130,7 @@ export class ComputerToolSession {
       idempotencyScope?: string;
       contextEpoch?: ComputerContextEpoch;
       transport?: ComputerToolTransport;
-      availableActions: (
-        actions: readonly ComputerUseV2ActionName[],
-      ) => readonly ComputerUseV2ActionName[];
-      defaultActions: readonly ComputerUseV2ActionName[];
+      gatewayStatus?: GatewayComputerStatus;
       onCapabilitiesChanged: (capabilities?: ComputerUseCapabilityDescriptor) => void;
       registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
       getOperationQueue: () => Promise<unknown>;
@@ -233,70 +145,59 @@ export class ComputerToolSession {
     }
   }
 
-  private bindNodeCapabilities(
-    node: Awaited<ReturnType<ComputerToolTransport["resolveNode"]>>,
-  ): void {
-    const next = this.options.transport?.computerUse ?? node.computerUse;
+  private bindCapabilities(binding: ComputerBinding, refresh = false): void {
+    const previous = this.selectedBinding;
     const changed =
-      this.selectedCapabilityNodeId !== node.nodeId ||
-      this.selectedCapabilities?.provider.generation !== next?.provider.generation;
-    this.selectedCapabilityNodeId = node.nodeId;
-    this.selectedCapabilities = next;
-    this.options.onCapabilitiesChanged(next);
+      !previous ||
+      computerHostKey(previous.host) !== computerHostKey(binding.host) ||
+      previous.capabilities?.provider.generation !== binding.capabilities?.provider.generation;
+    this.selectedBinding = binding;
+    if (changed || refresh) {
+      this.options.onCapabilitiesChanged(binding.capabilities);
+    }
     if (changed) {
       this.observationState = undefined;
     }
   }
 
-  private setComputerState(next: ComputerState): void {
-    this.computerState = next;
-    if (!this.options.contextEpoch) {
-      return;
-    }
-    if (next.kind !== "frame") {
+  setTarget(target: ComputerTarget): void {
+    this.computerState = { kind: "target", target };
+    if (this.options.contextEpoch) {
       delete this.options.contextEpoch.frameToolCallId;
       delete this.options.contextEpoch.frameImageIdentity;
     }
   }
 
-  setTarget(target: ComputerTarget): void {
-    this.setComputerState({ kind: "target", target });
-  }
-
-  private prepareScreenshotTarget(target: ComputerTarget): void {
+  private visibleFrameForTarget(target: ComputerTarget): ComputerFrame | undefined {
     const frame = this.computerState;
     const contextEpoch = this.options.contextEpoch;
-    // Retain the visible frame only until replacement pixels are verified; failures clear it.
+    // Without context tracking, the earlier screenshot may already have been pruned.
     if (
       contextEpoch?.frameImageIdentity &&
       frame.kind === "frame" &&
-      frame.target.nodeId === target.nodeId &&
+      computerHostKey(frame.target) === computerHostKey(target) &&
       frame.target.screenIndex === target.screenIndex &&
       frame.contextEpoch === contextEpoch.value
     ) {
-      return;
+      return frame;
     }
-    this.setTarget(target);
+    return undefined;
+  }
+
+  private prepareScreenshotTarget(target: ComputerTarget): void {
+    // Retain the visible frame only until replacement pixels are verified; failures clear it.
+    if (!this.visibleFrameForTarget(target)) {
+      this.setTarget(target);
+    }
   }
 
   refreshUnchangedFrame(params: {
     target: ComputerTarget;
     capture: ScreenshotCapture;
     imageIdentity?: string;
-    modelHasVision?: boolean;
   }): ComputerFrame | undefined {
-    const frame = this.computerState;
-    const contextEpoch = this.options.contextEpoch;
-    // Without context tracking, the earlier screenshot may already have been pruned.
-    if (
-      params.modelHasVision === false ||
-      !contextEpoch?.frameImageIdentity ||
-      contextEpoch.frameImageIdentity !== params.imageIdentity ||
-      frame.kind !== "frame" ||
-      frame.target.nodeId !== params.target.nodeId ||
-      frame.target.screenIndex !== params.target.screenIndex ||
-      frame.contextEpoch !== contextEpoch.value
-    ) {
+    const frame = this.visibleFrameForTarget(params.target);
+    if (!frame || this.options.contextEpoch?.frameImageIdentity !== params.imageIdentity) {
       return undefined;
     }
     // Keep the model's original image/frame binding while refreshing the node's capture token.
@@ -310,9 +211,8 @@ export class ComputerToolSession {
     frameId: string;
     toolCallId: string;
     imageIdentity?: string;
-    modelHasVision?: boolean;
   }): void {
-    if (params.modelHasVision === false || !params.imageIdentity) {
+    if (!params.imageIdentity) {
       this.setTarget(params.resolved.target);
       return;
     }
@@ -337,7 +237,7 @@ export class ComputerToolSession {
     const observationId = result.observation?.observationId;
     if (observationId && resolved.capabilities) {
       this.observationState = {
-        nodeId: resolved.target.nodeId,
+        targetKey: computerHostKey(resolved.target),
         providerGeneration: resolved.capabilities.provider.generation,
         observationId,
         imageCoordinates,
@@ -352,56 +252,141 @@ export class ComputerToolSession {
     signal?: AbortSignal;
   }): Promise<ResolvedComputerTarget> {
     this.assertOpen();
-    const transport = this.options.transport ?? createGatewayComputerTransport(params.gatewayOpts);
+    const explicitHost = params.input.target;
+    if (explicitHost !== undefined && explicitHost !== "gateway" && explicitHost !== "node") {
+      throw new Error("computer target must be gateway or node");
+    }
     const explicitNode = typeof params.input.node === "string" ? params.input.node : undefined;
-    const explicitScreenIndex = (() => {
-      if (params.input.screenIndex === undefined) {
-        return undefined;
-      }
-      if (
-        typeof params.input.screenIndex !== "number" ||
-        !Number.isInteger(params.input.screenIndex) ||
-        params.input.screenIndex < 0
-      ) {
-        throw new Error("screenIndex must be a non-negative integer");
-      }
-      return params.input.screenIndex;
-    })();
+    const environmentId =
+      typeof params.input.environmentId === "string"
+        ? params.input.environmentId.trim()
+        : undefined;
+    if (
+      environmentId !== undefined &&
+      (!environmentId ||
+        explicitHost !== undefined ||
+        explicitNode !== undefined ||
+        params.gatewayOpts.gatewayUrl ||
+        params.gatewayOpts.gatewayToken ||
+        this.options.transport)
+    ) {
+      throw new Error(
+        "Computer environmentId must select an attached environment without another target or Gateway override",
+      );
+    }
+    if (explicitHost === "gateway" && explicitNode !== undefined) {
+      throw new Error("computer target=gateway does not accept a node selector");
+    }
+    if (
+      this.options.transport &&
+      (explicitHost !== undefined ||
+        params.gatewayOpts.gatewayUrl ||
+        params.gatewayOpts.gatewayToken)
+    ) {
+      throw new Error("Computer control is bound to this session's desktop");
+    }
+    const explicitScreenIndex = params.input.screenIndex;
+    if (
+      explicitScreenIndex !== undefined &&
+      (typeof explicitScreenIndex !== "number" ||
+        !Number.isInteger(explicitScreenIndex) ||
+        explicitScreenIndex < 0)
+    ) {
+      throw new Error("screenIndex must be a non-negative integer");
+    }
     const needsFrame = computerActionNeedsFrame(params.action, params.input);
     const priorTarget =
       this.computerState.kind === "unbound" ? undefined : this.computerState.target;
     const implicitTarget = this.heldButtonTarget ?? priorTarget;
-    let nodeId: string;
-    if (explicitNode === undefined && implicitTarget) {
-      nodeId = implicitTarget.nodeId;
-    } else {
-      const node = await transport.resolveNode(explicitNode, params.signal);
-      this.assertOpen();
-      nodeId = node.nodeId;
-      this.bindNodeCapabilities(node);
+    const reuseTarget =
+      explicitNode === undefined &&
+      implicitTarget &&
+      (environmentId === undefined ||
+        (implicitTarget.host === "node" && implicitTarget.environmentId === environmentId)) &&
+      (explicitHost === undefined || explicitHost === implicitTarget.host);
+    const explicitGateway =
+      params.gatewayOpts.gatewayUrl !== undefined || params.gatewayOpts.gatewayToken !== undefined;
+    const priorBinding = priorTarget
+      ? this.executionTargets.get(computerHostKey(priorTarget))
+      : undefined;
+    const selectionGatewayOpts =
+      explicitNode !== undefined && !explicitGateway && priorBinding?.host.host === "node"
+        ? {
+            ...priorBinding.gatewayOpts,
+            timeoutMs: params.gatewayOpts.timeoutMs ?? priorBinding.gatewayOpts.timeoutMs,
+          }
+        : params.gatewayOpts;
+    const resolvedBinding = reuseTarget
+      ? this.executionTargets.get(computerHostKey(implicitTarget))!
+      : await resolveComputerBinding({
+          executionId: this.options.executionId,
+          sessionTransport: this.options.transport,
+          gatewayStatus: this.options.gatewayStatus,
+          target: explicitHost,
+          node: explicitNode,
+          environmentId,
+          gatewayOpts: selectionGatewayOpts,
+          signal: params.signal,
+        });
+    // Each attached preparation owns resources even when selection reuses an
+    // earlier binding. Retain it before selection or validation can reject it.
+    if (resolvedBinding.host.host === "node" && resolvedBinding.host.environmentId !== undefined) {
+      this.cleanupBindings.add(resolvedBinding);
     }
-    const capabilities =
-      this.selectedCapabilityNodeId === nodeId ? this.selectedCapabilities : undefined;
-    this.executionNodes.set(nodeId, transport);
-    const advertisedActions = this.options.availableActions(
-      capabilities?.actions ?? this.options.defaultActions,
-    );
-    if (!advertisedActions.includes(params.action)) {
+    const targetKey = computerHostKey(resolvedBinding.host);
+    const existingBinding = this.executionTargets.get(targetKey);
+    const refreshNode =
+      explicitNode !== undefined && !this.options.transport && resolvedBinding.host.host === "node";
+    const nextGatewayOpts = refreshNode ? resolvedBinding.gatewayOpts : params.gatewayOpts;
+    if (
+      existingBinding &&
+      (explicitGateway || refreshNode) &&
+      (nextGatewayOpts.gatewayUrl !== existingBinding.gatewayOpts.gatewayUrl ||
+        nextGatewayOpts.gatewayToken !== existingBinding.gatewayOpts.gatewayToken)
+    ) {
       throw new Error(
-        `${COMPUTER_CONTRACT_MISMATCH}: node ${nodeId} does not advertise action ${params.action}`,
+        "Computer target is bound to its Gateway connection; start a new execution to change it",
+      );
+    }
+    const binding = refreshNode ? resolvedBinding : (existingBinding ?? resolvedBinding);
+    // Cleanup drains the action queue before these bindings. Take custody before
+    // the closed-session fence can reject a newly resolved binding.
+    this.executionTargets.set(targetKey, binding);
+    this.assertOpen();
+    const capabilities = binding.capabilities;
+    this.bindCapabilities(binding, refreshNode);
+    const advertisedActions = availableComputerActions(
+      capabilities?.actions ?? COMPUTER_TOOL_ACTIONS,
+      this.options.registerRunCleanup !== undefined,
+    );
+    if (
+      params.action === "take_control" &&
+      !this.options.transport &&
+      !(binding.host.host === "node" && binding.host.environmentId)
+    ) {
+      throw new Error("take_control is only available for an attached or session desktop");
+    }
+    const providerAction = params.action === "take_control" ? "screenshot" : params.action;
+    if (!advertisedActions.includes(providerAction)) {
+      throw new Error(
+        `${COMPUTER_CONTRACT_MISMATCH}: computer ${targetKey} does not advertise action ${params.action}`,
       );
     }
     validateCapabilityBoundInput({
-      action: params.action,
+      action: providerAction,
       input: params.input,
-      nodeId,
+      targetKey,
       capabilities,
       observationState: this.observationState,
     });
-    if (this.heldButtonTarget && nodeId !== this.heldButtonTarget.nodeId) {
+    if (this.heldButtonTarget && targetKey !== computerHostKey(this.heldButtonTarget)) {
+      const heldHost =
+        this.heldButtonTarget.host === "gateway"
+          ? "Gateway"
+          : `node ${this.heldButtonTarget.nodeId}`;
       throw new Error(
-        `computer: left button may still be held on node ${this.heldButtonTarget.nodeId}; ` +
-          "release it before targeting another node",
+        `computer: left button may still be held on ${heldHost}; ` +
+          "release it before targeting another computer",
       );
     }
     if (
@@ -414,17 +399,18 @@ export class ComputerToolSession {
           "release it before targeting another screen",
       );
     }
-    const targetForNode = priorTarget?.nodeId === nodeId ? priorTarget : undefined;
+    const targetForHost =
+      priorTarget && computerHostKey(priorTarget) === targetKey ? priorTarget : undefined;
     const frame =
       this.computerState.kind === "frame" &&
-      this.computerState.target.nodeId === nodeId &&
+      computerHostKey(this.computerState.target) === targetKey &&
       this.computerState.contextEpoch === (this.options.contextEpoch?.value ?? 0)
         ? this.computerState
         : undefined;
     if (needsFrame && !frame) {
       throw new Error(
-        "computer: no screenshot of this node has been taken yet, so there is no display frame to " +
-          "target. Take a `screenshot` first (of this node) before issuing coordinate actions.",
+        "computer: no screenshot of this computer has been taken yet, so there is no display frame to " +
+          "target. Take a `screenshot` first (of this computer) before issuing coordinate actions.",
       );
     }
     if (
@@ -443,9 +429,34 @@ export class ComputerToolSession {
       explicitScreenIndex ??
       frame?.target.screenIndex ??
       this.heldButtonTarget?.screenIndex ??
-      targetForNode?.screenIndex ??
+      targetForHost?.screenIndex ??
       0;
-    return { target: { nodeId, screenIndex }, frame, capabilities };
+    return { target: { ...binding.host, screenIndex }, frame, capabilities };
+  }
+
+  async takeControl(
+    resolved: ResolvedComputerTarget,
+    toolCallId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.assertOpen();
+    signal?.throwIfAborted();
+    // Human input invalidates both coordinate frames and targeted observation refs.
+    // Clear before dispatch, including uncertain failures, so no old target is reused.
+    this.setTarget(resolved.target);
+    this.observationState = undefined;
+    const binding = this.executionTargets.get(computerHostKey(resolved.target))!;
+    await binding.invoke({
+      command: COMPUTER_ACT_COMMAND,
+      commandParams: { action: "__take_control", executionId: this.options.executionId },
+      idempotencyKey: nodeToolIdempotencyKey({
+        command: COMPUTER_ACT_COMMAND,
+        scope: this.options.idempotencyScope,
+        toolCallId,
+      }),
+      signal,
+    });
+    signal?.throwIfAborted();
   }
 
   async captureScreenshot(
@@ -463,24 +474,58 @@ export class ComputerToolSession {
       format: "jpeg",
     };
     try {
-      const payload = await this.executionNodes.get(resolved.target.nodeId)!.invoke({
-        nodeId: resolved.target.nodeId,
-        command: SCREEN_SNAPSHOT_COMMAND,
-        commandParams,
-        signal,
-      });
+      const capture = (binding: ComputerBinding) =>
+        binding.invoke({
+          command: SCREEN_SNAPSHOT_COMMAND,
+          commandParams,
+          signal,
+        });
+      const targetKey = computerHostKey(resolved.target);
+      const binding = this.executionTargets.get(targetKey)!;
+      let payload: unknown;
+      try {
+        payload = await capture(binding);
+      } catch (error) {
+        if (
+          binding.host.host !== "gateway" ||
+          !(error instanceof Error) ||
+          !/^(?:Error: )?COMPUTER_STALE_OBSERVATION:/.test(error.message)
+        ) {
+          throw error;
+        }
+        // Only a fresh screen read can reopen the same Gateway after native retirement.
+        this.setTarget(resolved.target);
+        this.observationState = undefined;
+        this.assertOpen();
+        signal?.throwIfAborted();
+        const refreshed = await resolveComputerBinding({
+          executionId: this.options.executionId,
+          target: "gateway",
+          gatewayOpts: binding.gatewayOpts,
+          signal,
+        });
+        this.cleanupBindings.add(binding);
+        this.executionTargets.set(targetKey, refreshed);
+        this.assertOpen();
+        signal?.throwIfAborted();
+        this.bindCapabilities(refreshed);
+        if (
+          binding.capabilities?.provider.generation !== refreshed.capabilities?.provider.generation
+        ) {
+          this.heldButtonTarget = undefined;
+        }
+        payload = await capture(refreshed);
+      }
       const parsed = parseScreenSnapshotResult(payload);
       if (!parsed.displayFrameId) {
         throw new Error(
-          "screen.snapshot response missing displayFrameId; update the node app before computer use",
+          "screen.snapshot response missing displayFrameId; update the computer provider before computer use",
         );
       }
       return {
         base64: parsed.base64,
         displayFrameId: parsed.displayFrameId,
         mimeType: imageMimeFromFormat(parsed.format) ?? "image/jpeg",
-        width: parsed.width,
-        height: parsed.height,
       };
     } catch (error) {
       this.setTarget(resolved.target);
@@ -492,6 +537,7 @@ export class ComputerToolSession {
     resolved: ResolvedComputerTarget;
     wireParams: ComputerActParams;
     toolCallId: string;
+    purpose?: "follow-up-observation";
     signal?: AbortSignal;
   }): Promise<ComputerActResult> {
     this.assertOpen();
@@ -528,20 +574,25 @@ export class ComputerToolSession {
       }
     }
     this.prepareScreenshotTarget(params.resolved.target);
+    if (params.purpose === "follow-up-observation") {
+      // Input may have changed the window. A failed refresh must not leave its old refs usable.
+      this.observationState = undefined;
+    }
     if (params.wireParams.action === "left_mouse_down") {
       this.heldButtonTarget = params.resolved.target;
     }
     let actResult: ComputerActResult;
     try {
       actResult = parseComputerActPayload(
-        await this.executionNodes.get(params.resolved.target.nodeId)!.invoke({
-          nodeId: params.resolved.target.nodeId,
+        await this.executionTargets.get(computerHostKey(params.resolved.target))!.invoke({
           command: COMPUTER_ACT_COMMAND,
           commandParams,
           timeoutMs: invokeTimeoutMs,
-          idempotencyKey: computerActIdempotencyKey({
+          idempotencyKey: nodeToolIdempotencyKey({
+            command: COMPUTER_ACT_COMMAND,
             scope: this.options.idempotencyScope,
             toolCallId: params.toolCallId,
+            purpose: params.purpose,
           }),
           signal: params.signal,
         }),
@@ -572,31 +623,34 @@ export class ComputerToolSession {
       .getOperationQueue()
       .catch(() => {})
       .then(async () => {
-        const nodes = [...this.executionNodes.entries()];
-        this.executionNodes.clear();
+        // Distinct preparations can share a host; only identical bindings share cleanup.
+        const targets = [...new Set([...this.executionTargets.values(), ...this.cleanupBindings])];
+        this.executionTargets.clear();
+        this.cleanupBindings.clear();
         const results = await Promise.allSettled(
-          nodes.map(async ([nodeId, transport]) => {
-            await transport.invoke({
-              nodeId,
+          targets.map(async (binding) => {
+            await binding.invoke({
               command: COMPUTER_ACT_COMMAND,
               commandParams: {
                 action: "__close_execution",
                 executionId: this.options.executionId,
                 reason,
               },
-              idempotencyKey: `computer.close:${this.options.executionId}:${nodeId}`,
+              idempotencyKey: `computer.close:${this.options.executionId}:${computerHostKey(binding.host)}`,
             });
           }),
         );
         // Ordinary paired nodes can disconnect during best-effort cleanup.
         // A bound session owner must observe cleanup failure before acknowledging its turn.
-        if (this.options.transport) {
-          const failures = results.flatMap((result) =>
-            result.status === "rejected" ? [result.reason] : [],
-          );
-          if (failures.length > 0) {
-            throw new AggregateError(failures, "computer: session desktop cleanup failed");
-          }
+        const ownsCleanup = (binding: ComputerBinding | undefined) =>
+          this.options.transport ||
+          binding?.host.host === "gateway" ||
+          (binding?.host.host === "node" && binding.host.environmentId !== undefined);
+        const failures = results.flatMap((result, index) =>
+          result.status === "rejected" && ownsCleanup(targets[index]) ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "computer: session desktop cleanup failed");
         }
       });
     return await this.disposePromise;

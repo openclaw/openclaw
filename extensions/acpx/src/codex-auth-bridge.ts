@@ -7,8 +7,9 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { tryReadJson } from "@openclaw/fs-safe/json";
 import { isRecord as isConfigRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   parse as parseToml,
   stringify as stringifyToml,
@@ -84,11 +85,8 @@ async function resolveInstalledAcpPackageBinPath(
 ): Promise<string | undefined> {
   try {
     const packageJsonPath = requireFromHere.resolve(`${packageName}/package.json`);
-    const { value: manifest } = await readJsonFileWithFallback<PackageManifest>(
-      packageJsonPath,
-      {},
-    );
-    if (manifest.name !== packageName) {
+    const manifest = await tryReadJson<PackageManifest>(packageJsonPath);
+    if (manifest?.name !== packageName) {
       return undefined;
     }
     const binPath = resolvePackageBinPath(packageJsonPath, manifest, binName);
@@ -100,16 +98,6 @@ async function resolveInstalledAcpPackageBinPath(
   } catch {
     return undefined;
   }
-}
-
-async function resolveInstalledCodexAcpBinPath(): Promise<string | undefined> {
-  // Keep OpenClaw's isolated CODEX_HOME wrapper, but launch the plugin-local
-  // Codex ACP adapter when the package dependency is available.
-  return await resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN);
-}
-
-async function resolveInstalledClaudeAcpBinPath(): Promise<string | undefined> {
-  return await resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN);
 }
 
 type DiagnosticRedactionRuleSpec = {
@@ -225,10 +213,6 @@ const DIAGNOSTIC_REDACTION_RULES: DiagnosticRedactionRuleSpec[] = [
   },
 ];
 
-function renderDiagnosticRedactionRuleSpecs(): string {
-  return JSON.stringify(DIAGNOSTIC_REDACTION_RULES);
-}
-
 function buildAdapterWrapperScript(params: {
   displayName: string;
   packageSpec: string;
@@ -296,7 +280,7 @@ function resolveStderrLogPath(args) {
   return fileURLToPath(new URL("./" + fileName, import.meta.url));
 }
 
-const diagnosticRedactionRules = ${renderDiagnosticRedactionRuleSpecs()}.map((rule) => [
+const diagnosticRedactionRules = ${JSON.stringify(DIAGNOSTIC_REDACTION_RULES)}.map((rule) => [
   new RegExp(rule.source, rule.flags),
   rule.replacement,
 ]);
@@ -452,7 +436,9 @@ const npmCliPath = resolveNpmCliPath();
 const installedBinPath = ${params.installedBinPath ? JSON.stringify(params.installedBinPath) : "undefined"};
 let defaultCommand;
 let defaultArgs;
-if (installedBinPath) {
+// Plugin capture/install directories are disposable: a durable wrapper can
+// outlive the path it captured, so re-check the target before trusting it.
+if (installedBinPath && existsSync(installedBinPath)) {
   defaultCommand = process.execPath;
   defaultArgs = [installedBinPath];
 } else if (npmCliPath) {
@@ -717,31 +703,21 @@ async function prepareIsolatedCodexHome(params: {
   return codexHome;
 }
 
-async function makeGeneratedWrapperExecutableIfPossible(wrapperPath: string): Promise<void> {
+async function writeAdapterWrapper(
+  baseDir: string,
+  fileName: string,
+  script: string,
+): Promise<string> {
+  await fs.mkdir(baseDir, { recursive: true });
+  const wrapperPath = path.join(baseDir, fileName);
+  await fs.writeFile(wrapperPath, script, {
+    encoding: "utf8",
+  });
   try {
     await fs.chmod(wrapperPath, 0o755);
   } catch {
     // The wrapper is invoked via `node wrapper.mjs`; executable mode is only a convenience.
   }
-}
-
-async function writeCodexAcpWrapper(baseDir: string, installedBinPath?: string): Promise<string> {
-  await fs.mkdir(baseDir, { recursive: true });
-  const wrapperPath = path.join(baseDir, "codex-acp-wrapper.mjs");
-  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(installedBinPath), {
-    encoding: "utf8",
-  });
-  await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
-  return wrapperPath;
-}
-
-async function writeClaudeAcpWrapper(baseDir: string, installedBinPath?: string): Promise<string> {
-  await fs.mkdir(baseDir, { recursive: true });
-  const wrapperPath = path.join(baseDir, "claude-agent-acp-wrapper.mjs");
-  await fs.writeFile(wrapperPath, buildClaudeAcpWrapperScript(installedBinPath), {
-    encoding: "utf8",
-  });
-  await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
   return wrapperPath;
 }
 
@@ -750,14 +726,12 @@ function buildWrapperCommand(wrapperPath: string, args: string[] = []): string[]
 }
 
 function isAcpPackageSpec(value: string, packageName: string): boolean {
-  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escapedPackageName}(?:@.+)?$`, "i").test(value.trim());
+  return new RegExp(`^${escapeRegExp(packageName)}(?:@.+)?$`, "i").test(value.trim());
 }
 
 function isAcpBinName(value: string, binName: string): boolean {
   const commandName = basename(value);
-  const escapedBinName = binName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escapedBinName}(?:\\.exe|\\.[cm]?js)?$`, "i").test(commandName);
+  return new RegExp(`^${escapeRegExp(binName)}(?:\\.exe|\\.[cm]?js)?$`, "i").test(commandName);
 }
 
 function isPackageRunnerCommand(value: string): boolean {
@@ -908,20 +882,6 @@ function resolveCodexAdapterLaunch(
   return { args: maintainedAdapterArgs };
 }
 
-function buildCodexAcpWrapperCommand(
-  wrapperPath: string,
-  configuredCommand?: AcpxAgentCommand,
-): string[] {
-  const launch = resolveCodexAdapterLaunch(configuredCommand);
-  if (launch) {
-    return buildWrapperCommand(wrapperPath, launch.args);
-  }
-  return buildWrapperCommand(wrapperPath, [
-    RUN_CONFIGURED_COMMAND_SENTINEL,
-    ...splitCommandParts(configuredCommand ?? []),
-  ]);
-}
-
 async function persistMigratedCodexMcpConfig(params: {
   codexHome: string;
   migratedConfig: Record<string, unknown> | undefined;
@@ -955,11 +915,9 @@ function buildClaudeAcpWrapperCommand(
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;
-  logger?: unknown;
   resolveInstalledCodexAcpBinPath?: () => Promise<string | undefined>;
   resolveInstalledClaudeAcpBinPath?: () => Promise<string | undefined>;
 }): Promise<ResolvedAcpxPluginConfig> {
-  void params.logger;
   const codexBaseDir = path.join(params.stateDir, "acpx");
   const configuredCodexCommand = params.pluginConfig.agents.codex;
   const configuredClaudeCommand = params.pluginConfig.agents.claude;
@@ -972,20 +930,34 @@ export async function prepareAcpxCodexAuthConfig(params: {
     codexHome,
     migratedConfig: codexLaunch?.migratedConfig,
   });
-  const installedCodexBinPath = await (
-    params.resolveInstalledCodexAcpBinPath ?? resolveInstalledCodexAcpBinPath
-  )();
-  const installedClaudeBinPath = await (
-    params.resolveInstalledClaudeAcpBinPath ?? resolveInstalledClaudeAcpBinPath
-  )();
-  const wrapperPath = await writeCodexAcpWrapper(codexBaseDir, installedCodexBinPath);
-  const claudeWrapperPath = await writeClaudeAcpWrapper(codexBaseDir, installedClaudeBinPath);
+  const installedCodexBinPath = await (params.resolveInstalledCodexAcpBinPath
+    ? params.resolveInstalledCodexAcpBinPath()
+    : resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN));
+  const installedClaudeBinPath = await (params.resolveInstalledClaudeAcpBinPath
+    ? params.resolveInstalledClaudeAcpBinPath()
+    : resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN));
+  const wrapperPath = await writeAdapterWrapper(
+    codexBaseDir,
+    "codex-acp-wrapper.mjs",
+    buildCodexAcpWrapperScript(installedCodexBinPath),
+  );
+  const claudeWrapperPath = await writeAdapterWrapper(
+    codexBaseDir,
+    "claude-agent-acp-wrapper.mjs",
+    buildClaudeAcpWrapperScript(installedClaudeBinPath),
+  );
 
   return {
     ...params.pluginConfig,
     agents: {
       ...params.pluginConfig.agents,
-      codex: buildCodexAcpWrapperCommand(wrapperPath, configuredCodexCommand),
+      codex: buildWrapperCommand(
+        wrapperPath,
+        codexLaunch?.args ?? [
+          RUN_CONFIGURED_COMMAND_SENTINEL,
+          ...splitCommandParts(configuredCodexCommand ?? []),
+        ],
+      ),
       claude: buildClaudeAcpWrapperCommand(claudeWrapperPath, configuredClaudeCommand),
     },
   };

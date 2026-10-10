@@ -1,23 +1,59 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-// Agent model selection staged against the runtime config form, split out of
-// agents-page.ts to keep that page inside the TS LOC ratchet.
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  resolveAgentConfig,
-  resolveEffectiveModelFallbacks,
-  resolveModelPrimary,
-} from "../../lib/agents/display.ts";
-import {
-  currentConfigObject,
-  type AgentConfigEntryTarget,
-} from "../../lib/config/config-state-model.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
-function modelEntry(target: AgentConfigEntryTarget) {
+export function createAgentModelActions(params: {
+  getRuntimeConfig: () => RuntimeConfig;
+  canUpdate: (agentId: string) => boolean;
+  onPrimaryChanged: () => void;
+}) {
   return {
-    path: [...target.path, "model"] as Array<string | number>,
-    existing: target.entry.model,
+    onModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: Boolean(modelId) });
+        if (target) {
+          // Clearing the primary must preserve authored agent fallbacks.
+          stageModelShape(
+            runtimeConfig,
+            [...target.path, "model"],
+            modelId,
+            existingModelParts(target.entry.model).fallbacks,
+          );
+        }
+        params.onPrimaryChanged();
+      }
+    },
+    onDecisionModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: modelId !== null });
+        if (target) {
+          const path = [...target.path, "decisionModel"];
+          // Null inherits; an empty string explicitly disables the per-agent model.
+          if (modelId === null) {
+            runtimeConfig.removeFormValue(path);
+          } else {
+            runtimeConfig.patchForm(path, modelId);
+          }
+        }
+      }
+    },
+    onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
+      if (params.canUpdate(agentId)) {
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: true });
+        if (target) {
+          stageModelShape(
+            runtimeConfig,
+            [...target.path, "model"],
+            existingModelParts(target.entry.model).primary,
+            normalizeStringEntries(fallbacks),
+          );
+        }
+      }
+    },
   };
 }
 
@@ -31,14 +67,13 @@ function stageModelShape(
   primary: string | null,
   fallbacks: string[] | null,
 ) {
-  if (primary && fallbacks) {
-    runtimeConfig.patchForm(path, { primary, fallbacks });
-  } else if (primary) {
-    runtimeConfig.patchForm(path, primary);
-  } else if (fallbacks) {
-    runtimeConfig.patchForm(path, { fallbacks });
-  } else {
+  if (!primary && !fallbacks) {
     runtimeConfig.removeFormValue(path);
+  } else {
+    runtimeConfig.patchForm(
+      path,
+      primary && fallbacks ? { primary, fallbacks } : primary || { fallbacks },
+    );
   }
 }
 
@@ -57,47 +92,4 @@ function existingModelParts(existing: unknown): {
     };
   }
   return { primary: null, fallbacks: null };
-}
-
-/** Stage a primary-model change; clearing falls back to the inherited default. */
-export function stageAgentPrimaryModel(
-  runtimeConfig: RuntimeConfig,
-  agentId: string,
-  modelId: string | null,
-) {
-  const target = runtimeConfig.agentEntry(agentId, { ensure: Boolean(modelId) });
-  if (!target) {
-    return;
-  }
-  const entry = modelEntry(target);
-  // Clearing the primary must not delete authored agent fallbacks: the
-  // { fallbacks }-only shape stays representable.
-  stageModelShape(runtimeConfig, entry.path, modelId, existingModelParts(entry.existing).fallbacks);
-}
-
-/** Stage fallback-list edits, preserving the effective primary model shape. */
-export function stageAgentModelFallbacks(
-  runtimeConfig: RuntimeConfig,
-  agentId: string,
-  fallbacks: string[],
-) {
-  const config = currentConfigObject(runtimeConfig.state);
-  const normalized = normalizeStringEntries(fallbacks);
-  const resolved = resolveAgentConfig(config, agentId);
-  const effective = resolveEffectiveModelFallbacks(resolved.entry?.model, resolved.defaults?.model);
-  const existingTarget = runtimeConfig.agentEntry(agentId);
-  const mustWrite = normalized.length > 0 || (effective?.length ?? 0) > 0 || existingTarget;
-  const target = mustWrite
-    ? (existingTarget ?? runtimeConfig.agentEntry(agentId, { ensure: true }))
-    : null;
-  if (!target) {
-    return;
-  }
-  const entry = modelEntry(target);
-  const primary =
-    existingModelParts(entry.existing).primary ??
-    resolveModelPrimary(resolved.entry?.model) ??
-    resolveModelPrimary(resolved.defaults?.model) ??
-    null;
-  stageModelShape(runtimeConfig, entry.path, primary, normalized.length > 0 ? normalized : null);
 }

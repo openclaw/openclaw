@@ -6,11 +6,8 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import {
-  loadAuthProfileStoreForRuntime,
-  loadAuthProfileStoreWithoutExternalProfiles,
-  resolvePersistedAuthProfileOwnerAgentDir,
-} from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "../agents/auth-profiles/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -18,7 +15,7 @@ import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./docto
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-const cliCredentials = vi.hoisted(() => ({ readCodex: vi.fn() }));
+const cliCredentials = vi.hoisted(() => ({ readCodex: vi.fn(), readMiniMax: vi.fn() }));
 const refreshProfile = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
@@ -26,66 +23,26 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
 }));
 vi.mock("../agents/cli-credentials.js", () => ({
   readCodexCliCredentialsCached: cliCredentials.readCodex,
-  readMiniMaxCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: cliCredentials.readMiniMax,
 }));
 
 afterEach(() => {
   vi.clearAllMocks();
   cliCredentials.readCodex.mockReset();
+  cliCredentials.readMiniMax.mockReset();
 });
 
+function createFleetConfig(): OpenClawConfig {
+  return {
+    agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    plugins: { enabled: false },
+  };
+}
+
 describe("Doctor shared auth health", () => {
-  it("reports shared OAuth expiry for an explicit fleet without local profiles", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-doctor-shared-health-" }, async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-        plugins: { enabled: false },
-      };
-      await state.writeConfig(cfg);
-      const profileId = "diagnostic-provider:shared";
-      const store = {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth" as const,
-            provider: "diagnostic-provider",
-            access: "synthetic-access",
-            refresh: "synthetic-refresh",
-            expires: Date.now() - 60_000,
-          },
-        },
-      };
-      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-      writePersistedAuthProfileStoreRaw(store);
-      const sharedPath = resolveSharedAuthStorePath();
-      const prompter = createDoctorPrompter({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        options: { nonInteractive: true },
-      });
-
-      const findings = await collectAuthProfileHealthFindings({ cfg });
-      await noteAuthProfileHealth({ cfg, prompter, allowKeychainPrompt: false });
-
-      expect.soft(findings).toEqual([
-        expect.objectContaining({
-          target: profileId,
-          path: sharedPath,
-          message: expect.stringContaining("expired"),
-        }),
-      ]);
-      expect
-        .soft(vi.mocked(note).mock.calls)
-        .toEqual([[expect.stringContaining(`${profileId}: expired`), "Model auth"]]);
-      expect(loadAuthProfileStoreWithoutExternalProfiles().profiles).toEqual(store.profiles);
-    });
-  });
-
   it("keeps inherited-profile recovery guidance local without duplicating shared expiry", async () => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-auth-owners-" }, async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-        plugins: { enabled: false },
-      };
+      const cfg = createFleetConfig();
       await state.writeConfig(cfg);
       const profileId = "diagnostic-provider:shared";
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
@@ -114,6 +71,7 @@ describe("Doctor shared auth health", () => {
       );
 
       const findings = await collectAuthProfileHealthFindings({ cfg });
+      expect(refreshProfile).not.toHaveBeenCalled();
       expect.soft(findings).toEqual([
         expect.objectContaining({
           target: profileId,
@@ -145,12 +103,9 @@ describe("Doctor shared auth health", () => {
     });
   });
 
-  it("preserves external CLI overlays when checking an agent-local auth store", async () => {
+  it("reports a missing host profile without importing the native Codex account", async () => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-cli-auth-" }, async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-        plugins: { enabled: false },
-      };
+      const cfg = createFleetConfig();
       await state.writeConfig(cfg);
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       writePersistedAuthProfileStoreRaw(
@@ -168,10 +123,14 @@ describe("Doctor shared auth health", () => {
         expires: Date.now() + 7 * 86_400_000,
       });
 
-      expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([]);
-      expect(cliCredentials.readCodex).toHaveBeenCalledWith(
-        expect.objectContaining({ allowKeychainPrompt: false }),
-      );
+      expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([
+        expect.objectContaining({
+          target: "openai:default",
+          requirement: "missing_credential",
+          fixHint: expect.stringContaining("openclaw models auth login --provider openai"),
+        }),
+      ]);
+      expect(cliCredentials.readCodex).not.toHaveBeenCalled();
     });
   });
 
@@ -181,10 +140,7 @@ describe("Doctor shared auth health", () => {
     { name: "distinct local account", sharedExpired: false, sameAccount: false, owner: "local" },
   ])("respects canonical OAuth ownership for $name credentials", async (scenario) => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-oauth-owner-" }, async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-        plugins: { enabled: false },
-      };
+      const cfg = createFleetConfig();
       await state.writeConfig(cfg);
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       const profileId = "diagnostic-provider:shared";

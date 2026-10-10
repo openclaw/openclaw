@@ -16,31 +16,40 @@ type CliMessagingDeliveryEvidence = Pick<
   | "messagingToolSourceReplyPayloads"
 >;
 
+export function projectCliMessagingDeliveryEvidence(
+  output: CliMessagingDeliveryEvidence,
+  snapshot = false,
+): CliMessagingDeliveryEvidence {
+  const evidence: CliMessagingDeliveryEvidence = {};
+  for (const key of [
+    "didSendViaMessagingTool",
+    "didDeliverSourceReplyViaMessageTool",
+    "sourceReplyDelivered",
+  ] as const) {
+    if (output[key]) {
+      evidence[key] = true;
+    }
+  }
+  for (const key of [
+    "messagingToolSentTexts",
+    "messagingToolSentMediaUrls",
+    "messagingToolSentTargets",
+    "messagingToolSourceReplyPayloads",
+  ] as const) {
+    const values = output[key];
+    if (values?.length) {
+      Object.assign(evidence, { [key]: snapshot ? values.slice() : values });
+    }
+  }
+  return evidence;
+}
+
 function snapshotCliMessagingDeliveryEvidence(
   output: CliMessagingDeliveryEvidence,
 ): CliMessagingDeliveryEvidence | undefined {
-  if (output.didSendViaMessagingTool !== true) {
-    return undefined;
-  }
-  return {
-    didSendViaMessagingTool: true,
-    ...(output.didDeliverSourceReplyViaMessageTool
-      ? { didDeliverSourceReplyViaMessageTool: true }
-      : {}),
-    ...(output.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
-    ...(output.messagingToolSentTexts?.length
-      ? { messagingToolSentTexts: output.messagingToolSentTexts.slice() }
-      : {}),
-    ...(output.messagingToolSentMediaUrls?.length
-      ? { messagingToolSentMediaUrls: output.messagingToolSentMediaUrls.slice() }
-      : {}),
-    ...(output.messagingToolSentTargets?.length
-      ? { messagingToolSentTargets: output.messagingToolSentTargets.slice() }
-      : {}),
-    ...(output.messagingToolSourceReplyPayloads?.length
-      ? { messagingToolSourceReplyPayloads: output.messagingToolSourceReplyPayloads.slice() }
-      : {}),
-  };
+  return output.didSendViaMessagingTool === true
+    ? projectCliMessagingDeliveryEvidence(output, true)
+    : undefined;
 }
 
 /** Attaches confirmed delivery evidence so caller retries cannot duplicate a visible send. */

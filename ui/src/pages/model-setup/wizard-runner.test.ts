@@ -1,9 +1,261 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, GatewayBrowserClient } from "../../api/gateway.ts";
+import type { WizardNextResult } from "../../api/types.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 
+type RunnerOptions = ConstructorParameters<typeof ModelSetupWizardRunner>[0];
+
+function createRunner(options: Pick<RunnerOptions, "getClient"> & Partial<RunnerOptions>) {
+  return new ModelSetupWizardRunner({
+    getAgentId: () => null,
+    onChange: () => undefined,
+    requestFailedMessage: () => "failed",
+    cancelledMessage: () => "cancelled",
+    sessionExpiredMessage: () => "expired",
+    gatewayNotRespondingMessage: () => "not responding",
+    ...options,
+  });
+}
+
 describe("ModelSetupWizardRunner", () => {
+  it("cleans a late MCP admission on the captured client without replaying or selecting an agent", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000001";
+    const generateUUID = vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);
+    const admission = createDeferred<WizardNextResult>();
+    const original = new GatewayBrowserClient({ url: "ws://gateway-a.example.test" });
+    const replacement = new GatewayBrowserClient({ url: "ws://gateway-b.example.test" });
+    const originalRequest = vi
+      .spyOn(original, "request")
+      .mockReturnValueOnce(admission.promise)
+      .mockResolvedValue({ status: "cancelled" });
+    const replacementRequest = vi.spyOn(replacement, "request");
+    let client = original;
+    const getAgentId = vi.fn(() => "selected-agent");
+    const onStart = vi.fn();
+    const runner = createRunner({ getClient: () => client, getAgentId, onStart });
+    try {
+      const start = runner.startMcpLogin("docs");
+      expect(originalRequest).toHaveBeenCalledWith(
+        "mcp.authLogin",
+        { sessionId, serverName: "docs" },
+        { timeoutMs: null },
+      );
+      expect(getAgentId).not.toHaveBeenCalled();
+      expect(onStart).toHaveBeenCalledWith("mcp.authLogin", undefined);
+
+      client = replacement;
+      await runner.cancel();
+      const cancellation = originalRequest.mock.calls[1];
+      expect(cancellation).toEqual([
+        "wizard.cancel",
+        { sessionId, closeInput: true },
+        { timeoutMs: 30_000 },
+      ]);
+      admission.resolve({ done: false, status: "running" });
+      await expect(start).resolves.toBeNull();
+      expect(originalRequest).toHaveBeenCalledTimes(3);
+      expect(originalRequest.mock.calls[2]).toEqual(cancellation);
+      expect(replacementRequest).not.toHaveBeenCalled();
+      expect(runner.state).toEqual({ phase: "idle" });
+    } finally {
+      admission.resolve({ done: true, status: "cancelled" });
+      await runner.cancel();
+      originalRequest.mockRestore();
+      replacementRequest.mockRestore();
+      generateUUID.mockRestore();
+    }
+  });
+
+  it.each(["cancelled", "failed"] as const)(
+    "shares an in-flight explicit cancellation with teardown when it is %s",
+    async (outcome) => {
+      const pending = createDeferred<unknown>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "openclaw.setup.auth.start") {
+          return { done: false, status: "running" };
+        }
+        if (method === "wizard.cancel") {
+          return await pending.promise;
+        }
+        return { done: false, status: "running", step: { id: "key", type: "text" } };
+      });
+      const terminal = vi.fn();
+      const runner = createRunner({
+        getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+        getAgentId: () => "main",
+        onStart: () => terminal,
+      });
+      await runner.start("provider-auth");
+      const explicit = runner.requestCancellation();
+      const teardown = runner.cancel();
+      const callsBeforeAcknowledgment = request.mock.calls.filter(
+        ([method]) => method === "wizard.cancel",
+      );
+      if (outcome === "failed") {
+        pending.reject(new Error("Cancellation transport disconnected"));
+      } else {
+        pending.resolve({ status: "cancelled" });
+      }
+      await expect(Promise.all([explicit, teardown])).resolves.toEqual([undefined, undefined]);
+      expect(callsBeforeAcknowledgment).toHaveLength(1);
+      expect(runner.state).toEqual({ phase: "idle" });
+      expect(terminal).toHaveBeenCalledTimes(outcome === "cancelled" ? 1 : 0);
+    },
+  );
+
+  it("cancels independently after transport rebind and retries settled cancellation attempts", async () => {
+    const oldCancellation = createDeferred<unknown>();
+    const originalRequest = vi.fn(async (method: string) => {
+      if (method === "openclaw.setup.auth.start") {
+        return { done: false, status: "running" };
+      }
+      if (method === "wizard.cancel") {
+        return await oldCancellation.promise;
+      }
+      return { done: false, status: "running", step: { id: "key", type: "text" } };
+    });
+    let cancellations = 0;
+    const replacementRequest = vi.fn(async (method: string) => {
+      if (method === "wizard.next") {
+        return { done: false, status: "running", step: { id: "key", type: "text" } };
+      }
+      if (method === "wizard.cancel") {
+        cancellations += 1;
+        if (cancellations === 1) {
+          return { status: "running" };
+        }
+        if (cancellations === 2) {
+          throw new Error("Cancellation transport disconnected");
+        }
+        return { status: "cancelled" };
+      }
+      throw new Error(`Unexpected wizard request: ${method}`);
+    });
+    let client = { request: originalRequest } as unknown as GatewayBrowserClient;
+    const terminal = vi.fn();
+    const runner = createRunner({
+      getClient: () => client,
+      getAgentId: () => "main",
+      onStart: () => terminal,
+    });
+    await runner.start("provider-auth");
+    const pending = runner.requestCancellation();
+    runner.suspend();
+    client = { request: replacementRequest } as unknown as GatewayBrowserClient;
+    await runner.resume();
+    await expect(runner.requestCancellation()).resolves.toBe("running");
+    await expect(runner.requestCancellation()).rejects.toThrow(
+      "Cancellation transport disconnected",
+    );
+    expect(runner.state).toMatchObject({ phase: "step", authChoice: "provider-auth" });
+    await expect(runner.requestCancellation()).resolves.toBe("cancelled");
+    expect(cancellations).toBe(3);
+    expect(terminal).toHaveBeenCalledExactlyOnceWith({ done: true, status: "cancelled" });
+    oldCancellation.resolve({ status: "cancelled" });
+    await expect(pending).resolves.toBeUndefined();
+    expect(terminal).toHaveBeenCalledOnce();
+    expect(runner.state).toEqual({ phase: "idle" });
+    expect(
+      originalRequest.mock.calls.filter(([method]) => method === "wizard.cancel"),
+    ).toHaveLength(1);
+    expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
+      "wizard.next",
+      "wizard.cancel",
+      "wizard.cancel",
+      "wizard.cancel",
+    ]);
+  });
+
+  it("ignores a retired owner's cancellation failure and keeps teardown best effort", async () => {
+    const failedCancel = createDeferred<unknown>();
+    let cancellations = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "openclaw.setup.auth.start") {
+        return { done: false, status: "running" };
+      }
+      if (method === "wizard.cancel") {
+        if (++cancellations === 1) {
+          return await failedCancel.promise;
+        }
+        throw new Error("Cleanup transport failed");
+      }
+      return { done: false, status: "running", step: { id: "key", type: "text" } };
+    });
+    const terminal = vi.fn();
+    const runner = createRunner({
+      getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+      getAgentId: () => "main",
+      onStart: () => terminal,
+    });
+    await runner.start("original");
+    const cancellation = runner.requestCancellation();
+    runner.close({ retireOwner: true });
+    await runner.start("replacement");
+    failedCancel.reject(new Error("Original transport failed"));
+    await expect(cancellation).resolves.toBeUndefined();
+    expect(runner.state).toMatchObject({ phase: "step", authChoice: "replacement" });
+    expect(terminal).not.toHaveBeenCalled();
+    await expect(runner.cancel()).resolves.toBeUndefined();
+    expect(runner.state).toEqual({ phase: "idle" });
+    expect(cancellations).toBe(2);
+  });
+
+  it.each(["late admission", "late terminal", "late cancellation"] as const)(
+    "retires detached %s authority before a client can represent another owner",
+    async (caseName) => {
+      const lateReply = createDeferred<WizardNextResult>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "openclaw.setup.auth.start") {
+          return caseName === "late admission"
+            ? await lateReply.promise
+            : { done: false, status: "running" };
+        }
+        if (method === "wizard.next") {
+          return caseName === "late terminal"
+            ? await lateReply.promise
+            : { done: false, status: "running", step: { id: "key", type: "text" } };
+        }
+        if (method === "wizard.cancel") {
+          return await lateReply.promise;
+        }
+        throw new Error(`Unexpected wizard request: ${method}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const onTerminal = vi.fn();
+      const runner = createRunner({
+        getClient: () => client,
+        getAgentId: () => "main",
+        onStart: () => onTerminal,
+      });
+      let pending: Promise<unknown> = runner.start("original-provider");
+      if (caseName === "late terminal") {
+        await vi.waitFor(() =>
+          expect(request.mock.calls.some(([method]) => method === "wizard.next")).toBe(true),
+        );
+      }
+      if (caseName === "late cancellation") {
+        await pending;
+        pending = runner.cancel();
+        await vi.waitFor(() =>
+          expect(request.mock.calls.some(([method]) => method === "wizard.cancel")).toBe(true),
+        );
+      }
+      runner.close({ retireOwner: true });
+      const requestsAtRetirement = request.mock.calls.length;
+      lateReply.resolve(
+        caseName === "late admission"
+          ? { done: false, status: "running" }
+          : { done: true, status: "cancelled" },
+      );
+      await pending;
+      expect(request).toHaveBeenCalledTimes(requestsAtRetirement);
+      expect(onTerminal).not.toHaveBeenCalled();
+      expect(runner.state).toEqual({ phase: "idle" });
+    },
+  );
+
   it.each(["cancelled", "error", "done"])(
     "binds cancellation to the original client and fences late %s after repeated resets",
     async (terminal) => {
@@ -32,14 +284,9 @@ describe("ModelSetupWizardRunner", () => {
       let client = { request: originalRequest } as unknown as GatewayBrowserClient;
       const originalTerminal = vi.fn();
       const replacementTerminal = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => client,
-        getAgentId: () => null,
-        onChange: () => undefined,
         onStart: vi.fn().mockReturnValueOnce(originalTerminal).mockReturnValue(replacementTerminal),
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
       await runner.start("original");
       const next = runner.answer("answer");
@@ -80,6 +327,94 @@ describe("ModelSetupWizardRunner", () => {
     },
   );
 
+  it("reconciles an interrupted answer without replaying it or cancelling the resumed wizard", async () => {
+    const interrupted = createDeferred<unknown>();
+    let nextCalls = 0;
+    const originalRequest = vi.fn(async (method: string) => {
+      if (method === "openclaw.setup.auth.start") {
+        return { done: false, status: "running" };
+      }
+      nextCalls += 1;
+      if (nextCalls === 1) {
+        return { done: false, status: "running", step: { id: "key", type: "text" } };
+      }
+      return interrupted.promise;
+    });
+    const replacementRequest = vi.fn(
+      async (_method: string, _params?: unknown, _options?: unknown) => ({
+        done: false,
+        status: "running",
+        step: { id: "model-review", type: "note" },
+      }),
+    );
+    let client = { request: originalRequest } as unknown as GatewayBrowserClient;
+    const terminal = vi.fn();
+    const runner = createRunner({
+      getClient: () => client,
+      getAgentId: () => "research",
+      onStart: () => terminal,
+    });
+    await runner.start("meta-api-key");
+    const answer = runner.answer("synthetic-key");
+    runner.suspend();
+    client = { request: replacementRequest } as unknown as GatewayBrowserClient;
+    await runner.resume();
+    expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
+      "wizard.next",
+      { sessionId: expect.any(String) },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    interrupted.resolve({ done: true, status: "cancelled" });
+    await answer;
+    expect(terminal).not.toHaveBeenCalled();
+    expect(runner.state).toMatchObject({
+      phase: "step",
+      authChoice: "meta-api-key",
+      step: { id: "model-review" },
+    });
+    expect(
+      originalRequest.mock.calls.filter(([method]) => method === "wizard.cancel"),
+    ).toHaveLength(0);
+  });
+
+  it("uses a terminal reply received while disconnected without repeating a Gateway request", async () => {
+    const terminalReply = createDeferred<unknown>();
+    let nextCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "openclaw.setup.auth.start") {
+        return { done: false, status: "running" };
+      }
+      if (++nextCalls === 1) {
+        return { done: false, status: "running", step: { id: "key", type: "text" } };
+      }
+      return terminalReply.promise;
+    });
+    const afterReconnect = vi.fn();
+    let client = { request } as unknown as GatewayBrowserClient;
+    const onTerminal = vi.fn();
+    const runner = createRunner({
+      getClient: () => client,
+      getAgentId: () => "research",
+      onStart: () => onTerminal,
+    });
+    await runner.start("meta-api-key");
+    const answer = runner.answer("synthetic-key");
+    runner.suspend();
+    terminalReply.resolve({
+      done: true,
+      status: "done",
+      modelActivation: { modelRef: "meta/fixture-model" },
+    });
+    await answer;
+    expect(onTerminal).not.toHaveBeenCalled();
+    client = { request: afterReconnect } as unknown as GatewayBrowserClient;
+    expect(await runner.resume()).toMatchObject({
+      modelActivation: { modelRef: "meta/fixture-model" },
+    });
+    expect(afterReconnect).not.toHaveBeenCalled();
+    expect(onTerminal).toHaveBeenCalledOnce();
+  });
+
   it("starts, advances an unbounded note step, and guards duplicate answers", async () => {
     let resolveDone: ((value: unknown) => void) | null = null;
     const request = vi.fn((method: string, _params?: unknown, _options?: unknown) => {
@@ -102,13 +437,9 @@ describe("ModelSetupWizardRunner", () => {
       return Promise.resolve({});
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
       getAgentId: () => "research",
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
@@ -132,7 +463,7 @@ describe("ModelSetupWizardRunner", () => {
     );
     resolveDone!({ done: true, status: "done" });
     await expect(answer).resolves.toEqual({ startMethod: "openclaw.setup.auth.start" });
-    expect(runner.state).toEqual({ phase: "done", authChoice: "openai-oauth" });
+    expect(runner.state).toEqual({ phase: "done" });
   });
 
   it("cancels the gateway wizard when advancing fails", async () => {
@@ -146,13 +477,8 @@ describe("ModelSetupWizardRunner", () => {
       return Promise.resolve({ ok: true });
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
@@ -167,51 +493,10 @@ describe("ModelSetupWizardRunner", () => {
     );
   });
 
-  it("uses the prepare start method with the shared wizard transport", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "openclaw.setup.prepare.start") {
-        return Promise.resolve({ sessionId: "prepare-session", done: false, status: "running" });
-      }
-      if (method === "wizard.next") {
-        return Promise.resolve({
-          done: false,
-          status: "running",
-          step: { id: "pull", type: "progress", message: "Pulling 25%" },
-        });
-      }
-      return Promise.resolve({});
-    });
-    const runner = new ModelSetupWizardRunner({
-      getClient: () => ({ request }) as unknown as GatewayBrowserClient,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
-    });
-
-    await runner.start("llama-cpp", "openclaw.setup.prepare.start");
-
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "openclaw.setup.prepare.start",
-      { sessionId: expect.any(String), authChoice: "llama-cpp" },
-      { timeoutMs: null },
-    );
-    expect(runner.state).toMatchObject({
-      phase: "step",
-      authChoice: "llama-cpp",
-      step: { type: "progress" },
-    });
-  });
-
   it.each([
     ["openclaw.setup.auth.start", "cancel"],
     ["openclaw.setup.auth.start", "settled cancel"],
     ["openclaw.setup.auth.start", "close"],
-    ["openclaw.setup.prepare.start", "cancel"],
-    ["openclaw.setup.prepare.start", "settled cancel"],
-    ["openclaw.setup.prepare.start", "close"],
   ] as const)(
     "releases a late %s session after %s so setup can restart",
     async (method, action) => {
@@ -263,14 +548,9 @@ describe("ModelSetupWizardRunner", () => {
       );
       const client = { request } as unknown as GatewayBrowserClient;
       const terminalResult = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => client,
-        getAgentId: () => null,
-        onChange: () => undefined,
         onStart: () => terminalResult,
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
 
       const firstStart = runner.start("original", method);
@@ -292,21 +572,16 @@ describe("ModelSetupWizardRunner", () => {
         { timeoutMs: 30_000 },
       );
       await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
-      expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+      expect(runner.state).toEqual({ phase: "done" });
     },
   );
 
   it.each([
     ["openclaw.setup.auth.start", "running"],
-    ["openclaw.setup.prepare.start", "running"],
     ["openclaw.setup.auth.start", "done"],
-    ["openclaw.setup.prepare.start", "done"],
     ["openclaw.setup.auth.start", "error"],
-    ["openclaw.setup.prepare.start", "error"],
     ["openclaw.setup.auth.start", "cancelled"],
-    ["openclaw.setup.prepare.start", "cancelled"],
     ["openclaw.setup.auth.start", "busy"],
-    ["openclaw.setup.prepare.start", "busy"],
   ] as const)(
     "retains late %s responses after the local deadline (status: %s)",
     async (method, status) => {
@@ -377,23 +652,15 @@ describe("ModelSetupWizardRunner", () => {
         );
         const client = { request } as unknown as GatewayBrowserClient;
         const terminalResult = vi.fn();
-        const runner = new ModelSetupWizardRunner({
+        const runner = createRunner({
           getClient: () => client,
-          getAgentId: () => null,
-          onChange: () => undefined,
           onStart: () => terminalResult,
-          requestFailedMessage: () => "failed",
-          cancelledMessage: () => "cancelled",
-          sessionExpiredMessage: () => "expired",
         });
 
         const timedOutStart = runner.start("original", method);
         await vi.advanceTimersByTimeAsync(30_000);
         await timedOutStart;
-        expect(runner.state).toEqual({
-          phase: "error",
-          message: `gateway request timed out after 30000ms: ${method}`,
-        });
+        expect(runner.state).toEqual({ phase: "error", message: "not responding" });
 
         resolveFirstStart();
         await vi.runAllTimersAsync();
@@ -409,7 +676,7 @@ describe("ModelSetupWizardRunner", () => {
 
         await runner.cancel();
         await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
-        expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+        expect(runner.state).toEqual({ phase: "done" });
       } finally {
         vi.useRealTimers();
       }
@@ -456,13 +723,8 @@ describe("ModelSetupWizardRunner", () => {
     const originalClient = { request: originalRequest } as unknown as GatewayBrowserClient;
     const replacementClient = { request: replacementRequest } as unknown as GatewayBrowserClient;
     let currentClient = originalClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => currentClient,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     const originalStart = runner.start("original");
@@ -484,14 +746,13 @@ describe("ModelSetupWizardRunner", () => {
   });
 
   it.each(
-    (["openclaw.setup.auth.start", "openclaw.setup.prepare.start"] as const).flatMap((method) =>
-      ["done", "busy"].flatMap((status) =>
-        ["open", "closed"].map((lifecycle) => ({ method, status, lifecycle })),
-      ),
+    ["done", "busy"].flatMap((status) =>
+      ["open", "closed"].map((lifecycle) => ({ status, lifecycle })),
     ),
   )(
-    "does not cancel a terminal $method $status result ($lifecycle presentation)",
-    async ({ method, status, lifecycle }) => {
+    "does not cancel a terminal $status result ($lifecycle presentation)",
+    async ({ status, lifecycle }) => {
+      const method = "openclaw.setup.auth.start";
       let resolveStart: () => void = () => {
         throw new Error("the setup request did not start");
       };
@@ -521,14 +782,9 @@ describe("ModelSetupWizardRunner", () => {
       });
       const client = { request } as unknown as GatewayBrowserClient;
       const terminalResult = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => client,
-        getAgentId: () => null,
-        onChange: () => undefined,
         onStart: () => terminalResult,
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
 
       const start = runner.start("original", method);
@@ -542,10 +798,11 @@ describe("ModelSetupWizardRunner", () => {
       expect(request.mock.calls.map(([requestMethod]) => requestMethod)).toEqual([method]);
       expect(runner.state).toEqual({ phase: "idle" });
       if (status === "busy") {
-        expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ done: true, status: "error", error: "Setup busy" }),
-          true,
-        );
+        expect(terminalResult).toHaveBeenCalledExactlyOnceWith({
+          done: true,
+          status: "not-admitted",
+          error: "Setup busy",
+        });
       } else if (lifecycle === "open") {
         expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ done: true, status: "done" }),
@@ -585,12 +842,8 @@ describe("ModelSetupWizardRunner", () => {
       },
     );
     const client = { request } as unknown as GatewayBrowserClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
       sessionExpiredMessage: () => "Setup expired. Close and restart setup.",
     });
 
@@ -640,17 +893,13 @@ describe("ModelSetupWizardRunner", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const seen: string[] = [];
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
-      getAgentId: () => null,
       onChange: (state) => {
         if (state.phase === "step" && state.step.type === "progress") {
           seen.push(state.step.message ?? "");
         }
       },
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     await expect(runner.start("llama-cpp", "openclaw.setup.prepare.start")).resolves.toEqual({

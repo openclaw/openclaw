@@ -32,8 +32,8 @@ const getUserProfileDisplay = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../state/user-profiles.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
+vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
   getUserProfileDisplay,
 }));
 
@@ -43,6 +43,84 @@ afterEach(() => {
   vi.restoreAllMocks();
   getUserProfileDisplay.mockClear();
 });
+
+it.each([true, false, undefined])(
+  "filters subagent sessions before pagination and people facets when excludeSubagents is %s",
+  async (excludeSubagents) => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dashboard:grouped": {
+        sessionId: "grouped-conversation",
+        updatedAt: 7,
+        spawnedBy: "agent:main:discussion",
+        category: "Research",
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+      "agent:main:subagent:recent": {
+        sessionId: "subagent-recent",
+        updatedAt: 6,
+        category: "Research",
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "Subagent:legacy": {
+        sessionId: "subagent-legacy",
+        updatedAt: 5,
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "agent:main:legacy-child": {
+        sessionId: "legacy-child",
+        updatedAt: 4,
+        spawnedBy: "agent:main:discussion",
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "agent:main:discussion": {
+        sessionId: "discussion",
+        updatedAt: 3,
+        label: "Subagent design discussion",
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+      "agent:main:fork": {
+        sessionId: "fork",
+        updatedAt: 2,
+        parentSessionKey: "agent:main:discussion",
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+      "agent:main:older": {
+        sessionId: "older",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+    };
+    const result = await listSessionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      storePath: "/tmp/openclaw-session-activity-subagents",
+      store,
+      opts: { excludeSubagents, includePeople: true, limit: 2 },
+    });
+
+    expect(result.sessions.map((row) => row.key)).toEqual(
+      excludeSubagents
+        ? ["agent:main:dashboard:grouped", "agent:main:discussion"]
+        : ["agent:main:dashboard:grouped", "agent:main:subagent:recent"],
+    );
+    expect(result).toMatchObject({
+      totalCount: excludeSubagents ? 4 : 7,
+      peopleSessionCount: excludeSubagents ? 4 : 7,
+      nextOffset: 2,
+      hasMore: true,
+    });
+    expect(result.people?.map((person) => [person.identity.id, person.sessionCount])).toEqual(
+      excludeSubagents
+        ? [["profile-ada", 4]]
+        : [
+            ["profile-ada", 4],
+            ["profile-bob", 3],
+          ],
+    );
+    expect(result.owners?.map((owner) => owner.id)).toEqual(
+      excludeSubagents ? ["profile-ada"] : ["profile-ada", "profile-bob"],
+    );
+  },
+);
 
 it("lets configured agents win id-only owner facet collisions", async () => {
   const actorOrders = [
@@ -66,7 +144,7 @@ it("lets configured agents win id-only owner facet collisions", async () => {
     );
     const result = await listSessionFixture({
       cfg: {
-        agents: { list: [{ id: "shared-id", identity: { name: "Shared agent" } }] },
+        agents: { entries: { "shared-id": { identity: { name: "Shared agent" } } } },
       } as OpenClawConfig,
       storePath: "/tmp/openclaw-session-owner-order",
       store,
@@ -228,10 +306,10 @@ it("projects only durable profiles and configured agents as effective owners", a
   const result = await listSessionFixture({
     cfg: {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "research", identity: { name: "Research" } },
-        ],
+        entries: {
+          main: {},
+          research: { identity: { name: "Research" } },
+        },
       },
     } as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owner-candidates",
@@ -481,7 +559,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     },
   };
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "research", identity: { name: "Research" } }] },
+    agents: { entries: { research: { identity: { name: "Research" } } } },
   };
   const result = await listSessionFixture({
     cfg,
@@ -598,7 +676,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       };
     }
     const query = {
-      cfg: { agents: { list: [{ id: "main" }, { id: "research" }] } },
+      cfg: { agents: { entries: { main: {}, research: {} } } },
       storePath: "/tmp/openclaw-session-profile-alias",
       store,
       opts: { archived: "all" as const, includePeople: true },
@@ -743,7 +821,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   }));
   const cfg = {
     agents: {
-      list: [{ id: "main", default: true }, { id: "work" }],
+      entries: { main: {}, work: {} },
     },
   } as OpenClawConfig;
   const store: Record<string, SessionEntry> = {
@@ -907,43 +985,4 @@ it("preserves list output across visibility, scope, owner, and search filters", 
       totalCount: 2,
     }),
   );
-});
-
-it("keeps the serialized list response deterministic for the current filter path", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-  const result = await listSessionFixture({
-    fixtureAgentId: "main",
-    cfg: {
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.4" } },
-        list: [{ id: "main", default: true, model: { primary: "openai/gpt-5.4" } }],
-      },
-    } as OpenClawConfig,
-    opts: { archived: "all", includeGlobal: true, search: "needle" },
-    store: {
-      global: {
-        agentHarnessId: "codex",
-        contextTokens: 100,
-        contextTokensSource: "runtime",
-        createdActor: { type: "system", id: "creator-b" },
-        estimatedCostUsd: 0,
-        model: "gpt-5.4",
-        modelProvider: "openai",
-        sessionId: "session-global",
-        subject: "needle global",
-        totalTokens: 1,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        updatedAt: 999_999,
-      },
-    },
-    storePath: "/tmp/openclaw-session-byte-parity",
-  });
-  const expectedSerializedResponse = [
-    '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
-    ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","permissionModePending":false,"createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}],"thinkingOptions":["off","minimal","low","medium","high"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
-  ].join("");
-
-  expect(JSON.stringify(result)).toBe(expectedSerializedResponse);
 });

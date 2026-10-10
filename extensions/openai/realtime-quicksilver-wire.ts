@@ -1,14 +1,19 @@
 // GPT-Live frameless session, call-creation, and sideband event wire contracts.
-import { randomBytes } from "node:crypto";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/realtime-voice-provider";
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  type RealtimeVoiceAgentConsultTranscriptEntry,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
+import { createOpenAILiveCall, OPENAI_LIVE_SESSIONS_URL } from "./realtime-live-api.js";
 import {
   buildOpenAIQuicksilverBackgroundContext,
   OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS,
 } from "./realtime-quicksilver-instructions.js";
 import {
   isOpenAIGptLiveModel,
+  isOpenAIGptLiveApiModel,
   resolveOpenAIQuicksilverVoice,
   type OpenAIGptLiveVoice,
 } from "./realtime-quicksilver.js";
@@ -17,7 +22,7 @@ const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
 const OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS = 1_800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES = 16;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ITEM_CHARS = 800;
-const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
+export const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
 const OPENAI_QUICKSILVER_CALL_URL = "https://api.openai.com/v1/live";
 const OPENAI_CHATGPT_QUICKSILVER_CALL_URL =
   "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas";
@@ -27,15 +32,15 @@ const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
 const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const OPENAI_REALTIME_LOCATION_MAX_BYTES = 512;
 const OPENAI_REALTIME_CALL_ID_RE = /^[A-Za-z0-9_-]{1,128}$/u;
-const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 function redactOpenAIRealtimeErrorDetail(
   text: string,
   auth: OpenAIQuicksilverAuth,
+  model: string,
   redactSensitiveText: OpenAIRealtimeHost["redactSensitiveText"],
 ): string {
   let redacted = text;
-  const exactSecrets = [auth.token, auth.type === "oauth" ? auth.accountId : undefined];
+  const exactSecrets = [auth.token, auth.type === "oauth" ? auth.accountId : undefined, model];
   for (const secret of exactSecrets) {
     if (secret) {
       redacted = redacted.split(secret).join("[REDACTED]");
@@ -54,10 +59,13 @@ export type OpenAIQuicksilverRequestIds = {
   threadId: string;
 };
 
-export type OpenAIQuicksilverInitialItem = {
-  role: "user" | "assistant";
-  text: string;
-};
+export function createOpenAIQuicksilverRequestIds(): OpenAIQuicksilverRequestIds {
+  return {
+    realtimeSessionId: randomUUID(),
+    sessionId: randomUUID(),
+    threadId: randomUUID(),
+  };
+}
 
 type OpenAIQuicksilverSession = {
   model: string;
@@ -69,12 +77,15 @@ type OpenAIQuicksilverSession = {
     role: "user" | "assistant";
     content: Array<{ type: "input_text" | "output_text"; text: string }>;
   }>;
+  input?: OpenAIQuicksilverSession["initial_items"];
 };
 
-type OpenAIQuicksilverSessionUpdate = {
-  type: "session.update";
-  session: Omit<OpenAIQuicksilverSession, "model">;
-};
+type OpenAIQuicksilverSessionUpdate =
+  | {
+      type: "session.update";
+      session: Omit<OpenAIQuicksilverSession, "model">;
+    }
+  | { type: "session.start"; session: OpenAIQuicksilverSession };
 
 export { parseOpenAIQuicksilverEvent } from "./realtime-quicksilver-events.js";
 export type { OpenAIQuicksilverInboundEvent } from "./realtime-quicksilver-events.js";
@@ -94,9 +105,10 @@ export function buildOpenAIQuicksilverSession(params: {
   hostControlsInput?: boolean;
   instructions?: string;
   voice?: string;
-  initialItems?: readonly OpenAIQuicksilverInitialItem[];
+  initialItems?: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
 }): OpenAIQuicksilverSession {
   const history = boundOpenAIQuicksilverContextItems(params.initialItems ?? []);
+  const publicApi = isOpenAIGptLiveApiModel(params.model);
   const instructions = [
     params.instructions?.trim(),
     params.hostControlsInput ? OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS : undefined,
@@ -125,29 +137,36 @@ export function buildOpenAIQuicksilverSession(params: {
             OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES,
           )
         : ""),
-    audio: { output: { voice: resolveOpenAIQuicksilverVoice(params.voice) } },
+    audio: { output: { voice: resolveOpenAIQuicksilverVoice(params.model, params.voice) } },
     // Set at call creation: an attached sideband cannot change existing-call configuration.
-    delegation: params.hostControlsInput
-      ? { type: "client", ack_filler: false }
-      : { type: "client" },
-    ...(initialItems && initialItems.length > 0 ? { initial_items: initialItems } : {}),
+    delegation:
+      params.hostControlsInput && !publicApi
+        ? { type: "client", ack_filler: false }
+        : { type: "client" },
+    ...(initialItems.length > 0
+      ? publicApi
+        ? { input: initialItems }
+        : { initial_items: initialItems }
+      : {}),
   };
 }
 
-/** Builds the direct Frameless Bidi WebSocket handshake used by Codex realtime v3. */
-export function buildOpenAIQuicksilverSessionUpdate(params: {
-  instructions?: string;
-  voice?: string;
-  initialItems?: readonly OpenAIQuicksilverInitialItem[];
-}): OpenAIQuicksilverSessionUpdate {
-  const { model: _model, ...session } = buildOpenAIQuicksilverSession({
-    model: "direct-websocket",
-    ...params,
-  });
+/** Builds the initial WebSocket frame for the selected Live protocol. */
+export function buildOpenAIQuicksilverSessionUpdate(
+  params: Parameters<typeof buildOpenAIQuicksilverSession>[0],
+): OpenAIQuicksilverSessionUpdate {
+  const configured = buildOpenAIQuicksilverSession(params);
+  if (isOpenAIGptLiveApiModel(params.model)) {
+    return { type: "session.start", session: configured };
+  }
+  const { model: _model, ...session } = configured;
   return { type: "session.update", session };
 }
 
 export function buildOpenAIQuicksilverWebSocketUrl(model: string): string {
+  if (isOpenAIGptLiveApiModel(model)) {
+    return OPENAI_LIVE_SESSIONS_URL.replace("https:", "wss:");
+  }
   const url = new URL(OPENAI_QUICKSILVER_CALL_URL);
   url.protocol = "wss:";
   url.searchParams.set("model", model);
@@ -174,10 +193,10 @@ function truncateOpenAIQuicksilverContextText(text: string, maxBytes: number): s
 }
 
 export function boundOpenAIQuicksilverContextItems(
-  items: readonly OpenAIQuicksilverInitialItem[],
-): OpenAIQuicksilverInitialItem[] {
+  items: readonly RealtimeVoiceAgentConsultTranscriptEntry[],
+): RealtimeVoiceAgentConsultTranscriptEntry[] {
   let remainingBytes = OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES;
-  const newestFirst: OpenAIQuicksilverInitialItem[] = [];
+  const newestFirst: RealtimeVoiceAgentConsultTranscriptEntry[] = [];
   for (
     let index = items.length - 1;
     index >= 0 && newestFirst.length < OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES;
@@ -201,13 +220,15 @@ export function openAIQuicksilverAuthHeaders(
   auth: OpenAIQuicksilverAuth,
   requestIds: OpenAIQuicksilverRequestIds,
   runtime: OpenAIRealtimeHost,
+  url = OPENAI_QUICKSILVER_CALL_URL,
 ): Record<string, string> {
+  const baseUrl = url.replace(/^wss:/u, "https:");
   return openAIRealtimeAuthHeaders(
     {
       auth,
       requestIds,
-      baseUrl: OPENAI_QUICKSILVER_CALL_URL,
-      includeQuicksilverAlpha: true,
+      baseUrl,
+      includeQuicksilverAlpha: !baseUrl.startsWith(OPENAI_LIVE_SESSIONS_URL),
     },
     runtime,
   );
@@ -318,33 +339,26 @@ function decodeOpenAIQuicksilverCallId(params: {
   callUrl: string;
 }): string {
   const sessionId = params.openAiSessionId?.trim() ?? "";
-  if (!params.location) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
+  let errorMessage = sessionId
+    ? "GPT-Live call response returned an invalid openai-session-id"
+    : "GPT-Live call response missing Location and openai-session-id headers";
+  if (params.location) {
+    try {
+      const callId = new URL(params.location, params.callUrl).pathname
+        .split("/")
+        .find(isOpenAIQuicksilverCallId);
+      if (callId) {
+        return callId;
+      }
+      errorMessage = "GPT-Live call response Location has no valid call id";
+    } catch {
+      errorMessage = "GPT-Live call response returned an invalid Location";
     }
-    throw new OpenAIQuicksilverCallError(
-      sessionId
-        ? "GPT-Live call response returned an invalid openai-session-id"
-        : "GPT-Live call response missing Location and openai-session-id headers",
-    );
   }
-  let pathname: string;
-  try {
-    pathname = new URL(params.location, params.callUrl).pathname;
-  } catch {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
-    throw new OpenAIQuicksilverCallError("GPT-Live call response returned an invalid Location");
+  if (isOpenAIQuicksilverCallId(sessionId)) {
+    return sessionId;
   }
-  const callId = pathname.split("/").filter(Boolean).find(isOpenAIQuicksilverCallId);
-  if (!callId) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
-    throw new OpenAIQuicksilverCallError("GPT-Live call response Location has no valid call id");
-  }
-  return callId;
+  throw new OpenAIQuicksilverCallError(errorMessage);
 }
 
 function describeOpenAIQuicksilverCallError(
@@ -362,7 +376,7 @@ function describeOpenAIQuicksilverCallError(
     (normalized.includes("model_not_found") ||
       normalized.includes("does not exist or you do not have access"))
   ) {
-    return `OpenAI Platform API-key access to /v1/live is waitlist-gated. Use a ChatGPT OAuth profile or request access at ${OPENAI_GPT_LIVE_WAITLIST_URL}`;
+    return "OpenAI Platform API-key access is unavailable for the selected GPT-Live model. Verify the selected model and Platform account access.";
   }
   if (
     status === 400 &&
@@ -371,7 +385,7 @@ function describeOpenAIQuicksilverCallError(
   ) {
     return "The GPT-Live model value is not permitted. Choose a supported GPT-Live model in Settings > Talk.";
   }
-  return `GPT-Live call creation failed (${status})${detail ? `: ${detail}` : ""}`;
+  return `GPT-Live call creation failed (${status})`;
 }
 
 export async function createOpenAIQuicksilverCall(
@@ -382,28 +396,29 @@ export async function createOpenAIQuicksilverCall(
     requestIds: OpenAIQuicksilverRequestIds;
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
+    onCallAllocated?: (callId: string) => void;
   } & ({ gaSideband: true; onCallAllocated: (callId: string) => void } | { gaSideband?: false }),
   runtime: OpenAIRealtimeHost,
-): Promise<
-  | {
-      kind: "gpt-live";
-      status: number;
-      answerSdp: string;
-      callId: string;
-      sidebandUrl: string;
-    }
-  | { kind: "ga-realtime"; status: number; answerSdp: string }
-  | {
-      kind: "ga-sideband";
-      status: number;
-      answerSdp: string;
-      callId: string;
-      sidebandUrl: string;
-    }
-> {
+) {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
   if (params.gaSideband && (isGptLive || params.auth.type !== "api-key")) {
     throw new Error("OpenAI Realtime Gateway control requires a GA model and Platform API key");
+  }
+  if (isOpenAIGptLiveApiModel(params.session.model)) {
+    if (params.auth.type !== "api-key") {
+      throw new Error("GPT-Live API sessions require a Platform API key");
+    }
+    return createOpenAILiveCall(
+      {
+        apiKey: params.auth.token,
+        sdp: params.sdp,
+        session: params.session,
+        onCallAllocated: params.onCallAllocated,
+        signal: params.signal,
+        fetchImpl: params.fetchImpl,
+      },
+      runtime,
+    );
   }
   const chatGptCall = isGptLive && params.auth.type === "oauth";
   const callUrl = chatGptCall
@@ -451,6 +466,7 @@ export async function createOpenAIQuicksilverCall(
           redactOpenAIRealtimeErrorDetail(
             providerDetail?.text.trim() ?? "",
             params.auth,
+            params.session.model,
             runtime.redactSensitiveText,
           ),
           OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS,
@@ -486,7 +502,7 @@ export async function createOpenAIQuicksilverCall(
   }
   if (gaCallId) {
     return {
-      kind: "ga-sideband",
+      kind: "ga-sideband" as const,
       status: response.status,
       answerSdp,
       callId: gaCallId,
@@ -494,7 +510,7 @@ export async function createOpenAIQuicksilverCall(
     };
   }
   if (!isGptLive) {
-    return { kind: "ga-realtime", status: response.status, answerSdp };
+    return { kind: "ga-realtime" as const, status: response.status, answerSdp };
   }
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
@@ -502,7 +518,7 @@ export async function createOpenAIQuicksilverCall(
     callUrl,
   });
   return {
-    kind: "gpt-live",
+    kind: "gpt-live" as const,
     status: response.status,
     answerSdp,
     callId,
@@ -541,8 +557,11 @@ export async function hangupOpenAIRealtimeCall(
   }
 }
 
-export function chunkOpenAIQuicksilverAppendText(text: string): string[] {
-  if (Buffer.byteLength(text, "utf8") <= OPENAI_QUICKSILVER_APPEND_MAX_BYTES) {
+export function chunkOpenAIQuicksilverAppendText(
+  text: string,
+  maxBytes = OPENAI_QUICKSILVER_APPEND_MAX_BYTES,
+): string[] {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
     return [text];
   }
   const chunks: string[] = [];
@@ -550,7 +569,7 @@ export function chunkOpenAIQuicksilverAppendText(text: string): string[] {
   let currentBytes = 0;
   for (const character of text) {
     const characterBytes = Buffer.byteLength(character, "utf8");
-    if (current && currentBytes + characterBytes > OPENAI_QUICKSILVER_APPEND_MAX_BYTES) {
+    if (current && currentBytes + characterBytes > maxBytes) {
       chunks.push(current);
       current = "";
       currentBytes = 0;

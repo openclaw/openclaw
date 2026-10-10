@@ -8,15 +8,13 @@ import { pathToFileURL } from "node:url";
 import { createWindowsCmdShimFixture, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
-import {
-  createChannelIngressQueue,
-  getChannelIngressKysely,
-} from "../../../../src/channels/message/ingress-queue.js";
+import { createChannelIngressQueue } from "../../../../src/channels/message/ingress-queue.js";
 import type { ModelDefinitionConfig } from "../../../../src/config/types.models.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../../src/infra/kysely-sync.js";
+import type { DB } from "../../../../src/state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
-import { withTestTimeout } from "../../../helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type JsonObject = Record<string, unknown>;
@@ -174,12 +172,15 @@ async function readTelegramIngressStatuses(stateDir: string, eventIds: string[])
   try {
     return executeSqliteQuerySync(
       database.db,
-      getChannelIngressKysely(database.db)
+      getNodeSqliteKysely<Pick<DB, "channel_ingress_events">>(database.db)
         .selectFrom("channel_ingress_events")
         .select([
           "account_id as accountId",
+          "attempts",
           "event_id as eventId",
           "lane_key as laneKey",
+          "last_attempt_at as lastAttemptAt",
+          "last_error as lastError",
           "queue_name as queueName",
           "status",
         ])
@@ -237,6 +238,8 @@ async function startControlledSourceGateway(params: {
   replacementConfigPath: string;
   fixtureRoot: string;
   repoRoot: string;
+  signal: AbortSignal;
+  onTestFinished: (cleanup: () => Promise<void>) => void;
 }) {
   const bootstrapPath = path.join(params.fixtureRoot, "source-gateway-control.mjs");
   const port = await reservePort();
@@ -245,7 +248,7 @@ async function startControlledSourceGateway(params: {
     resolveBuiltModule({
       distDir,
       prefix: "server-",
-      exportMarker: "resetPreparedModelCatalogForTest, startGatewayServer, truncateCloseReason",
+      exportMarker: "startGatewayServer, truncateCloseReason",
     }),
     resolveBuiltModule({
       distDir,
@@ -325,6 +328,9 @@ process.on("message", async (message) => {
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  // Retain exit before any control request or stop signal can settle the child.
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   let output = "";
   child.stdout?.on("data", (chunk) => {
     output += String(chunk);
@@ -334,6 +340,7 @@ process.on("message", async (message) => {
   });
   const pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
   let nextId = 1;
+  let isReady = false;
   const ready = new Promise<void>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => {
@@ -349,6 +356,7 @@ process.on("message", async (message) => {
       }
       const value = message as { type?: string; id?: number; error?: string };
       if (value.type === "ready") {
+        isReady = true;
         resolve();
         return;
       }
@@ -367,16 +375,6 @@ process.on("message", async (message) => {
       }
     });
   });
-  try {
-    await withTestTimeout(ready, SOURCE_GATEWAY_TIMEOUT_MS, "Source Gateway did not become ready");
-  } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-      await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not stop");
-    }
-    throw new Error(`${String(error)}\n${output}`, { cause: error });
-  }
-
   const request = async (action: "mark" | "replace" | "close") => {
     const id = nextId++;
     await withTestTimeout(
@@ -394,18 +392,28 @@ process.on("message", async (message) => {
       `Source Gateway ${action} control timed out`,
     );
   };
-  return {
-    request,
-    output: () => output,
-    close: async () => {
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null) {
-        await request("close").catch(() => child.kill("SIGTERM"));
+        if (isReady) {
+          await request("close").catch(() => child.kill("SIGTERM"));
+        } else {
+          child.kill("SIGTERM");
+        }
       }
-      if (child.exitCode === null && child.signalCode === null) {
-        await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not exit");
-      }
-    },
-  };
+      await exited;
+    })());
+  // Vitest can finish its timeout wrapper while startup's catch is still joining
+  // the child. Share that join before the surrounding fixture removes its root.
+  params.onTestFinished(close);
+  try {
+    await withinTest(ready, params.signal);
+  } catch (error) {
+    await close();
+    throw new Error(`${String(error)}\n${output}`, { cause: error });
+  }
+  return { request, output: () => output, close };
 }
 
 async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
@@ -637,16 +645,14 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               timeout: 30_000,
             })
             .toBe("providers");
-          await expect
-            .poll(() => gateway.call("models.list", { view: "default" }), {
-              interval: 50,
-              timeout: 30_000,
-            })
-            .toMatchObject({
-              models: expect.arrayContaining([
-                expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
-              ]),
-            });
+          // Startup publishes a static owner; one explicit refresh owns live discovery.
+          await expect(
+            gateway.call("models.list", { view: "default", refresh: true }),
+          ).resolves.toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
           expect(discoveryRequests).toBeGreaterThan(0);
           const warmDiscoveryRequests = discoveryRequests;
           discoveryFrozen = true;
@@ -925,14 +931,28 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
   });
 }, 120_000);
 
-test("recovers a replaced model catalog and drains the following Telegram callback", async () => {
+test("recovers a replaced model catalog and drains the following Telegram callback", async ({
+  signal,
+  onTestFinished,
+}) => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   const getUpdatesOffsets: Array<number | undefined> = [];
   let telegramPolls = 0;
+  let pendingGetUpdatesResponse: ServerResponse | undefined;
+
+  const flushPendingUpdates = () => {
+    if (!pendingGetUpdatesResponse || pendingUpdates.length === 0) {
+      return;
+    }
+    const response = pendingGetUpdatesResponse;
+    pendingGetUpdatesResponse = undefined;
+    succeed(response, pendingUpdates.splice(0));
+  };
 
   const queueCallback = (updateId: number, data: string) => {
     pendingUpdates.push(callbackUpdate(updateId, `replacement-callback-${updateId}`, data));
+    flushPendingUpdates();
   };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
@@ -960,7 +980,18 @@ test("recovers a replaced model catalog and drains the following Telegram callba
     if (method === "getUpdates") {
       telegramPolls += 1;
       getUpdatesOffsets.push(typeof body.offset === "number" ? body.offset : undefined);
-      succeed(res, pendingUpdates.splice(0));
+      if (pendingUpdates.length > 0) {
+        succeed(res, pendingUpdates.splice(0));
+      } else {
+        // Model Telegram's long poll so callbacks queued after an empty poll do not wait for
+        // grammY's idle backoff before reaching the durable ingress queue.
+        pendingGetUpdatesResponse = res;
+        res.once("close", () => {
+          if (pendingGetUpdatesResponse === res) {
+            pendingGetUpdatesResponse = undefined;
+          }
+        });
+      }
       return;
     }
     telegramCalls.push({ method, body });
@@ -991,6 +1022,8 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           replacementConfigPath,
           fixtureRoot,
           repoRoot,
+          signal,
+          onTestFinished,
         });
         const queue = createChannelIngressQueue({
           channelId: "telegram",
@@ -1011,27 +1044,23 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           await gateway.request("mark");
           queueCallback(10, `mdl_list_${REPLACEMENT_PROVIDER}_1`);
           queueCallback(11, "mdl_prov");
+          // A claimed callback waits for the pending publication instead of retrying stale data.
           await expect
-            .poll(async () => await readTelegramIngressStatuses(stateDir, eventIds), {
-              interval: 5,
-              timeout: 600,
+            .poll(async () => (await readTelegramIngressStatuses(stateDir, eventIds))[0], {
+              interval: 25,
+              timeout: 30_000,
             })
-            .toEqual([
-              {
+            .toEqual(
+              expect.objectContaining({
                 accountId: "picker",
                 eventId: eventIds[0],
-                laneKey: `telegram:${CHAT_ID}`,
-                queueName: '["telegram","picker"]',
+                attempts: 0,
+                lastAttemptAt: null,
+                lastError: null,
                 status: "claimed",
-              },
-              {
-                accountId: "picker",
-                eventId: eventIds[1],
-                laneKey: `telegram:${CHAT_ID}`,
-                queueName: '["telegram","picker"]',
-                status: "pending",
-              },
-            ]);
+              }),
+            );
+          expect(telegramCalls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
 
           await gateway.request("replace");
 
@@ -1050,11 +1079,12 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           expect(firstPickerEdit).toBeDefined();
           expect(hasCallback(firstPickerEdit!, `mdl_sel_${REPLACEMENT_MODEL_REF}`)).toBe(true);
           expect(
-            telegramCalls
-              .filter((call) => call.method === "answerCallbackQuery")
-              .map((call) => call.body.callback_query_id)
-              .toSorted((a, b) => String(a).localeCompare(String(b))),
-          ).toEqual(["replacement-callback-10", "replacement-callback-11"]);
+            new Set(
+              telegramCalls
+                .filter((call) => call.method === "answerCallbackQuery")
+                .map((call) => call.body.callback_query_id),
+            ),
+          ).toEqual(new Set(["replacement-callback-10", "replacement-callback-11"]));
           expect(getUpdatesOffsets).toContain(12);
 
           await expect
@@ -1073,8 +1103,11 @@ test("recovers a replaced model catalog and drains the following Telegram callba
               pending: 0,
               statuses: eventIds.map((eventId) => ({
                 accountId: "picker",
+                attempts: 0,
                 eventId,
                 laneKey: `telegram:${CHAT_ID}`,
+                lastAttemptAt: null,
+                lastError: null,
                 queueName: '["telegram","picker"]',
                 status: "completed",
               })),

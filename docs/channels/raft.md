@@ -18,10 +18,9 @@ Raft is an official external plugin. Install it on the Gateway host:
 
 ```bash
 openclaw plugins install @openclaw/raft
-openclaw gateway restart
 ```
 
-Details: [Plugins](/tools/plugin)
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) before continuing.
 
 ## Prerequisites
 

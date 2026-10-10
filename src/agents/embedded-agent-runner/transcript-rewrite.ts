@@ -6,18 +6,20 @@ import type {
   TranscriptRewriteResult,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
-import { SessionManager } from "../sessions/index.js";
+import { getRawSessionAppendMessageAsync } from "../session-raw-append-message.js";
+import type { SessionManager } from "../sessions/session-manager.js";
 
-type SessionManagerLike = ReturnType<typeof SessionManager.open>;
-type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
+type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
+type RewriteMessageAppender = (
+  message: Parameters<SessionManager["appendMessageAsync"]>[0],
+) => Promise<string>;
 
 function stripStalePrefixReplay(message: AgentMessage): AgentMessage {
   return message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message;
 }
 
-function estimateMessageBytes(message: AgentMessage): number {
-  return Buffer.byteLength(JSON.stringify(message), "utf8");
+function unchangedRewrite(reason: string): TranscriptRewriteResult {
+  return { changed: false, bytesFreed: 0, rewrittenEntries: 0, reason };
 }
 
 function findTranscriptRewriteMatches(
@@ -35,10 +37,13 @@ function findTranscriptRewriteMatches(
     if (!replacement) {
       continue;
     }
-    const originalBytes = estimateMessageBytes(entry.message);
-    const replacementBytes = estimateMessageBytes(replacement);
+    const originalJson = JSON.stringify(entry.message);
+    const replacementJson = JSON.stringify(replacement);
+    if (originalJson === replacementJson) {
+      continue;
+    }
     matchedIndices.push(index);
-    bytesFreed += Math.max(0, originalBytes - replacementBytes);
+    bytesFreed += Math.max(0, Buffer.byteLength(originalJson) - Buffer.byteLength(replacementJson));
   }
 
   return { matchedIndices, bytesFreed };
@@ -48,125 +53,122 @@ function remapEntryId(
   entryId: string | null | undefined,
   rewrittenEntryIds: ReadonlyMap<string, string>,
 ): string | null {
-  if (!entryId) {
-    return null;
-  }
-  return rewrittenEntryIds.get(entryId) ?? entryId;
+  return entryId ? (rewrittenEntryIds.get(entryId) ?? entryId) : null;
 }
 
-function appendBranchEntry(params: {
-  sessionManager: SessionManagerLike;
+async function appendBranchEntry(params: {
+  sessionManager: SessionManager;
   entry: SessionBranchEntry;
   rewrittenEntryIds: ReadonlyMap<string, string>;
-  appendMessage: SessionManagerLike["appendMessage"];
-}): string {
+  appendMessage: RewriteMessageAppender;
+  replacement?: AgentMessage;
+}): Promise<string> {
   const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
-  if (entry.type === "message") {
-    const message = stripStalePrefixReplay(entry.message) as Parameters<
-      typeof sessionManager.appendMessage
-    >[0];
-    return withSessionPendingInputRelocation(entry.id, message, () => appendMessage(message));
-  }
-  if (entry.type === "compaction") {
-    const { __openclaw: identity } = entry;
-    return sessionManager.appendCompaction(
-      entry.summary,
-      remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId,
-      entry.tokensBefore,
-      entry.details,
-      entry.fromHook,
-      // An unknown historical run must not inherit the rewriting run's identity.
-      { runId: identity?.runId, ...identity },
-    );
-  }
-  if (entry.type === "reset") {
-    return sessionManager.appendResetBoundary(
-      entry.reason,
-      entry.firstKeptEntryId
-        ? (remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId)
-        : undefined,
-    );
-  }
-  if (entry.type === "thinking_level_change") {
-    return sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
-  }
-  if (entry.type === "model_change") {
-    return sessionManager.appendModelChange(entry.provider, entry.modelId);
-  }
-  if (entry.type === "custom") {
-    return sessionManager.appendCustomEntry(entry.customType, entry.data);
-  }
-  if (entry.type === "custom_message") {
-    return sessionManager.appendCustomMessageEntry(
-      entry.customType,
-      entry.content,
-      entry.display,
-      entry.details,
-    );
-  }
-  if (entry.type === "session_info") {
-    if (entry.name) {
-      return sessionManager.appendSessionInfo(entry.name);
+  switch (entry.type) {
+    case "message": {
+      const message = (
+        params.replacement === undefined
+          ? stripStalePrefixReplay(entry.message)
+          : params.replacement
+      ) as Parameters<typeof sessionManager.appendMessage>[0];
+      return withSessionPendingInputRelocation(entry.id, message, () => appendMessage(message));
     }
-    return sessionManager.appendSessionInfo("");
+    case "compaction": {
+      const { __openclaw: identity } = entry;
+      return sessionManager.appendCompactionAsync(
+        entry.summary,
+        remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId,
+        entry.tokensBefore,
+        entry.details,
+        entry.fromHook,
+        // An unknown historical run must not inherit the rewriting run's identity.
+        { runId: identity?.runId, ...identity },
+        entry.tokensAfter,
+      );
+    }
+    case "reset":
+      return sessionManager.appendResetBoundaryAsync(
+        entry.reason,
+        entry.firstKeptEntryId
+          ? (remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId)
+          : undefined,
+      );
+    case "thinking_level_change":
+      return sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
+    case "model_change":
+      return sessionManager.appendModelChange(entry.provider, entry.modelId);
+    case "custom":
+      return sessionManager.appendCustomEntryAsync(entry.customType, entry.data);
+    case "custom_message":
+      return sessionManager.appendCustomMessageEntryAsync(
+        entry.customType,
+        entry.content,
+        entry.display,
+        entry.details,
+      );
+    case "session_info":
+      return sessionManager.appendSessionInfoAsync(entry.name || "");
+    case "branch_summary":
+      return sessionManager.branchWithSummaryAsync(
+        remapEntryId(entry.parentId, rewrittenEntryIds),
+        entry.summary,
+        entry.details,
+        entry.fromHook,
+      );
+    default:
+      return sessionManager.appendLabelChangeAsync(
+        remapEntryId(entry.targetId, rewrittenEntryIds) ?? entry.targetId,
+        entry.label,
+      );
   }
-  if (entry.type === "branch_summary") {
-    return sessionManager.branchWithSummary(
-      remapEntryId(entry.parentId, rewrittenEntryIds),
-      entry.summary,
-      entry.details,
-      entry.fromHook,
-    );
-  }
-  return sessionManager.appendLabelChange(
-    remapEntryId(entry.targetId, rewrittenEntryIds) ?? entry.targetId,
-    entry.label,
-  );
 }
 
 /**
  * Safely rewrites transcript message entries on the active branch by branching
  * from the first rewritten message's parent and re-appending the suffix.
  */
-export function rewriteTranscriptEntriesInSessionManager(params: {
-  sessionManager: SessionManagerLike;
+export async function rewriteTranscriptEntriesInSessionManager(params: {
+  sessionManager: SessionManager;
   replacements: TranscriptRewriteReplacement[];
   /** Preserve a checkpoint freshly captured on an explicit replacement. */
   preserveReplacementCompactionReplay?: boolean;
-}): TranscriptRewriteResult {
+}): Promise<TranscriptRewriteResult> {
   const replacementsById = new Map(
     params.replacements
       .filter((replacement) => replacement.entryId.trim().length > 0)
-      .map((replacement) => [replacement.entryId, replacement.message]),
+      .map((replacement) => [
+        replacement.entryId,
+        params.preserveReplacementCompactionReplay
+          ? replacement.message
+          : stripStalePrefixReplay(replacement.message),
+      ]),
   );
   if (replacementsById.size === 0) {
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason: "no replacements requested",
-    };
+    return unchangedRewrite("no replacements requested");
   }
 
-  const branch = params.sessionManager.getBranch();
-  if (branch.length === 0) {
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason: "empty session",
-    };
+  const activeBranch = params.sessionManager.getBranch();
+  if (activeBranch.length === 0) {
+    return unchangedRewrite("empty session");
   }
 
-  const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(branch, replacementsById);
+  const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(
+    activeBranch,
+    replacementsById,
+  );
 
   if (matchedIndices.length === 0) {
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason: "no matching message entries",
-    };
+    return unchangedRewrite("no changed matching message entries");
+  }
+
+  const rewrite = await params.sessionManager.prepareTranscriptRewriteAsync();
+  const rewriteManager = rewrite.sessionManager;
+  const branch = rewriteManager.getBranch();
+  if (
+    branch.length !== activeBranch.length ||
+    branch.some((entry, index) => entry.id !== activeBranch[index]?.id)
+  ) {
+    throw new Error("Session transcript changed before rewrite preparation");
   }
 
   const firstMatchedIndex = matchedIndices.at(0);
@@ -174,50 +176,40 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     firstMatchedIndex === undefined ? undefined : branch.at(firstMatchedIndex);
   // matchedIndices only contains indices of branch "message" entries.
   if (!firstMatchedEntry || firstMatchedEntry.type !== "message") {
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason: "invalid first rewrite target",
-    };
+    return unchangedRewrite("invalid first rewrite target");
   }
 
   if (!firstMatchedEntry.parentId) {
-    params.sessionManager.resetLeaf();
+    await rewriteManager.resetLeafAsync();
   } else {
-    params.sessionManager.branch(firstMatchedEntry.parentId);
+    await rewriteManager.branchAsync(firstMatchedEntry.parentId);
   }
 
   // Maintenance rewrites should preserve the exact requested history without
   // re-running persistence hooks or size truncation on replayed messages.
-  const rawAppendMessage = getRawSessionAppendMessage(params.sessionManager);
+  const rawAppendMessage = getRawSessionAppendMessageAsync(rewriteManager);
   // Deliberate copies retain ingress keys without adopting their old branch entries.
-  const appendMessage: SessionManagerLike["appendMessage"] = (message) =>
-    rawAppendMessage(message, { idempotencyLookup: "caller-checked" });
+  const appendMessage: RewriteMessageAppender = async (message) => {
+    const entryId = await rawAppendMessage(message, { idempotencyLookup: "caller-checked" });
+    if (entryId === undefined) {
+      throw new Error("Transcript rewrite message was not appended");
+    }
+    return entryId;
+  };
   const rewrittenEntryIds = new Map<string, string>();
   // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.
   for (const entry of branch.slice(firstMatchedIndex)) {
-    const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
-    const newEntryId =
-      replacement === undefined
-        ? appendBranchEntry({
-            sessionManager: params.sessionManager,
-            entry,
-            rewrittenEntryIds,
-            appendMessage,
-          })
-        : (() => {
-            const message = (
-              params.preserveReplacementCompactionReplay
-                ? replacement
-                : stripStalePrefixReplay(replacement)
-            ) as Parameters<typeof params.sessionManager.appendMessage>[0];
-            return withSessionPendingInputRelocation(entry.id, message, () =>
-              appendMessage(message),
-            );
-          })();
+    const newEntryId = await appendBranchEntry({
+      sessionManager: rewriteManager,
+      entry,
+      rewrittenEntryIds,
+      appendMessage,
+      replacement: entry.type === "message" ? replacementsById.get(entry.id) : undefined,
+    });
     rewrittenEntryIds.set(entry.id, newEntryId);
   }
+
+  await rewrite.commit(rewrittenEntryIds);
 
   return {
     changed: true,

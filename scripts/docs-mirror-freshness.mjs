@@ -83,11 +83,12 @@ function toCommitApiPath(pattern) {
   return bare;
 }
 
-async function newestWatchedCommit(watchPaths) {
+async function newestWatchedCommit(watchPaths, until = "") {
   let newest = null;
+  const untilQuery = until ? `&until=${encodeURIComponent(until)}` : "";
   for (const watchPath of watchPaths) {
     const commits = await githubJson(
-      `/repos/${SOURCE_REPO}/commits?sha=main&path=${encodeURIComponent(watchPath)}&per_page=1`,
+      `/repos/${SOURCE_REPO}/commits?sha=main&path=${encodeURIComponent(watchPath)}&per_page=1${untilQuery}`,
     );
     const head = commits[0];
     if (!head) {
@@ -98,7 +99,7 @@ async function newestWatchedCommit(watchPaths) {
       newest = { sha: head.sha, committedAt, path: watchPath };
     }
   }
-  if (!newest) {
+  if (!newest && !until) {
     throw new Error("no commits found for any watched docs path on main");
   }
   return newest;
@@ -154,18 +155,25 @@ async function main() {
     newestWatchedCommit(watchPaths),
     readMirroredSourceSha(),
   ]);
-  const ageMinutes = Math.round((Date.now() - newest.committedAt) / 60_000);
+  const now = Date.now();
+  const ageMinutes = Math.round((now - newest.committedAt) / 60_000);
   const summary = `newest docs-touching main commit ${newest.sha} (${newest.path}, ${ageMinutes}m ago); mirror at ${mirroredSha}`;
 
   if (await mirrorCoversCommit(newest.sha, mirroredSha)) {
     console.log(`docs mirror fresh: ${summary}`);
     return;
   }
-  if (ageMinutes < STALE_MINUTES) {
-    console.log(
-      `docs mirror trailing within ${STALE_MINUTES}m grace (sync in flight?): ${summary}`,
-    );
-    return;
+  let stale = newest;
+  const cutoff = now - STALE_MINUTES * 60_000;
+  if (newest.committedAt > cutoff) {
+    // Recent edits must not renew grace for older changes the mirror still lacks.
+    stale = await newestWatchedCommit(watchPaths, new Date(cutoff).toISOString());
+    if (!stale || (await mirrorCoversCommit(stale.sha, mirroredSha))) {
+      console.log(
+        `docs mirror trailing within ${STALE_MINUTES}m grace (sync in flight?): ${summary}`,
+      );
+      return;
+    }
   }
 
   const activeSyncRuns = await countActiveSyncRuns();
@@ -177,7 +185,10 @@ async function main() {
       `${activeSyncRuns} ${SYNC_WORKFLOW} run(s) already queued/in progress; not dispatching another`,
     );
   }
-  fail(`docs mirror stale for ${ageMinutes}m (threshold ${STALE_MINUTES}m): ${summary}`);
+  const staleMinutes = Math.round((now - stale.committedAt) / 60_000);
+  fail(
+    `docs mirror stale for ${staleMinutes}m (threshold ${STALE_MINUTES}m): unmirrored docs-touching main commit ${stale.sha} (${stale.path}); mirror at ${mirroredSha}`,
+  );
 }
 
 try {

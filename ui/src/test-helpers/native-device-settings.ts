@@ -1,11 +1,29 @@
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 
-export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapshot {
+type NativeDeviceSettingsWithLocation = NativeDeviceSettingsSnapshot & {
+  permissions: NativeDeviceSettingsSnapshot["permissions"] & {
+    location: NonNullable<NativeDeviceSettingsSnapshot["permissions"]["location"]>;
+  };
+};
+
+type MacDeviceSettingsSnapshot = NativeDeviceSettingsWithLocation & {
+  app: NonNullable<NativeDeviceSettingsSnapshot["app"]>;
+  capabilities: NonNullable<NativeDeviceSettingsSnapshot["capabilities"]>;
+  browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]> & {
+    cookieSync: NonNullable<NonNullable<NativeDeviceSettingsSnapshot["browser"]>["cookieSync"]>;
+  };
+  voice: NativeDeviceSettingsSnapshot["voice"] &
+    Required<Pick<NativeDeviceSettingsSnapshot["voice"], "microphone" | "locale">>;
+  updates: NonNullable<NativeDeviceSettingsSnapshot["updates"]>;
+};
+
+export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot {
   return {
     contract: 1,
     device: { platform: "macos", appVersion: "2026.9.3", appBuild: "42", profileName: null },
     app: {
       showDockIcon: true,
+      nativeExperienceEnabled: false,
       iconStyle: {
         selectedId: "paper",
         available: [
@@ -20,6 +38,8 @@ export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapsh
       iconAnimationsEnabled: true,
       launchAtLogin: false,
       launchAtLoginAvailable: true,
+      keepGatewayRunning: false,
+      keepGatewayRunningAvailable: true,
       quickChatEnabled: true,
       quickChatShortcut: "⌥Space",
       debugPaneEnabled: false,
@@ -28,12 +48,16 @@ export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapsh
       canvasEnabled: true,
       cameraEnabled: true,
       computerControlEnabled: true,
+      desktopSharingEnabled: true,
       computerControlProvider: "peekaboo",
       cuaDriverBundled: false,
       peekabooBridgeEnabled: true,
       activeComputerPresenceEnabled: false,
+      unattendedDesktopEnabled: false,
     },
+    desktopAvailability: { state: "unlocked" },
     browser: {
+      chromeSetupActions: ["inspect", "install", "verify"],
       importAvailable: true,
       cookieSync: {
         available: true,
@@ -53,7 +77,6 @@ export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapsh
         { id: "camera", status: "notDetermined" },
         { id: "speechRecognition", status: "granted" },
         { id: "location", status: "denied" },
-        { id: "automation", status: "unavailable" },
       ],
       location: { mode: "off", precise: false },
     },
@@ -79,4 +102,66 @@ export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapsh
     },
     updates: { available: true, automatic: true, unavailableReason: null },
   };
+}
+
+export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsWithLocation {
+  return {
+    contract: 1,
+    device: {
+      platform: "ios",
+      formFactor: "phone",
+      modelName: "iPhone",
+      appVersion: "2026.9.3",
+      appBuild: "42",
+      profileName: null,
+    },
+    app: { appearance: "system", notificationsEnabled: true },
+    capabilities: {
+      cameraEnabled: true,
+      keepAwakeEnabled: false,
+      healthSummaryAvailable: true,
+      healthSummaryEnabled: false,
+    },
+    permissions: {
+      entries: [
+        { id: "notifications", status: "granted" },
+        { id: "camera", status: "notDetermined" },
+        { id: "microphone", status: "granted" },
+        { id: "speechRecognition", status: "granted" },
+        { id: "location", status: "granted" },
+        { id: "contacts", status: "limited" },
+        { id: "calendars", status: "notDetermined" },
+        { id: "reminders", status: "denied" },
+        { id: "photos", status: "limited" },
+      ],
+      location: { mode: "whileUsing", precise: true, preciseEditable: false },
+    },
+    voice: {
+      supported: true,
+      wakeEnabled: false,
+      talkEnabled: true,
+      talkButtonEnabled: true,
+      talkBackgroundEnabled: false,
+      speakerphoneEnabled: false,
+    },
+  };
+}
+
+export function createTauriDeviceSettingsSnapshot(platform: "linux" | "windows" | "macos") {
+  return {
+    contract: 1,
+    revision: 1,
+    device: {
+      platform,
+      formFactor: "desktop",
+      appVersion: "2026.9.3",
+      appBuild: "42",
+      profileName: null,
+    },
+    browser: { chromeSetupActions: ["inspect", "install", "verify"] },
+    capabilities: { desktopSharingEnabled: true },
+    desktopSharing: { state: "running" },
+    permissions: { entries: [] },
+    voice: { supported: false, wakeEnabled: false },
+  } satisfies NativeDeviceSettingsSnapshot;
 }

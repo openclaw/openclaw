@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import { connectGatewayStatusClient } from "../../../helpers/gateway-e2e-harness.js";
@@ -13,6 +13,8 @@ import { runCodexAuthDoctorMigrationProof } from "./codex-auth-product-proof.tes
 
 const PRIMARY_MODEL = "openai/gpt-5.4";
 const FALLBACK_MODEL = "openai/gpt-5.4-mini";
+const REPAIRED_MODEL_ID = "gpt-5.6-terra";
+const REPAIRED_FALLBACK_MODEL = "openai/gpt-5.6-luna";
 const LATER_TURN_TEXT = "QA_CODEX_LATER_TURN_OK";
 type AppServerMessage = {
   method?: string;
@@ -41,7 +43,7 @@ function messageText(content: unknown): string {
     : "";
 }
 
-describe("Gateway Codex failure recovery product proof", () => {
+describe("Gateway Codex failure recovery with automatic cyber failover off", () => {
   it.each([
     {
       failureKind: "bio",
@@ -67,10 +69,9 @@ describe("Gateway Codex failure recovery product proof", () => {
       failureKind: "misalignment",
       firstStatus: "error",
       firstTurnStartCount: 1,
-      totalTurnStartCount: 2,
+      totalTurnStartCount: 1,
       visibleReplies: [
-        "The provider refused this request (category: misalignment). Revise the request and try again.",
-        LATER_TURN_TEXT,
+        "Chat stopped as a precaution. Review the findings in chat before continuing.",
       ],
     },
     {
@@ -81,7 +82,7 @@ describe("Gateway Codex failure recovery product proof", () => {
       visibleReplies: [LATER_TURN_TEXT, LATER_TURN_TEXT],
     },
   ])(
-    "$failureKind preserves terminal or retry behavior and continues the same native thread",
+    "$failureKind preserves terminal, review, and retry behavior on the same native thread",
     { timeout: 180_000 },
     async (scenario) => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
@@ -96,6 +97,8 @@ describe("Gateway Codex failure recovery product proof", () => {
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_QA_CODEX_FAILURE_KIND: scenario.failureKind,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Native task admission needs the configured owner published by full Gateway startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           plugins: {
@@ -110,6 +113,8 @@ describe("Gateway Codex failure recovery product proof", () => {
                     command: process.execPath,
                     args: [fixture],
                     requestTimeoutMs: 60_000,
+                    // This fixture proves terminal refusals on the selected model.
+                    cyberFailover: { mode: "off" },
                   },
                 },
               },
@@ -130,12 +135,24 @@ describe("Gateway Codex failure recovery product proof", () => {
           },
         },
       });
+      const currentInstance = instance;
+      onTestFailed(() => console.error(currentInstance.logs()));
       const requestLog = instance.state.path("codex-refusal-app-server.jsonl");
       instance.env.OPENCLAW_QA_CODEX_REFUSAL_APP_SERVER_LOG = requestLog;
       await runCodexAuthDoctorMigrationProof(instance, {
         accountId: "qa-codex-refusal",
         oauthAccess: "synthetic-codex-refusal-oauth",
         shape: "oauth-only",
+      });
+      expect(JSON.parse(await fs.readFile(instance.configPath, "utf8"))).toMatchObject({
+        agents: {
+          defaults: {
+            model: {
+              primary: `openai/${REPAIRED_MODEL_ID}`,
+              fallbacks: [REPAIRED_FALLBACK_MODEL],
+            },
+          },
+        },
       });
       await instance.startGateway();
       const client = await connectGatewayStatusClient(instance);
@@ -154,6 +171,7 @@ describe("Gateway Codex failure recovery product proof", () => {
             { runId: started.runId, timeoutMs: 60_000 },
             { timeoutMs: 65_000 },
           );
+          console.log(`[gateway Codex terminal] ${JSON.stringify({ message, terminal })}`);
           return terminal.status;
         };
 
@@ -174,7 +192,20 @@ describe("Gateway Codex failure recovery product proof", () => {
           },
         });
 
-        const laterStatus = await send("Complete this ordinary later turn.");
+        let laterStatus: string | undefined;
+        if (scenario.failureKind === "misalignment") {
+          await expect(send("Complete this ordinary later turn.")).rejects.toThrow(
+            "paused as a precaution",
+          );
+          laterStatus = "blocked";
+          const paused = await client.request<{ session: { providerReview?: unknown } }>(
+            "sessions.describe",
+            { key: sessionKey },
+          );
+          expect(paused.session.providerReview).toMatchObject({ canContinue: false });
+        } else {
+          laterStatus = await send("Complete this ordinary later turn.");
+        }
         const history = await client.request<{
           messages?: Array<{ role?: unknown; content?: unknown }>;
         }>("chat.history", { sessionKey, limit: 20 });
@@ -189,7 +220,7 @@ describe("Gateway Codex failure recovery product proof", () => {
         const allTurnStarts = allEntries.filter((entry) => entry.method === "turn/start");
         const proof = {
           failureKind: scenario.failureKind,
-          configuredFallback: FALLBACK_MODEL,
+          configuredFallback: REPAIRED_FALLBACK_MODEL,
           firstTurnStartCount: firstTurnStarts.length,
           compactionRequestCount: firstEntries.filter(
             (entry) => entry.method === "thread/compact/start",
@@ -205,16 +236,16 @@ describe("Gateway Codex failure recovery product proof", () => {
         console.log(`[gateway Codex failure recovery proof] ${JSON.stringify(proof)}`);
         expect(proof).toEqual({
           failureKind: scenario.failureKind,
-          configuredFallback: FALLBACK_MODEL,
+          configuredFallback: REPAIRED_FALLBACK_MODEL,
           firstTurnStartCount: scenario.firstTurnStartCount,
           compactionRequestCount: 0,
           firstStatus: scenario.firstStatus,
           visibleReplies: scenario.visibleReplies,
-          laterStatus: "ok",
+          laterStatus: scenario.failureKind === "misalignment" ? "blocked" : "ok",
           totalTurnStartCount: scenario.totalTurnStartCount,
           threadStartCount: 1,
           nativeThreadIds: [expect.any(String)],
-          selectedModels: ["gpt-5.4"],
+          selectedModels: [REPAIRED_MODEL_ID],
         });
         expect(JSON.stringify(history)).not.toContain("biological risk");
         expect(JSON.stringify(history)).not.toContain("/new");

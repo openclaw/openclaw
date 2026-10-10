@@ -1,77 +1,14 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
-import {
-  createControlUiMockGatewayInitScript,
-  type ControlUiMockGatewayScenario,
-} from "./control-ui-e2e.ts";
-import { mockGatewayTest } from "./mock-gateway-page.test-support.ts";
+import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
+import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
+import { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
 
 type Row = Record<string, unknown>;
-type Frame = { type: string; id: string; ok: boolean; payload: Row; error?: Row };
-type Controls = {
-  deferNext: (method: string) => void;
-  resolveDeferred: (method: string, payload?: unknown) => void;
-  rejectDeferred: (method: string) => void;
-  setMethodResponse: (method: string, payload: unknown) => void;
-  setSessionsListResponse: (payload: { sessions: unknown[] }) => void;
-};
-const flush = () =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
 
-const it = mockGatewayTest.extend<{
-  connect: (scenario?: ControlUiMockGatewayScenario) => Promise<{
-    send: (method: string, params?: Row) => Promise<string>;
-    response: (id: string) => Frame | undefined;
-    request: (method: string, params?: Row) => Promise<Frame>;
-    controls: Controls;
-  }>;
-}>({
-  connect: async ({ gatewayPage }, use) => {
-    await use(async (scenario = {}) => {
-      const { window, execute } = gatewayPage;
-      execute(createControlUiMockGatewayInitScript(scenario));
-      const socket = new window.WebSocket("ws://mock-gateway");
-      const frames: Frame[] = [];
-      socket.addEventListener("message", (event: MessageEvent) => {
-        frames.push(JSON.parse(String(event.data)) as Frame);
-      });
-      await flush();
-      let sequence = 0;
-      const send = async (method: string, params: Row = {}) => {
-        const id = String(++sequence);
-        socket.send(JSON.stringify({ type: "req", id, method, params }));
-        await flush();
-        return id;
-      };
-      const response = (id: string) =>
-        frames.find((frame) => frame.type === "res" && frame.id === id);
-      const controls = (
-        window as typeof window & {
-          openclawControlUiE2eGateway: Controls;
-        }
-      ).openclawControlUiE2eGateway;
-      return {
-        send,
-        response,
-        controls,
-        request: async (method, params) => {
-          const frame = response(await send(method, params));
-          if (!frame) {
-            throw new Error(`Missing response for ${method}`);
-          }
-          return frame;
-        },
-      };
-    });
-  },
-});
-
 it.for([
-  { defaultAgentId: "main", sessionKey: "agent:main:notes", expected: "agent:main:main" },
-  { defaultAgentId: "ops", sessionKey: notes.key, expected: "agent:ops:main" },
   { defaultAgentId: " Ops Team ", sessionKey: notes.key, expected: "agent:ops-team:main" },
   {
     defaultAgentId: "ops",
@@ -244,7 +181,9 @@ it.for(["cases", "sequence"])(
         "sessionInfo",
       );
     }
-    expect((await request("sessions.list")).payload.sessions).toEqual([row]);
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      { ...row, snapshotAt: expect.any(Number) },
+    ]);
     // Wire-only list responses do not declare a canonical stored row for describe.
     expect((await request("sessions.describe", { key: row.key })).payload.session).toBeNull();
     expect((await request("sessions.resolve", { reference: { key: row.key } })).payload).toEqual({
@@ -352,7 +291,7 @@ it("preserves stale wire responses without consuming sequences or replacing cano
 });
 
 it("keeps patch metadata and pin/archive timestamps coherent across reads", async ({ connect }) => {
-  const scenario = { sessionKey: notes.key, sessions: [notes] };
+  const scenario = { sessionKey: notes.key, sessions: [{ ...notes, updatedAt: 1 }] };
   const { request } = await connect(scenario);
   const readRow = async () => {
     const { payload } = await request("sessions.list", { archived: "all" });
@@ -369,8 +308,9 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
     return row;
   };
   const patch = (fields: Row) => request("sessions.patch", { key: notes.key, ...fields });
-  await patch({ color: "blue" });
-  expect((await readRow()).color).toBe("blue");
+  const committed = (await patch({ color: "blue" })).payload.entry as Row;
+  expect(committed.updatedAt).toBeGreaterThan(1);
+  expect(await readRow()).toMatchObject({ color: "blue", updatedAt: committed.updatedAt });
   await patch({ color: null });
   expect((await readRow()).color).toBeNull();
   await patch({ pinned: true });
@@ -383,9 +323,10 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
   expect(archived).toMatchObject({ archived: true, archivedAt: expect.any(Number), pinned: false });
   expect(archived).not.toHaveProperty("pinnedAt");
   await patch({ archived: true });
-  expect((await readRow()).archivedAt).toBe(archived.archivedAt);
+  const repeatedArchive = await readRow();
+  expect(repeatedArchive.archivedAt).toBe(archived.archivedAt);
   expect(await patch({ pinned: true })).toMatchObject({ ok: false });
-  expect(await readRow()).toEqual(archived);
+  expect(await readRow()).toEqual(repeatedArchive);
   await patch({ archived: false, pinned: true });
   expect(await readRow()).toMatchObject({
     archived: false,
@@ -492,9 +433,17 @@ it("replaces canonical rows and membership without retaining omitted fields", as
   controls.setSessionsListResponse({ sessions: [replacement] });
 
   const assertReplacement = async (currentRequest: typeof request) => {
-    expect((await currentRequest("sessions.list")).payload.sessions).toEqual([replacement]);
+    const list = (await currentRequest("sessions.list")).payload;
+    expect(list).toMatchObject({
+      count: 1,
+      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+      path: "",
+      ts: expect.any(Number),
+      sessions: [replacement],
+    });
+    expect(list.sessions).toEqual([{ ...replacement, snapshotAt: expect.any(Number) }]);
     expect((await currentRequest("sessions.describe", { key: notes.key })).payload.session).toEqual(
-      replacement,
+      { ...replacement, snapshotAt: expect.any(Number) },
     );
     for (const method of ["chat.history", "chat.startup"]) {
       expect((await currentRequest(method, { sessionKey: notes.key })).payload).toMatchObject({
@@ -514,6 +463,45 @@ it("replaces canonical rows and membership without retaining omitted fields", as
   const reloaded = await connect(scenario);
   await assertReplacement(reloaded.request);
 });
+
+it.for([
+  {
+    name: "configured",
+    defaults: { model: "fixture-model", modelProvider: "fixture-provider", contextTokens: 4096 },
+  },
+  { name: "malformed", defaults: null },
+])(
+  "preserves canonical list envelopes and explicit overrides from $name defaults",
+  async ({ defaults }, { connect }) => {
+    const envelope = { path: "fixture-store", ts: 123, totalCount: 9, defaults, sessions: [notes] };
+    const scenario = { sessions: [notes], methodResponses: { "sessions.list": envelope } };
+    const { request, controls } = await connect(scenario);
+    controls.setSessionsListResponse({ sessions: [notes] });
+    expect((await request("sessions.list")).payload).toMatchObject({
+      path: envelope.path,
+      ts: envelope.ts,
+      totalCount: envelope.totalCount,
+      count: 1,
+      defaults: defaults ?? { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+    });
+    const overridden = {
+      path: "replacement-store",
+      ts: 456,
+      count: 3,
+      totalCount: 12,
+      defaults: {
+        model: "replacement-model",
+        modelProvider: "replacement-provider",
+        contextTokens: 8192,
+      },
+      sessions: [notes],
+    };
+    controls.setSessionsListResponse(overridden);
+    expect((await request("sessions.list")).payload).toMatchObject(overridden);
+    const reloaded = await connect(scenario);
+    expect((await reloaded.request("sessions.list")).payload).toMatchObject(overridden);
+  },
+);
 
 it("commits only successful patchMany targets", async ({ connect }) => {
   const other = { key: "agent:ops:other", sessionId: "other-generation" };
@@ -546,16 +534,27 @@ it.for(["sessions.create", "sessions.catalog.continue"])(
   "materializes %s identity for every read",
   async (method, { connect }) => {
     const key = "agent:main:created";
-    const { request } = await connect({
+    const { request, controls } = await connect({
       methodResponses: {
-        [method]: { key, entry: { sessionId: "created-generation" }, runStarted: true },
+        [method]: {
+          key,
+          entry: { sessionId: "created-generation" },
+          runStarted: true,
+          runId: "created-run",
+        },
       },
     });
     await request(method, { label: "Created" });
     for (const read of ["chat.history", "chat.startup"]) {
       expect((await request(read, { sessionKey: key })).payload).toMatchObject({
         sessionId: "created-generation",
-        sessionInfo: { key, sessionId: "created-generation", label: "Created", hasActiveRun: true },
+        sessionInfo: {
+          key,
+          sessionId: "created-generation",
+          label: "Created",
+          hasActiveRun: true,
+          activeRunIds: ["created-run"],
+        },
       });
     }
     expect((await request("sessions.describe", { key })).payload).toMatchObject({
@@ -564,12 +563,33 @@ it.for(["sessions.create", "sessions.catalog.continue"])(
     expect((await request("sessions.list")).payload.sessions).toEqual(
       expect.arrayContaining([expect.objectContaining({ key, sessionId: "created-generation" })]),
     );
+    controls.emit("chat", {
+      sessionKey: key,
+      runId: "created-run",
+      state: "error",
+      errorMessage: "Workspace preparation failed",
+    });
+    const settled = {
+      key,
+      activeRunIds: [],
+      hasActiveRun: false,
+      status: "failed",
+      lastRunError: "Workspace preparation failed",
+    };
+    for (const read of ["chat.history", "chat.startup"]) {
+      expect((await request(read, { sessionKey: key })).payload.sessionInfo).toMatchObject(settled);
+    }
+    expect((await request("sessions.describe", { key })).payload.session).toMatchObject(settled);
+    await request(method, { label: "Created" });
+    expect((await request("sessions.list")).payload.sessions).toEqual(
+      expect.arrayContaining([expect.objectContaining(settled)]),
+    );
   },
 );
 
 it.for([
   { sessionKey: "agent:ops:notes", sessionScope: "global" as const, kind: "direct" },
-  { sessionKey: "global", sessionScope: "agent" as const, kind: "global" },
+  { sessionKey: "global", sessionScope: "per-sender" as const, kind: "global" },
 ])(
   "derives selected row kind from its key under $sessionScope scope",
   async ({ kind, ...scenario }, { connect }) => {
@@ -580,5 +600,102 @@ it.for([
     expect(
       (await request("chat.history", { sessionKey: scenario.sessionKey })).payload.sessionInfo,
     ).toMatchObject({ key: scenario.sessionKey, kind });
+  },
+);
+
+it("serves progress for the Workboard dashboard and its individual card sessions", async ({
+  connect,
+}) => {
+  const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+  const { request } = await connect({
+    sessionKey: seed.sessionKey,
+    methodResponses: seed.methodResponses,
+  });
+  const dashboard = (await request("board.get", { sessionKey: seed.sessionKey })).payload;
+  expect(dashboard).toMatchObject({
+    sessionKey: seed.sessionKey,
+    widgets: expect.arrayContaining([
+      expect.objectContaining({ name: "session-progress", pluginKind: "session:progress" }),
+    ]),
+  });
+  const progress = (await request("progressCard.get", { sessionKey: dashboard.sessionKey }))
+    .payload;
+  expect(progress.card).toMatchObject({
+    sessionKey: seed.sessionKey,
+    markdown: "**Product launch** is moving through final checks.",
+    steps: [
+      { step: "Confirm release scope", status: "completed" },
+      { step: "Validate onboarding flow", status: "in_progress" },
+      { step: "Publish support handoff", status: "pending" },
+    ],
+  });
+  const cardSessionKey = "agent:main:workboard-onboarding";
+  expect(
+    (await request("progressCard.get", { sessionKey: cardSessionKey })).payload.card,
+  ).toMatchObject({
+    sessionKey: cardSessionKey,
+    markdown: "Account setup passed. First-task navigation is being checked.",
+  });
+  expect(
+    (await request("progressCard.get", { sessionKey: "agent:main:without-progress" })).payload,
+  ).toEqual({ card: null });
+});
+
+it.for(["chat.history", "chat.startup"])(
+  "keeps Workboard session edits when reopening through %s",
+  async (method, { connect }) => {
+    const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+    const key = "agent:main:workboard-onboarding";
+    const transcripts: NonNullable<ControlUiMockGatewayScenario["sessionTranscripts"]> =
+      seed.cardSessionHistories;
+    const history = expectDefined(transcripts[key], "onboarding history");
+    const { request } = await connect({
+      sessions: seed.cardSessions,
+      sessionTranscripts: transcripts,
+    });
+    await request("sessions.patch", { key, label: "Renamed onboarding", pinned: true });
+    const reopened = (await request(method, { sessionKey: key })).payload;
+    expect(reopened.sessionInfo).toMatchObject({ key, label: "Renamed onboarding", pinned: true });
+    expect(reopened.messages).toEqual(history.messages);
+  },
+);
+
+it.for(
+  ["chat.history", "chat.startup"].flatMap((method) =>
+    ["transcript", "scenario"].map((source) => ({ method, source })),
+  ),
+)(
+  "does not replay a stopped $source Workboard run through $method",
+  async ({ method, source }, { connect }) => {
+    const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+    const key = "agent:main:workboard-onboarding";
+    const transcripts: NonNullable<ControlUiMockGatewayScenario["sessionTranscripts"]> =
+      seed.cardSessionHistories;
+    const history = expectDefined(transcripts[key], "onboarding history");
+    const runId = "workboard-onboarding-run";
+    const preview = expectDefined(history.inFlightRun, "onboarding run preview");
+    const { request } = await connect({
+      sessions: seed.cardSessions,
+      sessionTranscripts:
+        source === "transcript" ? transcripts : { [key]: { messages: history.messages } },
+      ...(source === "scenario" ? { inFlightRun: preview } : {}),
+    });
+    expect((await request(method, { sessionKey: key })).payload.inFlightRun).toMatchObject({
+      runId,
+      text: "Checking first-task navigation and recovery after a validation error…",
+    });
+    expect((await request("chat.abort", { sessionKey: key, runId })).payload).toEqual({
+      aborted: true,
+      runIds: [runId],
+    });
+    const reopened = (await request(method, { sessionKey: key })).payload;
+    expect(reopened.inFlightRun).toBeNull();
+    expect(reopened.sessionInfo).toMatchObject({
+      key,
+      status: "killed",
+      hasActiveRun: false,
+      activeRunIds: [],
+    });
+    expect(reopened.messages).toEqual(history.messages);
   },
 );

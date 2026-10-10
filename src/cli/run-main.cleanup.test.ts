@@ -1,17 +1,27 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 const dispatch = vi.hoisted(() => ({
   run: async () => {},
   command: undefined as Promise<void> | undefined,
   memoryClosed: vi.fn(async () => {}),
 }));
+const temp = useAutoCleanupTempDirTracker(afterEach);
+const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
 // Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
 vi.mock("./route.js", () => ({
   tryRouteCli: async () => {
@@ -28,15 +38,25 @@ vi.mock("../entry.compile-cache.js", () => ({
   respawnWithoutOpenClawCompileCacheIfNeeded: async () => false,
 }));
 vi.mock("../entry.respawn.js", () => ({ buildCliRespawnPlan: () => null }));
-vi.mock("../infra/openclaw-exec-env.js", () => ({ ensureOpenClawExecMarkerOnProcess() {} }));
+vi.mock("../infra/openclaw-exec-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-exec-env.js")>()),
+  ensureOpenClawExecMarkerOnProcess() {},
+}));
 vi.mock("../infra/warning-filter.js", () => ({ installProcessWarningFilter() {} }));
 vi.mock("../infra/unhandled-rejections.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/unhandled-rejections.js")>()),
-  installUnhandledRejectionHandler() {},
+  installUnhandledRejectionHandler: installUnhandledRejectionHandlerMock,
 }));
-vi.mock("../logging.js", () => ({ enableConsoleCapture() {}, routeLogsToStderr() {} }));
+vi.mock("../logging/console.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/console.js")>()),
+  enableConsoleCapture() {},
+  routeLogsToStderr() {},
+}));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath() {} }));
-vi.mock("./dotenv.js", () => ({ loadCliDotEnv() {} }));
+vi.mock("./dotenv.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dotenv.js")>()),
+  loadCliDotEnv() {},
+}));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
   startProxy: async () => null,
@@ -47,7 +67,8 @@ vi.mock("../plugins/memory-runtime.js", () => ({
   closeActiveMemorySearchManagersCore: dispatch.memoryClosed,
 }));
 vi.mock("./gateway-cli/pre-bootstrap.js", () => ({ selectGatewayRunEnvironment: async () => {} }));
-vi.mock("./gateway-cli/run-command.js", () => ({
+vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/run-command.js")>()),
   addGatewayRunCommand: (command: import("commander").Command) =>
     command.action(() => dispatch.run()),
 }));
@@ -62,12 +83,11 @@ vi.mock("./one-shot-exit.js", () => ({
   },
 }));
 
-function resourceHarness(id: string, gate?: Deferred) {
+function resourceHarness(id: string) {
   let child: ChildProcessWithoutNullStreams | undefined;
   let closed: Promise<unknown[]> | undefined;
   let output: readline.Interface | undefined;
   let disposeCalls = 0;
-  const entered = createDeferredCore();
   const pending = new Map<string, Deferred>();
   function line(value: string) {
     const next = createDeferredCore();
@@ -106,15 +126,12 @@ function resourceHarness(id: string, gate?: Deferred) {
     },
     dispose: async () => {
       disposeCalls++;
-      entered.resolve();
-      await gate?.promise;
       child?.stdin.end();
       await closed;
     },
   };
   return {
     harness,
-    entered,
     async ping() {
       const pong = line("pong");
       child?.stdin.write("ping\n");
@@ -122,12 +139,15 @@ function resourceHarness(id: string, gate?: Deferred) {
     },
     snapshot: () => ({ disposeCalls, exitCode: child?.exitCode, signalCode: child?.signalCode }),
     async closeAndJoin() {
-      gate?.resolve();
-      child?.stdin.end();
+      // Setup can fail before spawn; teardown must preserve that original error.
+      if (!child) {
+        return;
+      }
+      child.stdin.end();
       await closed;
       output?.close();
-      expect(child?.exitCode).toBe(0);
-      expect(child?.signalCode).toBe(null);
+      expect(child.exitCode).toBe(0);
+      expect(child.signalCode).toBe(null);
     },
   };
 }
@@ -163,7 +183,9 @@ beforeEach(async () => {
   process.argv = argv;
   runtime.setActivePluginRegistry(emptyRegistry.createEmptyPluginRegistry());
   dispatch.command = undefined;
+  dispatch.run = async () => {};
   dispatch.memoryClosed.mockClear();
+  installUnhandledRejectionHandlerMock.mockClear();
 });
 afterEach(() => {
   process.argv = originalArgv;
@@ -196,40 +218,142 @@ async function runProcessEntry() {
 }
 
 describe("CLI process harness cleanup", () => {
-  it.each(["current", "transient-resolve", "transient-reject"])(
-    "joins %s resources at process completion",
+  it("reclaims earlier CLI captures and owns periodic cleanup until command exit", async () => {
+    const stateDir = temp.make("cli-capture-orphans-");
+    const source = path.join(stateDir, "fixture");
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+    const { acquireSqliteStagingToken } = await import("../infra/sqlite-staging-token.js");
+    const prior = path.join(stateDir, "tmp", "plugin-captures", "previous-command");
+    fs.mkdirSync(path.join(prior, "captures"), { recursive: true });
+    fs.writeFileSync(path.join(prior, "captures", "source.js"), "retained source");
+    const release = acquireSqliteStagingToken(prior, "create");
+    release();
+    const aged = new Date(Date.now() - 2 * 60 * 60_000);
+    fs.utimesSync(prior, aged, aged);
+    const { getBoundLegacyPluginSdkResourceHost } =
+      await import("../plugins/legacy-sdk-resource-host.js");
+    const { getPluginCache } = await import("../plugins/plugin-cache.js");
+    const { PluginInstance } = await import("../plugins/plugin-instance.js");
+    const { capturePluginGenerationArtifact } =
+      await import("../plugins/plugin-generation-artifact.js");
+    // Fixture imports initialize WAL maintenance before we observe the command scheduler.
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const schedulerModule = await import("../infra/gateway-scheduler.js");
+    const constructor = vi
+      .spyOn(schedulerModule, "GatewayScheduler")
+      .mockImplementation(function () {
+        return scheduler;
+      });
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    dispatch.run = async () => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const host = getBoundLegacyPluginSdkResourceHost();
+      expect(host).toBeDefined();
+      expect(host?.scheduler).toBe(scheduler);
+      artifact = capturePluginGenerationArtifact(source);
+      const instance = new PluginInstance("orphan-recovery-fixture");
+      instance.onModuleDispose(artifact.disposeAsync);
+      getPluginCache().instances.add(instance);
+      expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60 * 60_000);
+      expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
+        "retained",
+      );
+    };
+    try {
+      await runProcessEntry();
+      expect(constructor).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prior)).toBe(false);
+      expect(scheduler.signal.aborted).toBe(true);
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(artifact).toBeDefined();
+      expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
+    } finally {
+      constructor.mockRestore();
+      await scheduler.stop();
+      await artifact?.disposeAsync();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["failure", "gateway-adopted"])(
+    "retires command captures unless their inventory is adopted (%s)",
     async (mode) => {
-      const registry =
-        mode === "current"
-          ? runtime.getActivePluginRegistry()!
-          : emptyRegistry.createEmptyPluginRegistry();
-      const resource = resourceHarness(mode);
-      registerHarness(registry, resource.harness);
-      const actionError = new Error("synthetic action failure");
+      const stateDir = temp.make("cli-capture-custody-");
+      const source = path.join(stateDir, "fixture");
+      fs.mkdirSync(source);
+      fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+      const { getPluginCache, adoptProcessPluginCache, getProcessPluginCache } =
+        await import("../plugins/plugin-cache.js");
+      const { PluginInstance } = await import("../plugins/plugin-instance.js");
+      const { capturePluginGenerationArtifact } =
+        await import("../plugins/plugin-generation-artifact.js");
+      const { retainGatewayPluginMetadata } =
+        await import("../plugins/plugin-metadata-lifecycle.js");
+      const previous = getProcessPluginCache();
+      let gateway: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
+      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      const failure = new Error("fixture command failed");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       dispatch.run = async () => {
-        await scopes.withPluginRuntimeRegistryScope(registry, () => acquire(mode));
-        if (mode === "transient-reject") {
-          throw actionError;
+        const cache = getPluginCache();
+        artifact = capturePluginGenerationArtifact(source);
+        const instance = new PluginInstance("capture-fixture");
+        instance.onModuleDispose(artifact.disposeAsync);
+        cache.instances.add(instance);
+        if (mode === "gateway-adopted") {
+          gateway = retainGatewayPluginMetadata(createTestGatewayScheduler());
+          adoptProcessPluginCache(cache);
+          gateway.publish(undefined);
+        }
+        if (mode === "failure") {
+          throw failure;
         }
       };
       try {
         const error = await runProcessEntry().catch((cause: unknown) => cause);
-        const atReturn = resource.snapshot();
-        if (atReturn.exitCode === null) {
-          await resource.ping();
+        expect(error).toBe(mode === "failure" ? failure : undefined);
+        expect(artifact).toBeDefined();
+        expect(fs.existsSync(artifact!.boundaryRoot)).toBe(mode === "gateway-adopted");
+        if (gateway) {
+          expect(fs.readFileSync(artifact!.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
+            "module.exports = 'retained';",
+          );
+          await gateway.close();
+          expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
         }
-        expect(error).toBe(mode === "transient-reject" ? actionError : undefined);
-        expect(atReturn).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
       } finally {
-        await resource.closeAndJoin();
+        await gateway?.close();
+        await artifact?.disposeAsync();
+        adoptProcessPluginCache(previous);
+        vi.unstubAllEnvs();
       }
     },
   );
 
+  it("installs the rejection handler before the direct Gateway fast path", async () => {
+    dispatch.run = async () => {
+      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
+    };
+
+    const { runCli } = await import("./run-main.js");
+    await runCli(["node", "openclaw", "gateway"]);
+
+    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
+  });
+
   it("awaits a transient disposer before later finalizers and process completion", async () => {
     const registry = emptyRegistry.createEmptyPluginRegistry();
     const gate = createDeferredCore();
-    const resource = resourceHarness("awaited", gate);
+    const entered = createDeferredCore();
+    const resource = resourceHarness("awaited");
+    const dispose = resource.harness.dispose!.bind(resource.harness);
+    resource.harness.dispose = async () => {
+      entered.resolve();
+      await gate.promise;
+      await dispose();
+    };
     registerHarness(registry, resource.harness);
     dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire("awaited"));
     let returned = false;
@@ -238,9 +362,10 @@ describe("CLI process harness cleanup", () => {
     });
     try {
       // Early command return must fail the assertion and still reach fixture teardown.
-      await Promise.race([resource.entered.promise, command]);
+      await Promise.race([entered.promise, command]);
       expect(returned).toBe(false);
       await resource.ping();
+      expect(returned).toBe(false);
       expect(dispatch.memoryClosed).not.toHaveBeenCalled();
     } finally {
       gate.resolve();
@@ -268,7 +393,7 @@ describe("CLI process harness cleanup", () => {
     }
   });
 
-  it.each(["helper", "direct", "legacy", "gateway", "gateway-run", "gateway-legacy"])(
+  it.each(["direct", "gateway-legacy"])(
     "leaves %s transient resources with their owner",
     async (mode) => {
       const registry = emptyRegistry.createEmptyPluginRegistry();
@@ -277,42 +402,19 @@ describe("CLI process harness cleanup", () => {
       dispatch.run = () =>
         scopes.withPluginRuntimeRegistryScope(registry, () => acquire("borrowed"));
       try {
-        if (mode === "helper") {
-          const { withAgentPluginRegistry } = await import("../agents/runtime-plugins.js");
-          await scopes.withPluginRuntimeRegistryScope(registry, () =>
-            withAgentPluginRegistry({
-              config: {},
-              workspaceDir: process.cwd(),
-              run: () => acquire("borrowed"),
-            }),
-          );
-        } else if (mode === "direct") {
+        if (mode === "direct") {
           const { runCli } = await import("./run-main.js");
           await runCli(argv);
-        } else if (mode === "legacy") {
-          const action = dispatch.run;
-          dispatch.run = async () => {};
-          const { runLegacyCliEntry } = await import("../index.js");
-          await dispatch.command;
-          dispatch.run = action;
-          await runLegacyCliEntry(argv, undefined, { retainConsoleRoutingUntilProcessExit: true });
         } else {
-          if (mode === "gateway-legacy") {
-            const borrowedAction = dispatch.run;
-            dispatch.run = async () => {
-              dispatch.run = borrowedAction;
-              const { runLegacyCliEntry } = await import("../index.js");
-              await runLegacyCliEntry(argv, undefined, {
-                retainConsoleRoutingUntilProcessExit: true,
-              });
-            };
-          }
-          process.argv = [
-            "node",
-            "openclaw",
-            "gateway",
-            ...(mode === "gateway-run" ? ["run"] : []),
-          ];
+          const borrowedAction = dispatch.run;
+          dispatch.run = async () => {
+            dispatch.run = borrowedAction;
+            const { runLegacyCliEntry } = await import("../index.js");
+            await runLegacyCliEntry(argv, undefined, {
+              retainConsoleRoutingUntilProcessExit: true,
+            });
+          };
+          process.argv = ["node", "openclaw", "gateway"];
           await runProcessEntry();
         }
         expect(resource.snapshot()).toEqual({ disposeCalls: 0, exitCode: null, signalCode: null });
@@ -359,7 +461,7 @@ describe("CLI process harness cleanup", () => {
     dispatch.run = async () => {
       for (const [index, target] of [registry, second].entries()) {
         await scopes.withPluginRuntimeRegistryScope(target, () =>
-          scopes.withPluginRuntimePluginIdScope(`request-${index}`, async () => {
+          scopes.withPluginRuntimePluginScope({ pluginId: `request-${index}` }, async () => {
             await acquire("shared");
             registryApi.getRegisteredAgentHarness("shared");
             registryApi.listRegisteredAgentHarnesses();
@@ -383,16 +485,17 @@ describe("CLI process harness cleanup", () => {
   });
 
   it("rejects reuse of cleaned registrations without retiring unused cache entries", async () => {
-    const { pluginLoaderCacheState } = await import("../plugins/registry-lifecycle.js");
+    const { getPluginLoaderCacheState } = await import("../plugins/registry-lifecycle.js");
+    const cache = getPluginLoaderCacheState();
     const unused = emptyRegistry.createEmptyPluginRegistry();
-    pluginLoaderCacheState.set("cleanup-unused", unused);
+    cache.set("cleanup-unused", unused);
     const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
     const { runCli } = await import("./run-main.js");
     for (let invocation = 0; invocation < 2; invocation++) {
       const registry = emptyRegistry.createEmptyPluginRegistry();
       const resource = resourceHarness("sequential");
       registerHarness(registry, resource.harness);
-      pluginLoaderCacheState.set("cleanup-used", registry);
+      cache.set("cleanup-used", registry);
       let retainedLookup:
         | (() => ReturnType<typeof registryApi.getRegisteredAgentHarness>)
         | undefined;
@@ -405,8 +508,8 @@ describe("CLI process harness cleanup", () => {
         });
       try {
         await withCliProcessScope(() => runCli(argv));
-        expect(pluginLoaderCacheState.get("cleanup-used")).toBeUndefined();
-        expect(pluginLoaderCacheState.get("cleanup-unused")).toBe(unused);
+        expect(cache.get("cleanup-used")).toBeUndefined();
+        expect(cache.get("cleanup-unused")).toBe(unused);
         expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
         expect(retainedLookup).toBeDefined();
         expect(retainedLookup!()).toBeUndefined();

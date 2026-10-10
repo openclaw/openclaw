@@ -13,10 +13,13 @@ const panels = [
   { name: "desktop", tag: "openclaw-desktop-panel", selector: ".bp" },
   { name: "custodian", tag: "openclaw-assistant-panel", selector: ".assistant-panel" },
 ] as const;
+const deferredPanelTags = panels.map((panel) =>
+  panel.name === "custodian" ? "openclaw-assistant-panel-content" : panel.tag,
+);
 
 suite.define(() => {
   it.each(panels)(
-    "loads only the requested $name panel and restores it on reload",
+    "loads only the requested $name panel content and restores it on reload",
     async (panel) => {
       await suite.withPage(
         { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
@@ -52,6 +55,13 @@ suite.define(() => {
               scripts.add(request.url());
             }
           });
+          const terminalSession = {
+            agentId: "main",
+            confined: false,
+            cwd: "/workspace",
+            sessionId: "startup-terminal",
+            shell: "/bin/bash",
+          };
           const gateway = await installMockGateway(page, {
             terminalEnabled: true,
             featureMethods: [
@@ -64,13 +74,7 @@ suite.define(() => {
             ],
             methodResponses: {
               "terminal.list": { sessions: [] },
-              "terminal.open": {
-                agentId: "main",
-                confined: false,
-                cwd: "/workspace",
-                sessionId: "startup-terminal",
-                shell: "/bin/bash",
-              },
+              "terminal.open": terminalSession,
               "environments.list": { environments: [] },
               "openclaw.chat.history": { turns: [] },
             },
@@ -82,7 +86,7 @@ suite.define(() => {
           const definitions = () =>
             page.evaluate(
               (tags) => tags.filter((tag) => customElements.get(tag)),
-              panels.map(({ tag }) => tag),
+              deferredPanelTags,
             );
           expect(await definitions()).toEqual([]);
           if (panel.name === "terminal") {
@@ -113,7 +117,7 @@ suite.define(() => {
             expect(sources.some((source) => source.endsWith("/app/app-host.ts"))).toBe(true);
             expect(
               sources.filter((source) =>
-                /components\/(terminal\/terminal-panel\.ts|browser\/browser-panel\.ts|desktop\/desktop-panel\.ts|assistant-panel\.ts)$|pages\/chat\/chat-page\.ts$/.test(
+                /components\/(terminal\/terminal-panel\.ts|browser\/browser-panel\.ts|desktop\/desktop-panel\.ts|assistant-panel-content\.ts)$|pages\/(chat\/chat-page|debug\/debug-overlay-content)\.ts$/.test(
                   source,
                 ),
               ),
@@ -135,11 +139,30 @@ suite.define(() => {
             );
           }
           await page.locator(panel.tag).locator(panel.selector).waitFor();
-          expect(await definitions()).toEqual([panel.tag]);
+          const deferredTag =
+            panel.name === "custodian" ? "openclaw-assistant-panel-content" : panel.tag;
+          await page.locator(deferredTag).waitFor({ state: "attached" });
+          expect(await definitions()).toEqual([deferredTag]);
+          if (panel.name === "terminal") {
+            // Reload an adopted PTY, and keep the mock Gateway's live inventory across reload.
+            await page.locator(panel.tag).locator(".tabstrip-tab.is-live").waitFor();
+            await gateway.setMethodResponse("terminal.list", {
+              sessions: [{ ...terminalSession, attached: false, owner: "conn", createdAtMs: 1 }],
+            });
+            await gateway.setMethodResponse("terminal.attach", {
+              ...terminalSession,
+              buffer: "",
+              seq: 0,
+            });
+          }
           await page.reload();
           await page.locator(panel.tag).locator(panel.selector).waitFor();
-          expect(await definitions()).toEqual([panel.tag]);
+          await page.locator(deferredTag).waitFor({ state: "attached" });
+          expect(await definitions()).toEqual([deferredTag]);
           if (panel.name === "terminal") {
+            const attached = await gateway.waitForRequest("terminal.attach");
+            expect(attached.params).toEqual({ sessionId: terminalSession.sessionId });
+            expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
             const terminal = page.locator(panel.tag).locator(".tp-host");
             await terminal.locator("canvas").waitFor();
             await terminal.click();

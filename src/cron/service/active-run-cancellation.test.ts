@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { clearCronJobActive, markCronJobActive, noteActiveCronJobRemoval } from "../active-jobs.js";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  noteActiveCronJobRemoval,
+  requestActiveCronJobCancellation,
+} from "../active-jobs.js";
 import {
   abortActiveCronTaskRuns,
-  cancelActiveCronTaskRun,
   getSuspensionVisibleCronTaskRunCount,
   registerActiveCronTaskRun,
   retireActiveCronTaskRunTracking,
@@ -15,6 +19,32 @@ import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
 describe("cron task cancellation tracking", () => {
+  it("keeps a removed agent's unsettled core visible after cancellation and restart retirement", async () => {
+    vi.useFakeTimers();
+    resetActiveCronTaskRunsForTests();
+    const removed = createDeferred();
+    const survivor = createDeferred();
+    const controller = new AbortController();
+    trackActiveCronTaskRunSettlement(removed.promise, controller.signal, "removed");
+    trackActiveCronTaskRunSettlement(survivor.promise, undefined, "survivor");
+    try {
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
+      retireActiveCronTaskRunTracking();
+      expect(getSuspensionVisibleCronTaskRunCount({ agentId: "removed" })).toBe(1);
+      removed.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getSuspensionVisibleCronTaskRunCount({ agentId: "removed" })).toBe(0);
+      expect(getSuspensionVisibleCronTaskRunCount({ agentId: "survivor" })).toBe(1);
+    } finally {
+      removed.resolve();
+      survivor.resolve();
+      await Promise.allSettled([removed.promise, survivor.promise]);
+      vi.useRealTimers();
+      resetActiveCronTaskRunsForTests();
+    }
+  });
+
   it("consumes a removal request made before the run controller binds", () => {
     const marker = markCronJobActive("removed-before-controller");
     const controller = new AbortController();
@@ -197,6 +227,7 @@ describe("cron task cancellation tracking", () => {
     const unaffectedController = new AbortController();
     const cancelledRun = createDeferred();
     const unaffectedRun = createDeferred();
+    const marker = markCronJobActive("cancelled-job");
     let release: (() => void) | undefined;
 
     try {
@@ -206,12 +237,18 @@ describe("cron task cancellation tracking", () => {
       release = registerActiveCronTaskRun({
         runId: "cancelled-run",
         controller: cancelledController,
+        activeJobMarker: marker,
       });
       const existingTimerCount = vi.getTimerCount();
 
-      expect(cancelActiveCronTaskRun({ runId: "cancelled-run" })).toBe(true);
+      requestActiveCronJobCancellation("cancelled-job", "Cancelled by operator.");
+      expect(cancelledController.signal.aborted).toBe(true);
+      expect(cancelledController.signal.reason).toBe("Cancelled by operator.");
+      expect(unaffectedController.signal.aborted).toBe(false);
       expect(vi.getTimerCount()).toBe(existingTimerCount + 1);
-      expect(cancelActiveCronTaskRun({ runId: "cancelled-run" })).toBe(false);
+      requestActiveCronJobCancellation("cancelled-job", "Repeated cancellation.");
+      expect(cancelledController.signal.reason).toBe("Cancelled by operator.");
+      expect(vi.getTimerCount()).toBe(existingTimerCount + 1);
       release?.();
 
       await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
@@ -223,6 +260,7 @@ describe("cron task cancellation tracking", () => {
       expect(getSuspensionVisibleCronTaskRunCount()).toBe(2);
     } finally {
       release?.();
+      clearCronJobActive("cancelled-job", marker);
       cancelledRun.resolve();
       unaffectedRun.resolve();
       await Promise.allSettled([cancelledRun.promise, unaffectedRun.promise]);
@@ -278,25 +316,6 @@ describe("cron task cancellation tracking", () => {
       await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
       vi.useRealTimers();
       resetActiveCronTaskRunsForTests();
-    }
-  });
-
-  it("keeps suspension blocked until a timed-out core actually settles", async () => {
-    resetActiveCronTaskRunsForTests();
-    const controller = new AbortController();
-    const core = createDeferred();
-    trackActiveCronTaskRunSettlement(core.promise, controller.signal);
-    controller.abort();
-
-    try {
-      expect(getSuspensionVisibleCronTaskRunCount()).toBe(1);
-      core.resolve();
-      await core.promise;
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
-    } finally {
-      core.resolve();
-      await core.promise;
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
     }
   });
 });

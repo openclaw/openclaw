@@ -1,5 +1,3 @@
-/** Pure order-and-size layout for the session dashboard board. */
-
 export const BOARD_GRID_COLUMNS = 12;
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
@@ -28,11 +26,6 @@ type BoardGridCell = {
 
 export type BoardGridDirection = "left" | "right" | "up" | "down";
 
-type BoardGridPreview = {
-  items: BoardGridItem[];
-  rects: BoardGridRect[];
-};
-
 function clampInteger(value: number, minimum: number, maximum: number): number {
   const integer = Number.isFinite(value) ? Math.round(value) : minimum;
   return Math.min(maximum, Math.max(minimum, integer));
@@ -57,31 +50,25 @@ function canonicalItems(
     .map(withOrder);
 }
 
-function fits(occupied: readonly boolean[][], x: number, y: number, w: number, h: number): boolean {
+function fits(occupied: readonly number[], x: number, y: number, w: number, h: number): boolean {
+  // The fixed 12-column grid fits in one occupancy mask per row.
+  const columns = ((1 << w) - 1) << x;
   for (let row = y; row < y + h; row += 1) {
-    for (let column = x; column < x + w; column += 1) {
-      if (occupied[row]?.[column]) {
-        return false;
-      }
+    if ((occupied[row] ?? 0) & columns) {
+      return false;
     }
   }
   return true;
 }
 
-function occupy(occupied: boolean[][], rect: BoardGridRect): void {
-  for (let row = rect.y; row < rect.y + rect.h; row += 1) {
-    const cells = occupied[row] ?? Array.from({ length: BOARD_GRID_COLUMNS }, () => false);
-    occupied[row] = cells;
-    for (let column = rect.x; column < rect.x + rect.w; column += 1) {
-      cells[column] = true;
-    }
-  }
-}
-
-function firstFit(occupied: readonly boolean[][], item: BoardGridItem): BoardGridRect {
+function placeFirstFit(occupied: number[], item: BoardGridItem): BoardGridRect {
   for (let y = 0; ; y += 1) {
     for (let x = 0; x <= BOARD_GRID_COLUMNS - item.w; x += 1) {
       if (fits(occupied, x, y, item.w, item.h)) {
+        const columns = ((1 << item.w) - 1) << x;
+        for (let row = y; row < y + item.h; row += 1) {
+          occupied[row] = (occupied[row] ?? 0) | columns;
+        }
         return { name: item.name, x, y, w: item.w, h: item.h };
       }
     }
@@ -96,14 +83,12 @@ export function layout(
   items: readonly BoardGridItem[],
   maxItemHeight = BOARD_GRID_MAX_HEIGHT,
 ): BoardGridRect[] {
-  const occupied: boolean[][] = [];
-  const rects: BoardGridRect[] = [];
-  for (const item of canonicalItems(items, maxItemHeight)) {
-    const placed = firstFit(occupied, item);
-    occupy(occupied, placed);
-    rects.push(placed);
-  }
-  return rects;
+  return layoutCanonicalItems(canonicalItems(items, maxItemHeight));
+}
+
+function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
+  const occupied: number[] = [];
+  return items.map((item) => placeFirstFit(occupied, item));
 }
 
 function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {
@@ -113,35 +98,33 @@ function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {
 }
 
 /**
- * Reorders one item around the target cell, then fully reflows the board.
- * Occupied targets insert before their occupant: that item and its followers
- * are pushed aside by the normal first-fit pass.
+ * Reorders against a named current rectangle or the fallback grid cell.
+ * Resolve targets before removing the moving item so responsive card stacking
+ * and successive previews keep the same logical target through pointerup.
  */
 export function previewDrag(
   items: readonly BoardGridItem[],
   name: string,
-  targetCell: BoardGridCell,
-): BoardGridPreview {
+  target: BoardGridCell & { name: string | undefined },
+): BoardGridItem[] {
   const canonical = canonicalItems(items);
   const movingIndex = canonical.findIndex((item) => item.name === name);
   if (movingIndex < 0) {
-    return { items: canonical, rects: layout(canonical) };
+    return canonical;
   }
 
-  const currentRects = layout(canonical);
+  const currentRects = layoutCanonicalItems(canonical);
+  const targetCell = currentRects.find((rect) => rect.name === target.name) ?? target;
   const cell = {
     x: clampInteger(targetCell.x, 0, BOARD_GRID_COLUMNS - 1),
     y: Math.max(0, Number.isFinite(targetCell.y) ? Math.floor(targetCell.y) : 0),
   };
   const currentRect = currentRects.find((rect) => rect.name === name);
   if (currentRect && contains(currentRect, cell)) {
-    return { items: canonical, rects: currentRects };
+    return canonical;
   }
 
-  const [moving] = canonical.splice(movingIndex, 1);
-  if (!moving) {
-    return { items: canonical, rects: layout(canonical) };
-  }
+  const moving = canonical.splice(movingIndex, 1);
   const occupiedTarget = currentRects.find((rect) => rect.name !== name && contains(rect, cell));
   const nextRect =
     occupiedTarget ??
@@ -154,12 +137,10 @@ export function previewDrag(
   const insertionIndex = nextRect
     ? canonical.findIndex((item) => item.name === nextRect.name)
     : canonical.length;
-  canonical.splice(Math.max(0, insertionIndex), 0, moving);
-  const reordered = canonical.map(withOrder);
-  return { items: reordered, rects: layout(reordered) };
+  canonical.splice(Math.max(0, insertionIndex), 0, ...moving);
+  return canonical.map(withOrder);
 }
 
-/** Returns a new canonical item list with one clamped size change. */
 export function resize(
   items: readonly BoardGridItem[],
   name: string,
@@ -192,10 +173,7 @@ export function nudge(
   const delta = direction === "left" || direction === "up" ? -1 : 1;
   const target = Math.min(canonical.length - 1, Math.max(0, index + delta));
   if (target !== index) {
-    const [moving] = canonical.splice(index, 1);
-    if (moving) {
-      canonical.splice(target, 0, moving);
-    }
+    canonical.splice(target, 0, ...canonical.splice(index, 1));
   }
   return canonical.map(withOrder);
 }
@@ -303,3 +281,23 @@ type BoardWidgetSizingInput = {
   presentation?: "card" | "full-bleed" | "frameless";
   sizeH: number;
 };
+
+export function boardWidgetGridItems(
+  widgets: readonly (BoardWidgetSizingInput & { name: string; sizeW: number; position: number })[],
+  contentHeights: ReadonlyMap<string, number>,
+  fitAutoContent = false,
+  pageWidgetName = "",
+): BoardGridItem[] {
+  const chromeRowPx = boardChromeRowPx();
+  return widgets.map((widget) => ({
+    name: widget.name,
+    w: widget.sizeW,
+    h: effectiveBoardWidgetRows(
+      widget,
+      contentHeights.get(widget.name),
+      widget.name === pageWidgetName ? 0 : chromeRowPx,
+      fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+    ),
+    order: widget.position,
+  }));
+}

@@ -1,5 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
@@ -10,6 +14,7 @@ import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const unavailableDiscoveryAuthProfiles = new WeakMap<object, string>();
 
@@ -33,11 +38,13 @@ export async function prepareProviderDiscoveryAuth(
   {
     agentDir,
     authStore,
+    env,
     resolveProviderApiKey,
     resolveProviderAuth,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
+    env: NodeJS.ProcessEnv;
     resolveProviderApiKey: ProviderApiKeyResolver;
     resolveProviderAuth: ProviderAuthResolver;
   },
@@ -46,7 +53,7 @@ export async function prepareProviderDiscoveryAuth(
   const profiles = new Map<string, () => string>();
   for (const [profileId, credential] of Object.entries(authStore.profiles)) {
     const field = credential.type === "api_key" ? "key" : "token";
-    const ref = coerceSecretRef(
+    const ref = parseSecretRef(
       credential.type === "api_key"
         ? credential.keyRef
         : credential.type === "token"
@@ -54,12 +61,17 @@ export async function prepareProviderDiscoveryAuth(
           : undefined,
       config?.secrets?.defaults,
     );
-    if (!ref || ref.source === "env") {
+    if (!ref) {
+      continue;
+    }
+    // Cold catalog readers can use env material without a Gateway auth snapshot.
+    const envValue = ref.source === "env" ? normalizeOptionalString(env[ref.id.trim()]) : undefined;
+    if (envValue) {
+      profiles.set(profileId, () => envValue);
       continue;
     }
     try {
       // Only the canonical owner may redeem this exact profile's published ref.
-      // OAuth/env/plain profiles retain their existing discovery semantics.
       const resolved = await resolveApiKeyForProfile({
         cfg: config,
         store: authStore,
@@ -100,20 +112,26 @@ export async function prepareProviderCatalogOAuthAuth(
   {
     agentDir,
     authStore,
+    env,
     provider,
     resolveProviderAuth,
     isActive,
+    onPreparationFailure,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
+    env: NodeJS.ProcessEnv;
     provider: string;
     resolveProviderAuth: ProviderAuthResolver;
     isActive: () => boolean;
+    onPreparationFailure: (profileIds: readonly string[]) => void;
   },
   config?: OpenClawConfig,
 ) {
   const failedProfileIds: string[] = [];
-  let preparedProfile: { profileId: string; apiKey: string } | undefined;
+  const failures: Array<{ profileId: string; message: string }> = [];
+  let failedAuthFlow: string | undefined;
+  let preparedProfile: { profileId: string; apiKey: string; authFlow?: string } | undefined;
   // Let an admitted refresh finish persisting its rotation, but do not start
   // another candidate after the catalog owner closes preparation admission.
   while (isActive()) {
@@ -134,6 +152,7 @@ export async function prepareProviderCatalogOAuthAuth(
     ) {
       break;
     }
+    let message = "No OAuth credential was returned";
     try {
       const resolved = await resolveApiKeyForProfile({
         cfg: config,
@@ -143,24 +162,54 @@ export async function prepareProviderCatalogOAuthAuth(
         allowProfileFallback: false,
       });
       if (resolved?.apiKey) {
-        preparedProfile = { profileId: auth.profileId, apiKey: resolved.apiKey };
+        preparedProfile = {
+          profileId: auth.profileId,
+          apiKey: resolved.apiKey,
+          authFlow:
+            resolved.credential?.type === "oauth" ? resolved.credential.authFlow : undefined,
+        };
         break;
       }
-    } catch {
-      failedProfileIds.push(auth.profileId);
-      continue;
+    } catch (error) {
+      message = sanitizeForLog(redactSensitiveText(formatErrorMessage(error), { mode: "tools" }))
+        .replace(/\s+/gu, " ")
+        .slice(0, 500);
     }
     failedProfileIds.push(auth.profileId);
+    failures.push({ profileId: auth.profileId, message });
+    failedAuthFlow = auth.authFlow;
   }
-  return (requestedProvider?: string, options?: { oauthMarker?: string }) => {
-    const auth = resolveProviderAuth(requestedProvider?.trim() || provider, {
+  const resolvePreparedProviderAuth = (
+    requestedProvider?: string,
+    options?: { oauthMarker?: string },
+  ) => {
+    const target = requestedProvider?.trim() || provider;
+    const auth = resolveProviderAuth(target, {
       ...options,
       excludeProfileIds: failedProfileIds,
     });
+    if (
+      auth.mode === "none" &&
+      failedProfileIds.length > 0 &&
+      resolveProviderIdForAuth(target, { config, env }) ===
+        resolveProviderIdForAuth(provider, { config, env })
+    ) {
+      onPreparationFailure(failedProfileIds);
+      return {
+        ...auth,
+        preparationFailed: true,
+        ...(failedAuthFlow ? { authFlow: failedAuthFlow } : {}),
+      };
+    }
     // Refresh owns a separate store; the captured catalog snapshot can still
-    // contain the old token. Carry the resolved value for this exact profile.
+    // contain the old token and grants. Carry both facts for this exact profile.
     return preparedProfile && auth.profileId === preparedProfile.profileId
-      ? { ...auth, discoveryApiKey: preparedProfile.apiKey }
+      ? {
+          ...auth,
+          discoveryApiKey: preparedProfile.apiKey,
+          authFlow: preparedProfile.authFlow,
+        }
       : auth;
   };
+  return { resolveProviderAuth: resolvePreparedProviderAuth, failures };
 }

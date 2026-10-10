@@ -42,6 +42,7 @@ vi.mock("./app-registration.js", () => ({
 }));
 
 import { feishuPlugin } from "./channel.js";
+import { setFeishuNamedAccountEnabled } from "./setup-core.js";
 
 const baseStatusContext = {
   accountOverrides: {},
@@ -71,6 +72,39 @@ afterAll(() => {
 });
 
 describe("feishu setup wizard", () => {
+  it.each(["", " Alert Account ", "default"])(
+    "preserves the exact named-account key %j without enabling the channel",
+    (accountId) => {
+      const result = setFeishuNamedAccountEnabled(
+        {
+          channels: {
+            feishu: {
+              enabled: false,
+              accounts: {
+                [accountId]: { appId: "kept", enabled: false },
+                sibling: { enabled: false },
+              },
+            },
+          },
+        },
+        accountId,
+        true,
+      );
+
+      expect(result).toEqual({
+        channels: {
+          feishu: {
+            enabled: false,
+            accounts: {
+              [accountId]: { appId: "kept", enabled: true },
+              sibling: { enabled: false },
+            },
+          },
+        },
+      });
+    },
+  );
+
   beforeEach(() => {
     probeFeishuMock.mockReset();
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
@@ -321,16 +355,14 @@ describe("feishu setup wizard status", () => {
   });
 
   it("localizes existing bot setup prompts and status lines", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
-    const confirm = vi.fn(async () => true);
-    const note = vi.fn(async () => {});
-    const prompter = createTestWizardPrompter({
-      confirm,
-      note,
-    });
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
+      const confirm = vi.fn(async () => true);
+      const note = vi.fn(async () => {});
+      const prompter = createTestWizardPrompter({
+        confirm,
+        note,
+      });
 
-    try {
       await runSetupWizardConfigure({
         configure: feishuConfigure,
         cfg: {
@@ -351,45 +383,37 @@ describe("feishu setup wizard status", () => {
         }),
       );
       expect(note).toHaveBeenCalledWith("Bot 已配置。", "");
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("localizes new bot setup prompts and progress", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
-    const note = vi.fn(async () => {});
-    const stop = vi.fn();
-    const progress = vi.fn(() => ({ update: vi.fn(), stop }));
-    const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "你想如何连接 Feishu？") {
-        return "manual";
-      }
-      if (message === "选择 Feishu 域名？") {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
+      const note = vi.fn(async () => {});
+      const stop = vi.fn();
+      const progress = vi.fn(() => ({ update: vi.fn(), stop }));
+      const select = vi.fn(async ({ message }: { message: string }) => {
+        if (message === "你想如何连接 Feishu？") {
+          return "manual";
+        }
+        if (message === "选择 Feishu 域名？") {
+          return "feishu";
+        }
+        if (message === "群聊策略") {
+          return "allowlist";
+        }
         return "feishu";
-      }
-      if (message === "群聊策略") {
-        return "allowlist";
-      }
-      return "feishu";
-    });
-    const text = vi
-      .fn()
-      .mockResolvedValueOnce("cli_from_prompt")
-      .mockResolvedValueOnce("secret_from_prompt");
-    const prompter = createTestWizardPrompter({
-      note,
-      progress,
-      select: select as never,
-      text,
-    });
+      });
+      const text = vi
+        .fn()
+        .mockResolvedValueOnce("cli_from_prompt")
+        .mockResolvedValueOnce("secret_from_prompt");
+      const prompter = createTestWizardPrompter({
+        note,
+        progress,
+        select: select as never,
+        text,
+      });
 
-    try {
       await runSetupWizardConfigure({
         configure: feishuConfigure,
         cfg: {} as never,
@@ -432,13 +456,7 @@ describe("feishu setup wizard status", () => {
       );
       expect(progress).toHaveBeenCalledWith("正在配置...");
       expect(stop).toHaveBeenCalledWith("Bot 已配置。");
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {

@@ -5,31 +5,21 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/settings.css";
 
-function changeSourceLabel(source: SystemChangeEntry["source"]): string {
-  switch (source) {
-    case "system-agent":
-      return t("custodian.history.sources.systemAgent");
-    case "doctor":
-      return t("custodian.history.sources.doctor");
-    case "config-rpc":
-      return t("custodian.history.sources.settings");
-    case "external":
-      return t("custodian.history.sources.manualEdit");
-    case "cli":
-      return t("custodian.history.sources.cli");
-    case "plugin-install":
-      return t("custodian.history.sources.pluginInstall");
-    case "unknown":
-      return t("custodian.history.sources.unknown");
-  }
-  return source satisfies never;
-}
+const CHANGE_SOURCE_LABELS = {
+  "system-agent": "custodian.history.sources.systemAgent",
+  doctor: "custodian.history.sources.doctor",
+  "config-rpc": "custodian.history.sources.settings",
+  external: "custodian.history.sources.manualEdit",
+  cli: "custodian.history.sources.cli",
+  "plugin-install": "custodian.history.sources.pluginInstall",
+  unknown: "custodian.history.sources.unknown",
+} satisfies Record<SystemChangeEntry["source"], string>;
 
 function renderHistoryCard(entry: SystemChangeEntry) {
   return html`
     <article class="custodian__change-card ${entry.invalid ? "is-invalid" : ""}">
       <div class="custodian__change-meta">
-        <span class="custodian__change-source">${changeSourceLabel(entry.source)}</span>
+        <span class="custodian__change-source">${t(CHANGE_SOURCE_LABELS[entry.source])}</span>
         <time datetime=${new Date(entry.at).toISOString()}
           >${formatRelativeTimestamp(entry.at)}</time
         >
@@ -116,11 +106,9 @@ export function renderCustodianChangeHistory(params: {
               ?disabled=${params.loadingMore}
               @click=${() => params.onLoad(false)}
             >
-              ${
-                params.loadingMore
-                  ? t("custodian.history.loadingMore")
-                  : t("custodian.history.loadMore")
-              }
+              ${t(
+                params.loadingMore ? "custodian.history.loadingMore" : "custodian.history.loadMore",
+              )}
             </button>`
           : nothing
       }

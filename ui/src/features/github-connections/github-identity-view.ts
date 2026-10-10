@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
@@ -10,6 +11,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
@@ -47,11 +49,30 @@ const GITHUB_AUTHORIZATION_LABEL = {
   network_error: "agentTools.githubNetworkRetry",
 } as const;
 
-export function renderGitHubHealth(identity: GitHubIdentityFacts | null) {
-  const status = identity ? GITHUB_CREDENTIAL_STATUS[identity.credentialState] : null;
+export function renderGitHubUnloadedStatus(
+  request: Pick<GitHubIdentityController, "loading" | "error">,
+) {
   return renderSettingsStatus({
-    kind: status?.kind ?? "muted",
-    label: status ? t(status.label) : t("githubConnections.notLoaded"),
+    kind: request.error ? "warn" : "muted",
+    label: request.loading
+      ? t("githubConnections.checking")
+      : request.error
+        ? t("githubConnections.statusUnavailable")
+        : t("githubConnections.notLoaded"),
+  });
+}
+
+export function renderGitHubHealth(
+  identity: GitHubIdentityFacts | null,
+  request: Pick<GitHubIdentityController, "loading" | "error">,
+) {
+  if (!identity) {
+    return renderGitHubUnloadedStatus(request);
+  }
+  const status = GITHUB_CREDENTIAL_STATUS[identity.credentialState];
+  return renderSettingsStatus({
+    kind: status.kind,
+    label: t(status.label),
   });
 }
 
@@ -160,13 +181,23 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
               ? `${t("agentTools.githubCancelFailedHint")} ${authorization.message}`
               : t("agentTools.githubCancelFailedHint")
             : t("agentTools.githubAuthorizationHint"),
-        control: renderSettingsStatus({
-          kind:
-            authorization.phase === "network_error" || authorization.phase === "cancel_error"
-              ? "warn"
-              : "accent",
-          label: stateLabel,
-        }),
+        control: html`
+          ${renderSettingsStatus({
+            kind:
+              authorization.phase === "network_error" || authorization.phase === "cancel_error"
+                ? "warn"
+                : "accent",
+            label: stateLabel,
+          })}
+          <a
+            class="btn"
+            href=${authorization.verificationUri}
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
+          >
+            ${t("agentTools.githubOpen")}
+          </a>
+        `,
       })}
       ${renderSettingsRow({
         title: t("agentTools.githubDeviceCode"),
@@ -175,15 +206,18 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
           <code class="settings-row__value settings-row__value--mono github-device-code"
             >${authorization.userCode}</code
           >
-          <button
-            type="button"
-            class="btn btn--sm"
-            @click=${(event: Event) =>
-              void handleCopyButton(event, authorization.userCode, copyLabel)}
-          >
-            ${icons.copy}
-            <span data-copy-label>${copyLabel}</span>
-          </button>
+          ${keyed(
+            authorization.userCode,
+            html`<button
+              type="button"
+              class="btn btn--sm"
+              @click=${(event: Event) =>
+                void handleCopyButton(event, authorization.userCode, copyLabel)}
+            >
+              ${icons.copy}
+              <span data-copy-label>${copyLabel}</span>
+            </button>`,
+          )}
         `,
       })}
       ${renderSettingsRow({
@@ -197,14 +231,6 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
       })}
       <div class="settings-row settings-row--actions">
         <div class="settings-row__control">
-          <a
-            class="btn primary"
-            href=${authorization.verificationUri}
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-          >
-            ${t("agentTools.githubOpen")}
-          </a>
           ${
             authorization.phase === "cancelling" || authorization.phase === "finishing"
               ? nothing
@@ -228,7 +254,7 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
     return nothing;
   }
   const authorizeButton = html`<button
-    class="btn primary"
+    class="btn"
     @click=${() => void controller.startAuthorization()}
   >
     ${t("githubConnections.continue")}
@@ -365,6 +391,7 @@ export function renderGitHubIdentity(
   return renderSettingsSection(
     {
       title: t("githubConnections.agentTitle"),
+      description: t("githubConnections.agentDescription"),
       actions: controller.statusReadable
         ? html`<button
             class="btn btn--sm"
@@ -382,7 +409,7 @@ export function renderGitHubIdentity(
           identity?.source === "agent-override"
             ? t("githubConnections.agentOverride")
             : t("githubConnections.system"),
-        control: html`${renderGitHubHealth(identity)}<button
+        control: html`${renderGitHubHealth(identity, controller)}<button
             class="btn btn--sm"
             @click=${onOpenConnections}
           >
@@ -427,3 +454,5 @@ export function renderGitHubIdentity(
     `,
   );
 }
+
+registerGitHubEnglish();

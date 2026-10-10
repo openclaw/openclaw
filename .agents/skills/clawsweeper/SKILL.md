@@ -71,8 +71,7 @@ evidence links, likely owners, and runtime details stay inside the collapsed
 `Review details` block.
 
 For a simple status request, read existing reports and bounded live workflow
-state. `pnpm run status` summarizes current state. A requested full audit can use
-`pnpm run audit`; it is a broader scan, not a prerequisite for reading one item.
+state. Use `pnpm run audit` only for a requested full audit.
 
 Reconciliation is a separate authorized mutation: bare `pnpm run reconcile`
 moves/deletes report and work-plan files. Inspect its dry-run only when that
@@ -110,7 +109,7 @@ pnpm run repair:dispatch -- jobs/openclaw/inbox/clawsweeper-openclaw-openclaw-12
   --mode autonomous \
   --runner blacksmith-4vcpu-ubuntu-2404 \
   --execution-runner blacksmith-16vcpu-ubuntu-2404 \
-  --model gpt-5.6-sol
+  --model gpt-6-astra
 ```
 
 Do not dispatch a just-created job before the job file is committed and pushed;

@@ -198,26 +198,30 @@ describe("session menu navigation actions", () => {
     },
   );
 
-  it("copies only visible conversation messages", async () => {
-    const { params, request } = fixture();
-    request.mockResolvedValueOnce(
-      page([
-        message(1, "Visible response"),
-        message(2, "NO_REPLY"),
-        message(3, "HEARTBEAT_OK"),
-        { role: "user", content: " " },
-        {
-          role: "toolResult",
-          content:
-            "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
-        },
-      ]),
-    );
-    await runSessionNavigationAction("copy-markdown", params);
-    const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
-    expect(copied).toContain("Visible response");
-    expect(copied).not.toMatch(/NO_REPLY|HEARTBEAT_OK|transcript repair|## You/);
-  });
+  it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
+    "copies only visible conversation messages with %s",
+    async (scope) => {
+      const { params, request } = fixture();
+      params.context.gateway.snapshot.hello!.auth!.scopes = [scope];
+      request.mockResolvedValueOnce(
+        page([
+          message(1, "Visible response"),
+          message(2, "NO_REPLY"),
+          message(3, "HEARTBEAT_OK"),
+          { role: "user", content: " " },
+          {
+            role: "toolResult",
+            content:
+              "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ]),
+      );
+      await runSessionNavigationAction("copy-markdown", params);
+      const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+      expect(copied).toContain("Visible response");
+      expect(copied).not.toMatch(/NO_REPLY|HEARTBEAT_OK|transcript repair|## You/);
+    },
+  );
 
   it.each([
     { sessionId: "replacement-session" },
@@ -264,13 +268,15 @@ describe("session menu navigation actions", () => {
     expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
   });
 
-  it("denies transcript reads without operator.read", async () => {
+  it("denies transcript reads without a compatible read scope", async () => {
     const { params, request } = fixture();
     params.context.gateway.snapshot.hello!.auth!.scopes = [];
     await runSessionNavigationAction("copy-markdown", params);
     expect(request).not.toHaveBeenCalled();
     expect(copyToClipboard).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.actionRequiresRead") });
+    expect(showToast).toHaveBeenCalledWith({
+      message: t("sessionsView.actionRequiresScope", { scope: "operator.sessions.read" }),
+    });
   });
 
   it("reports an empty transcript without replacing the clipboard", async () => {

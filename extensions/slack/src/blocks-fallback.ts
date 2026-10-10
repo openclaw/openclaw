@@ -1,36 +1,18 @@
-// Slack plugin module implements blocks fallback behavior.
 import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  renderSlackDataTableFallbackText,
-  renderSlackDataTableMrkdwnFallbackText,
-  renderSlackTableFallbackText,
-  renderSlackTableMrkdwnFallbackText,
-} from "./data-table.js";
-import {
-  renderSlackDataVisualizationFallbackText,
-  renderSlackDataVisualizationMrkdwnFallbackText,
-} from "./data-visualization.js";
+import { renderSlackDataTableFallbackText, renderSlackTableFallbackText } from "./data-table.js";
+import { renderSlackDataVisualizationFallbackText } from "./data-visualization.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackRichText } from "./rich-text.js";
 
 type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
 
 type RenderSlackBlockFallbackOptions = {
+  includeSelectOptions?: boolean;
   nativeDataFormat?: SlackNativeDataFallbackFormat;
   nativeReferenceFormat?: SlackNativeDataFallbackFormat;
-};
-
-type SlackBlockLike = {
-  type?: unknown;
-  text?: unknown;
-  title?: unknown;
-  alt_text?: unknown;
-  elements?: unknown;
-  fields?: unknown;
-  accessory?: unknown;
 };
 
 const SLACK_SELECT_ELEMENT_TYPES = new Set([
@@ -51,53 +33,18 @@ function readTextObject(
   options: RenderSlackBlockFallbackOptions = {},
 ): string | undefined {
   const record = asOptionalRecord(value);
-  if (!record) {
-    return undefined;
-  }
   const text = normalizeOptionalString(record?.text);
   if (!text) {
     return undefined;
   }
-  return record.type === "plain_text" && options.nativeDataFormat !== "plain"
+  return record?.type === "plain_text" && options.nativeDataFormat !== "plain"
     ? escapeSlackMrkdwn(text)
     : text;
 }
 
-function readTextValue(
-  value: unknown,
-  options: RenderSlackBlockFallbackOptions = {},
-): string | undefined {
-  return normalizeOptionalString(value) ?? readTextObject(value, options);
-}
-
-function readImageText(block: SlackBlockLike): string | undefined {
-  const altText = normalizeOptionalString(block.alt_text);
-  return (altText ? escapeSlackMrkdwn(altText) : undefined) ?? readTextObject(block.title);
-}
-
-function readVideoText(
-  block: SlackBlockLike,
-  options: RenderSlackBlockFallbackOptions = {},
-): string | undefined {
-  const altText = normalizeOptionalString(block.alt_text);
-  return readTextObject(block.title, options) ?? (altText ? escapeSlackMrkdwn(altText) : undefined);
-}
-
-function readContextText(
-  block: SlackBlockLike,
-  options: RenderSlackBlockFallbackOptions = {},
-): string | undefined {
-  if (!Array.isArray(block.elements)) {
-    return undefined;
-  }
-  const parts = block.elements
-    .map((element) => {
-      const record = asOptionalRecord(element);
-      const altText = normalizeOptionalString(record?.alt_text);
-      return readTextObject(record, options) ?? (altText ? escapeSlackMrkdwn(altText) : undefined);
-    })
-    .filter((part): part is string => Boolean(part));
-  return parts.length > 0 ? parts.join(" ") : undefined;
+function readAltText(value: unknown): string | undefined {
+  const text = normalizeOptionalString(value);
+  return text ? escapeSlackMrkdwn(text) : undefined;
 }
 
 function readControlElementText(
@@ -107,10 +54,19 @@ function readControlElementText(
   const element = asOptionalRecord(value);
   const type = normalizeOptionalString(element?.type);
   if (type === "button" || type === "workflow_button") {
-    return readTextValue(element?.text, options);
+    return normalizeOptionalString(element?.text) ?? readTextObject(element?.text, options);
   }
   if (type && SLACK_SELECT_ELEMENT_TYPES.has(type)) {
-    return readTextObject(element?.placeholder, options);
+    if (!options.includeSelectOptions) {
+      return readTextObject(element?.placeholder, options);
+    }
+    const choices = Array.isArray(element?.options) ? element.options : [];
+    return [
+      readTextObject(element?.placeholder, options),
+      ...choices.map((choice) => readTextObject(asOptionalRecord(choice)?.text, options)),
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   return undefined;
 }
@@ -119,39 +75,28 @@ function readControlElementsText(
   values: readonly unknown[],
   options: RenderSlackBlockFallbackOptions = {},
 ): string | undefined {
-  const seen = new Set<string>();
-  const labels: string[] = [];
-  for (const value of values) {
-    const candidate = readControlElementText(value, options);
-    if (!candidate || seen.has(candidate)) {
-      continue;
-    }
-    seen.add(candidate);
-    labels.push(candidate);
-  }
-  return labels.length > 0 ? labels.join("\n") : undefined;
+  const labels = values.map((value) => readControlElementText(value, options)).filter(Boolean);
+  return [...new Set(labels)].join("\n") || undefined;
 }
 
-function readSectionText(
-  block: SlackBlockLike,
+function readTextLayout(
+  block: Record<string, unknown>,
   options: RenderSlackBlockFallbackOptions = {},
 ): string | undefined {
-  const parts = [readTextObject(block.text, options)];
-  if (Array.isArray(block.fields)) {
-    parts.push(...block.fields.map((field) => readTextObject(field, options)));
-  }
-  parts.push(readControlElementText(block.accessory, options));
-  const visibleParts = parts.filter((part): part is string => Boolean(part));
-  return visibleParts.length > 0 ? visibleParts.join("\n") : undefined;
-}
-
-function readActionsText(
-  block: SlackBlockLike,
-  options: RenderSlackBlockFallbackOptions = {},
-): string | undefined {
-  return Array.isArray(block.elements)
-    ? readControlElementsText(block.elements, options)
-    : undefined;
+  const context = block.type === "context";
+  const parts = context
+    ? (Array.isArray(block.elements) ? block.elements : []).map((element) => {
+        const record = asOptionalRecord(element);
+        return readTextObject(record, options) ?? readAltText(record?.alt_text);
+      })
+    : [
+        readTextObject(block.text, options),
+        ...(Array.isArray(block.fields)
+          ? block.fields.map((field) => readTextObject(field, options))
+          : []),
+        readControlElementText(block.accessory, options),
+      ];
+  return parts.filter(Boolean).join(context ? " " : "\n") || undefined;
 }
 
 /** Read only user-visible text from one Slack block. */
@@ -159,7 +104,7 @@ export function renderSlackBlockFallbackText(
   raw: unknown,
   options: RenderSlackBlockFallbackOptions = {},
 ): string | undefined {
-  const block = asOptionalRecord(raw) as SlackBlockLike | undefined;
+  const block = asOptionalRecord(raw);
   if (!block) {
     return undefined;
   }
@@ -177,29 +122,26 @@ export function renderSlackBlockFallbackText(
     case "header":
       return readTextObject(block.text, options);
     case "section":
-      return readSectionText(block, options);
+    case "context":
+      return readTextLayout(block, options);
     case "image":
-      return readImageText(block) ?? "Shared an image";
+      return readAltText(block.alt_text) ?? readTextObject(block.title) ?? "Shared an image";
     case "video":
-      return readVideoText(block, options) ?? "Shared a video";
+      return (
+        readTextObject(block.title, options) ?? readAltText(block.alt_text) ?? "Shared a video"
+      );
     case "file":
       return "Shared a file";
-    case "context":
-      return readContextText(block, options);
     case "actions":
-      return readActionsText(block, options);
+      return Array.isArray(block.elements)
+        ? readControlElementsText(block.elements, options)
+        : undefined;
     case "data_visualization":
-      return options.nativeDataFormat === "plain"
-        ? renderSlackDataVisualizationFallbackText(block)
-        : renderSlackDataVisualizationMrkdwnFallbackText(block);
+      return renderSlackDataVisualizationFallbackText(block, options.nativeDataFormat !== "plain");
     case "data_table":
-      return options.nativeDataFormat === "plain"
-        ? renderSlackDataTableFallbackText(block)
-        : renderSlackDataTableMrkdwnFallbackText(block);
+      return renderSlackDataTableFallbackText(block, options.nativeDataFormat !== "plain");
     case "table":
-      return options.nativeDataFormat === "plain"
-        ? renderSlackTableFallbackText(block)
-        : renderSlackTableMrkdwnFallbackText(block);
+      return renderSlackTableFallbackText(block, options.nativeDataFormat !== "plain");
     default:
       return undefined;
   }
@@ -216,9 +158,12 @@ export function buildSlackBlocksFallbackText(blocks: readonly unknown[]): string
   return "Shared a Block Kit message";
 }
 
-export function buildSlackCompleteBlocksFallbackText(blocks: readonly unknown[]): string {
+export function buildSlackCompleteBlocksFallbackText(
+  blocks: readonly unknown[],
+  options: RenderSlackBlockFallbackOptions = {},
+): string {
   const text = blocks
-    .map((block) => renderSlackBlockFallbackText(block))
+    .map((block) => renderSlackBlockFallbackText(block, options))
     .filter(Boolean)
     .join("\n\n")
     .trim();

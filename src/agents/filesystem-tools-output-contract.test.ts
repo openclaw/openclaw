@@ -13,10 +13,9 @@ import {
   runUntilCompleted,
 } from "./code-mode.test-support.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
-import { createFindTool } from "./sessions/tools/find.js";
-import { createGrepTool } from "./sessions/tools/grep.js";
 import { createLsTool } from "./sessions/tools/ls.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
+import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const ONE_PIXEL_PNG_BASE64 =
@@ -45,7 +44,7 @@ describe("filesystem tool output contracts", () => {
   });
 
   afterEach(async () => {
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -76,81 +75,6 @@ describe("filesystem tool output contracts", () => {
       expect(result).toMatchObject({
         status: "completed",
         value: { content: output, ...(nextAfter === undefined ? {} : { nextAfter }) },
-      });
-    },
-  );
-
-  it.each([
-    { mode: "matching", files: ["alpha.txt"], limit: 10, content: "alpha.txt" },
-    { mode: "empty", files: [], limit: 10, content: "No files found matching pattern" },
-    {
-      mode: "limited",
-      files: ["alpha.txt", "beta.txt"],
-      limit: 1,
-      content: "alpha.txt\n\n[1 results limit reached]",
-      resultLimitReached: 1,
-    },
-  ])(
-    "preserves $mode file search output through Code Mode",
-    async ({ files, limit, content, resultLimitReached }) => {
-      await Promise.all(files.map((file) => fs.writeFile(path.join(tmpDir, file), "fixture\n")));
-      const tool = createFindTool(tmpDir, {
-        operations: {
-          exists: (absolutePath) =>
-            fs.access(absolutePath).then(
-              () => true,
-              () => false,
-            ),
-          glob: async (pattern, cwd, options) => {
-            const matches: string[] = [];
-            for await (const match of fs.glob(pattern, { cwd })) {
-              matches.push(match);
-            }
-            return matches.toSorted().slice(0, options.limit);
-          },
-        },
-      }) as unknown as AnyAgentTool;
-      const args = { pattern: "*.txt", limit };
-      const direct = await tool.execute("direct-find", args);
-      const result = await callThroughCodeMode(tool, args);
-
-      expect(direct.content).toEqual([{ type: "text", text: content }]);
-      expect(result).toMatchObject({
-        status: "completed",
-        value: { content, ...(resultLimitReached === undefined ? {} : { resultLimitReached }) },
-      });
-    },
-  );
-
-  it.each([
-    {
-      mode: "matching",
-      pattern: "needle",
-      limit: 10,
-      content: "sample.txt:1: needle alpha\nsample.txt:2: needle beta",
-    },
-    { mode: "empty", pattern: "absent", limit: 10, content: "No matches found" },
-    {
-      mode: "limited",
-      pattern: "needle",
-      limit: 1,
-      content:
-        "sample.txt:1: needle alpha\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]",
-      matchLimitReached: 1,
-    },
-  ])(
-    "preserves $mode text search output through Code Mode",
-    async ({ pattern, limit, content, matchLimitReached }) => {
-      await fs.writeFile(path.join(tmpDir, "sample.txt"), "needle alpha\nneedle beta\n");
-      const tool = createGrepTool(tmpDir) as unknown as AnyAgentTool;
-      const args = { pattern, limit };
-      const direct = await tool.execute("direct-grep", args);
-      const result = await callThroughCodeMode(tool, args);
-
-      expect(direct.content).toEqual([{ type: "text", text: content }]);
-      expect(result).toMatchObject({
-        status: "completed",
-        value: { content, ...(matchLimitReached === undefined ? {} : { matchLimitReached }) },
       });
     },
   );
@@ -189,6 +113,107 @@ describe("filesystem tool output contracts", () => {
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
       '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
     );
+  });
+
+  it.each([
+    { mode: "adaptive cursor", wrapped: true, indent: 0, limit: undefined },
+    { mode: "native explicit line pages", wrapped: false, indent: 2, limit: 500 },
+    {
+      mode: "adaptive blank line pages",
+      wrapped: true,
+      indent: 2,
+      limit: 500,
+      leadingBlankLines: 500,
+    },
+  ])(
+    "reassembles JSON from $mode without parsing display notices",
+    async ({ wrapped, indent, limit, leadingBlankLines = 0 }) => {
+      const records = Array.from({ length: 1_500 }, (_, index) => ({
+        index,
+        value: "é🦞".repeat(8),
+      }));
+      const original =
+        "\n".repeat(leadingBlankLines) + JSON.stringify(records, null, indent) + "\n";
+      await fs.writeFile(path.join(tmpDir, "records.json"), original);
+      const base = createReadTool(tmpDir, { maxBytes: 16 * 1024 }) as unknown as AnyAgentTool;
+      const tool = wrapped ? createOpenClawReadTool(base) : base;
+      const first = await tool.execute("first-page", { path: "records.json" });
+      expectContract(tool, first.details);
+      expect(JSON.stringify(first.content)).toContain("to continue.");
+      const harness = createCodeModeHarness();
+      applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, tool] });
+      const result = await runUntilCompleted({
+        execTool: harness.tools[0]!,
+        waitTool: harness.tools[1]!,
+        code: `
+        let content = "";
+        let next = { path: "records.json", limit: ${limit ?? "undefined"} };
+        let delimiter = "";
+        for (let page = 0; page < 32; page++) {
+          const part = await read(next);
+          content += delimiter + part.content;
+          if (part.kind === "text") {
+            const records = JSON.parse(content);
+            return { count: records.length, last: records.at(-1), length: content.length };
+          }
+          if (part.kind !== "truncated") throw new Error("unexpected read result");
+          const { kind, ...continuation } = part.continuation;
+          next = { path: "records.json", ...continuation };
+          delimiter = kind === "line" ? "\\n" : "";
+        }
+        throw new Error("pagination did not reach EOF");
+      `,
+      });
+      expect(result.status, JSON.stringify(result)).toBe("completed");
+      expect(result.value).toEqual({
+        count: records.length,
+        last: records.at(-1),
+        length: original.length,
+      });
+    },
+  );
+
+  it("bounds structured blank pages independently of their short display summary", async () => {
+    await fs.writeFile(path.join(tmpDir, "blank.txt"), "\n".repeat(10_000));
+    const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool, {
+      modelContextWindowTokens: 1_024,
+    });
+    const result = await tool.execute("blank-budget", { path: "blank.txt" });
+    expectContract(tool, result.details);
+    const details = result.details;
+    if (
+      !details ||
+      typeof details !== "object" ||
+      !("content" in details) ||
+      typeof details.content !== "string"
+    ) {
+      throw new Error("Expected structured file text");
+    }
+    expect(toolResultFitsBudget(details.content, resolveToolResultBudget(1_024))).toBe(true);
+  });
+
+  it("retains source continuation when only its notice exceeds the rebound budget", async () => {
+    await fs.writeFile(path.join(tmpDir, "continued.txt"), "x".repeat(2_000));
+    const base = createReadTool(tmpDir, { maxBytes: 200 }) as unknown as AnyAgentTool;
+    const tool = createOpenClawReadTool(base, { modelContextWindowTokens: 100 });
+    const result = await tool.execute("continued-rebound", { path: "continued.txt" });
+    expectContract(tool, result.details);
+    expect(result.details).toMatchObject({
+      kind: "truncated",
+      continuation: { kind: "cursor", offset: 1, cursor: expect.any(Number) },
+    });
+  });
+
+  it("honors normalized explicit limit 0 without automatic paging", async () => {
+    await fs.writeFile(path.join(tmpDir, "limited.txt"), "alpha\nbeta\ngamma");
+    const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool);
+    const result = await tool.execute("normalized-limit", { path: "limited.txt", limit: 0 });
+    expectContract(tool, result.details);
+    expect(result.details).toMatchObject({
+      kind: "truncated",
+      content: "alpha",
+      continuation: { kind: "line", offset: 2, limit: 1 },
+    });
   });
 
   it("validates edit changed and no-op results", async () => {

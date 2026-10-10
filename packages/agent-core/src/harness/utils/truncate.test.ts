@@ -18,12 +18,53 @@ describe("truncate utilities", () => {
     expect(truncateTail("x\n", { maxBytes: 1 }).truncatedBy).toBe("bytes");
   });
 
-  it("keeps complete UTF-8 characters when taking a partial tail line", () => {
-    const result = truncateTail("alpha🙂", { maxBytes: 4 });
+  it("preserves a leading BOM and NUL in a partial tail line", () => {
+    expect(truncateTail("discarded-\uFEFFA\0B", { maxBytes: 6 })).toMatchObject({
+      content: "\uFEFFA\0B",
+      outputBytes: 6,
+      outputLines: 1,
+      lastLinePartial: true,
+    });
+  });
 
-    expect(result.content).toBe("🙂");
-    expect(result.lastLinePartial).toBe(true);
-    expect(result.outputBytes).toBe(4);
+  it.each([
+    { tail: "\uD800\uD800", maxBytes: 6, expected: "\uFFFD\uFFFD" },
+    { tail: "\uD800a\uDC00", maxBytes: 7, expected: "\uFFFDa\uFFFD" },
+    { tail: "\uDC00\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
+    { tail: "🙂\uD800", maxBytes: 7, expected: "🙂\uFFFD" },
+    { tail: "\uD800", maxBytes: 2, expected: "" },
+    { tail: "\uD800🙂", maxBytes: 4, expected: "🙂" },
+    { tail: "🙂\uDC00", maxBytes: 3, expected: "\uFFFD" },
+  ])(
+    "repairs only retained lone surrogates within $maxBytes bytes: $tail",
+    ({ tail, maxBytes, expected }) => {
+      const content = `discarded-${tail}`;
+      expect(truncateTail(content, { maxBytes })).toEqual({
+        content: expected,
+        truncated: true,
+        truncatedBy: "bytes",
+        totalLines: 1,
+        totalBytes: Buffer.byteLength(content),
+        outputLines: 1,
+        outputBytes: Buffer.byteLength(expected),
+        lastLinePartial: true,
+        firstLineExceedsLimit: false,
+        maxLines: 2000,
+        maxBytes,
+      });
+    },
+  );
+
+  it("preserves malformed strings when they fit without truncation", () => {
+    const content = "\uD800🙂\uDC00";
+    expect(truncateTail(content, { maxBytes: 10 })).toMatchObject({
+      content,
+      truncated: false,
+      truncatedBy: null,
+      totalBytes: 10,
+      outputBytes: 10,
+      lastLinePartial: false,
+    });
   });
 
   it.each([
@@ -54,6 +95,26 @@ describe("truncate utilities", () => {
       maxBytes: 4,
       head: "aa",
       tail: "cc",
+      outputLines: 1,
+      truncatedBy: "bytes",
+    },
+    {
+      name: "lone UTF-16 units",
+      content: "\uD800x\uDC00\ndiscarded\n\uD800x\uDC00",
+      maxLines: 2,
+      maxBytes: 7,
+      head: "\uD800x\uDC00",
+      tail: "\uD800x\uDC00",
+      outputLines: 1,
+      truncatedBy: "bytes",
+    },
+    {
+      name: "BOM and NUL",
+      content: "\uFEFFA\0B\ndiscarded\n\uFEFFA\0B",
+      maxLines: 2,
+      maxBytes: 6,
+      head: "\uFEFFA\0B",
+      tail: "\uFEFFA\0B",
       outputLines: 1,
       truncatedBy: "bytes",
     },
@@ -100,14 +161,11 @@ describe("truncate utilities", () => {
   );
 
   describe("truncateLine", () => {
-    it("returns text unchanged when within limit", () => {
-      expect(truncateLine("short", 10)).toEqual({ text: "short", wasTruncated: false });
-    });
-
-    it("truncates and appends suffix when over limit", () => {
-      const result = truncateLine("this is a very long line", 10);
-      expect(result.wasTruncated).toBe(true);
-      expect(result.text).toBe("this is a ... [truncated]");
+    it.each(["\uD800x\uDC00", "\uFEFFA\0B"])("preserves retained code units in %j", (prefix) => {
+      expect(truncateLine(`${prefix}discarded`, prefix.length)).toEqual({
+        text: `${prefix}... [truncated]`,
+        wasTruncated: true,
+      });
     });
 
     it("keeps 500 characters and truncates longer lines by default", () => {

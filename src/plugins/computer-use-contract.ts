@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { type Static, type TSchema, Type } from "typebox";
-import { Compile } from "typebox/compile";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeHostCommandAvailabilityContext,
-  OpenClawPluginNodeHostCommandContext,
-} from "./types.node-host.js";
+import { type Static, type TProperties, Type } from "typebox";
+import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
+import { closedObject } from "../../packages/gateway-protocol/src/schema/closed-object.js";
+
+export const COMPUTER_EXECUTION_ID_PATTERN =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 
 export const COMPUTER_USE_V2_ACTION_NAMES = [
   "screenshot",
@@ -59,9 +57,9 @@ export const COMPUTER_ACT_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1
 export const COMPUTER_CONTRACT_MISMATCH = "COMPUTER_CONTRACT_MISMATCH";
 export const COMPUTER_STALE_OBSERVATION = "COMPUTER_STALE_OBSERVATION";
 
-const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
+export const COMPUTER_SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 const DELIVERY_MODES = ["background", "foreground"] as const;
-const ESCALATION_REASONS = [
+export const COMPUTER_ESCALATION_REASONS = [
   "ax_tree_pixel_mismatch",
   "background_delivery_failed",
   "foreground_ineffective",
@@ -70,8 +68,6 @@ const ESCALATION_REASONS = [
 ] as const;
 const COMPUTER_RESOURCE_HANDLE_PATTERN =
   "^openclaw:computer-resource:v1:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
-const COMPUTER_EXECUTION_ID_PATTERN =
-  "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 
 const optionalScreenFields = {
   screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -85,36 +81,45 @@ const optionalReferenceFields = {
   deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
 };
 
-function actionObject<const Properties extends object>(
-  actions: readonly string[],
+const optionalPointerFields = {
+  displayFrameId: Type.Optional(Type.String()),
+  x: Type.Optional(Type.Number({ minimum: 0 })),
+  y: Type.Optional(Type.Number({ minimum: 0 })),
+};
+
+const browserTargetFields = {
+  browserRef: Type.String({ minLength: 1 }),
+  pageRef: Type.String({ minLength: 1 }),
+};
+
+const observedBrowserTargetFields = {
+  ...browserTargetFields,
+  observationId: Type.String({ minLength: 1 }),
+};
+
+function actionObject<const Actions extends string[], const Properties extends TProperties>(
+  actions: readonly [...Actions],
   properties: Properties,
 ) {
-  return Type.Object(
-    {
-      action: Type.Enum(actions, { type: "string" }),
-      executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
-      ...properties,
-    },
-    { additionalProperties: false },
-  );
+  return closedObject({
+    action: Type.Enum(actions, { type: "string" }),
+    executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
+    ...properties,
+  });
 }
 
 const ComputerActV1ParamsSchema = Type.Union([
   actionObject(
     ["left_click", "right_click", "middle_click", "double_click", "triple_click", "mouse_move"],
     {
-      displayFrameId: Type.Optional(Type.String()),
-      x: Type.Optional(Type.Number({ minimum: 0 })),
-      y: Type.Optional(Type.Number({ minimum: 0 })),
+      ...optionalPointerFields,
       modifiers: Type.Optional(Type.String()),
       ...optionalScreenFields,
       ...optionalReferenceFields,
     },
   ),
   actionObject(["left_click_drag"], {
-    displayFrameId: Type.Optional(Type.String()),
-    x: Type.Optional(Type.Number({ minimum: 0 })),
-    y: Type.Optional(Type.Number({ minimum: 0 })),
+    ...optionalPointerFields,
     fromX: Type.Optional(Type.Number({ minimum: 0 })),
     fromY: Type.Optional(Type.Number({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -122,19 +127,15 @@ const ComputerActV1ParamsSchema = Type.Union([
     ...optionalReferenceFields,
   }),
   actionObject(["left_mouse_down", "left_mouse_up"], {
-    displayFrameId: Type.Optional(Type.String()),
-    x: Type.Optional(Type.Number({ minimum: 0 })),
-    y: Type.Optional(Type.Number({ minimum: 0 })),
+    ...optionalPointerFields,
     modifiers: Type.Optional(Type.String()),
     ...optionalScreenFields,
     ...optionalReferenceFields,
   }),
   actionObject(["scroll"], {
-    displayFrameId: Type.Optional(Type.String()),
-    x: Type.Optional(Type.Number({ minimum: 0 })),
-    y: Type.Optional(Type.Number({ minimum: 0 })),
+    ...optionalPointerFields,
     modifiers: Type.Optional(Type.String()),
-    scrollDirection: Type.Optional(Type.Enum(SCROLL_DIRECTIONS, { type: "string" })),
+    scrollDirection: Type.Optional(Type.Enum(COMPUTER_SCROLL_DIRECTIONS, { type: "string" })),
     scrollAmount: Type.Optional(Type.Integer({ minimum: 1 })),
     ...optionalScreenFields,
     ...optionalReferenceFields,
@@ -169,6 +170,7 @@ export const ComputerActParamsSchema = Type.Union([
   }),
   actionObject(["get_window_state"], {
     windowRef: Type.String({ minLength: 1 }),
+    includeScreenshot: Type.Optional(Type.Boolean()),
     query: Type.Optional(Type.String()),
     depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 64 })),
     maxElements: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
@@ -206,8 +208,7 @@ export const ComputerActParamsSchema = Type.Union([
     windowRef: Type.String({ minLength: 1 }),
   }),
   actionObject(["get_browser_state"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     snapshotFormat: Type.Optional(
       Type.Enum(["dom_refs_v1", "semantic_v2"] as const, { type: "string" }),
     ),
@@ -227,52 +228,42 @@ export const ComputerActParamsSchema = Type.Union([
     ),
   }),
   actionObject(["browser_navigate"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     url: Type.String({ minLength: 1 }),
   }),
   actionObject(["browser_click"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.Optional(Type.String({ minLength: 1 })),
     x: Type.Optional(Type.Number({ minimum: 0 })),
     y: Type.Optional(Type.Number({ minimum: 0 })),
     inputRoute: Type.Optional(Type.Enum(["trusted", "dom_event"] as const, { type: "string" })),
   }),
   actionObject(["browser_type"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.String({ minLength: 1 }),
     text: Type.String(),
     mode: Type.Optional(Type.Enum(["insert_text", "keystrokes"] as const, { type: "string" })),
     replace: Type.Optional(Type.Boolean()),
   }),
   actionObject(["browser_dialog"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     dialogAction: Type.Literal("inspect"),
   }),
   actionObject(["browser_dialog"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     dialogAction: Type.Literal("accept"),
     dialogRef: Type.String({ minLength: 1 }),
     promptText: Type.Optional(Type.String()),
     deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
   }),
   actionObject(["browser_dialog"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     dialogAction: Type.Literal("dismiss"),
     dialogRef: Type.String({ minLength: 1 }),
     deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
   }),
   actionObject(["browser_set_input_files"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.String({ minLength: 1 }),
     resourceHandles: Type.Array(Type.String({ pattern: COMPUTER_RESOURCE_HANDLE_PATTERN }), {
       minItems: 1,
@@ -280,15 +271,11 @@ export const ComputerActParamsSchema = Type.Union([
     }),
   }),
   actionObject(["browser_download"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.String({ minLength: 1 }),
   }),
   actionObject(["browser_pointer"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     pointerAction: Type.Enum(["hover", "right_click", "double_click", "scroll", "drag"] as const, {
       type: "string",
     }),
@@ -303,7 +290,7 @@ export const ComputerActParamsSchema = Type.Union([
     deltaY: Type.Optional(Type.Number()),
   }),
   actionObject(["escalate_scope"], {
-    reason: Type.Enum(ESCALATION_REASONS, { type: "string" }),
+    reason: Type.Enum(COMPUTER_ESCALATION_REASONS, { type: "string" }),
   }),
   actionObject(["get_recording_state", "stop_recording"], {}),
   actionObject(["start_recording"], {
@@ -320,122 +307,95 @@ export const ComputerActParamsSchema = Type.Union([
 const COMPUTER_ACT_RESULT_MAX_ELEMENTS = 2_000;
 const COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS = 64;
 
-const ComputerBoundsSchema = Type.Object(
-  {
-    x: Type.Number(),
-    y: Type.Number(),
-    width: Type.Number({ minimum: 0 }),
-    height: Type.Number({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
+const ComputerBoundsSchema = closedObject({
+  x: Type.Number(),
+  y: Type.Number(),
+  width: Type.Number({ minimum: 0 }),
+  height: Type.Number({ minimum: 0 }),
+});
 
-const ComputerObservationSchema = Type.Object(
-  {
-    kind: Type.Enum(["window", "screen", "browser"] as const, { type: "string" }),
-    base64: Type.Optional(Type.String()),
-    format: Type.Optional(Type.Enum(["jpeg", "png"] as const, { type: "string" })),
-    width: Type.Optional(Type.Integer({ minimum: 1 })),
-    height: Type.Optional(Type.Integer({ minimum: 1 })),
-    observationId: Type.Optional(Type.String({ minLength: 1 })),
-    elements: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            elementRef: Type.String({ minLength: 1 }),
-            role: Type.String({ minLength: 1 }),
-            label: Type.Optional(Type.String()),
-            value: Type.Optional(Type.String()),
-            bounds: ComputerBoundsSchema,
-          },
-          { additionalProperties: false },
-        ),
-        { maxItems: COMPUTER_ACT_RESULT_MAX_ELEMENTS },
-      ),
+const ComputerObservationSchema = closedObject({
+  kind: Type.Enum(["window", "screen", "browser"] as const, { type: "string" }),
+  base64: Type.Optional(Type.String()),
+  format: Type.Optional(Type.Enum(["jpeg", "png"] as const, { type: "string" })),
+  width: Type.Optional(Type.Integer({ minimum: 1 })),
+  height: Type.Optional(Type.Integer({ minimum: 1 })),
+  observationId: Type.Optional(Type.String({ minLength: 1 })),
+  elements: Type.Optional(
+    Type.Array(
+      closedObject({
+        elementRef: Type.String({ minLength: 1 }),
+        role: Type.String({ minLength: 1 }),
+        label: Type.Optional(Type.String()),
+        value: Type.Optional(Type.String()),
+        bounds: ComputerBoundsSchema,
+      }),
+      { maxItems: COMPUTER_ACT_RESULT_MAX_ELEMENTS },
     ),
-  },
-  { additionalProperties: false },
-);
+  ),
+});
 
-export const ComputerActResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-    effect: Type.Optional(
-      Type.Enum(["confirmed", "unverifiable", "suspected_noop"] as const, {
+export const ComputerActResultSchema = closedObject({
+  ok: Type.Boolean(),
+  effect: Type.Optional(
+    Type.Enum(["confirmed", "unverifiable", "suspected_noop"] as const, {
+      type: "string",
+    }),
+  ),
+  observation: Type.Optional(ComputerObservationSchema),
+  escalation: Type.Optional(
+    closedObject({
+      recommended: Type.Enum(["window-pixel", "foreground", "desktop"] as const, {
         type: "string",
       }),
-    ),
-    observation: Type.Optional(ComputerObservationSchema),
-    escalation: Type.Optional(
-      Type.Object(
-        {
-          recommended: Type.Enum(["window-pixel", "foreground", "desktop"] as const, {
-            type: "string",
-          }),
-          reasonCode: Type.String({ minLength: 1 }),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    details: Type.Optional(
-      Type.Record(Type.String({ minLength: 1, maxLength: 128 }), Type.Unknown(), {
-        maxProperties: COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS,
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+      reasonCode: Type.String({ minLength: 1 }),
+    }),
+  ),
+  details: Type.Optional(
+    Type.Record(Type.String({ minLength: 1, maxLength: 128 }), Type.Unknown(), {
+      maxProperties: COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS,
+    }),
+  ),
+});
 
-export const ComputerUseCapabilityDescriptorSchema = Type.Object(
-  {
-    contractVersion: Type.Literal(2),
-    provider: Type.Object(
-      {
-        id: Type.String({ minLength: 1, maxLength: 128 }),
-        label: Type.String({ minLength: 1, maxLength: 256 }),
-        generation: Type.String({ minLength: 1, maxLength: 256 }),
-      },
-      { additionalProperties: false },
-    ),
-    actions: Type.Array(Type.Enum(COMPUTER_USE_V2_ACTION_NAMES, { type: "string" }), {
-      maxItems: COMPUTER_USE_V2_ACTION_NAMES.length,
-      uniqueItems: true,
-    }),
-    targets: Type.Array(Type.Enum(["screen", "window", "element", "browser"] as const), {
-      maxItems: 4,
-      uniqueItems: true,
-    }),
-    deliveryModes: Type.Array(Type.Enum(DELIVERY_MODES, { type: "string" }), {
-      maxItems: DELIVERY_MODES.length,
-      uniqueItems: true,
-    }),
-    observations: Type.Array(
-      Type.Enum(["image", "accessibility", "browser"] as const, { type: "string" }),
-      { maxItems: 3, uniqueItems: true },
-    ),
-    features: Type.Object(
-      {
-        recording: Type.Boolean(),
-        agentCursor: Type.Boolean(),
-        multiDisplay: Type.Boolean(),
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+export const ComputerUseCapabilityDescriptorSchema = closedObject({
+  contractVersion: Type.Literal(2),
+  provider: closedObject({
+    id: Type.String({ minLength: 1, maxLength: 128 }),
+    label: Type.String({ minLength: 1, maxLength: 256 }),
+    generation: Type.String({ minLength: 1, maxLength: 256 }),
+  }),
+  actions: Type.Array(Type.Enum(COMPUTER_USE_V2_ACTION_NAMES, { type: "string" }), {
+    maxItems: COMPUTER_USE_V2_ACTION_NAMES.length,
+    uniqueItems: true,
+  }),
+  targets: Type.Array(Type.Enum(["screen", "window", "element", "browser"] as const), {
+    maxItems: 4,
+    uniqueItems: true,
+  }),
+  deliveryModes: Type.Array(Type.Enum(DELIVERY_MODES, { type: "string" }), {
+    maxItems: DELIVERY_MODES.length,
+    uniqueItems: true,
+  }),
+  observations: Type.Array(
+    Type.Enum(["image", "accessibility", "browser"] as const, { type: "string" }),
+    { maxItems: 3, uniqueItems: true },
+  ),
+  features: closedObject({
+    recording: Type.Boolean(),
+    agentCursor: Type.Boolean(),
+    multiDisplay: Type.Boolean(),
+  }),
+});
 
 /** Canonical inner payload accepted by the `screen.snapshot` node command. */
-export const ScreenSnapshotParamsSchema = Type.Object(
-  {
-    executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
-    screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
-    maxWidth: Type.Optional(Type.Integer({ minimum: 1 })),
-    quality: Type.Optional(Type.Number()),
-    format: Type.Optional(Type.Enum(["jpeg", "png"], { type: "string" })),
-  },
-  { additionalProperties: false },
-);
+export const ScreenSnapshotParamsSchema = closedObject({
+  executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
+  screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
+  maxWidth: Type.Optional(Type.Integer({ minimum: 1 })),
+  quality: Type.Optional(Type.Number()),
+  format: Type.Optional(Type.Enum(["jpeg", "png"], { type: "string" })),
+});
 
 /** Canonical inner payload returned by the `screen.snapshot` node command. */
 export const ScreenSnapshotResultSchema = Type.Object({
@@ -456,21 +416,11 @@ export type ScreenSnapshotResult = Static<typeof ScreenSnapshotResultSchema>;
 
 type ComputerUseValidator<Value> = (value: unknown) => value is Value;
 
-/** Compile one Computer Use wire schema into a reusable type-guard validator. */
-export function compileComputerUseValidator<const Schema extends TSchema>(
-  schema: Schema,
-): ComputerUseValidator<Static<Schema>> {
-  const validator = Compile(schema);
-  return (value: unknown): value is Static<Schema> => validator.Check(value);
-}
-
-const validateComputerActParams = compileComputerUseValidator(ComputerActParamsSchema);
-const validateComputerActResult = compileComputerUseValidator(ComputerActResultSchema);
-const validateComputerUseCapabilityDescriptor = compileComputerUseValidator(
-  ComputerUseCapabilityDescriptorSchema,
-);
-const validateScreenSnapshotParams = compileComputerUseValidator(ScreenSnapshotParamsSchema);
-const validateScreenSnapshotResult = compileComputerUseValidator(ScreenSnapshotResultSchema);
+const validateComputerActParams = lazyCompile(ComputerActParamsSchema);
+const validateComputerActResult = lazyCompile(ComputerActResultSchema);
+const validateComputerUseCapabilityDescriptor = lazyCompile(ComputerUseCapabilityDescriptorSchema);
+const validateScreenSnapshotParams = lazyCompile(ScreenSnapshotParamsSchema);
+const validateScreenSnapshotResult = lazyCompile(ScreenSnapshotResultSchema);
 
 function parseParamsJSON<Value>(
   paramsJSON: string | null | undefined,
@@ -532,168 +482,4 @@ export function parseScreenSnapshotResult(value: unknown): ScreenSnapshotResult 
     ...(value.height !== undefined ? { height: value.height } : {}),
     ...(value.capturedAtMs !== undefined ? { capturedAtMs: value.capturedAtMs } : {}),
   };
-}
-
-type ComputerUseExecution = {
-  snapshot(paramsJSON: string | null | undefined, signal?: AbortSignal): Promise<string>;
-  act(paramsJSON: string | null | undefined, signal?: AbortSignal): Promise<string>;
-  close(reason: string): Promise<void>;
-};
-
-export type ComputerUseProvider = {
-  id: string;
-  label: string;
-  capabilities(): ComputerUseCapabilityDescriptor;
-  isAvailable(): boolean;
-  prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;
-  watchAvailability?: (
-    context: OpenClawPluginNodeHostCommandAvailabilityContext,
-    onChange: () => void,
-  ) => (() => void) | void;
-  openExecution(context: {
-    executionId: string;
-    sessionKey?: string;
-  }): Promise<ComputerUseExecution>;
-};
-
-// Structural registration surface built from leaf node-host types only: importing
-// the full plugin API type here creates an import cycle through the gateway
-// server-method types that consume this contract.
-type ComputerUseRegistrationApi = {
-  registerNodeHostCommand(command: OpenClawPluginNodeHostCommand): void;
-};
-
-/** Register the canonical node-host command pair for one node-local provider. */
-export function registerComputerUseProvider(
-  api: ComputerUseRegistrationApi,
-  provider: ComputerUseProvider,
-): void {
-  let execution: { id: string; promise: Promise<ComputerUseExecution> } | undefined;
-  let closingPromise: Promise<void> = Promise.resolve();
-
-  const executionEnvelopeFromParams = (paramsJSON: string | null | undefined) => {
-    let value: unknown;
-    try {
-      value = JSON.parse(paramsJSON ?? "{}");
-    } catch {
-      throw new Error("COMPUTER_INVALID_REQUEST: params must be valid JSON");
-    }
-    const executionId =
-      value && typeof value === "object" && !Array.isArray(value)
-        ? (value as { executionId?: unknown }).executionId
-        : undefined;
-    if (executionId === undefined) {
-      return { executionId: undefined, value };
-    }
-    if (
-      typeof executionId !== "string" ||
-      !new RegExp(COMPUTER_EXECUTION_ID_PATTERN, "u").test(executionId)
-    ) {
-      throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
-    }
-    return { executionId, value };
-  };
-  const getExecution = async (
-    paramsJSON: string | null | undefined,
-    context?: OpenClawPluginNodeHostCommandContext,
-  ) => {
-    const { executionId } = executionEnvelopeFromParams(paramsJSON);
-    if (!executionId) {
-      throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
-    }
-    await closingPromise;
-    if (execution && execution.id !== executionId) {
-      throw new Error("COMPUTER_HOST_BUSY: another provider execution owns this computer");
-    }
-    if (!execution) {
-      const opened = provider.openExecution(
-        context?.sessionKey ? { executionId, sessionKey: context.sessionKey } : { executionId },
-      );
-      // A failed open must not wedge the provider behind a cached rejection;
-      // the next command call retries openExecution instead.
-      opened.catch(() => {
-        if (execution?.promise === opened) {
-          execution = undefined;
-        }
-      });
-      execution = { id: executionId, promise: opened };
-    }
-    return execution.promise;
-  };
-  const closeExecution = async (executionId: string | undefined, reason: string) => {
-    await closingPromise;
-    const current = execution;
-    if (!current || (executionId !== undefined && current.id !== executionId)) {
-      return;
-    }
-    execution = undefined;
-    if (current) {
-      const close = current.promise.then(async (opened) => await opened.close(reason));
-      closingPromise = close.catch(() => {});
-      await close;
-    }
-  };
-
-  api.registerNodeHostCommand({
-    command: "screen.snapshot",
-    cap: "screen",
-    dangerous: false,
-    prepare: (context) => provider.prepare?.(context),
-    isAvailable: () => provider.isAvailable(),
-    watchAvailability: (context, onChange) => {
-      const stopWatching = provider.watchAvailability?.(context, onChange);
-      return () => {
-        stopWatching?.();
-        void closeExecution(undefined, "node-host-stop");
-      };
-    },
-    onDisconnect: async () => await closeExecution(undefined, "gateway-disconnect"),
-    handle: async (paramsJSON, _io, context) => {
-      const envelope = executionEnvelopeFromParams(paramsJSON);
-      if (envelope.executionId) {
-        return await (
-          await getExecution(paramsJSON, context)
-        ).snapshot(paramsJSON, context?.signal);
-      }
-      const executionId = randomUUID();
-      const opened = await provider.openExecution(
-        context?.sessionKey ? { executionId, sessionKey: context.sessionKey } : { executionId },
-      );
-      try {
-        return await opened.snapshot(paramsJSON, context?.signal);
-      } finally {
-        await opened.close("snapshot-complete");
-      }
-    },
-  });
-  api.registerNodeHostCommand({
-    command: "computer.act",
-    cap: "computer",
-    dangerous: true,
-    computerUse: () => provider.capabilities(),
-    isAvailable: () => provider.isAvailable(),
-    handle: async (paramsJSON, _io, context) => {
-      const envelope = executionEnvelopeFromParams(paramsJSON);
-      if (!envelope.executionId) {
-        throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
-      }
-      if (
-        envelope.value &&
-        typeof envelope.value === "object" &&
-        !Array.isArray(envelope.value) &&
-        (envelope.value as { action?: unknown }).action === "__close_execution"
-      ) {
-        const reason = (envelope.value as { reason?: unknown }).reason;
-        await closeExecution(
-          envelope.executionId,
-          typeof reason === "string" && reason.trim() ? reason.slice(0, 64) : "completion",
-        );
-        return JSON.stringify({ ok: true });
-      }
-      return await (await getExecution(paramsJSON, context)).act(paramsJSON, context?.signal);
-    },
-  });
-  // The provider plugin must also register its dangerous `computer.act` invoke
-  // policy with the full plugin API. Forgetting it fails closed: the Gateway
-  // rejects dangerous plugin commands that lack a registered policy.
 }

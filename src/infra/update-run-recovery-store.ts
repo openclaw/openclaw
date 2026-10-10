@@ -1,0 +1,56 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
+import {
+  decodeUpdateRecovery,
+  inspectUpdateRecovery,
+  type UpdateRecoveryInspection,
+  type UpdateRecoveryRecord,
+} from "./update-run-recovery-schema.js";
+
+type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
+
+function readRecoveryRows(db: DatabaseSync) {
+  if (!tableExists(db, "config_machine_state")) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<RecoveryDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select(["state_key", "value_json"])
+      .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
+      .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
+      .orderBy("state_key", "asc"),
+  ).rows;
+}
+/** Execution reads only its named operation; unrelated history is not execution input. */
+export function readRecovery(db: DatabaseSync, runId: string): UpdateRecoveryRecord | undefined {
+  const row = readRecoveryRows(db).find(
+    (entry) => entry.state_key === UPDATE_RECOVERY_KEY_PREFIX + runId,
+  );
+  return row ? decodeUpdateRecovery(row.value_json, runId) : undefined;
+}
+
+export function inspectRecoveryRows(db: DatabaseSync): UpdateRecoveryInspection[] {
+  return readRecoveryRows(db).map(({ value_json, state_key }) =>
+    inspectUpdateRecovery(value_json, state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
+  );
+}
+/** Private read-only compatibility surface for diagnostics and retained-pair
+ * inspection. Legacy receipts remain exact historical evidence, never authority.
+ * Execution loaders below deliberately reject them instead of upgrading them. */
+export function inspectUpdateRecoveries(
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateRecoveryInspection[] {
+  return (
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db }) => inspectRecoveryRows(db),
+      options,
+    ) ?? []
+  );
+}

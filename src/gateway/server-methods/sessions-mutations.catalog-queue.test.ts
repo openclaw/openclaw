@@ -1,26 +1,57 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { loadPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import {
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
 } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { validateConfigObject, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
+import {
+  isSessionStoreTopologyChange,
+  sessionChanges,
+} from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
+import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { loadGatewayModelCatalog as loadActualGatewayModelCatalog } from "../server-model-catalog.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
-afterEach(() => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -30,13 +61,42 @@ function patchContext(
 ) {
   return {
     getRuntimeConfig: () => cfg,
-    loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: async (
+      params: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
+    ) => {
+      const entries = await loadGatewayModelCatalog(params);
+      return { entries, routeVariants: entries };
+    },
     getSessionEventSubscriberConnIds: () => new Set(),
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
+}
+
+function modelConfig(store: string, agents: NonNullable<OpenClawConfig["agents"]>) {
+  const model = makeProviderModelFixture<"openai-completions">({
+    provider: "openai",
+    id: "gpt-5.6-sol",
+    api: "openai-completions",
+    baseUrl: "https://fixture.invalid/v1",
+  });
+  const cfg: OpenClawConfig = {
+    models: {
+      providers: {
+        openai: {
+          api: model.api,
+          baseUrl: model.baseUrl,
+          models: [model].map(({ provider: _provider, ...definition }) => definition),
+        },
+      },
+    },
+    agents: { defaults: { model: "openai/gpt-5.6-sol" }, ...agents },
+    session: { store },
+  };
+  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+  return { model, cfg };
 }
 
 function patchRequest(context: GatewayRequestContext) {
@@ -49,6 +109,82 @@ function patchRequest(context: GatewayRequestContext) {
     } as never);
 }
 
+test.each(["sessions.patch", "sessions.patchMany"] as const)(
+  "%s bounds a stalled catalog without committing and permits retry",
+  async (method) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const targets = (method === "sessions.patchMany" ? ["first", "second"] : ["first"]).map(
+        (name) => ({ key: `agent:main:catalog-deadline-${name}` }),
+      );
+      for (const { key } of targets) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key },
+          { sessionId: key, updatedAt: 1 },
+        );
+      }
+      const entries = () =>
+        targets.map(({ key }) => loadSessionEntry({ agentId: "main", sessionKey: key }));
+      const before = entries();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const context = patchContext(async () => {
+        entered.resolve();
+        await release.promise;
+        return [];
+      });
+      const respond = vi.fn();
+      const patch = { thinkingLevel: "low", pinned: true };
+      const params =
+        method === "sessions.patchMany" ? { targets, patch } : { ...targets[0], ...patch };
+      const invoke = () =>
+        sessionMutationHandlers[method]!({
+          req: { type: "req", id: "catalog-deadline", method, params },
+          params,
+          respond,
+          context,
+          client: null,
+          isWebchatConnect: () => false,
+        });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const pending = invoke();
+      try {
+        await Promise.race([entered.promise, pending]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        release.resolve();
+        await pending;
+        const unavailable = expect.objectContaining({
+          code: "UNAVAILABLE",
+          retryable: true,
+          message: expect.stringMatching(/model catalog.*loading.*retry/i),
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          ...(method === "sessions.patchMany"
+            ? [
+                true,
+                {
+                  outcomes: targets.map(({ key }) => ({ key, ok: false, error: unavailable })),
+                },
+                undefined,
+              ]
+            : [false, undefined, unavailable]),
+        );
+        expect(entries()).toEqual(before);
+      } finally {
+        vi.useRealTimers();
+        release.resolve();
+        await pending;
+      }
+      expect(entries()).toEqual(before);
+      respond.mockClear();
+      await invoke();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      for (const entry of entries()) {
+        expect(entry).toMatchObject({ thinkingLevel: "low", pinnedAt: expect.any(Number) });
+      }
+    });
+  },
+);
+
 test("catalog reload releases the agent writer while preserving same-session ordering", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const catalogKey = "agent:main:catalog-dependent";
@@ -59,37 +195,57 @@ test("catalog reload releases the agent writer while preserving same-session ord
         { sessionId: sessionKey, updatedAt: 1 },
       );
     }
+    await import("../../agents/prepared-model-catalog.js");
     const entered = createDeferredCore();
     const replacement = markPreparedModelRuntimeSnapshotsStale("catalog reload", {
       waitForReplacement: true,
     });
     expect(replacement).toBeDefined();
     const loadGatewayModelCatalog = vi.fn(async () => {
-      entered.resolve();
-      return await loadActualGatewayModelCatalog({ agentId: "main", getConfig: () => ({}) });
+      return await loadActualGatewayModelCatalog({
+        agentId: "main",
+        getConfig: () => ({}),
+        loadPublishedPreparedModelCatalogOwnerSnapshot: (params) => {
+          const pending = loadPublishedPreparedModelCatalogOwnerSnapshot(params);
+          // The real owner captures the replacement gate synchronously before returning.
+          entered.resolve();
+          return pending;
+        },
+      });
     });
     const context = patchContext(loadGatewayModelCatalog);
     const catalogResponse = vi.fn();
     const metadataResponse = vi.fn();
     const successorResponse = vi.fn();
     const patch = patchRequest(context);
-    const catalogPatch = patch({ key: catalogKey, contextWindow: "extended" }, catalogResponse);
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    let clock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const catalogTrace = createDiagnosticTraceContext();
+    const successorTrace = createDiagnosticTraceContext();
+    const records: Array<{ traceId: string | undefined; message: string }> = [];
+    const logSpy = vi.spyOn(sessionLog, "info").mockImplementation((message) => {
+      if (message.startsWith("slow session patch ")) {
+        records.push({ traceId: getActiveDiagnosticTraceContext()?.traceId, message });
+      }
+    });
+    const catalogPatch = runWithDiagnosticTraceContext(catalogTrace, () =>
+      patch({ key: catalogKey, contextWindow: "extended" }, catalogResponse),
+    );
     let metadataPatch: ReturnType<typeof patch> | undefined;
     let successorPatch: ReturnType<typeof patch> | undefined;
-    let blockedMetadata: Error | undefined;
     try {
       await Promise.race([entered.promise, catalogPatch]);
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
       expect(catalogResponse).not.toHaveBeenCalled();
-      successorPatch = patch({ key: catalogKey, pinned: true }, successorResponse);
+      successorPatch = runWithDiagnosticTraceContext(successorTrace, () =>
+        patch({ key: catalogKey, pinned: true }, successorResponse),
+      );
       metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
-      await vi
-        .waitFor(() =>
-          expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined),
-        )
-        .catch((error: unknown) => {
-          blockedMetadata = error instanceof Error ? error : new Error(String(error));
-        });
+      // Join independent work before advancing the diagnostic clock or releasing the catalog.
+      await metadataPatch;
+      expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       expect(catalogResponse).not.toHaveBeenCalled();
       expect(successorResponse).not.toHaveBeenCalled();
       expect(
@@ -97,11 +253,15 @@ test("catalog reload releases the agent writer while preserving same-session ord
       ).toBeUndefined();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     } finally {
+      clock += 1_500;
       rejectPendingPreparedModelRuntimeReplacement(
         replacement,
         new Error("Synthetic catalog reload failed"),
       );
       await Promise.allSettled([catalogPatch, metadataPatch, successorPatch]);
+      clockSpy.mockRestore();
+      logSpy.mockRestore();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
     }
     expect(catalogResponse).toHaveBeenCalledWith(false, undefined, {
       code: "UNAVAILABLE",
@@ -119,9 +279,13 @@ test("catalog reload releases the agent writer while preserving same-session ord
     expect(loadSessionEntry({ agentId: "main", sessionKey: metadataKey })?.pinnedAt).toEqual(
       expect.any(Number),
     );
-    if (blockedMetadata) {
-      throw blockedMetadata;
-    }
+    expect(records).toHaveLength(2);
+    expect(records.find((record) => record.traceId === catalogTrace.traceId)?.message).toMatch(
+      /^slow session patch 1500ms method=sessions\.patch .* catalog=1500ms(?: |$)/,
+    );
+    expect(records.find((record) => record.traceId === successorTrace.traceId)?.message).toMatch(
+      /^slow session patch 1500ms method=sessions\.patch .* lifecycleAdmission=1500ms(?: |$)/,
+    );
   });
 });
 
@@ -159,7 +323,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
           change === "alias"
             ? {
                 session: { mainKey: "work" },
-                agents: { list: [{ id: "main", default: true }] },
+                agents: { entries: { main: {} } },
               }
             : {},
         ),
@@ -196,7 +360,8 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
                       contextWindow: undefined,
                     },
               ).then(() => changed());
-        await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+        await mutation;
+        expect(changed).toHaveBeenCalledOnce();
       } finally {
         if (change === "alias") {
           catalog.resolve([]);
@@ -272,14 +437,30 @@ test("patchMany prepares singleton agent groups without blocking another session
     );
     const catalog =
       createDeferredCore<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
-    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
+    const entered = createDeferredCore();
+    const loadGatewayModelCatalog = vi.fn(() => {
+      if (loadGatewayModelCatalog.mock.calls.length === targets.length) {
+        entered.resolve();
+      }
+      return catalog.promise;
+    });
     const context = patchContext(loadGatewayModelCatalog, {
       agents: {
         defaults: { model: "anthropic/claude-sonnet-4-6" },
-        list: [{ id: "main" }, { id: "secondary" }],
+        entries: { main: {}, secondary: {} },
       },
     });
     const respond = vi.fn();
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    let clock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const timingRecords: string[] = [];
+    const logSpy = vi.spyOn(sessionLog, "info").mockImplementation((message) => {
+      if (message.startsWith("slow session patch ")) {
+        timingRecords.push(message);
+      }
+    });
     const batch = sessionMutationHandlers["sessions.patchMany"]!({
       params: { targets, patch: { contextWindow: "extended" } },
       respond,
@@ -289,13 +470,14 @@ test("patchMany prepares singleton agent groups without blocking another session
     const metadataResponse = vi.fn();
     let metadataPatch: Promise<void> | void = undefined;
     try {
-      await vi.waitFor(() => expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2));
+      await Promise.race([entered.promise, batch]);
+      expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
       metadataPatch = patchRequest(context)({ key: metadataKey, pinned: true }, metadataResponse);
-      await vi.waitFor(() =>
-        expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined),
-      );
+      await metadataPatch;
+      expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       expect(respond).not.toHaveBeenCalled();
     } finally {
+      clock += 1_500;
       catalog.resolve([
         {
           provider: "anthropic",
@@ -305,6 +487,9 @@ test("patchMany prepares singleton agent groups without blocking another session
         },
       ]);
       await Promise.allSettled([batch, metadataPatch]);
+      clockSpy.mockRestore();
+      logSpy.mockRestore();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
     }
     expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "main" });
@@ -323,6 +508,11 @@ test("patchMany prepares singleton agent groups without blocking another session
     expect(loadSessionEntry({ agentId: "main", sessionKey: metadataKey })?.pinnedAt).toEqual(
       expect.any(Number),
     );
+    expect(timingRecords).toEqual([
+      expect.stringMatching(
+        /^slow session patch 1500ms method=sessions\.patchMany .* catalog=3000ms(?: |$)/,
+      ),
+    ]);
   });
 });
 
@@ -338,7 +528,7 @@ test("a multi-target agent group retains ordered label claims around catalog loa
     const loadGatewayModelCatalog = vi.fn(async () => []);
     const respond = vi.fn();
     await sessionMutationHandlers["sessions.patchMany"]!({
-      params: { targets, patch: { label: "Winner", thinkingLevel: "off" } },
+      params: { targets, patch: { label: "Winner", thinkingLevel: "low" } },
       respond,
       context: patchContext(loadGatewayModelCatalog),
       client: null,
@@ -360,7 +550,7 @@ test("a multi-target agent group retains ordered label claims around catalog loa
     expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ agentId: "main", sessionKey: targets[0]!.key })).toMatchObject({
       label: "Winner",
-      thinkingLevel: "off",
+      thinkingLevel: "low",
     });
     expect(
       loadSessionEntry({ agentId: "main", sessionKey: targets[1]!.key })?.label,
@@ -373,6 +563,7 @@ test("a multi-target agent group retains ordered label claims around catalog loa
 
 test("dispatched authorization rejects an instance replaced during catalog preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const member = await ensureCanonicalUserProfileForEmail("member@example.com");
     const sessionKey = "agent:main:commit-bound-authorization";
     // A write-scoped model reset revalidates retained thinking. Admin scope would
     // bypass the session-instance authorization this request must exercise.
@@ -395,7 +586,7 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
         connId: "catalog-authorization",
         authenticatedUserId: "member@example.com",
         authenticatedUserProfile: {
-          profileId: "member",
+          profileId: member.id,
           displayName: "Member",
           hasAvatar: false,
           updatedAt: 1,
@@ -443,8 +634,8 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
         committed();
       })();
       void replacement.catch(() => {});
-      await vi.waitFor(() => expect(committed).toHaveBeenCalledOnce());
       await replacement;
+      expect(committed).toHaveBeenCalledOnce();
       release.resolve();
       await request;
       expect(respond).toHaveBeenCalledWith(
@@ -464,6 +655,327 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
     } finally {
       release.resolve();
       await Promise.allSettled([request, replacement]);
+    }
+  });
+});
+
+test("patch timing covers preparation and lifecycle finalization before cleanup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:phase-boundaries";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: key },
+      { sessionId: "phase-boundaries", updatedAt: 1 },
+    );
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    let clock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const log = vi.spyOn(sessionLog, "info").mockImplementation(() => {});
+    const runMutation = sessionLifecycle.runExclusiveSessionLifecycleMutation;
+    const lifecycle = vi
+      .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
+      .mockImplementation((operation, params) =>
+        runMutation(operation, {
+          ...params,
+          prepare: async (owner) => {
+            await params.prepare?.(owner);
+            clock += 700;
+          },
+          finalize: async () => {
+            await params.finalize?.();
+            clock += 500;
+          },
+        }),
+      );
+    const response = vi.fn();
+    try {
+      await patchRequest(patchContext(async () => []))({ key, pinned: true }, response);
+      expect(response).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      const timing = log.mock.calls.find(([message]) =>
+        message.startsWith("slow session patch 1200ms method=sessions.patch "),
+      )?.[0];
+      for (const phase of [
+        "lifecycleAdmission=700ms",
+        "lifecycleFinalize=500ms",
+        "cleanup=0ms",
+        "snapshot=0ms",
+        "commit=0ms",
+      ]) {
+        expect(timing).toContain(` ${phase}`);
+      }
+    } finally {
+      lifecycle.mockRestore();
+      log.mockRestore();
+      clockSpy.mockRestore();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
+    }
+  });
+});
+
+test("patchMany creates one shared physical store through original per-agent directory aliases", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const directory = state.statePath("patch-many-alias-birth");
+    const physical = path.join(directory, "physical");
+    const aliases = path.join(directory, "links");
+    await fs.mkdir(physical, { recursive: true });
+    await fs.mkdir(aliases);
+    const targets = ["main", "work"].map((agentId) => ({
+      agentId,
+      key: `agent:${agentId}:dashboard:shared-alias-birth`,
+    }));
+    for (const { agentId } of targets) {
+      await fs.symlink(
+        physical,
+        path.join(aliases, agentId),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    const physicalFile = path.join(await fs.realpath(physical), "shared.sqlite");
+    const { model, cfg } = modelConfig(path.join(aliases, "{agentId}", "shared.sqlite"), {
+      ownership: "explicit",
+      entries: { main: {}, work: {} },
+    });
+    await state.writeConfig(cfg);
+    const context = patchContext(async () => [model], cfg);
+    const response = vi.fn();
+    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
+    await expect(fs.stat(physicalFile)).rejects.toMatchObject({ code: "ENOENT" });
+    // The existing direct method harness uses null only for a trusted internal caller.
+    await sessionMutationHandlers["sessions.patchMany"]!({
+      req: { type: "req", id: "shared-alias-birth", method: "sessions.patchMany", params },
+      params,
+      respond: response,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(response).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
+      undefined,
+    );
+    const instances = targets.map(({ agentId, key }) => {
+      const storePath = path.join(aliases, agentId, "shared.sqlite");
+      const entry = loadSessionEntry({ agentId, sessionKey: key, storePath });
+      expect(entry).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+        sessionId: expect.any(String),
+      });
+      if (!entry) {
+        throw new Error("Successful alias patch did not persist its session");
+      }
+      return { agentId, key, storePath, expectedSessionId: entry.sessionId };
+    });
+    for (const { storePath } of instances) {
+      expect(await fs.realpath(storePath)).toBe(physicalFile);
+    }
+    const currentResponse = vi.fn();
+    const currentParams = {
+      targets: instances.map(({ agentId, key, expectedSessionId }) => ({
+        agentId,
+        key,
+        expectedSessionId,
+      })),
+      patch: { model: "openai/gpt-5.6-sol", pinned: true },
+    };
+    await sessionMutationHandlers["sessions.patchMany"]!({
+      req: {
+        type: "req",
+        id: "shared-alias-current",
+        method: "sessions.patchMany",
+        params: currentParams,
+      },
+      params: currentParams,
+      respond: currentResponse,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(currentResponse).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
+      undefined,
+    );
+    for (const { agentId, key, storePath, expectedSessionId } of instances) {
+      expect(loadSessionEntry({ agentId, sessionKey: key, storePath })).toMatchObject({
+        sessionId: expectedSessionId,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+        pinnedAt: expect.any(Number),
+      });
+    }
+  });
+});
+
+test("patchMany retains original RAM facts while its cold durable sibling publishes registration", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("mixed-patch-cold.sqlite");
+    const { model, cfg } = modelConfig(storePath, {
+      entries: { main: {} },
+    });
+    await state.writeConfig(cfg);
+    const ramKey = "agent:main:dashboard:incognito-mixed-patch";
+    const ramPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const ramScope = { agentId: "main", sessionKey: ramKey, storePath: ramPath };
+    const ramIdentity = {
+      sessionId: "original-mixed-ram",
+      lifecycleRevision: "original-mixed-ram-generation",
+      incognito: true as const,
+    };
+    await upsertSessionEntryCore(ramScope, { ...ramIdentity, updatedAt: 1 });
+    const originalRam = getOpenIncognitoAgentDatabase("main", ramPath);
+    if (!originalRam) {
+      throw new Error("Incognito fixture did not retain its original RAM database");
+    }
+    const fileKey = "agent:main:dashboard:mixed-file-patch";
+    const targets = [
+      { agentId: "main", key: ramKey, expectedSessionId: ramIdentity.sessionId },
+      { agentId: "main", key: fileKey },
+    ];
+    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
+    const context = patchContext(async () => [model], cfg);
+    const response = vi.fn();
+    const ramLifetimesAtStoresPublication: boolean[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if (isSessionStoreTopologyChange(change)) {
+        ramLifetimesAtStoresPublication.push(
+          getOpenIncognitoAgentDatabase("main", ramPath) === originalRam && originalRam.db.isOpen,
+        );
+      }
+    });
+    try {
+      await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        req: { type: "req", id: "mixed-file-ram-patch", method: "sessions.patchMany", params },
+        params,
+        respond: response,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(ramLifetimesAtStoresPublication.length).toBeGreaterThan(0);
+      expect(ramLifetimesAtStoresPublication.every(Boolean)).toBe(true);
+      expect(response).toHaveBeenCalledExactlyOnceWith(
+        true,
+        { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
+        undefined,
+      );
+      expect(getOpenIncognitoAgentDatabase("main", ramPath)).toBe(originalRam);
+      expect(originalRam.db.isOpen).toBe(true);
+      expect(loadSessionEntry(ramScope)).toMatchObject({
+        ...ramIdentity,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: fileKey, storePath })).toMatchObject({
+        sessionId: expect.any(String),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      await expect(fs.stat(ramPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      stop();
+    }
+  });
+});
+
+test("patchMany excludes a revoked cold-store promotion while its independent store commits", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixtureDirectory = state.statePath("independent-cold-patch");
+    await fs.mkdir(fixtureDirectory, { recursive: true });
+    const directory = await fs.realpath(fixtureDirectory);
+    const targets = ["main", "work"].map((agentId) => ({
+      agentId,
+      key: `agent:${agentId}:dashboard:cold-promotion`,
+    }));
+    const failed = targets[0]!;
+    const successful = targets[1]!;
+    const failedPath = path.join(directory, failed.agentId, "store.sqlite");
+    const successfulPath = path.join(directory, successful.agentId, "store.sqlite");
+    const { model, cfg } = modelConfig(path.join(directory, "{agentId}", "store.sqlite"), {
+      ownership: "explicit",
+      entries: { main: {}, work: {} },
+    });
+    await state.writeConfig(cfg);
+    const context = patchContext(async () => [model], cfg);
+    const revoked = new SessionMutationAuthorizationChangedError(
+      errorShape(ErrorCodes.FORBIDDEN, "Original cold-store source was revoked"),
+    );
+    const source = new AbortController();
+    let failedOpenAdmissions = 0;
+    const admissionObserver = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "open" &&
+        isRecord(request.facts) &&
+        request.facts.databasePath === failedPath &&
+        isRecord(request.facts.creatingIdentity) &&
+        request.facts.creatingIdentity.key === `path:${failedPath}`
+      ) {
+        failedOpenAdmissions++;
+        source.abort(revoked);
+      }
+      admit(request, grant);
+    });
+    const writers = vi.spyOn(sessionReplacement, "applySessionEntryCanonicalReplacements");
+    const respond = vi.fn();
+    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
+    try {
+      await expect(fs.stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(successfulPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        req: {
+          type: "req",
+          id: "independent-cold-promotion",
+          method: "sessions.patchMany",
+          params,
+        },
+        params,
+        respond,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+        sessionMutationAuthorization: {
+          assertCurrent() {},
+          assertTargetCurrent({ sessionKey }) {
+            if (sessionKey === failed.key) {
+              source.signal.throwIfAborted();
+            }
+          },
+        },
+      });
+      expect(failedOpenAdmissions).toBe(1);
+      expect(source.signal.reason).toBe(revoked);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        {
+          outcomes: [
+            { ...failed, ok: false, error: revoked.error },
+            { ...successful, ok: true },
+          ],
+        },
+        undefined,
+      );
+      // Failed preparation must not reenter the canonical writer through a fallback.
+      expect(writers.mock.calls.some(([request]) => request.storePath === failedPath)).toBe(false);
+      expect(writers.mock.calls.some(([request]) => request.storePath === successfulPath)).toBe(
+        true,
+      );
+      await expect(fs.stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        loadSessionEntry({
+          agentId: successful.agentId,
+          sessionKey: successful.key,
+          storePath: successfulPath,
+        }),
+      ).toMatchObject({
+        sessionId: expect.any(String),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+    } finally {
+      writers.mockRestore();
+      admissionObserver.mockRestore();
     }
   });
 });

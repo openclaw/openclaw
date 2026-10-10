@@ -1,11 +1,13 @@
 import type { TranscriptSessionSummary } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import {
-  isTranscriptSessionActive,
+  isTranscriptSelectionCurrent,
+  isTranscriptSelectionOwned,
   resolveSourceProvider,
   type TranscriptsRuntimeContext,
 } from "../../transcripts/capture.js";
-import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
+import { presentTranscriptSession } from "../../transcripts/read-live.js";
+import { projectTranscriptSession, projectTranscriptNotes } from "../../transcripts/read.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { toolText } from "./transcripts-tool-result.js";
@@ -31,14 +33,15 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
   // Page before authorization, but limit after it: hidden meetings must not crowd
   // accessible captures out of the result. No per-meeting database queries.
   for (let offset = 0; sessions.length < limit; offset += 200) {
-    const entries = store.listReadEntries({ limit: 200, offset });
+    const { entries, hasMore } = await store.listReadEntries({ limit: 200, offset });
+    ctx.assertCallerActive?.();
     for (const entry of entries) {
       if (!(await canAccessTranscriptSession(ctx, entry.session, "list"))) {
         continue;
       }
-      const { overview: _overview, ...session } = projectTranscriptSession(
-        entry,
-        isTranscriptSessionActive(entry.session),
+      const { overview: _overview, ...session } = presentTranscriptSession(
+        projectTranscriptSession(entry),
+        undefined,
         resolveSourceProvider(entry.session.source.providerId, ctx)?.name,
       );
       sessions.push(session);
@@ -46,7 +49,7 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
         break;
       }
     }
-    if (entries.length < 200) {
+    if (!hasMore) {
       break;
     }
   }
@@ -72,16 +75,24 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
 export async function showPastTranscript(params: ReadParams) {
   const { ctx, store } = params;
   const selection = await resolveTranscriptToolSession({ ...params, action: "show" });
-  const entry = store.listReadEntries({ limit: 1, session: selection.session })[0];
+  const entry = (await store.listReadEntries({ limit: 1, session: selection.session })).entries[0];
+  ctx.assertCallerActive?.();
   if (!entry) {
     throw new Error(`transcripts session not found: ${selection.selector}`);
   }
-  const notes = await readTranscriptNotes(store, selection.session);
+  const notes = projectTranscriptNotes(await store.readNotes(selection.session));
+  const current = await isTranscriptSelectionCurrent(selection, store);
   ctx.assertCallerActive?.();
-  const session = projectTranscriptSession(
-    { ...entry, session: selection.session },
-    isTranscriptSessionActive(selection.session),
-  );
+  if (!current || !isTranscriptSelectionOwned(selection)) {
+    const text = "Transcript changed while reading. Retry show to read the current notes.";
+    return toolText(text, {
+      text,
+      sessionId: selection.session.sessionId,
+      selector: selection.selector,
+      skipped: true,
+      retryable: true,
+    });
+  }
   const {
     selector,
     sessionId,
@@ -92,7 +103,7 @@ export async function showPastTranscript(params: ReadParams) {
     participants,
     summarySource,
     active,
-  } = session;
+  } = presentTranscriptSession(projectTranscriptSession({ ...entry, session: selection.session }));
   const marker = `\n[truncated; run openclaw transcripts show ${selector} for the full notes]`;
   const markdown = notes?.markdown;
   const text =
@@ -104,6 +115,7 @@ export async function showPastTranscript(params: ReadParams) {
   return {
     content: [{ type: "text" as const, text }],
     details: {
+      text,
       selector,
       sessionId,
       title,

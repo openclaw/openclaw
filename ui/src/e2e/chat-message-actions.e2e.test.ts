@@ -3,9 +3,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -93,13 +95,21 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
           >("wa-tooltip");
         const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
         const bounds = body?.getBoundingClientRect();
+        // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
+        // markup whitespace is in textContent but never rendered or announced.
+        const readableText = (node: Node): string =>
+          node instanceof Element && node.getAttribute("aria-hidden") === "true"
+            ? ""
+            : node instanceof Text
+              ? node.data
+              : Array.from(node.childNodes, readableText).join("");
         return {
           anchorMatches: tooltip?.anchor === element,
           height: bounds?.height ?? 0,
           hidden: body?.hidden ?? true,
           open: tooltip?.hasAttribute("open") ?? false,
           popupActive: tooltip?.popup?.active ?? false,
-          text: tooltip?.textContent?.trim() ?? "",
+          text: tooltip ? readableText(tooltip).trim() : "",
           width: bounds?.width ?? 0,
         };
       }),
@@ -167,6 +177,103 @@ describeControlUiE2e("Control UI chat message actions", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it.each([
+    { name: "desktop", width: 1440, height: 900 },
+    { name: "mobile", width: 390, height: 844 },
+  ])("keeps view-only subagent reply actions absent on $name", async (viewport) => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      hasTouch: viewport.name === "mobile",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+      recordVideo: captureUiProof ? { dir: artifactDir, size: viewport } : undefined,
+    });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(server.baseUrl).origin,
+    });
+    const parent = { key: "agent:main:reply-parent", kind: "direct", label: "Workspace review" };
+    const child = {
+      key: "agent:main:subagent:reply-child",
+      kind: "direct",
+      label: "Check dependencies",
+      spawnedBy: parent.key,
+      parentSessionKey: parent.key,
+      status: "done",
+      hasActiveRun: false,
+    };
+    const message = "The dependency review is complete.";
+    try {
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        sessionKey: child.key,
+        sessions: [parent, child],
+        historyMessages: [
+          {
+            role: "user",
+            content: "Review the workspace dependencies.",
+            timestamp: Date.now() - 2_000,
+            __openclaw: { id: "review-request", seq: 1 },
+          },
+          {
+            role: "assistant",
+            content: message,
+            timestamp: Date.now() - 1_000,
+            __openclaw: { id: "review-result", seq: 2 },
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(server.baseUrl, child.key));
+      await gateway.waitForRequest("chat.startup");
+      await page.getByText("View-only subagent", { exact: true }).waitFor();
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      const bubble = activePane.locator('.chat-bubble[data-entry-id="review-result"]');
+      await bubble.waitFor({ state: "visible" });
+      if (viewport.name === "mobile") {
+        await bubble.tap();
+      } else {
+        await bubble.hover();
+      }
+      await screenshot(page, `${viewport.name}-subagent-actions.png`);
+      expect(await page.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
+      expect.soft(await page.getByRole("button", { name: "Reply to message" }).count()).toBe(0);
+      const copy = activePane.locator(".chat-group.assistant .chat-copy-btn");
+      await copy.click();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(message);
+      await bubble.click({ button: "right" });
+      const menu = page.locator(".chat-reply-context-menu");
+      await menu.waitFor({ state: "visible" });
+      await screenshot(page, `${viewport.name}-subagent-context-menu.png`);
+      expect.soft(await menu.getByRole("menuitem", { name: "Reply to message" }).count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('.chat-bubble[data-entry-id="review-request"]').click({ button: "right" });
+      expect(
+        await menu.getByRole("menuitem", { name: "Fork from here", exact: true }).count(),
+      ).toBe(1);
+      await page.keyboard.press("Escape");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await page.getByRole("button", { name: "Open parent session", exact: true }).click();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible" });
+      if (viewport.name === "mobile") {
+        await bubble.tap();
+      } else {
+        await bubble.hover();
+      }
+      await activePane
+        .locator(".chat-group.assistant")
+        .getByRole("button", { name: "Reply to message", exact: true })
+        .click();
+      await expect
+        .poll(() => activePane.locator(".chat-reply-preview__text").textContent())
+        .toBe(message);
+      await screenshot(page, `${viewport.name}-parent-reply.png`);
+    } finally {
+      await context.close();
+    }
   });
 
   it.each([
@@ -302,11 +409,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });
-        const sentPreview = page.locator(".chat-reply-preview--message");
-        await expect
-          .poll(() => sentPreview.locator(".chat-reply-preview__text").textContent())
-          .toBe(fileName);
-        await sentPreview.click();
+        const sentPreview = page.locator(".chat-reply-attribution--inline");
+        await expect.poll(() => sentPreview.getByRole("button").count()).toBe(1);
+        await sentPreview.getByRole("button").click();
         await expect
           .poll(() =>
             bubble.evaluate((element) => element.classList.contains("chat-bubble--reply-target")),
@@ -364,8 +469,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
 
     const presentation = (group: Locator) =>
       group.evaluate((element) => {
-        const footer = element.querySelector<HTMLElement>(".chat-group-footer");
-        const action = element.querySelector<HTMLElement>(".chat-group-footer-actions button");
+        const footer = element.querySelector<HTMLElement>(":scope > .chat-group-footer");
+        const action = element.querySelector<HTMLElement>(
+          ":scope > .chat-group-footer .chat-group-footer-actions button",
+        );
         return {
           actionOpacity: action ? getComputedStyle(action).opacity : null,
           actionPointerEvents: action ? getComputedStyle(action).pointerEvents : null,
@@ -382,7 +489,14 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const earlierAssistant = assistantGroups.first();
       const latestAssistant = assistantGroups.last();
       await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
-      const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
+      const intermediateId = await latestAssistant
+        .locator(".chat-bubble")
+        .first()
+        .getAttribute("data-message-id");
+      const intermediateOwner = latestAssistant.locator(
+        `[data-message-actions-for="${intermediateId}"]`,
+      );
+      const inlineAction = intermediateOwner.locator("button").first();
       await expect.poll(() => inlineAction.count()).toBe(1);
 
       await screenshot(page, "user-last-assistant-actions-hidden-desktop.png");
@@ -412,6 +526,11 @@ describeControlUiE2e("Control UI chat message actions", () => {
         .toEqual({ opacity: "0", pointerEvents: "none" });
 
       await page.setViewportSize({ width: 390, height: 844 });
+      await expect.poll(() => intermediateOwner.count()).toBe(1);
+      await expect.poll(() => latestAssistant.locator(".chat-message-actions-row").count()).toBe(0);
+      expect(await intermediateOwner.locator("..").getAttribute("class")).toContain(
+        "chat-message-footer",
+      );
       await screenshot(page, "latest-assistant-actions-resting-mobile.png");
       await expect
         .poll(() => presentation(latestAssistant))
@@ -512,7 +631,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
       await file.hover();
       await expect.poll(() => openTooltip.count()).toBe(1);
-      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      const filePath = group.locator("openclaw-tooltip[open] .markdown-file-tooltip__path");
+      await filePath.waitFor({ state: "visible" });
+      expect(await filePath.textContent()).toBe("/workspace/tooltip-proof.txt");
       expect(await popupStyle()).toEqual(metadataStyle);
       expect(await file.getAttribute("title")).toBe("");
       await screenshot(page, "tooltip-file-hint.png");
@@ -627,9 +748,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const applePlatform = process.platform === "darwin";
       const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
+      const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("link", { name: "New session" }),
-        "New session",
+        page.locator(".sidebar-brand").getByRole("link", { name: "New conversation" }),
+        `New conversation (${newSessionShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
@@ -798,7 +920,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
-        maxChars: 500_000,
+        maxChars: CHAT_MESSAGE_MAX_CHARS,
       });
       await expect
         .poll(() => fullTextBubble.locator(".chat-text").textContent())
@@ -864,8 +986,16 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await groupedToolBubble.waitFor({ state: "visible" });
       expect(await groupedToolBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
       await groupedToolBubble.click({ button: "right" });
-      expect(await menu.getByRole("menuitem").allTextContents()).toEqual(["Reply"]);
+      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
+        "Reply",
+        "Copy as markdown",
+      ]);
       await screenshot(page, "09-oversized-tool-actions.png");
+      await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(oversizedNotice);
+      await groupedToolBubble.click({ button: "right" });
       await menu.getByRole("menuitem", { name: "Reply to message" }).click();
       await expect
         .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())

@@ -1,51 +1,58 @@
 import { toUSVString } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  isIncognitoOpenClawAgentDatabase,
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
+import type {
+  OpenClawAgentDatabase,
+  OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store.js";
+import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store-kernel.js";
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
-} from "./session-accessor.sqlite-archive.js";
+} from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  planSessionStateDeleteIfUnreferenced,
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
-  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
 import type {
-  LifecycleArtifactCleanupPlan,
+  LifecycleRemovalProjectionInput,
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
-  parseSessionEntryJson as parseSessionEntryRow,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+  sessionReferenceAtomPath,
+  sessionReferenceAtoms,
+  sessionReferenceProjection,
+  usableSessionReferenceProjection,
+} from "./session-accessor.sqlite-reference-projection.js";
+import {
+  addRetainedWindowSessionReferences,
+  collectSessionStateIdsForEntry,
+} from "./session-accessor.sqlite-references.js";
+import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
+import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
@@ -86,119 +93,121 @@ export function shouldRemoveSessionEntry(
   ) {
     return false;
   }
-  if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {
-    return false;
-  }
-  return true;
-}
-
-function sessionKeySegmentStartsWith(sessionKey: string, prefix: string): boolean {
-  const firstSeparator = sessionKey.indexOf(":");
-  if (firstSeparator < 0) {
-    return sessionKey.startsWith(prefix);
-  }
-  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
-  const sessionSegment = secondSeparator < 0 ? sessionKey : sessionKey.slice(secondSeparator + 1);
-  return sessionSegment.startsWith(prefix);
-}
-
-function sessionKeyBelongsToAgent(sessionKey: string, agentId: string | undefined): boolean {
-  if (agentId === undefined) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  return parsed !== null && normalizeAgentId(parsed.agentId) === normalizeAgentId(agentId);
-}
-
-function readSessionTranscriptUpdatedAt(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): number | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"))
-      .where("session_id", "=", sessionId),
-  );
-  if (row?.updated_at === null || row?.updated_at === undefined) {
-    return undefined;
-  }
-  return sqliteNumber(row.updated_at);
-}
-
-function sqliteTranscriptStateIsReclaimable(params: {
-  database: OpenClawAgentDatabase;
-  sessionUpdatedAt?: number;
-  sessionId: string;
-  nowMs: number;
-  orphanTranscriptMinAgeMs: number;
-}): boolean {
-  const transcriptUpdatedAt = readSessionTranscriptUpdatedAt(params.database, params.sessionId);
-  const updatedAt =
-    params.sessionUpdatedAt === undefined
-      ? transcriptUpdatedAt
-      : Math.max(params.sessionUpdatedAt, transcriptUpdatedAt ?? params.sessionUpdatedAt);
-  return updatedAt === undefined || params.nowMs - updatedAt >= params.orphanTranscriptMinAgeMs;
-}
-
-function sqliteTranscriptStateHasMarker(params: {
-  database: OpenClawAgentDatabase;
-  sessionId: string;
-  transcriptContentMarker: string;
-}): boolean {
-  const db = getSessionKysely(params.database.db);
-  const rows = iterateSqliteQuerySync(
-    params.database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("event_json")
-      .where("session_id", "=", params.sessionId)
-      .orderBy("seq", "asc"),
-  );
-  // Consume every row so late SQLite errors still abort cleanup planning.
-  let hasMarker = false;
-  for (const row of rows) {
-    hasMarker ||= row.event_json.includes(params.transcriptContentMarker);
-  }
-  return hasMarker;
+  return removal.expectedUpdatedAt === undefined || entry.updatedAt === removal.expectedUpdatedAt;
 }
 
 /** Session ids protected by live node state. */
 export function readReferencedSessionIds(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   excludedSessionKeys: ReadonlySet<string> = new Set(),
+  candidateSessionIds?: readonly string[],
+  diskBudget?: { preserveRecentMs?: number | null },
 ): Set<string> {
+  if (candidateSessionIds?.length === 0) {
+    return new Set();
+  }
   const db = getSessionKysely(database.db);
   // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
   const excludedKeys = [...excludedSessionKeys].filter(
     (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
   );
-  const rows = iterateSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "current_session_id", "session_key"])
-      .$if(excludedKeys.length > 0, (query) =>
-        query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
+  let query = db
+    .selectFrom("session_nodes")
+    .select(["current_session_id", "session_key"])
+    .$if(excludedKeys.length > 0, (builder) =>
+      builder.where("session_key", "not in", sqliteStringSet(excludedKeys)),
+    );
+  // Narrow all target IDs together. Optional/malformed references stay eligible
+  // for the projection or raw fallback, including escaped and duplicate keys.
+  // Bulk plans scan once instead of comparing each surviving row with every candidate.
+  if (
+    candidateSessionIds?.length &&
+    candidateSessionIds.length <= 16 &&
+    candidateSessionIds.every(
+      (candidate) => toUSVString(candidate) === candidate && !/[\0\uFFFD-\uFFFF]/u.test(candidate),
+    )
+  ) {
+    query = query.where((eb) =>
+      eb.or([
+        eb.or(
+          candidateSessionIds.map(
+            (candidate) =>
+              /* kysely-allow-raw: substring narrowing retains trimmed current IDs. */ sql<boolean>`instr(current_session_id, ${candidate}) > 0`,
+          ),
+        ),
+        /* kysely-allow-raw: malformed TEXT and optional fields retain their original reference semantics. */ sql<boolean>`CASE
+          WHEN NOT json_valid(entry_json) THEN 1
+          WHEN length(CAST(entry_json AS BLOB)) != length(CAST(printf('%s', entry_json) AS BLOB)) THEN 1
+          ELSE json_type(entry_json, '$.previousSessionId') IS NOT NULL
+            OR json_type(entry_json, '$.usageFamilySessionIds') IS NOT NULL
+            OR json_type(entry_json, '$.compactionCheckpoints') IS NOT NULL
+        END`,
+      ]),
+    );
+  }
+  const referenceQuery = db
+    .with(
+      (cte) => cte("projected_nodes").materialized(),
+      () => query.select(sessionReferenceProjection),
+    )
+    .with(
+      (cte) => cte("reference_nodes").materialized(),
+      (builder) =>
+        builder.selectFrom("projected_nodes").selectAll().select(usableSessionReferenceProjection),
+    )
+    .selectFrom("reference_nodes")
+    .leftJoin(sessionReferenceAtoms, (join) => join.on(sessionReferenceAtomPath))
+    .select(["current_session_id", "session_key", "reference.atom", "reference.fullkey"])
+    .select(
+      /* kysely-allow-raw: only exceptional rows cross into JS as entry JSON. */ sql<
+        string | null
+      >`CASE WHEN "references" IS NULL THEN (SELECT entry_json FROM session_nodes WHERE session_nodes.session_key = reference_nodes.session_key) END`.as(
+        "entry_json",
       ),
-  );
+    );
+  const rows = iterateSqliteQuerySync(database.db, referenceQuery);
   const sessionIds = new Set<string>();
+  const candidates = candidateSessionIds ? new Set(candidateSessionIds) : undefined;
+  const addReference = (sessionId: string) => {
+    if (!candidates || candidates.has(sessionId)) {
+      sessionIds.add(sessionId);
+    }
+  };
   for (const row of rows) {
     if (excludedSessionKeys.has(row.session_key)) {
       continue;
     }
-    sessionIds.add(row.current_session_id);
-    const entry = parseSessionEntryRow(row);
-    if (!entry) {
-      continue;
-    }
-    for (const sessionId of collectSessionStateIdsForEntry(entry)) {
-      sessionIds.add(sessionId);
+    addReference(row.current_session_id);
+    if (row.entry_json !== null) {
+      const entry = parseSessionEntryRow({ ...row, entry_json: row.entry_json });
+      if (entry) {
+        for (const sessionId of collectSessionStateIdsForEntry(entry)) {
+          addReference(sessionId);
+        }
+      }
+    } else if (
+      row.atom !== null &&
+      row.fullkey !== null &&
+      /^\$\.(sessionId|previousSessionId|usageFamilySessionIds\[\d+\]|compactionCheckpoints\[\d+\]\.(sessionId|(?:preCompaction|postCompaction)\.sessionId))$/u.test(
+        row.fullkey,
+      )
+    ) {
+      const sessionId = row.atom.trim();
+      if (sessionId) {
+        addReference(sessionId);
+      }
     }
   }
-  return sessionIds;
+  addRetainedWindowSessionReferences(
+    database,
+    sessionIds,
+    excludedSessionKeys,
+    candidateSessionIds,
+    diskBudget,
+  );
+  return candidateSessionIds
+    ? new Set(candidateSessionIds.filter((sessionId) => sessionIds.has(sessionId)))
+    : sessionIds;
 }
 
 // Projects references after a lifecycle mutation so reset/delete can archive
@@ -206,41 +215,12 @@ export function readReferencedSessionIds(
 export function readReferencedSessionIdsAfterTargetMutation(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
-  nextEntry?: SessionEntry,
+  candidateSessionIds: readonly string[],
 ): Set<string> {
   const removedKeys = new Set(
     uniqueStrings([target.canonicalKey, ...target.storeKeys].map((key) => key.trim())),
   );
-  const sessionIds = readReferencedSessionIds(database, removedKeys);
-  if (nextEntry) {
-    for (const sessionId of collectSessionStateIdsForEntry(nextEntry)) {
-      sessionIds.add(sessionId);
-    }
-  }
-  return sessionIds;
-}
-
-export function planSessionStateDeleteIfUnreferenced(params: {
-  archiveTranscript?: boolean;
-  archiveDirectory: string;
-  database: OpenClawAgentDatabase;
-  reason?: "deleted" | "reset";
-  referencedSessionIds: ReadonlySet<string>;
-  sessionId: string;
-}): SessionStateDeletePlan | null {
-  if (params.referencedSessionIds.has(params.sessionId)) {
-    return null;
-  }
-  return {
-    agentId: params.database.agentId,
-    archiveDirectory: params.archiveDirectory,
-    archiveTranscript:
-      params.archiveTranscript !== false && !isIncognitoOpenClawAgentDatabase(params.database),
-    databasePath: params.database.path,
-    reason: params.reason ?? "deleted",
-    sessionId: params.sessionId,
-    snapshot: readSessionStateDeleteSnapshot(params.database.db, params.sessionId),
-  };
+  return readReferencedSessionIds(database, removedKeys, candidateSessionIds);
 }
 
 export function deleteMaterializedSessionStatePlans(
@@ -248,19 +228,26 @@ export function deleteMaterializedSessionStatePlans(
   plans: readonly MaterializedSessionStateDeletePlan[],
   protectedSessionIds?: ReadonlySet<string>,
   excludedSessionKeys?: ReadonlySet<string>,
-  /** Synchronous mutation notification; durable completion still belongs to COMMIT. */
-  onDeleted?: () => void,
+  diskBudget?: { preserveRecentMs?: number | null },
 ): SessionLifecycleArchivedTranscript[] {
   if (plans.length === 0) {
     return [];
   }
   const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-  const referencedSessionIds = readReferencedSessionIds(database, excludedSessionKeys);
+  const referencedSessionIds = readReferencedSessionIds(
+    database,
+    excludedSessionKeys,
+    plans.map((plan) => plan.sessionId),
+    diskBudget,
+  );
   for (const sessionId of protectedSessionIds ?? []) {
     referencedSessionIds.add(sessionId);
   }
   for (const plan of plans) {
-    if (referencedSessionIds.has(plan.sessionId)) {
+    if (
+      referencedSessionIds.has(plan.sessionId) ||
+      readSessionColdTranscript(database.db, plan.sessionId)
+    ) {
       continue;
     }
     const currentSnapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
@@ -270,9 +257,7 @@ export function deleteMaterializedSessionStatePlans(
     if (plan.archive) {
       persistSessionTranscriptArchive(database, plan);
     }
-    if (deleteSqliteSessionStateRows(database, plan.sessionId)) {
-      onDeleted?.();
-    }
+    deleteSqliteSessionStateRows(database, plan.sessionId);
     if (plan.snapshot.lastSeq !== null && plan.archivedTranscript) {
       archivedTranscripts.push(plan.archivedTranscript);
     }
@@ -290,10 +275,10 @@ export function planSessionStateAfterEntryRemoval(params: {
   reason: "deleted" | "reset";
   referencedSessionIds?: ReadonlySet<string>;
 }): SessionStateDeletePlan[] {
+  const candidates = collectSessionStateIdsForEntry(params.entry);
   const referencedSessionIds =
-    params.referencedSessionIds ?? readReferencedSessionIds(params.database);
-  const plans: SessionStateDeletePlan[] = [];
-  for (const sessionId of collectSessionStateIdsForEntry(params.entry)) {
+    params.referencedSessionIds ?? readReferencedSessionIds(params.database, undefined, candidates);
+  return candidates.flatMap((sessionId) => {
     const plan = planSessionStateDeleteIfUnreferenced({
       archiveTranscript: params.archiveTranscript,
       archiveDirectory: params.archiveDirectory,
@@ -302,11 +287,8 @@ export function planSessionStateAfterEntryRemoval(params: {
       referencedSessionIds,
       sessionId,
     });
-    if (plan) {
-      plans.push(plan);
-    }
-  }
-  return plans;
+    return plan ? [plan] : [];
+  });
 }
 
 /** Ids of every persisted generation owned by the given logical session keys. */
@@ -326,42 +308,42 @@ export function readSessionGenerationIdsForKeys(
   ).rows.map((row) => row.session_id);
 }
 
-// Projects removals and upserts before archive materialization so same-call
-// upserts can keep a transcript live without producing a spurious archive.
-export async function projectSessionEntryLifecycleMutation(
-  databaseOptions: OpenClawAgentDatabaseOptions,
-  params: {
-    allowCanonicalRepair?: boolean;
-    archiveDirectory: string;
-    removals: readonly SessionEntryLifecycleRemoval[];
-    upserts: readonly SessionEntryLifecycleUpsert[];
-  },
-): Promise<ProjectedLifecycleMutation> {
-  // openclaw-agent-db.ts cache rule: keep handles within synchronous sections.
-  const removalDatabase = openOpenClawAgentDatabase(databaseOptions);
-  const store = readSessionEntryStore(removalDatabase, {
-    allowCanonicalRepair: params.allowCanonicalRepair === true,
-    sessionKeys: [
-      ...params.removals.map((removal) =>
-        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
-      ),
-      ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
-    ],
-  });
+/** Raw Doctor removals also guard cold changes while the hot blob remains unchanged. */
+export function assertRawSessionEntryRemovalUnchanged(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionKey: string,
+  removal: Extract<SessionEntryLifecycleRemoval, { expectedRawEntryJson: string }>,
+): void {
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("session_nodes")
+      .select(["entry_json", "snapshot_revision"])
+      .where("session_key", "=", sessionKey),
+  );
+  if (
+    !row ||
+    row.entry_json !== removal.expectedRawEntryJson ||
+    row.snapshot_revision !== removal.expectedSnapshotRevision
+  ) {
+    throw new Error(`SQLite session entry changed before raw lifecycle removal for ${sessionKey}`);
+  }
+}
+
+export function selectProjectedLifecycleRemovals(
+  database: OpenClawAgentDatabase,
+  store: Record<string, SessionEntry>,
+  removals: readonly SessionEntryLifecycleRemoval[],
+) {
   const removedKeysToArchive = new Set<string>();
   const changedSessionKeys = new Set<string>();
   const projectedRemovals: ProjectedLifecycleMutation["removals"] = [];
-  for (const removal of params.removals) {
+  for (const removal of removals) {
     const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
     let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
     if (removal.expectedRawEntryJson !== undefined) {
-      const currentRawEntryJson = readExactSessionEntryJson(removalDatabase, sessionKey);
-      if (currentRawEntryJson !== removal.expectedRawEntryJson) {
-        throw new Error(
-          `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
-        );
-      }
-      entry = removal.expectedEntry ? cloneSessionEntry(removal.expectedEntry) : undefined;
+      assertRawSessionEntryRemovalUnchanged(database, sessionKey, removal);
+      entry = structuredClone(removal.expectedEntry);
     }
     if (!shouldRemoveSessionEntry(entry, removal)) {
       continue;
@@ -371,7 +353,7 @@ export async function projectSessionEntryLifecycleMutation(
       if (
         !sessionId ||
         !sqliteSessionStateDeleteSnapshotsEqual(
-          readSessionStateDeleteSnapshot(removalDatabase.db, sessionId),
+          readSessionStateDeleteSnapshot(database.db, sessionId),
           removal.expectedTranscriptSnapshot,
         )
       ) {
@@ -383,7 +365,7 @@ export async function projectSessionEntryLifecycleMutation(
     projectedRemovals.push({
       // Capture each archive decision before an async builder can change its input.
       archiveTranscript: removal.archiveRemovedTranscript === true,
-      expectedEntry: cloneSessionEntry(entry),
+      expectedEntry: structuredClone(entry),
       removal,
       sessionKey,
     });
@@ -393,60 +375,32 @@ export async function projectSessionEntryLifecycleMutation(
     changedSessionKeys.add(sessionKey);
     delete store[sessionKey];
   }
-  const upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"] = [];
-  for (const upsert of params.upserts) {
-    const sessionKey = upsert.sessionKey.trim();
-    if (!sessionKey) {
-      continue;
-    }
-    if (
-      upsert.requiresRemovalSessionKey &&
-      !projectedRemovals.some(
-        (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
-      )
-    ) {
-      continue;
-    }
-    const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
-    if (upsert.resetBoundary && !expectedEntry) {
-      throw new Error(
-        `Cannot append reset boundary without an existing session row: ${sessionKey}`,
-      );
-    }
-    const entry =
-      upsert.buildEntry === undefined
-        ? upsert.entry
-        : await upsert.buildEntry({
-            currentEntry: expectedEntry ? cloneSessionEntry(expectedEntry) : undefined,
-            sessionKey,
-          });
-    if (!entry) {
-      continue;
-    }
-    const cloned = cloneSessionEntry(entry);
-    store[sessionKey] = cloned;
-    changedSessionKeys.add(sessionKey);
-    upsertedEntries.push({
-      expectedEntry,
-      sessionKey,
-      entry: cloned,
-      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
-      ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
-    });
-  }
-  if (projectedRemovals.length === 0) {
-    return { deletePlans: [], removals: projectedRemovals, upsertedEntries };
-  }
-  // openclaw-agent-db.ts cache rule: LRU eviction may close idle handles during buildEntry awaits.
-  const database = openOpenClawAgentDatabase(databaseOptions);
+  return { removedKeysToArchive, changedSessionKeys, projectedRemovals };
+}
+
+export function finishProjectedLifecycleRemovalPlans(
+  database: OpenClawAgentDatabase,
+  archiveDirectory: string,
+  store: Record<string, SessionEntry>,
+  selected: ReturnType<typeof selectProjectedLifecycleRemovals>,
+  upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"],
+): ProjectedLifecycleMutation {
+  const { removedKeysToArchive, changedSessionKeys, projectedRemovals } = selected;
+  const removedGenerationIds = readSessionGenerationIdsForKeys(database, removedKeysToArchive);
   const referencedSessionIds = collectProjectedReferencedSessionIds({
     database,
     excludedSessionKeys: changedSessionKeys,
     projectedStore: store,
+    candidateSessionIds: uniqueStrings([
+      ...projectedRemovals.flatMap(({ expectedEntry }) =>
+        collectSessionStateIdsForEntry(expectedEntry),
+      ),
+      ...removedGenerationIds,
+    ]),
   });
   const deletePlans = projectedRemovals.flatMap(({ archiveTranscript, expectedEntry: entry }) =>
     planSessionStateAfterEntryRemoval({
-      archiveDirectory: params.archiveDirectory,
+      archiveDirectory,
       archiveTranscript,
       database,
       entry,
@@ -470,12 +424,12 @@ export async function projectSessionEntryLifecycleMutation(
     }
   }
   const plannedIds = new Set(deletePlans.map((plan) => plan.sessionId));
-  for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeysToArchive)) {
+  for (const sessionId of removedGenerationIds) {
     if (plannedIds.has(sessionId)) {
       continue;
     }
     const plan = planSessionStateDeleteIfUnreferenced({
-      archiveDirectory: params.archiveDirectory,
+      archiveDirectory,
       archiveTranscript: true,
       database,
       reason: "deleted",
@@ -490,15 +444,140 @@ export async function projectSessionEntryLifecycleMutation(
   return { deletePlans, removals: projectedRemovals, upsertedEntries };
 }
 
+/** Removal-only planning shares selection and reference policy with the async upsert owner. */
+export function projectSessionEntryLifecycleRemovalsInDatabase(
+  database: OpenClawAgentDatabase,
+  params: LifecycleRemovalProjectionInput,
+): ProjectedLifecycleMutation {
+  const store = readSessionEntryStore(database, {
+    allowCanonicalRepair: params.allowCanonicalRepair === true,
+    sessionKeys: params.removals.map((removal) =>
+      removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+    ),
+  });
+  const selected = selectProjectedLifecycleRemovals(database, store, params.removals);
+  if (selected.projectedRemovals.length === 0) {
+    return { deletePlans: [], removals: [], upsertedEntries: [] };
+  }
+  return finishProjectedLifecycleRemovalPlans(
+    database,
+    params.archiveDirectory,
+    store,
+    selected,
+    [],
+  );
+}
+
+// Projects removals and upserts before archive materialization so same-call
+// upserts can keep a transcript live without producing a spurious archive.
+export async function projectSessionEntryLifecycleMutation(
+  databaseOptions: OpenClawAgentDatabaseOptions,
+  params: {
+    allowCanonicalRepair?: boolean;
+    archiveDirectory: string;
+    removals: readonly SessionEntryLifecycleRemoval[];
+    upserts: readonly SessionEntryLifecycleUpsert[];
+  },
+): Promise<ProjectedLifecycleMutation> {
+  return withSqliteSessionDatabase(databaseOptions, async (removalDatabase) => {
+    const sessionKeys = [
+      ...params.removals.map((removal) =>
+        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+      ),
+      ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
+    ];
+    const store = readSessionEntryStore(removalDatabase, {
+      allowCanonicalRepair: params.allowCanonicalRepair === true,
+      sessionKeys,
+    });
+    const selected = selectProjectedLifecycleRemovals(removalDatabase, store, params.removals);
+    const { projectedRemovals } = selected;
+    const upsertedEntries = await buildProjectedLifecycleUpserts(store, selected, params.upserts);
+    if (projectedRemovals.length === 0) {
+      return {
+        deletePlans: [],
+        removals: projectedRemovals,
+        upsertedEntries,
+      };
+    }
+    // Builders can close the original handle; admit the reference snapshot again.
+    return withSqliteSessionDatabase(databaseOptions, (database) => {
+      return finishProjectedLifecycleRemovalPlans(
+        database,
+        params.archiveDirectory,
+        store,
+        selected,
+        upsertedEntries,
+      );
+    });
+  });
+}
+
+/** Builders run once outside SQL; commit rereads their exact prepared rows. */
+export async function buildProjectedLifecycleUpserts(
+  store: Record<string, SessionEntry>,
+  selected: ReturnType<typeof selectProjectedLifecycleRemovals>,
+  upserts: readonly SessionEntryLifecycleUpsert[],
+): Promise<ProjectedLifecycleMutation["upsertedEntries"]> {
+  const { projectedRemovals, changedSessionKeys } = selected;
+  const upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"] = [];
+  for (const upsert of upserts) {
+    const sessionKey = upsert.sessionKey.trim();
+    if (!sessionKey) {
+      continue;
+    }
+    if (
+      upsert.requiresRemovalSessionKey &&
+      !projectedRemovals.some(
+        (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
+      )
+    ) {
+      continue;
+    }
+    const expectedEntry = store[sessionKey] ? structuredClone(store[sessionKey]) : undefined;
+    if (upsert.resetBoundary && !expectedEntry) {
+      throw new Error(
+        `Cannot append reset boundary without an existing session row: ${sessionKey}`,
+      );
+    }
+    const entry =
+      upsert.buildEntry === undefined
+        ? upsert.entry
+        : await upsert.buildEntry({
+            currentEntry: expectedEntry ? structuredClone(expectedEntry) : undefined,
+            sessionKey,
+          });
+    if (!entry) {
+      continue;
+    }
+    const cloned = structuredClone(entry);
+    store[sessionKey] = cloned;
+    changedSessionKeys.add(sessionKey);
+    upsertedEntries.push({
+      expectedEntry,
+      sessionKey,
+      entry: cloned,
+      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
+      ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
+    });
+  }
+  return upsertedEntries;
+}
+
 // Projected deletes must preserve raw session_nodes.current_session_id references for
 // remaining rows whose entry_json cannot be parsed into a SessionEntry.
 export function collectProjectedReferencedSessionIds(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   excludedSessionKeys: Iterable<string>;
   projectedStore: Record<string, SessionEntry>;
+  candidateSessionIds?: readonly string[];
 }): Set<string> {
   const excludedSessionKeys = new Set(params.excludedSessionKeys);
-  const sessionIds = readReferencedSessionIds(params.database, excludedSessionKeys);
+  const sessionIds = readReferencedSessionIds(
+    params.database,
+    excludedSessionKeys,
+    params.candidateSessionIds,
+  );
   for (const entry of Object.values(params.projectedStore)) {
     for (const sessionId of collectSessionStateIdsForEntry(entry)) {
       sessionIds.add(sessionId);
@@ -509,210 +588,26 @@ export function collectProjectedReferencedSessionIds(params: {
 
 export { collectSessionStateIdsForEntry };
 
-function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): boolean {
+function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): void {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   // The window row cascades canonical transcript tables, but FTS is virtual;
   // clear its projection before dropping the owner row.
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-  const deleted = executeSqliteQuerySync(
+  executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_windows").where("session_id", "=", sessionId),
   );
-  return Number(deleted.numAffectedRows ?? 0n) > 0;
-}
-
-// Plans orphan cleanup without file writes or row deletion; finalization
-// handles archive durability before removing rows.
-function planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
-  agentId?: string;
-  archiveRemovedEntryTranscripts: boolean;
-  archiveDirectory: string;
-  database: OpenClawAgentDatabase;
-  excludedSessionIds?: ReadonlySet<string>;
-  pluginOwnerId?: string;
-  referencedSessionIds: ReadonlySet<string>;
-  transcriptContentMarker: string;
-  orphanTranscriptMinAgeMs: number;
-  nowMs: number;
-}): SessionStateDeletePlan[] {
-  const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
-    params.database.db,
-    db
-      .selectFrom("session_windows")
-      .select(["session_id", "session_key", "plugin_owner_id"])
-      .orderBy("session_id", "asc"),
-  ).rows;
-
-  const deletePlans: SessionStateDeletePlan[] = [];
-  // Orphan transcript state is represented by a historical window that is no
-  // longer the node's current id. The marker scopes cleanup to this lifecycle.
-  for (const row of rows) {
-    if (
-      !sessionKeyBelongsToAgent(row.session_key, params.agentId) ||
-      params.referencedSessionIds.has(row.session_id) ||
-      params.excludedSessionIds?.has(row.session_id) ||
-      (params.pluginOwnerId && row.plugin_owner_id && row.plugin_owner_id !== params.pluginOwnerId)
-    ) {
-      continue;
-    }
-    if (
-      !sqliteTranscriptStateIsReclaimable({
-        database: params.database,
-        sessionId: row.session_id,
-        nowMs: params.nowMs,
-        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-      }) ||
-      !sqliteTranscriptStateHasMarker({
-        database: params.database,
-        sessionId: row.session_id,
-        transcriptContentMarker: params.transcriptContentMarker,
-      })
-    ) {
-      continue;
-    }
-    const plan = planSessionStateDeleteIfUnreferenced({
-      archiveTranscript: params.archiveRemovedEntryTranscripts,
-      archiveDirectory: params.archiveDirectory,
-      database: params.database,
-      reason: "deleted",
-      referencedSessionIds: params.referencedSessionIds,
-      sessionId: row.session_id,
-    });
-    if (plan) {
-      deletePlans.push(plan);
-    }
-  }
-  return deletePlans;
-}
-
-export function planSessionLifecycleArtifactCleanup(
-  database: OpenClawAgentDatabase,
-  params: {
-    agentId?: string;
-    archiveRemovedEntryTranscripts: boolean;
-    archiveDirectory: string;
-    pluginOwnerId?: string;
-    sessionKeySegmentPrefix: string;
-    transcriptContentMarker: string;
-    orphanTranscriptMinAgeMs: number;
-    nowMs: number;
-  },
-): LifecycleArtifactCleanupPlan {
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["entry_json", "session_key", "current_session_id", "updated_at"])
-      .orderBy("session_key", "asc"),
-  ).rows;
-
-  const removedSessionIds = new Set<string>();
-  const entries: LifecycleArtifactCleanupPlan["entries"] = [];
-  const projectedStore = readSessionEntryStore(database);
-  const foreignOwnedSessionIds = params.pluginOwnerId
-    ? new Set(
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_windows")
-            .select("session_id")
-            .where("plugin_owner_id", "is not", null)
-            .where("plugin_owner_id", "!=", params.pluginOwnerId),
-        ).rows.map((row) => row.session_id),
-      )
-    : undefined;
-  for (const row of rows) {
-    if (
-      !sessionKeyBelongsToAgent(row.session_key, params.agentId) ||
-      !sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix)
-    ) {
-      continue;
-    }
-    const entry = projectedStore[row.session_key];
-    const sessionIds = uniqueStrings([
-      row.current_session_id,
-      ...(entry ? collectSessionStateIdsForEntry(entry) : []),
-    ]);
-    // Window ownership survives placeholder nodes and ownerless row projections; preserve
-    // the entire node when any referenced generation belongs to another plugin.
-    if (
-      (params.pluginOwnerId &&
-        entry?.pluginOwnerId &&
-        entry.pluginOwnerId !== params.pluginOwnerId) ||
-      sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
-    ) {
-      continue;
-    }
-    if (
-      !sqliteTranscriptStateIsReclaimable({
-        database,
-        // Admission updates the node even when a run has no event yet or reuses old events.
-        sessionUpdatedAt: sqliteNumber(row.updated_at),
-        sessionId: row.current_session_id,
-        nowMs: params.nowMs,
-        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-      })
-    ) {
-      continue;
-    }
-    for (const sessionId of sessionIds) {
-      removedSessionIds.add(sessionId);
-    }
-    entries.push({
-      expectedEntry: entry ? cloneSessionEntry(entry) : undefined,
-      sessionKey: row.session_key,
-    });
-    delete projectedStore[row.session_key];
-  }
-
-  const referencedSessionIds = collectProjectedReferencedSessionIds({
-    database,
-    excludedSessionKeys: entries.map((entry) => entry.sessionKey),
-    projectedStore,
-  });
-  const deletePlans: SessionStateDeletePlan[] = [];
-  for (const sessionId of removedSessionIds) {
-    const plan = planSessionStateDeleteIfUnreferenced({
-      archiveTranscript: params.archiveRemovedEntryTranscripts,
-      archiveDirectory: params.archiveDirectory,
-      database,
-      referencedSessionIds,
-      sessionId,
-    });
-    if (plan) {
-      deletePlans.push(plan);
-    }
-  }
-  deletePlans.push(
-    ...planSqliteOrphanLifecycleTranscriptStateDeletes({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
-      archiveDirectory: params.archiveDirectory,
-      database,
-      excludedSessionIds: removedSessionIds,
-      ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
-      referencedSessionIds,
-      transcriptContentMarker: params.transcriptContentMarker,
-      orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-      nowMs: params.nowMs,
-    }),
-  );
-  return { deletePlans, entries };
 }
 
 export function deletePlannedLifecycleArtifactEntries(
   database: OpenClawAgentDatabase,
   entries: readonly SessionEntryRemovalPlan[],
 ): number {
-  assertPlannedLifecycleArtifactEntriesUnchanged(database, entries);
-  let removedEntries = 0;
   for (const planned of entries) {
     deleteSessionEntryRows(database, planned.sessionKey);
-    removedEntries += 1;
   }
-  return removedEntries;
+  return entries.length;
 }
 
 export function assertPlannedLifecycleArtifactEntriesUnchanged(
@@ -725,18 +620,4 @@ export function assertPlannedLifecycleArtifactEntriesUnchanged(
       throw new Error(`SQLite lifecycle cleanup entry changed for ${planned.sessionKey}`);
     }
   }
-}
-
-/** Partition only optimistic entry conflicts; database and parse failures stay fatal. */
-export function partitionUnchangedPlannedLifecycleArtifactEntries(
-  database: OpenClawAgentDatabase,
-  entries: readonly SessionEntryRemovalPlan[],
-): { changed: SessionEntryRemovalPlan[]; unchanged: SessionEntryRemovalPlan[] } {
-  const changed: SessionEntryRemovalPlan[] = [];
-  const unchanged: SessionEntryRemovalPlan[] = [];
-  for (const planned of entries) {
-    const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
-    (sqliteSessionEntriesEqual(current, planned.expectedEntry) ? unchanged : changed).push(planned);
-  }
-  return { changed, unchanged };
 }

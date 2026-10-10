@@ -1,7 +1,12 @@
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
 const INSTALL_SMOKE_REUSABLE = ".github/workflows/install-smoke-reusable.yml";
@@ -24,6 +29,8 @@ type WorkflowJob = {
   needs?: string | string[];
   outputs?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
+  "continue-on-error"?: boolean;
+  "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
     matrix?: {
@@ -46,8 +53,8 @@ type Workflow = {
   permissions?: Record<string, unknown>;
 };
 
-function readWorkflow(path: string): Workflow {
-  return parse(readFileSync(path, "utf8")) as Workflow;
+function readWorkflow(workflowPath: string): Workflow {
+  return parse(readFileSync(workflowPath, "utf8")) as Workflow;
 }
 
 function job(workflow: Workflow, name: string): WorkflowJob {
@@ -91,6 +98,8 @@ describe("install smoke no-push root image transport", () => {
         "${{ github.event_name == 'schedule' || inputs.run_bun_global_install_smoke }}",
       update_baseline_version: "${{ inputs.update_baseline_version || 'latest' }}",
     });
+    // The Bun-only lane is Full Release Validation only: never nightly or manual Install Smoke.
+    expect(delegated.with).not.toHaveProperty("run_bun_only_runtime_smoke");
     expect(readFileSync(INSTALL_SMOKE, "utf8")).not.toContain("packages: write");
   });
 
@@ -128,7 +137,15 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     expect(workflowIdentity.run).not.toContain("EXPECTED_WORKFLOW_SHA");
+    expect(step(preflight, "Materialize selected-source contract resolver").with).toMatchObject({
+      repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      ref: "${{ steps.workflow.outputs.workflow_sha }}",
+      path: ".release-harness",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts/resolve-fs-safe-native-contract.mjs",
+    });
 
+    const identityOutput = path.join(tempDirs.make("install-smoke-workflow-identity-"), "output");
     const identityResult = spawnSync(
       "bash",
       ["--noprofile", "--norc", "-c", workflowIdentity.run!],
@@ -137,6 +154,7 @@ describe("install smoke no-push root image transport", () => {
         env: {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+          GITHUB_OUTPUT: identityOutput,
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: "openclaw/openclaw",
@@ -146,9 +164,33 @@ describe("install smoke no-push root image transport", () => {
       },
     );
     expect(identityResult.status, identityResult.stderr).toBe(0);
+    expect(readFileSync(identityOutput, "utf8")).toBe(
+      `workflow_repository=openclaw/openclaw\nworkflow_sha=${"b".repeat(40)}\n`,
+    );
     const workflowText = JSON.stringify(workflow);
     expect(workflowText).not.toContain("${{ github.workflow_sha }}");
     expect(workflowText).not.toContain("fromJSON(toJSON(job)).workflow_");
+    expect(workflowText).not.toContain("needs.preflight.outputs.workflow_");
+
+    const fastJob = job(workflow, "install-smoke-fast");
+    const warningRelay = step(fastJob, "Checkout trusted build warning relay");
+    expect(fastJob.needs).toContain("preflight");
+    expect(warningRelay.with).toMatchObject({
+      repository: "openclaw/openclaw",
+      ref: "${{ github.sha }}",
+      path: ".artifacts/build-warning-harness",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+      "sparse-checkout-cone-mode": false,
+      "sparse-checkout": "scripts/relay-build-limit-warnings.mts\nscripts/lib/check-limits.mts\n",
+    });
+    const warningBuild = step(fastJob, "Build root Dockerfile smoke image");
+    expect(warningBuild.run).toContain(
+      "node .artifacts/build-warning-harness/scripts/relay-build-limit-warnings.mts",
+    );
+    expect(
+      fastJob.steps!.indexOf(step(fastJob, "Resolve exact trusted workflow identity")),
+    ).toBeLessThan(fastJob.steps!.indexOf(warningBuild));
     const trustedJobs: string[] = [];
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
       const trustedCheckouts =
@@ -158,26 +200,35 @@ describe("install smoke no-push root image transport", () => {
         continue;
       }
       trustedJobs.push(jobName);
-      const resolver = step(workflowJob, "Restore exact trusted workflow revision");
+      const resolver = step(workflowJob, "Resolve exact trusted workflow identity");
       expect(resolver.env, jobName).toMatchObject({
         EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
         JOB_CONTEXT: "${{ toJSON(job) }}",
       });
-      expect(resolver.env?.HARNESS_PATH, jobName).toMatch(/^(\.|\.release-harness)$/u);
+      const harnessPath =
+        jobName === "install-smoke-fast" ? ".artifacts/build-warning-harness" : ".release-harness";
       expect(resolver.run, jobName).toContain(
         "job.workflow_sha must be a full lowercase commit SHA",
       );
-      expect(resolver.run, jobName).toContain('"fetch"');
+      expect(resolver.run, jobName).not.toContain("execFileSync");
       expect(resolver.run, jobName).toContain(
         "`repository=${repository}\\nsha=${job.workflow_sha}\\n`",
       );
       const checkoutIndex = workflowJob.steps!.indexOf(trustedCheckouts[0]!);
       const resolverIndex = workflowJob.steps!.indexOf(resolver);
-      expect(checkoutIndex, jobName).toBeLessThan(resolverIndex);
+      expect(resolverIndex, jobName).toBeLessThan(checkoutIndex);
+      const restore = step(workflowJob, "Restore exact trusted workflow revision");
+      expect(workflowJob.steps!.indexOf(restore), jobName).toBe(checkoutIndex + 1);
+      expect(restore.env, jobName).toMatchObject({
+        HARNESS_PATH: harnessPath,
+        WORKFLOW_REPOSITORY: "${{ steps.workflow.outputs.repository }}",
+        WORKFLOW_SHA: "${{ steps.workflow.outputs.sha }}",
+      });
       for (const checkout of trustedCheckouts) {
         expect(checkout.with, jobName).toMatchObject({
           repository: "openclaw/openclaw",
-          ref: "main",
+          ref: "${{ github.sha }}",
+          path: harnessPath,
           "fetch-depth": 1,
           "persist-credentials": false,
         });
@@ -186,6 +237,8 @@ describe("install smoke no-push root image transport", () => {
     expect(trustedJobs.toSorted()).toEqual(
       [
         "bun_global_install_smoke",
+        "bun_only_runtime_smoke",
+        "install-smoke-fast",
         "installer_smoke_candidate_payload",
         "installer_smoke_nonroot",
         "installer_smoke_nonroot_image",
@@ -198,7 +251,7 @@ describe("install smoke no-push root image transport", () => {
 
     const candidateResolver = step(
       job(workflow, "installer_smoke_candidate_payload"),
-      "Restore exact trusted workflow revision",
+      "Resolve exact trusted workflow identity",
     );
     const runResolver = (workflowRepository: string, workflowSha: string) =>
       spawnSync("bash", ["--noprofile", "--norc", "-c", candidateResolver.run!], {
@@ -207,7 +260,7 @@ describe("install smoke no-push root image transport", () => {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
-          HARNESS_PATH: ".",
+          GITHUB_OUTPUT: identityOutput,
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: workflowRepository,
             workflow_sha: workflowSha,
@@ -222,19 +275,34 @@ describe("install smoke no-push root image transport", () => {
     expect(wrongRepository.stderr).toContain(
       "job.workflow_repository must exactly match github.repository",
     );
+    // The per-job resolver must work before any harness checkout exists.
+    const validIdentity = runResolver("openclaw/openclaw", "c".repeat(40));
+    expect(validIdentity.status, validIdentity.stderr).toBe(0);
+    expect(readFileSync(identityOutput, "utf8")).toContain(`sha=${"c".repeat(40)}\n`);
     const manifest = step(preflight, "Build install-smoke CI manifest");
     expect(manifest.env).toEqual({
       OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:
         "${{ inputs.run_bun_global_install_smoke || 'false' }}",
     });
-    expect(manifest.run).toContain(
+    const manifestRun = manifest.run;
+    expect(manifestRun).toBeDefined();
+    if (!manifestRun) {
+      throw new Error("Build install-smoke CI manifest must have a run script");
+    }
+    expect(manifestRun).toContain(
       'dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"',
     );
-    expect(manifest.run).toContain(
+    expect(manifestRun).toContain(
       'run_bun_global_install_smoke="$workflow_bun_global_install_smoke"',
     );
-    expect(manifest.run).not.toContain("event_name");
-    expect(manifest.run).not.toContain("workflow_call");
+    expect(manifestRun).not.toContain("event_name");
+    expect(manifestRun).not.toContain("workflow_call");
+    expect(manifestRun).toContain(
+      "refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*",
+    );
+    expect(
+      manifestRun.indexOf("git fetch --quiet --unshallow --no-tags --filter=blob:none origin"),
+    ).toBeLessThan(manifestRun.indexOf("resolve-fs-safe-native-contract.mjs"));
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text).not.toContain("packages: write");
@@ -371,8 +439,25 @@ describe("install smoke no-push root image transport", () => {
       expect(requireLocal.if, jobName).toBeUndefined();
       expect(requireLocal.run, jobName).toBe('docker image inspect "$IMAGE_REF" >/dev/null');
 
+      const selectedCheckout = step(
+        consumer,
+        "Checkout selected source for gateway network provenance",
+      );
+      expect(step(consumer, "Prepare trusted selected-source Git owner").uses).toBe(
+        "./.release-harness/.github/actions/git-owner",
+      );
+      expect(selectedCheckout.env).toMatchObject({
+        CHECKOUT_KIND: "preflight",
+        CHECKOUT_REPO: "openclaw/openclaw",
+        CHECKOUT_REF: "${{ needs.preflight.outputs.target_sha }}",
+        CHECKOUT_FALLBACK_REF: "${{ needs.preflight.outputs.target_sha }}",
+        CHECKOUT_TOKEN: "",
+        SELECTED_SOURCE_DIR: "${{ github.workspace }}/.release-source",
+        WORKFLOW_SHA: "${{ steps.workflow.outputs.sha }}",
+      });
       const gatewayNetwork = step(consumer, "Run Docker gateway network e2e");
       expect(gatewayNetwork.env, jobName).toMatchObject({
+        OPENCLAW_DOCKER_E2E_REPO_ROOT: "${{ github.workspace }}/.release-source",
         OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS:
           "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
         OPENCLAW_SELECTED_SHA: "${{ needs.preflight.outputs.target_sha }}",
@@ -384,6 +469,128 @@ describe("install smoke no-push root image transport", () => {
     expect(text.match(/verify-upload "Root image"/g)).toHaveLength(1);
     expect(text).not.toContain("gh api");
   });
+
+  it.each(
+    ["selected", "tooling", "missing"].flatMap((source) =>
+      ["0", "1"].map((allowOmissions) => ({ source, allowOmissions })),
+    ),
+  )(
+    "checks selected network source provenance before Docker: $source, omissions=$allowOmissions",
+    ({ source, allowOmissions }) => {
+      const workspace = tempDirs.make("install-smoke-source-binding-");
+      const selected = path.join(workspace, ".release-source");
+      const tooling = process.cwd();
+      const origin = path.join(workspace, "source-origin");
+      mkdirSync(origin);
+      execFileSync("git", ["init", "--quiet", origin]);
+      execFileSync("git", [
+        "-C",
+        origin,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "selected source",
+      ]);
+      const selectedSha = execFileSync("git", ["-C", origin, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      const toolingSha = execFileSync("git", ["-C", tooling, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      symlinkSync(tooling, path.join(workspace, ".release-harness"), "dir");
+      const bin = path.join(workspace, "bin");
+      mkdirSync(bin);
+      const dockerCalls = path.join(workspace, "docker-calls");
+      writeFileSync(
+        path.join(bin, "docker"),
+        '#!/bin/sh\nprintf "%s\n" "$*" >>"$DOCKER_CALLS"\nexit 47\n',
+        { mode: 0o755 },
+      );
+      const consumer = job(readWorkflow(INSTALL_SMOKE_REUSABLE), "root_dockerfile_smokes");
+      const checkout = step(consumer, "Checkout selected source for gateway network provenance");
+      const checkoutEnv = Object.fromEntries(
+        Object.entries(checkout.env ?? {}).map(([key, value]) => [
+          key,
+          value
+            .replace("${{ github.workspace }}", workspace)
+            .replace("${{ needs.preflight.outputs.target_sha }}", selectedSha)
+            .replace("${{ steps.workflow.outputs.sha }}", toolingSha),
+        ]),
+      );
+      const fetched = spawnSync("bash", ["-c", checkout.run!], {
+        cwd: workspace,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...checkoutEnv,
+          CI_GIT_OWNER: path.join(tooling, ".github/actions/git-owner/owner.py"),
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: `url.${pathToFileURL(origin).href}.insteadOf`,
+          GIT_CONFIG_VALUE_0: "https://github.com/openclaw/openclaw.git",
+        },
+      });
+      expect(fetched.status, fetched.stdout + fetched.stderr).toBe(0);
+      expect(
+        execFileSync("git", ["-C", selected, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      ).toBe(selectedSha);
+      expect(
+        execFileSync("git", ["-C", selected, "config", "--local", "--list"], { encoding: "utf8" }),
+      ).not.toMatch(/extraheader|AUTHORIZATION/i);
+      const network = step(consumer, "Run Docker gateway network e2e");
+      const configuredRoot = network.env?.OPENCLAW_DOCKER_E2E_REPO_ROOT?.replace(
+        "${{ github.workspace }}",
+        workspace,
+      );
+      const repoRoot =
+        source === "selected"
+          ? configuredRoot
+          : source === "tooling"
+            ? tooling
+            : path.join(workspace, "absent");
+      const result = spawnSync("bash", ["-c", network.run!], {
+        cwd: workspace,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          DOCKER_CALLS: dockerCalls,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: allowOmissions,
+          OPENCLAW_SELECTED_SHA: selectedSha,
+          OPENCLAW_TOOLING_SHA: toolingSha,
+          OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1",
+          OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot ?? "",
+        },
+      });
+      if (source === "selected") {
+        expect(result.stderr).not.toContain("selected source checkout does not match");
+        expect(existsSync(dockerCalls), result.stderr).toBe(true);
+        expect(readFileSync(dockerCalls, "utf8")).toContain("image inspect");
+      } else {
+        expect(
+          result.status,
+          JSON.stringify({
+            stderr: result.stderr,
+            dockerCalls: existsSync(dockerCalls) ? readFileSync(dockerCalls, "utf8") : null,
+          }),
+        ).toBe(2);
+        expect(result.stderr).toContain(
+          source === "tooling"
+            ? "selected source checkout does not match OPENCLAW_SELECTED_SHA"
+            : "frozen source: unable to read selected source",
+        );
+        expect(existsSync(dockerCalls)).toBe(false);
+      }
+    },
+  );
 
   it("forwards frozen-target omission authority from the release coordinator", () => {
     const workflow = readWorkflow(RELEASE_CHECKS);
@@ -524,6 +731,7 @@ describe("install smoke no-push root image transport", () => {
       expect(step(consumer, pair.testName).env).toMatchObject({
         OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR:
           "${{ runner.temp }}/install-smoke-candidate-payload",
+        OPENCLAW_INSTALL_SMOKE_NODE_VERSION: "${{ env.NODE_VERSION }}",
         OPENCLAW_INSTALL_SMOKE_GROUP: pair.group,
       });
     }
@@ -565,7 +773,7 @@ describe("install smoke no-push root image transport", () => {
     expect(bunVerify.run).toContain("install-smoke-candidate-payload.mts verify");
     expect(bunVerify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(bunVerify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
-    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.0");
+    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.2");
     expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
       "working-directory": ".release-harness",
       env: {
@@ -580,6 +788,81 @@ describe("install smoke no-push root image transport", () => {
     expect(JSON.stringify(bunConsumer)).not.toContain(
       "./.release-harness/.github/actions/setup-node-env",
     );
+
+    expect(workflow.on?.workflow_call?.inputs?.run_bun_only_runtime_smoke).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const bunOnlyConsumer = job(workflow, "bun_only_runtime_smoke");
+    expect(bunOnlyConsumer.needs).toEqual(["preflight", "installer_smoke_candidate_payload"]);
+    expect(bunOnlyConsumer.if).toBe(
+      "needs.preflight.outputs.run_full_install_smoke == 'true' && inputs.run_bun_only_runtime_smoke && !inputs.allow_frozen_target_scenario_omissions",
+    );
+    expect(bunOnlyConsumer["continue-on-error"]).toBe(true);
+    expect(bunOnlyConsumer["runs-on"]).toBe(bunConsumer["runs-on"]);
+    expect(bunOnlyConsumer["runs-on"]).toContain("inputs.runner_group");
+    expect(bunOnlyConsumer["runs-on"]).toContain("ubuntu-24.04");
+    expect(bunOnlyConsumer["timeout-minutes"]).toBe(20);
+    const bunOnlyNode = step(bunOnlyConsumer, "Setup Node for payload verification");
+    expect(bunOnlyNode).toMatchObject({
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
+    });
+    expect(step(bunOnlyConsumer, "Validate candidate payload artifact binding")).toBe(bunBinding);
+    const bunOnlyDownload = step(bunOnlyConsumer, "Download candidate payload artifact");
+    expect(bunOnlyDownload).toBe(step(bunConsumer, "Download candidate payload artifact"));
+    expect(bunOnlyDownload.with).toMatchObject({
+      path: "${{ runner.temp }}/install-smoke-candidate-payload",
+      "github-token": "${{ github.token }}",
+    });
+    expect(step(bunOnlyConsumer, "Verify candidate payload contents")).toBe(bunVerify);
+    const bunOnlySetup = step(bunOnlyConsumer, "Setup pinned Bun runtime");
+    expect(bunOnlySetup.uses).toBe("./.release-harness/.github/actions/setup-test-bun");
+    const bunOnlyRun = step(bunOnlyConsumer, "Run Bun-only runtime smoke");
+    expect(bunOnlyRun).toMatchObject({
+      "working-directory": ".release-harness",
+      env: {
+        OPENCLAW_BUN_ONLY_SMOKE_PACKAGE_TGZ:
+          "${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",
+        OPENCLAW_BUN_ONLY_SMOKE_ARTIFACT_DIR: "${{ runner.temp }}/bun-only-runtime-smoke",
+        OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE: "1",
+      },
+      run: "bash scripts/e2e/bun-only-runtime-smoke.sh",
+    });
+    const bunOnlyUpload = step(bunOnlyConsumer, "Upload Bun-only runtime smoke artifacts");
+    expect(bunOnlyUpload).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "bun-only-runtime-smoke-${{ github.run_attempt }}",
+        path: ["md", "json", "jsonl", "log"]
+          .map((extension) => `\${{ runner.temp }}/bun-only-runtime-smoke/*.${extension}\n`)
+          .join(""),
+        "retention-days": 14,
+        "if-no-files-found": "ignore",
+      },
+    });
+    expect(bunOnlyConsumer.steps).toEqual([
+      bunOnlyNode,
+      step(bunOnlyConsumer, "Resolve exact trusted workflow identity"),
+      step(bunOnlyConsumer, "Checkout trusted release harness"),
+      step(bunOnlyConsumer, "Restore exact trusted workflow revision"),
+      bunBinding,
+      bunOnlyDownload,
+      bunVerify,
+      bunOnlySetup,
+      bunOnlyRun,
+      bunOnlyUpload,
+    ]);
+    for (const forbidden of [
+      "setup-node-env",
+      "setup-release-harness",
+      "blacksmith",
+      "npm install -g bun",
+      "pnpm install",
+    ]) {
+      expect(JSON.stringify(bunOnlyConsumer)).not.toContain(forbidden);
+    }
   });
 
   it("packages candidate code only in an isolated image and verifies the sealed payload", () => {
@@ -600,7 +883,7 @@ describe("install smoke no-push root image transport", () => {
     });
     expect(step(producer, "Checkout trusted release harness").with).toMatchObject({
       repository: "openclaw/openclaw",
-      ref: "main",
+      ref: "${{ github.sha }}",
       "fetch-depth": 1,
       "persist-credentials": false,
     });
@@ -716,6 +999,7 @@ describe("install smoke no-push root image transport", () => {
         "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       ref: "${{ needs.resolve_target.outputs.revision }}",
       run_bun_global_install_smoke: true,
+      run_bun_only_runtime_smoke: true,
     });
   });
 

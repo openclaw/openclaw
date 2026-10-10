@@ -8,10 +8,9 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
-import { listGatewayMethods } from "../../server-methods-list.js";
-import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "../../server-methods-list.test-fixtures.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
 
@@ -75,6 +74,7 @@ vi.mock("../../../state/user-profiles.js", () => ({
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
+  listControlUiLinkReaders: vi.fn(() => []),
   listControlUiPluginTabs: listControlUiPluginTabsMock,
   listControlUiPluginWidgetKinds: listControlUiPluginWidgetKindsMock,
 }));
@@ -97,12 +97,16 @@ vi.mock("../../../infra/tailscale.js", () => ({
 
 import { sendGatewayHello } from "./connect-hello.js";
 
-function makeContext(role: "operator" | "node", scopes: string[]) {
+function makeContext(
+  role: "operator" | "node",
+  scopes: string[],
+  client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
+) {
   return {
     handler: {
       socket: new EventEmitter(),
       isClosed: vi.fn(() => false),
-      getClient: () => null,
+      getClient: () => client ?? null,
       connId: `conn-${role}`,
       bootId: "gateway-boot-a",
       gatewayMethods: [],
@@ -123,6 +127,7 @@ function makeContext(role: "operator" | "node", scopes: string[]) {
     },
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
+    onHelloDelivered: vi.fn(),
     pendingNodePairingCleanup: {},
     releasePendingNodePairingCleanup: vi.fn(async () => undefined),
   };
@@ -175,6 +180,49 @@ describe("sendGatewayHello update detail scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  it.each(["write", "suggest", "view", "none", undefined] as const)(
+    "projects the current operator session cap %s only when configured",
+    async (sessionCap) => {
+      const context = makeContext("operator", ["operator.write"], {
+        internal: { operatorRoleActor: { kind: "operator", profileId: "profile-riley" } },
+        preparedSessionProfile: {
+          profileId: "profile-riley",
+          aliases: new Set(["profile-riley"]),
+          role: "collaborator",
+        },
+      });
+      if (sessionCap !== undefined) {
+        context.configSnapshot = {
+          gateway: {
+            roles: {
+              default: "collaborator",
+              definitions: {
+                collaborator: {
+                  sessions: { others: sessionCap },
+                  agents: ["main"],
+                  scopes: ["operator.write"],
+                },
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+      }
+
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.write"]) as never,
+        {},
+      );
+
+      const auth = helloPayload(context)?.auth;
+      if (sessionCap === undefined) {
+        expect(auth).not.toHaveProperty("sessionCap");
+      } else {
+        expect(auth?.sessionCap).toBe(sessionCap);
+      }
+    },
+  );
 
   it.each([
     { mode: "trusted-proxy", tailscale: "off", expected: true },
@@ -286,6 +334,7 @@ describe("sendGatewayHello update detail scope", () => {
   it.each(["exit", "cleanup", "replacement"] as const)(
     "retires an announced Serve connection on route %s and renews its hello",
     async (withdrawal) => {
+      const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
       tailscaleClaim.mockResolvedValue({
         exited: exited.promise,
@@ -322,7 +371,7 @@ describe("sendGatewayHello update detail scope", () => {
             ...context,
             handler: {
               ...context.handler,
-              gatewayMethods: listGatewayMethods(),
+              gatewayMethods,
               socket,
               close: (code?: number, reason?: string) => socket.close(code, reason),
             },
@@ -340,17 +389,7 @@ describe("sendGatewayHello update detail scope", () => {
       };
       try {
         const original = await connect();
-        expect(original.hello.features.methods).toEqual([
-          ...LEGACY_ADVERTISED_GATEWAY_METHODS,
-          "plugins.controlUi.list",
-          "plugins.controlUi.reload",
-          "plugins.controlUi.report",
-          "plugins.controlUi.status",
-          "update.runs.get",
-          "update.runs.list",
-          "gateway.suspend.handoff",
-          "update.report",
-        ]);
+        expect(original.hello.features.methods).toEqual(gatewayMethods);
         expect(original.hello.snapshot.controlUiIdentityUrl).toBe(
           "https://gateway.tailnet.ts.net/",
         );
@@ -371,7 +410,7 @@ describe("sendGatewayHello update detail scope", () => {
           expect(original.close).toHaveBeenCalledWith(1012, expect.anything()),
         );
         const renewed = await connect();
-        expect(renewed.hello.features.methods).toEqual(original.hello.features.methods);
+        expect(renewed.hello.features.methods).toEqual(gatewayMethods);
         expect(renewed.hello.snapshot.controlUiIdentityUrl).toBe(
           withdrawal === "replacement" ? "https://replacement.tailnet.ts.net/" : undefined,
         );
@@ -467,17 +506,52 @@ describe("sendGatewayHello update detail scope", () => {
       GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
     );
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
+    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-model-catalog");
+    expect(helloPayload(context)?.features.capabilities).toContain("profile-binding-v1");
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      "sender-restricted-hidden-helpers-v1",
+    );
   });
 
-  it("reports Gateway build identity separately from configured UI source", async () => {
-    const context = makeContext("operator", ["operator.read"]);
-    context.configSnapshot = { gateway: { controlUi: { root: "/custom/ui" } } };
+  it.each([
+    { label: "default bundled UI", controlUi: undefined, source: "bundled", browserFocus: true },
+    {
+      label: "enabled bundled UI",
+      controlUi: { enabled: true },
+      source: "bundled",
+      browserFocus: true,
+    },
+    {
+      label: "disabled bundled UI",
+      controlUi: { enabled: false },
+      source: "bundled",
+      browserFocus: false,
+    },
+    {
+      label: "configured UI",
+      controlUi: { root: "/custom/ui" },
+      source: "configured",
+      browserFocus: false,
+    },
+  ])(
+    "reports Gateway build identity and browser focus support for $label",
+    async ({ controlUi, source, browserFocus }) => {
+      const context = makeContext("operator", ["operator.read"]);
+      context.configSnapshot = { gateway: { controlUi } };
 
-    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
 
-    expect(helloPayload(context)?.server.buildId).toBe("build-a");
-    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
-  });
+      expect(helloPayload(context)?.server.buildId).toBe("build-a");
+      expect(helloPayload(context)?.server.controlUiBuildSource).toBe(source);
+      expect(
+        helloPayload(context)?.features.capabilities?.includes("control-ui-browser-focus"),
+      ).toBe(browserFocus);
+    },
+  );
 
   it.each([
     [
@@ -517,6 +591,7 @@ describe("sendGatewayHello update detail scope", () => {
     });
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.auth).toEqual({
+      method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
       recoveryMigrationAllowed: true,

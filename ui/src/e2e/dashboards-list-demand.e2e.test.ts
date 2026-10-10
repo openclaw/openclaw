@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 // Control UI E2E proves dashboard tabs do not multiply server-owned session-list demand.
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { dashboardSessionListQuery } from "../lib/sessions/session-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
@@ -18,10 +19,13 @@ const suite = createControlUiE2eSuite({
 const DASHBOARD_REQUEST_PARAMS = {
   archived: "all",
   configuredAgentsOnly: true,
+  excludeDock: true,
   hasBoard: true,
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+  rowMode: "compact",
+  source: "dashboard",
 } as const;
 
 function sessionsResult(key: string, label: string, updatedAt: number) {
@@ -103,8 +107,7 @@ suite.define(() => {
         retryable: true,
       });
       // Confirm the real store consumed the failed wire response before capturing the UI.
-      // The predicate runs in the page, so the limit crosses as an argument.
-      await page.waitForFunction((rosterLimit) => {
+      await page.waitForFunction((query) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime?: {
             context: {
@@ -121,13 +124,11 @@ suite.define(() => {
         const appContext = app.runtime?.context;
         return (
           appContext?.sessions.listSnapshot({
-            limit: rosterLimit,
-            hasBoard: true,
-            archivedFilter: "all",
+            ...query,
             agentId: appContext.agentSelection.state.scopeId ?? undefined,
           }).error === "Dashboard refresh unavailable"
         );
-      }, SIDEBAR_SESSION_ROSTER_LIMIT);
+      }, dashboardSessionListQuery());
       await page.screenshot({ path: path.join(artifactDir, "refresh-failed.png") });
       expect(await dashboards.getByText("Deploy monitor", { exact: true }).isVisible()).toBe(true);
       expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
@@ -136,6 +137,7 @@ suite.define(() => {
         "Dashboard refresh unavailable",
       );
       expect(await dashboards.getByRole("alert").textContent()).toContain("Showing stale data");
+      expect(await dashboards.getByRole("alert").getByRole("button").count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.list", {
         cases: [
@@ -145,7 +147,8 @@ suite.define(() => {
           },
         ],
       });
-      await dashboards.getByRole("button", { name: "Retry", exact: true }).click();
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
       await dashboards.getByText("Updated deploy monitor", { exact: true }).waitFor();
       expect(await dashboards.getByRole("alert").count()).toBe(0);
       const after = (await gateway.getRequests("sessions.list")).filter(isDashboardRequest);
@@ -157,43 +160,88 @@ suite.define(() => {
     }
   });
 
-  it("retries an initial dashboard failure without claiming the list is empty", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1440 } });
-    const page = await context.newPage();
-    try {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": {
+  it.each([false, true])(
+    "recovers an initial dashboard failure without claiming the list is empty (suspending: %s)",
+    async (suspending) => {
+      const context = await suite.browser.newContext({ viewport: { height: 900, width: 1440 } });
+      const page = await context.newPage();
+      try {
+        const gateway = await installMockGateway(page, {
+          awaitInitialRoster: !suspending,
+          gatewaySuspensionPhase: suspending ? "draining" : "accepting",
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { hasBoard: true },
+                  response: {
+                    __mockError: {
+                      code: "UNAVAILABLE",
+                      message: "Dashboard list unavailable",
+                      retryable: true,
+                      ...(suspending
+                        ? { details: { reason: "gateway-suspending", phase: "draining" } }
+                        : {}),
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}dashboards`);
+        const dashboards = page.locator("openclaw-dashboards-page");
+        if (suspending) {
+          await dashboards.locator('[aria-busy="true"]').waitFor();
+          expect(await dashboards.getByRole("alert").count()).toBe(0);
+        } else {
+          await dashboards.getByRole("alert").waitFor();
+          expect(await dashboards.getByRole("alert").textContent()).toContain(
+            "Dashboard list unavailable",
+          );
+          await gateway.setMethodResponse("sessions.list", {
             cases: [
               {
                 match: { hasBoard: true },
                 response: {
-                  __mockError: { code: "UNAVAILABLE", message: "Dashboard list unavailable" },
+                  __mockError: {
+                    code: "UNAVAILABLE",
+                    message: "Gateway is suspending",
+                    retryable: true,
+                    details: { reason: "gateway-suspending", phase: "draining" },
+                  },
                 },
               },
             ],
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}dashboards`);
-      const dashboards = page.locator("openclaw-dashboards-page");
-      await dashboards.getByRole("alert").waitFor();
-      expect(await dashboards.getByRole("alert").textContent()).toContain(
-        "Dashboard list unavailable",
-      );
-      expect(await dashboards.textContent()).not.toContain("Showing stale data");
-      expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
-      const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
-      await gateway.setMethodResponse("sessions.list", {
-        cases: [{ match: { hasBoard: true }, response: emptyResult }],
-      });
-      await dashboards.getByRole("button", { name: "Retry", exact: true }).click();
-      await dashboards.locator("[data-dashboards-empty]").waitFor();
-      expect(await dashboards.getByRole("alert").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
+          });
+          await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
+          await gateway.emitGatewayEvent("sessions.changed", {
+            agentId: "main",
+            key: "agent:main:dashboard",
+            sessionKey: "agent:main:dashboard",
+            reason: "update",
+          });
+          await dashboards.locator('[aria-busy="true"]').waitFor();
+          expect(await dashboards.getByRole("alert").count()).toBe(0);
+        }
+        expect(await dashboards.getByRole("button", { name: "Retry", exact: true }).count()).toBe(
+          0,
+        );
+        expect(await dashboards.textContent()).not.toContain("Showing stale data");
+        expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
+        const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
+        await gateway.setMethodResponse("sessions.list", {
+          cases: [{ match: { hasBoard: true }, response: emptyResult }],
+        });
+        await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
+        await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+        await dashboards.locator("[data-dashboards-empty]").waitFor();
+        expect(await dashboards.getByRole("alert").count()).toBe(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("keeps dashboard query demand at one request per real browser tab", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
@@ -234,11 +282,14 @@ suite.define(() => {
           expect(canonical.params).toEqual({
             agentId: "main",
             configuredAgentsOnly: true,
+            excludeDock: true,
             includeDerivedTitles: true,
             includeGlobal: true,
             includeLastMessage: true,
             includeUnknown: true,
             limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+            rowMode: "compact",
+            source: "sidebar",
           });
           await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
           await page.waitForFunction(() => {

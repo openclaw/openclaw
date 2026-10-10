@@ -1,15 +1,10 @@
-// Memory Host SDK module implements post json behavior.
-import { formatErrorMessage } from "./error-utils.js";
-import type { SsrFPolicy } from "./openclaw-runtime-network.js";
+import { createProviderHttpError, type SsrFPolicy } from "./openclaw-runtime-network.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
-import {
-  readMemoryHostResponseTextSnippet,
-  readResponseJsonWithLimit,
-} from "./response-snippet.js";
+import { readResponseJsonWithLimit } from "./response-snippet.js";
 
 // Shared JSON POST helper for guarded remote memory provider calls.
 
-/** POST JSON, parse bounded response JSON, and attach status metadata when requested. */
+/** POST JSON, parse bounded response JSON, and preserve provider error metadata. */
 export async function postJson<T>(params: {
   url: string;
   headers: Record<string, string>;
@@ -18,8 +13,9 @@ export async function postJson<T>(params: {
   signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
-  attachStatus?: boolean;
   maxResponseBytes?: number;
+  onResponse?: (response: Response) => void;
+  mapResponseError?: (error: unknown) => unknown;
   parse: (payload: unknown) => T | Promise<T>;
 }): Promise<T> {
   return await withRemoteHttpResponse({
@@ -33,24 +29,27 @@ export async function postJson<T>(params: {
       body: JSON.stringify(params.body),
     },
     onResponse: async (res) => {
-      if (!res.ok) {
-        const text = await readMemoryHostResponseTextSnippet(res, { signal: params.signal });
-        const err = new Error(
-          `${params.errorPrefix}: ${res.status} ${formatErrorMessage(text)}`,
-        ) as Error & {
-          status?: number;
-        };
-        if (params.attachStatus) {
-          err.status = res.status;
+      params.onResponse?.(res);
+      try {
+        if (!res.ok) {
+          throw await createProviderHttpError(res, params.errorPrefix, {
+            requestHeaders: params.headers,
+            signal: params.signal,
+            maxBodyBytes: 8 * 1024,
+          });
         }
-        throw err;
+        const payload = await readResponseJsonWithLimit(res, {
+          errorPrefix: params.errorPrefix,
+          maxBytes: params.maxResponseBytes,
+          signal: params.signal,
+        });
+        return await params.parse(payload);
+      } catch (error) {
+        if (params.signal?.aborted) {
+          throw error;
+        }
+        throw params.mapResponseError ? params.mapResponseError(error) : error;
       }
-      const payload = await readResponseJsonWithLimit(res, {
-        errorPrefix: params.errorPrefix,
-        maxBytes: params.maxResponseBytes,
-        signal: params.signal,
-      });
-      return await params.parse(payload);
     },
   });
 }

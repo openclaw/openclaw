@@ -1,16 +1,19 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
   objectFieldEquals,
   readFixtureLog,
   startTuiFixture,
+  tuiFixtureReceipts,
   waitForFixtureLogEntry,
   waitForSynchronizedFrameRows,
   writeTuiPtyFixtureScript,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { startPty } from "./tui-pty-test-support.js";
+import { startRuntimePty } from "./tui-pty-test-support.js";
 
 const STARTUP_TIMEOUT_MS = 20_000;
 const OUTPUT_TIMEOUT_MS = 2_000;
@@ -20,7 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it(
   "keeps multiline exit paste in chat and preserves shared stop behavior",
-  async () => {
+  async ({ signal }) => {
     const stateDir = tempDirs.make("openclaw-tui-input-pty-");
     const fixture = await startTuiFixture({
       env: {
@@ -44,7 +47,7 @@ it(
         OUTPUT_TIMEOUT_MS,
       );
       await fixture.run.write("\u001b[200~/stop\n\u001b[201~\r", { delay: false });
-      await fixture.waitForLogEntry((entry) => entry.method === "abortChat");
+      await fixture.waitForLogEntry((entry) => entry.method === "abortChat", signal);
       const sends = (await readFixtureLog(fixture.logPath)).filter(
         (entry) => entry.method === "sendChat",
       );
@@ -70,7 +73,7 @@ describe.each([
 ])("TUI reset transition PTY ($input)", ({ nativePaste }) => {
   it.skipIf(nativePaste && process.platform !== "darwin")(
     "preserves overlapping input while /reset owns the terminal session transition",
-    async () => {
+    async ({ signal }) => {
       const tempDir = tempDirs.make("openclaw-tui-reset-pty-");
       const scriptPath = await writeTuiPtyFixtureScript(tempDir);
       const logPath = path.join(tempDir, "fixture-log.jsonl");
@@ -79,27 +82,35 @@ describe.each([
         ? Array.from({ length: 11 }, (_, index) => `line-${index}`).join("\n")
         : "newer suffix";
       const preservedDraft = `overlap during reset\n${newerDraft}`;
-      const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
-        cwd: process.cwd(),
-        env: {
-          OPENCLAW_THEME: "dark",
-          OPENCLAW_TUI_PTY_LOG_PATH: logPath,
-          OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
-          OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: nativePaste ? undefined : "1000",
-          OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
-          OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
-          // Emulate iTerm for Darwin's default coalescing, without Apple Terminal's
-          // host modifier-state lookup for synthetic Return.
-          TERM_PROGRAM: nativePaste ? "iTerm.app" : undefined,
-          NO_COLOR: undefined,
+      const run = await startRuntimePty(
+        process.execPath,
+        resolveRuntimeWorkerArgv(pathToFileURL(scriptPath)),
+        {
+          cwd: process.cwd(),
+          env: {
+            OPENCLAW_THEME: "dark",
+            OPENCLAW_TUI_PTY_LOG_PATH: logPath,
+            OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
+            OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: nativePaste ? undefined : "1000",
+            OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
+            OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
+            // Emulate iTerm for Darwin's default coalescing, without Apple Terminal's
+            // host modifier-state lookup for synthetic Return.
+            TERM_PROGRAM: nativePaste ? "iTerm.app" : undefined,
+            NO_COLOR: undefined,
+          },
+          exitTimeoutMs: EXIT_TIMEOUT_MS,
+          outputTimeoutMs: OUTPUT_TIMEOUT_MS,
         },
-        exitTimeoutMs: EXIT_TIMEOUT_MS,
-        outputTimeoutMs: OUTPUT_TIMEOUT_MS,
-      });
+      );
 
       try {
         const waitForLogEntry = async (predicate: Parameters<typeof waitForFixtureLogEntry>[1]) =>
-          await waitForFixtureLogEntry(logPath, predicate, OUTPUT_TIMEOUT_MS, run.output);
+          await waitForFixtureLogEntry(logPath, predicate, {
+            receipts: tuiFixtureReceipts,
+            run,
+            signal,
+          });
 
         await run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
         await run.write("/reset\r", { delay: false });

@@ -12,6 +12,8 @@ export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
 export type ProviderCatalogContext = {
+  /** Acquisition lifetime; release awaited work and join its cleanup when aborted. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -36,6 +38,9 @@ export type ProviderCatalogContext = {
     mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
     source: "env" | "profile" | "none";
     profileId?: string;
+    /** Credential preparation exhausted its candidates; not an unconfigured provider. */
+    preparationFailed?: boolean;
+    authFlow?: string;
   };
 };
 
@@ -57,7 +62,6 @@ export type ProviderPluginCatalog = {
 };
 
 export type UnifiedModelCatalogProviderContext = ProviderCatalogContext & {
-  signal?: AbortSignal;
   includeLive?: boolean;
   timeoutMs?: number;
 };
@@ -72,13 +76,7 @@ export type UnifiedModelCatalogProviderPlugin = {
     | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
     | null
     | undefined;
-  liveCatalog?: (
-    ctx: UnifiedModelCatalogProviderContext,
-  ) =>
-    | readonly UnifiedModelCatalogEntry[]
-    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
-    | null
-    | undefined;
+  liveCatalog?: NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
 };
 
 /**

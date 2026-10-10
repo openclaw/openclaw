@@ -11,67 +11,63 @@ function navigateTo(href: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
-  return html`
-    <section class="card">
-      <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
-      <p>
-        ${
-          data.candidates.length > 1
-            ? t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })
-            : t("chat.sessionRoute.additionalMatches")
-        }
-      </p>
-      ${data.candidates.map(
-        (candidate) => html`
-          <p>
-            <a href=${candidate.href}>${candidate.displayName}</a><br />
-            <small>${candidate.agentId} · ${candidate.idPrefix}</small>
-          </p>
-        `,
-      )}
-      ${
-        data.truncated && data.candidates.length > 1
-          ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
-          : null
-      }
-    </section>
-  `;
-}
-
-function renderMissingSession(data: Extract<ChatRouteData, { kind: "missing-session" }>) {
-  return renderPanelErrorState({
-    className: "session-route-not-found",
-    role: "status",
-    title: t("chat.sessionRoute.notFoundTitle"),
-    subtitle: t("chat.sessionRoute.notFoundExplanation"),
-    actions: html`
-      <button class="btn primary" type="button" @click=${() => navigateTo(data.currentSessionHref)}>
-        ${t("chat.sessionRoute.goToMain")}
-      </button>
-      <button class="btn" type="button" @click=${() => navigateTo(data.sessionsHref)}>
-        ${t("chat.sessionRoute.viewSessions")}
-      </button>
-    `,
-  });
-}
-
-export function renderChatRoute(data: unknown) {
+export function renderChatRoute(data: unknown, _loaderPending = false, presented = true) {
   // SAFETY: This renderer receives only this route's colocated ChatRouteData loader result.
   const routeData = data as ChatRouteData | undefined;
   if (!routeData) {
     return nothing;
   }
   if (routeData.kind === "ambiguous") {
-    return renderAmbiguous(routeData);
+    return html`
+      <section class="card">
+        <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
+        <p>
+          ${
+            routeData.candidates.length > 1
+              ? t("chat.sessionRoute.multipleMatches", { shortId: routeData.shortId })
+              : t("chat.sessionRoute.additionalMatches")
+          }
+        </p>
+        ${routeData.candidates.map(
+          (candidate) => html`
+            <p>
+              <a href=${candidate.href}>${candidate.displayName}</a><br />
+              <small>${candidate.agentId} · ${candidate.idPrefix}</small>
+            </p>
+          `,
+        )}
+        ${
+          routeData.truncated && routeData.candidates.length > 1
+            ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
+            : null
+        }
+      </section>
+    `;
   }
   if (routeData.kind === "route-error") {
     return html`<section class="card"><p role="alert">${routeData.message}</p></section>`;
   }
   if (routeData.kind === "missing-session") {
-    return renderMissingSession(routeData);
+    return renderPanelErrorState({
+      className: "session-route-not-found",
+      role: "status",
+      title: t("chat.sessionRoute.notFoundTitle"),
+      subtitle: t("chat.sessionRoute.notFoundExplanation"),
+      actions: html`
+        <button
+          class="btn primary"
+          type="button"
+          @click=${() => navigateTo(routeData.currentSessionHref)}
+        >
+          ${t("chat.sessionRoute.goToMain")}
+        </button>
+        <button class="btn" type="button" @click=${() => navigateTo(routeData.sessionsHref)}>
+          ${t("chat.sessionRoute.viewSessions")}
+        </button>
+      `,
+    });
   }
-  return html`<openclaw-chat-page .data=${routeData}></openclaw-chat-page>`;
+  return html`<openclaw-chat-page .data=${routeData} .presented=${presented}></openclaw-chat-page>`;
 }
 
 export function sessionRenderOwnerKey(

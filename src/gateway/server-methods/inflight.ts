@@ -1,12 +1,7 @@
-import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export type GatewayInflightResult = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ErrorShape;
-  meta?: Record<string, unknown>;
-};
+export type GatewayInflightResult = GatewayMethodDispatchResponse;
 
 const inflightByContext = new WeakMap<
   GatewayRequestContext,
@@ -51,7 +46,7 @@ export function resolveGatewayInflightRequest(params: {
     return {
       kind: "handled",
       done: inflight.then((result) => {
-        const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+        const meta = { ...result.meta, cached: true };
         params.respond(result.ok, result.payload, result.error, meta);
       }),
     };

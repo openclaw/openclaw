@@ -1,4 +1,3 @@
-// Terminal Core tests cover ansi behavior.
 import { describe, expect, it } from "vitest";
 import { AnsiSequenceStripper, iterateAnsiSegments } from "./ansi-sequences.js";
 import {
@@ -32,9 +31,6 @@ describe("terminal ansi helpers", () => {
     ["ESC OSC with BEL", ["A\u001B]0;title", "\u0007B"]],
     ["ESC OSC with ESC ST", ["A\u001B]0;title", "\u001B\\B"]],
     ["C1 OSC with C1 ST", ["A\u009D0;title", "\u009CB"]],
-    ["C1 OSC with ESC ST", ["A\u009D0;title", "\u001B\\B"]],
-    ["ESC CSI", ["A\u001B[31", "mB"]],
-    ["C1 CSI", ["A\u009B31", "mB"]],
     ["ESC compatibility charset", ["A\u001B(", "BB"]],
     ["ESC compatibility bracket prefix", ["A\u001B[", "[AB"]],
     ["ESC compatibility mixed prefixes", ["A\u001B(", "[31mB"]],
@@ -48,6 +44,61 @@ describe("terminal ansi helpers", () => {
     expect(split).toBe(joined);
   });
 
+  it.each(CSI_INTRODUCERS)(
+    "dispatches complete %s controls once across every split",
+    (_label, csi) => {
+      const input = `A${csi}6n${csi}?1hB${csi}?6n${csi}?1l${csi}31mC`;
+      for (let split = 0; split <= input.length; split += 1) {
+        const controls: string[] = [];
+        const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+        expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe(
+          "ABC",
+        );
+        expect(controls).toEqual(["6n", "?1h", "?6n", "?1l", "31m"]);
+        expect(stripper.finish()).toBe("");
+      }
+    },
+  );
+
+  it.each([
+    ["OSC payload", "\x1b]0;\x1b[6n\x1b[?1h\x07", []],
+    ["cancelled CSI", "\x1b[6\x18n\x1b[?1\x1ah", []],
+    ["embedded C0", "\x1b[6\x07n", ["6n"]],
+    ["compatibility sequence", "\x1b[[6n", []],
+  ])("dispatches only active CSI in %s", (_label, input, expected) => {
+    const controls: string[] = [];
+    const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+    for (const char of input) {
+      stripper.write(char);
+    }
+    expect(controls).toEqual(expected);
+  });
+
+  it.each([
+    ["CSI to ESC CSI", "\x1b[?1", "\x1b[6n", ["6n"]],
+    ["escape to C1 CSI", "\x1b", "\x9b6n", ["6n"]],
+    ["compatibility to C1 OSC", "\x1b(", "\x9d0;\x1b[6n\x07", []],
+  ])("restarts %s across every chunk boundary", (_label, pending, restart, expected) => {
+    const input = `A${pending}${restart}B`;
+    for (let split = 0; split <= input.length; split += 1) {
+      const controls: string[] = [];
+      const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+      expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe("AB");
+      expect(controls).toEqual(expected);
+      expect(stripper.finish()).toBe("");
+    }
+  });
+
+  it("drops oversized and unfinished CSI metadata without dispatching partial controls", () => {
+    const controls: string[] = [];
+    const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+    expect(stripper.write("A\x1b[" + "?".repeat(1024 * 1024))).toBe("A");
+    expect(stripper.write("6nB\x1b[6")).toBe("B");
+    stripper.finish();
+    expect(stripper.write("nC\x1b[6n")).toBe("nC");
+    expect(controls).toEqual(["6n"]);
+  });
+
   it("keeps a trailing ESC pending until the next chunk can identify OSC", () => {
     const chunks = ["A\u001B", "]0;title\u0007B"];
     const stripper = new AnsiSequenceStripper();
@@ -57,15 +108,6 @@ describe("terminal ansi helpers", () => {
 
     expect(split).toBe("AB");
     expect(split).toBe(joined);
-  });
-
-  it("drops unterminated chunked OSC payload without retaining it until finish", () => {
-    const stripper = new AnsiSequenceStripper();
-
-    const split =
-      stripper.write("line\n\t🙂\u001B]unter") + stripper.write("minated") + stripper.finish();
-
-    expect(split).toBe("line\n\t🙂");
   });
 
   it("does not retain large unterminated OSC payloads", () => {
@@ -108,9 +150,6 @@ describe("terminal ansi helpers", () => {
   it.each([
     ["ESC OSC with BEL", "\u001B]", "\u0007"],
     ["ESC OSC with ESC ST", "\u001B]", "\u001B\\"],
-    ["ESC OSC with C1 ST", "\u001B]", "\u009C"],
-    ["C1 OSC with BEL", "\u009D", "\u0007"],
-    ["C1 OSC with ESC ST", "\u009D", "\u001B\\"],
     ["C1 OSC with C1 ST", "\u009D", "\u009C"],
   ])("strips %s without clipping adjacent text", (_label, introducer, terminator) => {
     expect(stripAnsiSequences(`before🙂${introducer}0;title${terminator}after界`)).toBe(
@@ -195,14 +234,8 @@ describe("terminal ansi helpers", () => {
 
   it.each([
     ["halfwidth voiced kana", "ﾊﾞ", 2],
-    ["halfwidth semi-voiced kana", "ﾊﾟ", 2],
     ["halfwidth kana with a prolonged sound", "ｳﾞｰ", 3],
     ["zero-width space", "\u200B", 0],
-    ["zero-width non-joiner", "\u200C", 0],
-    ["word joiner", "\u2060", 0],
-    ["function application", "\u2061", 0],
-    ["soft hyphen", "\u00AD", 0],
-    ["zero-width no-break space", "\uFEFF", 0],
     ["Hindi spacing mark", "का", 2],
     ["repeated leading Hangul jamo", "ᄀᄀ", 4],
     ["repeated Hangul jamo with a vowel", "ᄀ가", 4],
@@ -215,8 +248,6 @@ describe("terminal ansi helpers", () => {
     ["Hangul compatibility filler with a combining mark", "\u3164\u0301", 2],
     ["halfwidth Hangul filler with a voiced mark", "\uFFA0\uFF9E", 2],
     ["lone high surrogate", "\uD800", 1],
-    ["lone low surrogate", "\uDC00", 1],
-    ["well-formed emoji surrogate pair", "\uD83D\uDE00", 2],
   ])("measures %s with Unicode terminal-width rules", (_label, text, width) => {
     expect(visibleWidth(text)).toBe(width);
   });

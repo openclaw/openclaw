@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
+import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   MockedFailoverError,
@@ -68,21 +68,12 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
       ...createOverflowRunParams(state),
       runId: "run-codex-server-error-fallback",
       agentHarnessRuntimeOverride: "openclaw",
-      config: makeModelFallbackCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.4",
-              fallbacks: ["anthropic/claude-opus-4-6"],
-            },
-          },
-        },
-      }),
+      config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow(
-      "⚠️ openai/gpt-5.4 request failed (provider internal error). This is usually temporary — try again shortly.",
+      "⚠️ The AI service is having trouble. Please try again in a moment.",
     );
     // Initial attempt plus the full same-model transient retry budget.
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(9);

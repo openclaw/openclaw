@@ -10,7 +10,7 @@ Kilo Gateway routes requests to many models behind a single OpenAI-compatible en
 
 | Property | Value                              |
 | -------- | ---------------------------------- |
-| Provider | `kilocode`                         |
+| Provider | `kilocode` (alias: `kilo`)         |
 | Auth     | `KILOCODE_API_KEY`                 |
 | API      | OpenAI-compatible                  |
 | Base URL | `https://api.kilo.ai/api/gateway/` |
@@ -19,8 +19,10 @@ Kilo Gateway routes requests to many models behind a single OpenAI-compatible en
 
 ```bash
 openclaw plugins install @openclaw/kilocode-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Setup
 
@@ -46,6 +48,8 @@ openclaw gateway restart
     ```
   </Step>
 </Steps>
+
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
 
 ## Default model and catalog
 

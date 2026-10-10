@@ -79,4 +79,29 @@ describe("option card", () => {
     expect(onSkip).toHaveBeenCalledOnce();
     expect(skipped).toHaveBeenCalledOnce();
   });
+
+  it.each(["textarea", "button"] as const)(
+    "preserves focus on a %s when a recommended answer arrives",
+    async (tagName) => {
+      const control = document.createElement(tagName);
+      const target = document.createElement("div");
+      container.append(control, target);
+      control.focus();
+      render(
+        html`<openclaw-option-card
+          .props=${{
+            question: "What would you like to do first?",
+            options: [
+              { value: "chat", label: "Talk to my agent", recommended: true },
+              { value: "channels", label: "See all channels" },
+            ],
+          }}
+        ></openclaw-option-card>`,
+        target,
+      );
+      await target.querySelector("openclaw-option-card")!.updateComplete;
+
+      expect(document.activeElement).toBe(control);
+    },
+  );
 });

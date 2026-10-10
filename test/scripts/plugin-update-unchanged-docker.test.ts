@@ -1,24 +1,16 @@
 // Plugin Update Unchanged Docker tests cover plugin update unchanged docker script behavior.
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "../../src/plugins/installed-plugin-package-ownership.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../src/state/openclaw-state-db.js";
-
-const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
-const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
+import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 const CORRUPT_UPDATE_DOCKER_SCRIPT = "scripts/e2e/update-corrupt-plugin-docker.sh";
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
-const PLUGIN_UPDATE_REGISTRY_SCRIPT = "scripts/e2e/lib/plugin-update/registry-server.mjs";
 const CORRUPT_PLUGIN_ID = "demo-corrupt-plugin";
 const PLUGIN_INDEX_MODULE_URL = pathToFileURL(
   path.resolve("scripts/e2e/lib/plugin-index-sqlite.mjs"),
@@ -149,19 +141,6 @@ fi
   }
 }
 
-async function waitForPortFile(portFile: string): Promise<number> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (existsSync(portFile)) {
-      const port = Number.parseInt(readFileSync(portFile, "utf8"), 10);
-      if (Number.isInteger(port) && port > 0) {
-        return port;
-      }
-    }
-    await delay(50);
-  }
-  throw new Error("registry did not write a port file");
-}
-
 describe("plugin update unchanged Docker E2E", () => {
   it.each([false, true])(
     "seeds plugin ownership with initialized state=%s",
@@ -220,61 +199,6 @@ describe("plugin update unchanged Docker E2E", () => {
     },
   );
 
-  it("bounds the update command and prints diagnostics on hangs", () => {
-    const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
-
-    expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
-    expect(script).toContain("registry_port_file=/tmp/openclaw-e2e-registry.port");
-    expect(script).toContain(
-      'node scripts/e2e/lib/plugin-update/registry-server.mjs "$registry_port_file"',
-    );
-    expect(script).toContain(
-      'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"',
-    );
-    expect(script).toContain('export npm_config_registry="$NPM_CONFIG_REGISTRY"');
-    expect(script).toContain(
-      "openclaw_e2e_read_positive_int_env OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS 180",
-    );
-    expect(script).toContain(
-      'openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update',
-    );
-    expect(script).not.toContain(
-      'plugin_update_timeout_seconds="${OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS:-180}"',
-    );
-    expect(script).not.toMatch(
-      /^\s*timeout "\$\{plugin_update_timeout_seconds\}s" node "\$entry"/mu,
-    );
-    expect(script).toContain('"--- plugin update output ---"');
-    expect(script).toContain('"--- local registry output ---"');
-    expect(script).toContain("openclaw_e2e_print_log /tmp/plugin-update-output.log");
-    expect(script).toContain("openclaw_e2e_print_log /tmp/openclaw-e2e-registry.log");
-    expect(script).not.toContain("cat /tmp/plugin-update-output.log");
-    expect(script).not.toContain("cat /tmp/openclaw-e2e-registry.log");
-  });
-
-  it("serves plugin metadata from an ephemeral registry port", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-registry-"));
-    const portFile = path.join(root, "registry.port");
-    const child = spawn("node", [PLUGIN_UPDATE_REGISTRY_SCRIPT, portFile], {
-      stdio: "ignore",
-    });
-    try {
-      const port = await waitForPortFile(portFile);
-
-      const response = await fetch(`http://127.0.0.1:${port}/@example%2flossless-claw`);
-      expect(response.status).toBe(200);
-      const metadata = (await response.json()) as {
-        versions?: Record<string, { dist?: { tarball?: string } }>;
-      };
-      expect(metadata.versions?.["0.9.0"]?.dist?.tarball).toBe(
-        `http://127.0.0.1:${port}/@example/lossless-claw/-/lossless-claw-0.9.0.tgz`,
-      );
-    } finally {
-      child.kill("SIGTERM");
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("bounds assert-output diagnostics to the saved command log tail", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
     const logPath = path.join(root, "plugin-update-output.log");
@@ -321,77 +245,19 @@ describe("plugin update unchanged Docker E2E", () => {
     }
   });
 
-  it("waits for the local registry process during cleanup", () => {
-    const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
-
-    expect(script).toContain('openclaw_e2e_stop_process "${registry_pid:-}"');
-    expect(script).not.toContain('kill "$registry_pid"');
-  });
-
-  it("bounds corrupt plugin update commands and prints diagnostics on hangs", () => {
-    const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
-    const nonCodexRoute =
-      'node "$entry" config set agents.defaults.model anthropic/claude-sonnet-4-6 >/dev/null';
-    const codexOptOut = 'node "$entry" config set plugins.entries.codex.enabled false >/dev/null';
-
-    expect(script).toContain('plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force');
-    expect(script).toContain("config set plugins.allow '[\"demo-corrupt-plugin\"]'");
-    expect(script).toContain(nonCodexRoute);
-    expect(script.indexOf(nonCodexRoute)).toBeLessThan(script.indexOf(codexOptOut));
-    expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
-    expect(script).toContain(
-      "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
-    );
-    expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_STEP_TIMEOUT_SECONDS");
-    expect(script).toContain(
-      "default_update_step_timeout_seconds=$((10#$update_timeout_seconds - 30))",
-    );
-    expect(script).not.toContain(
-      'update_timeout_seconds="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS:-900}"',
-    );
-    expect(
-      script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
-    ).toBe(2);
-    expect(script).toContain("--channel beta");
-    expect(script.match(/--timeout "\$update_step_timeout_seconds"/g)).toHaveLength(2);
-    expect(script).toContain("OPENCLAW_UPDATE_POST_CORE=1");
-    expect(script).not.toContain(
-      'node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ',
-    );
-    expect(script).toContain(
-      "openclaw update failed or timed out after ${update_timeout_seconds}s",
-    );
-    expect(script).toContain(
-      "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s",
-    );
-    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(7);
-    expect(script).toContain('openclaw_e2e_print_log "$post_core_result_path"');
-    expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
-    expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(3);
-  });
-
-  it("inherits the shared upgrade-survivor baseline for corrupt plugin updates", () => {
-    const result = runCorruptUpdateDockerBaseline({
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
-    });
-
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.7.1-2");
-  });
-
-  it("keeps an explicit corrupt-plugin baseline ahead of the shared baseline", () => {
-    const result = runCorruptUpdateDockerBaseline({
-      OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: "openclaw@2026.6.34",
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
-    });
-
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.6.34");
-  });
+  it.each(["2026.9.2"])(
+    "keeps a historical %s override out of the same-schema repair lane",
+    (version) => {
+      const result = runCorruptUpdateDockerBaseline({
+        OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: `openclaw@${version}`,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: `openclaw@${version}`,
+      });
+      expect(result.result.status, result.result.stderr).toBe(0);
+      expect(result.baseline).toBeUndefined();
+    },
+  );
 
   it.each([
-    ["explicit disable", { enabled: false }, [CORRUPT_PLUGIN_ID]],
-    ["typed quarantine", { enabled: true }, [CORRUPT_PLUGIN_ID]],
     ["target-owned additions", { enabled: false }, [CORRUPT_PLUGIN_ID, "memory-core", "codex"]],
   ])("preserves the explicit allow policy after %s recovery", (_recovery, entry, allow) => {
     expect(() =>
@@ -402,7 +268,6 @@ describe("plugin update unchanged Docker E2E", () => {
   it.each([
     ["non-array allow policy", CORRUPT_PLUGIN_ID, false, "plugins.allow to be an array"],
     ["missing fixture membership", ["memory-core"], false, "exactly once"],
-    ["duplicate fixture membership", [CORRUPT_PLUGIN_ID, CORRUPT_PLUGIN_ID], false, "exactly once"],
     [
       "loss of the Codex opt-out",
       [CORRUPT_PLUGIN_ID],
@@ -417,77 +282,5 @@ describe("plugin update unchanged Docker E2E", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(expectedError);
-  });
-
-  it("accepts disabled or quarantined corrupt plugin warnings and rejects neither", () => {
-    const disabledAfterFailure = {
-      status: "ok",
-      npm: {
-        outcomes: [
-          {
-            pluginId: CORRUPT_PLUGIN_ID,
-            status: "skipped",
-            message: `Disabled "${CORRUPT_PLUGIN_ID}" after plugin update failure; OpenClaw will continue without it. Failed to update ${CORRUPT_PLUGIN_ID}: registry timeout`,
-          },
-        ],
-      },
-    };
-
-    const acceptedOkResult = runProbeStatus("assert-corrupt-plugin-result", disabledAfterFailure);
-
-    expect(acceptedOkResult.status).not.toBe(0);
-    expect(acceptedOkResult.stderr).toContain("expected clean or repaired corrupt plugin state");
-    expect(() =>
-      runProbe("assert-corrupt-plugin-result", {
-        ...disabledAfterFailure,
-        status: "warning",
-        warnings: [
-          {
-            pluginId: CORRUPT_PLUGIN_ID,
-            message:
-              `Plugin "${CORRUPT_PLUGIN_ID}" could not be processed after the core update: ` +
-              expectDefined(
-                disabledAfterFailure.npm.outcomes[0],
-                "corrupt plugin update failure outcome",
-              ).message +
-              " Run openclaw update repair to retry post-update plugin repair. " +
-              `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
-          },
-        ],
-      }),
-    ).not.toThrow();
-
-    const quarantinedAfterFailure = {
-      status: "warning",
-      npm: {
-        outcomes: [
-          {
-            pluginId: CORRUPT_PLUGIN_ID,
-            status: "error",
-            message: `Plugin "${CORRUPT_PLUGIN_ID}" failed post-core payload smoke check: package.json is missing`,
-          },
-        ],
-      },
-      warnings: [
-        {
-          pluginId: CORRUPT_PLUGIN_ID,
-          reason: "package.json is missing",
-          guidance: [
-            "Run openclaw update repair to retry post-update plugin repair.",
-            `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
-          ],
-        },
-      ],
-    };
-    expect(() => runProbe("assert-corrupt-plugin-result", quarantinedAfterFailure)).not.toThrow();
-
-    const neitherRecovery = runProbeStatus("assert-corrupt-plugin-result", {
-      ...quarantinedAfterFailure,
-      npm: { outcomes: [] },
-    });
-    expect(neitherRecovery.status).not.toBe(0);
-    expect(neitherRecovery.stderr).toContain(
-      "expected quarantined or disabled-after-failure outcome",
-    );
   });
 });

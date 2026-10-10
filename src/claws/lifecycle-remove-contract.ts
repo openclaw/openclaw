@@ -1,16 +1,19 @@
+import type { PluginRuntimeApplication } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import type { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawCronGateway } from "./cron.js";
-import type { ConfigCommit } from "./lifecycle-config-removal.js";
 import type { ClawTrashPath, RemovedWorkspaceFile } from "./lifecycle-delete-support.js";
+import type { ClawMonitorCleanupGateway } from "./monitor-cleanup-contract.js";
+import type { ClawPackageRemovalGateway } from "./package-remove-contract.js";
 import type {
   ClawPackageRemovalResult,
   ClawReferencedCleanup,
   PackageRemovalDeps,
 } from "./package-remove.js";
+import type { ClawRemovalJournalGateway } from "./removal-journal-contract.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
 export const CLAW_REMOVE_PLAN_SCHEMA_VERSION = "openclaw.clawRemovePlan.v1" as const;
@@ -70,10 +73,12 @@ export type ClawRemovePlanOptions = OpenClawStateDatabaseOptions & {
   listMcpServers?: typeof listConfiguredMcpServers;
   packageDeps?: PackageRemovalDeps;
   referencedCleanup?: ClawReferencedCleanup;
+  monitorGateway?: ClawMonitorCleanupGateway;
 };
 
 export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {
-  commitConfig?: ConfigCommit;
+  journalGateway?: ClawRemovalJournalGateway;
+  packageGateway?: ClawPackageRemovalGateway;
   purgeSessions?: (
     ...args: Parameters<typeof purgeAgentSessionStoreEntries>
   ) => Promise<boolean | void>;
@@ -97,5 +102,7 @@ export type ClawRemoveResult = {
   mcpServers: RemovedMcpServer[];
   cronJobs: RemovedCronJob[];
   packageRefsReleased: number;
+  pluginRuntime?: PluginRuntimeApplication;
+  warnings?: string[];
   error?: { code: string; message: string };
 };

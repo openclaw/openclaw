@@ -1,9 +1,9 @@
-/** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -13,26 +13,21 @@ import {
 } from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import {
-  defaultBundleLspRuntimeDependencies,
-  type BundleLspRuntimeDependencies,
-} from "./agent-bundle-lsp-dependencies.js";
+import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
+import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
-// Minimal LSP JSON-RPC framing over stdio (Content-Length header + JSON body).
 
 type LspSession = {
   serverName: string;
   process: OwnedStdioProcess;
   requestId: number;
   pendingRequests: ReturnType<typeof createPendingRequestRegistry<number, unknown, undefined>>;
-  buffer: Buffer;
+  input: LspInputBuffer;
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
@@ -52,7 +47,6 @@ type LspServerCapabilities = {
   [key: string]: unknown;
 };
 
-/** Materialized LSP tools plus session capabilities and cleanup handle. */
 type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
@@ -63,6 +57,7 @@ type LspPositionParams = {
   uri: string;
   line: number;
   character: number;
+  includeDeclaration?: boolean;
 };
 
 const LSP_SHUTDOWN_GRACE_MS = 500;
@@ -75,7 +70,7 @@ function createLspSession(serverName: string, child: OwnedStdioProcess): LspSess
     process: child,
     requestId: 0,
     pendingRequests: createPendingRequestRegistry<number, unknown, undefined>(),
-    buffer: Buffer.alloc(0),
+    input: { buffer: Buffer.alloc(0), length: 0 },
     initialized: false,
     capabilities: {},
     disposed: false,
@@ -83,17 +78,9 @@ function createLspSession(serverName: string, child: OwnedStdioProcess): LspSess
   };
 }
 
-function registerActiveLspSession(session: LspSession): void {
-  activeBundleLspSessions.add(session);
-}
-
-function rememberLspFailure(session: LspSession, error: Error): void {
-  session.failure ??= error;
-}
-
 function failLspSession(session: LspSession, error: Error): void {
-  rememberLspFailure(session, error);
-  session.pendingRequests.rejectAll(session.failure ?? error);
+  session.failure ??= error;
+  session.pendingRequests.rejectAll(session.failure);
 }
 
 function lspProcessExitError(
@@ -115,7 +102,7 @@ function attachLspProcessHandlers(session: LspSession): void {
   });
   session.process.onExit((code, signal) => {
     // Block new requests immediately, but let stdout drain any final response before close.
-    rememberLspFailure(session, lspProcessExitError(session, code, signal));
+    session.failure ??= lspProcessExitError(session, code, signal);
   });
   void session.process.wait().then(
     ({ code, signal }) => failLspSession(session, lspProcessExitError(session, code, signal)),
@@ -147,8 +134,14 @@ class LspFramingError extends Error {
 }
 
 type LspParseResult =
-  | { readonly ok: true; readonly messages: unknown[]; readonly remaining: Buffer }
+  | { readonly ok: true; readonly messages: unknown[]; readonly consumed: number }
   | { readonly ok: false; readonly messages: unknown[]; readonly error: LspFramingError };
+
+type LspInputBuffer = {
+  buffer: Buffer;
+  length: number;
+  body?: { start: number; end: number };
+};
 
 function framingError(messages: unknown[], detail: string): LspParseResult {
   return {
@@ -190,35 +183,38 @@ function parseContentLength(header: string): number | LspFramingError {
   return length;
 }
 
-function parseLspMessages(buffer: Buffer): LspParseResult {
+function parseLspMessages(input: LspInputBuffer): LspParseResult {
   const messages: unknown[] = [];
-  let remaining = buffer;
+  let consumed = 0;
 
   while (true) {
-    const headerEnd = remaining.indexOf(LSP_HEADER_SEPARATOR);
-    if (headerEnd === -1) {
-      const maxIncompleteHeaderBytes = MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length - 1;
-      return remaining.length > maxIncompleteHeaderBytes
-        ? framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`)
-        : { ok: true, messages, remaining };
-    }
-    if (headerEnd > MAX_LSP_HEADER_BYTES) {
-      return framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`);
-    }
+    if (!input.body) {
+      const remaining = input.buffer.subarray(consumed, input.length);
+      const headerEnd = remaining.indexOf(LSP_HEADER_SEPARATOR);
+      if (headerEnd === -1) {
+        const maxIncompleteHeaderBytes = MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length - 1;
+        return remaining.length > maxIncompleteHeaderBytes
+          ? framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`)
+          : { ok: true, messages, consumed };
+      }
+      if (headerEnd > MAX_LSP_HEADER_BYTES) {
+        return framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`);
+      }
 
-    const contentLength = parseContentLength(remaining.subarray(0, headerEnd).toString("ascii"));
-    if (contentLength instanceof LspFramingError) {
-      return { ok: false, messages, error: contentLength };
+      const contentLength = parseContentLength(remaining.subarray(0, headerEnd).toString("ascii"));
+      if (contentLength instanceof LspFramingError) {
+        return { ok: false, messages, error: contentLength };
+      }
+      const start = consumed + headerEnd + LSP_HEADER_SEPARATOR.length;
+      input.body = { start, end: start + contentLength };
     }
-    const bodyStart = headerEnd + LSP_HEADER_SEPARATOR.length;
-    const bodyEnd = bodyStart + contentLength;
-    if (remaining.length < bodyEnd) {
-      return { ok: true, messages, remaining };
+    if (input.length < input.body.end) {
+      return { ok: true, messages, consumed };
     }
 
     let body: string;
     try {
-      body = LSP_BODY_DECODER.decode(remaining.subarray(bodyStart, bodyEnd));
+      body = LSP_BODY_DECODER.decode(input.buffer.subarray(input.body.start, input.body.end));
     } catch {
       return framingError(messages, "body is not valid UTF-8");
     }
@@ -230,7 +226,8 @@ function parseLspMessages(buffer: Buffer): LspParseResult {
         `body is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    remaining = remaining.subarray(bodyEnd);
+    consumed = input.body.end;
+    input.body = undefined;
   }
 }
 
@@ -238,6 +235,12 @@ function lspAbortError(signal?: AbortSignal): Error {
   return signal?.reason instanceof Error
     ? signal.reason
     : createAbortError("LSP request aborted", { cause: signal?.reason });
+}
+
+function throwIfLspAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw lspAbortError(signal);
+  }
 }
 
 function lspSessionDisposedError(): Error {
@@ -298,16 +301,37 @@ function sendRequest(
 }
 
 function handleIncomingData(session: LspSession, chunk: Buffer | string) {
-  session.buffer = Buffer.concat([
-    session.buffer,
-    typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
-  ]);
-  const parsed = parseLspMessages(session.buffer);
-  session.buffer = parsed.ok
-    ? parsed.remaining.length === 0
-      ? Buffer.alloc(0)
-      : Buffer.from(parsed.remaining)
-    : Buffer.alloc(0);
+  const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+  const input = session.input;
+  const length = input.length + bytes.length;
+  if (length > input.buffer.length) {
+    // Grow geometrically while a frame arrives, instead of copying its full
+    // prefix on every stdout chunk. Only input.length bytes are initialized.
+    const capacity = Math.max(
+      length,
+      Math.min(
+        Math.max(4096, input.buffer.length * 2),
+        MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length + MAX_LSP_BODY_BYTES,
+      ),
+    );
+    const buffer = Buffer.allocUnsafe(capacity);
+    input.buffer.copy(buffer, 0, 0, input.length);
+    input.buffer = buffer;
+  }
+  bytes.copy(input.buffer, input.length);
+  input.length = length;
+  const parsed = parseLspMessages(input);
+  if (!parsed.ok || parsed.consumed === input.length) {
+    session.input = { buffer: Buffer.alloc(0), length: 0 };
+  } else if (parsed.consumed > 0) {
+    // Detach the incomplete tail from completed frames and release spare capacity.
+    input.buffer = Buffer.from(input.buffer.subarray(parsed.consumed, input.length));
+    input.length -= parsed.consumed;
+    if (input.body) {
+      input.body.start -= parsed.consumed;
+      input.body.end -= parsed.consumed;
+    }
+  }
 
   for (const msg of parsed.messages) {
     if (typeof msg !== "object" || msg === null) {
@@ -325,7 +349,6 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
         }
       }
     }
-    // Notifications (no id) are logged but not acted on
     if ("method" in record && !("id" in record)) {
       logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
     }
@@ -337,21 +360,29 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
   }
 }
 
-async function initializeSession(session: LspSession): Promise<LspServerCapabilities> {
-  const result = (await sendRequest(session, "initialize", {
-    processId: process.pid,
-    rootUri: null,
-    capabilities: {
-      textDocument: {
-        hover: { contentFormat: ["plaintext", "markdown"] },
-        completion: { completionItem: { snippetSupport: false } },
-        definition: {},
-        references: {},
+async function initializeSession(
+  session: LspSession,
+  signal?: AbortSignal,
+): Promise<LspServerCapabilities> {
+  const result = (await sendRequest(
+    session,
+    "initialize",
+    {
+      processId: process.pid,
+      rootUri: null,
+      capabilities: {
+        textDocument: {
+          hover: { contentFormat: ["plaintext", "markdown"] },
+          completion: { completionItem: { snippetSupport: false } },
+          definition: {},
+          references: {},
+        },
       },
     },
-  })) as { capabilities?: LspServerCapabilities } | undefined;
+    signal,
+  )) as { capabilities?: LspServerCapabilities } | undefined;
+  throwIfLspAborted(signal);
 
-  // Send initialized notification
   session.process.stdin?.write(
     encodeLspMessage({ jsonrpc: "2.0", method: "initialized", params: {} }),
   );
@@ -409,14 +440,12 @@ async function disposeSessions(sessions: Iterable<LspSession>): Promise<void> {
 
 function createLspPositionTool(params: {
   session: LspSession;
-  toolName: string;
   label: string;
   description: string;
-  method: string;
-  resultLabel: string;
+  method: "hover" | "definition" | "references";
 }): AnyAgentTool {
   return {
-    name: params.toolName,
+    name: `lsp_${params.method}_${params.session.serverName}`,
     label: params.label,
     description: params.description,
     parameters: {
@@ -425,6 +454,14 @@ function createLspPositionTool(params: {
         uri: { type: "string", description: "File URI (file:///path/to/file)" },
         line: { type: "number", description: "Zero-based line number" },
         character: { type: "number", description: "Zero-based character offset" },
+        ...(params.method === "references"
+          ? {
+              includeDeclaration: {
+                type: "boolean",
+                description: "Include the declaration in results",
+              },
+            }
+          : {}),
       },
       required: ["uri", "line", "character"],
     },
@@ -432,116 +469,61 @@ function createLspPositionTool(params: {
       const position = input as LspPositionParams;
       const result = await sendRequest(
         params.session,
-        params.method,
+        `textDocument/${params.method}`,
         {
           textDocument: { uri: position.uri },
           position: { line: position.line, character: position.character },
+          ...(params.method === "references"
+            ? { context: { includeDeclaration: position.includeDeclaration ?? true } }
+            : {}),
         },
         signal,
       );
-      return formatLspResult(params.session.serverName, params.resultLabel, result);
+      const text =
+        result !== null && result !== undefined
+          ? JSON.stringify(result, null, 2)
+          : `No ${params.method} result from ${params.session.serverName}`;
+      return {
+        content: [{ type: "text", text }],
+        details: { lspServer: params.session.serverName, lspMethod: params.method },
+      };
     },
   };
 }
 
 function buildLspTools(session: LspSession): AnyAgentTool[] {
-  const tools: AnyAgentTool[] = [];
-  const caps = session.capabilities;
   const serverLabel = session.serverName;
-
-  if (caps.hoverProvider) {
-    tools.push(
-      createLspPositionTool({
-        session,
-        toolName: `lsp_hover_${serverLabel}`,
-        label: `LSP Hover (${serverLabel})`,
-        description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
-        method: "textDocument/hover",
-        resultLabel: "hover",
-      }),
-    );
-  }
-
-  if (caps.definitionProvider) {
-    tools.push(
-      createLspPositionTool({
-        session,
-        toolName: `lsp_definition_${serverLabel}`,
-        label: `LSP Go to Definition (${serverLabel})`,
-        description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
-        method: "textDocument/definition",
-        resultLabel: "definition",
-      }),
-    );
-  }
-
-  if (caps.referencesProvider) {
-    tools.push({
-      name: `lsp_references_${serverLabel}`,
+  const definitions = [
+    {
+      method: "hover",
+      label: `LSP Hover (${serverLabel})`,
+      description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
+    },
+    {
+      method: "definition",
+      label: `LSP Go to Definition (${serverLabel})`,
+      description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
+    },
+    {
+      method: "references",
       label: `LSP Find References (${serverLabel})`,
       description: `Find all references to a symbol at a position in a file via the ${serverLabel} language server.`,
-      parameters: {
-        type: "object",
-        properties: {
-          uri: { type: "string", description: "File URI (file:///path/to/file)" },
-          line: { type: "number", description: "Zero-based line number" },
-          character: { type: "number", description: "Zero-based character offset" },
-          includeDeclaration: {
-            type: "boolean",
-            description: "Include the declaration in results",
-          },
-        },
-        required: ["uri", "line", "character"],
-      },
-      execute: async (_toolCallId, input, signal) => {
-        const params = input as {
-          uri: string;
-          line: number;
-          character: number;
-          includeDeclaration?: boolean;
-        };
-        const result = await sendRequest(
-          session,
-          "textDocument/references",
-          {
-            textDocument: { uri: params.uri },
-            position: { line: params.line, character: params.character },
-            context: { includeDeclaration: params.includeDeclaration ?? true },
-          },
-          signal,
-        );
-        return formatLspResult(serverLabel, "references", result);
-      },
-    });
-  }
-
-  return tools;
-}
-
-function formatLspResult(
-  serverName: string,
-  method: string,
-  result: unknown,
-): AgentToolResult<unknown> {
-  const text =
-    result !== null && result !== undefined
-      ? JSON.stringify(result, null, 2)
-      : `No ${method} result from ${serverName}`;
-  return {
-    content: [{ type: "text", text }],
-    details: { lspServer: serverName, lspMethod: method },
-  };
+    },
+  ] as const;
+  return definitions
+    .filter(({ method }) => session.capabilities[`${method}Provider`])
+    .map((definition) => createLspPositionTool({ session, ...definition }));
 }
 
 export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  abortSignal?: AbortSignal;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  dependencies?: BundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
-  const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
-  const loaded = dependencies.loadLspConfig({
+  throwIfLspAborted(params.abortSignal);
+  const loaded = loadEnabledBundleLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
@@ -549,21 +531,17 @@ export async function createBundleLspToolRuntime(params: {
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-lsp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
-  // Skip spawning when no LSP servers are configured.
-  if (Object.keys(loaded.lspServers).length === 0) {
+  if (Object.keys(loaded.config.lspServers).length === 0) {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
 
-  const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) =>
-      normalizeOptionalLowercaseString(name),
-    ).filter(Boolean),
-  );
+  const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
 
   try {
-    for (const [serverName, rawServer] of Object.entries(loaded.lspServers)) {
+    for (const [serverName, rawServer] of Object.entries(loaded.config.lspServers)) {
+      throwIfLspAborted(params.abortSignal);
       const launch = resolveStdioMcpServerLaunchConfig(rawServer);
       if (!launch.ok) {
         logWarn(`bundle-lsp: skipped server "${serverName}" because ${launch.reason}.`);
@@ -573,11 +551,16 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        session = createLspSession(serverName, await dependencies.spawnServerProcess(launchConfig));
-        registerActiveLspSession(session);
+        session = createLspSession(
+          serverName,
+          await spawnLspServerProcess(launchConfig, { abortSignal: params.abortSignal }),
+        );
+        activeBundleLspSessions.add(session);
         attachLspProcessHandlers(session);
+        throwIfLspAborted(params.abortSignal);
 
-        const capabilities = await initializeSession(session);
+        const capabilities = await initializeSession(session, params.abortSignal);
+        throwIfLspAborted(params.abortSignal);
         session.capabilities = capabilities;
         sessions.push(session);
 
@@ -610,9 +593,12 @@ export async function createBundleLspToolRuntime(params: {
         } else if (error instanceof OwnedStdioCleanupError) {
           recordAgentCleanupFailure();
         }
-        logWarn(
-          `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
-        );
+        if (!params.abortSignal?.aborted || error instanceof OwnedStdioCleanupError) {
+          logWarn(
+            `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
+          );
+        }
+        throwIfLspAborted(params.abortSignal);
       }
     }
 

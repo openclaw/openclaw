@@ -29,6 +29,8 @@ import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 const runtime = createLlmRuntime();
 registerBuiltInApiProviders(runtime.registry);
 
+// `model` (a model descriptor), `messages`, and `apiKey` are supplied by you;
+// see `examples/ai-chat` for concrete values.
 const stream = runtime.streamSimple(model, { messages }, { apiKey });
 for await (const event of stream) {
   if (event.type === "text_delta") process.stdout.write(event.delta);
@@ -66,6 +68,11 @@ A runnable version lives in the repository at `examples/ai-chat`.
 | `./providers`    | `registerBuiltInApiProviders`, `resetApiProviders`                             |
 | `./types`        | Model/message/tool/stream types                                                |
 | `./validation`   | Tool argument validation                                                       |
-| `./diagnostics`  | Diagnostics contracts                                                          |
+| `./diagnostics`  | Diagnostics contracts, transport logging, and sanitized URL formatting         |
 | `./event-stream` | Shared `EventStream` implementation                                            |
 | `./internal/*`   | OpenClaw-internal, no semver guarantee                                         |
+
+Use `@openclaw/ai/diagnostics` for `emitModelTransportDebug`,
+`formatModelTransportDebugUrl`, and `formatModelTransportDebugBaseUrl` when
+you only need logging helpers. This entrypoint keeps provider transport
+implementations out of the import graph.

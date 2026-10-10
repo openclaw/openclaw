@@ -12,9 +12,7 @@ export const desktopDocumentStyles = css`
     box-sizing: border-box;
     background: var(--bg);
   }
-  .desktop-document .desktop-content {
-    width: 100%;
-  }
+  .desktop-document .desktop-content,
   .desktop-document .desktop-stage {
     width: 100%;
   }
@@ -25,8 +23,10 @@ export const desktopDocumentStyles = css`
     bottom: max(12px, env(safe-area-inset-bottom));
     left: 12px;
     display: flex;
+    box-sizing: border-box;
     width: max-content;
     max-width: calc(100% - 24px);
+    flex-wrap: wrap;
     align-items: center;
     justify-content: center;
     gap: 4px;
@@ -35,7 +35,7 @@ export const desktopDocumentStyles = css`
     border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
     border-radius: 14px;
     background: color-mix(in srgb, var(--bg) 84%, transparent);
-    box-shadow: 0 8px 28px rgb(0 0 0 / 35%);
+    box-shadow: var(--overlay-shadow);
     backdrop-filter: blur(16px);
   }
   .desktop-touch-action {
@@ -61,6 +61,11 @@ export const desktopDocumentStyles = css`
     outline: 2px solid var(--focus, var(--accent));
     outline-offset: 1px;
   }
+  .desktop-touch-action > svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
   .desktop-touch-action__icon {
     display: inline-flex;
     width: 18px;
@@ -82,13 +87,24 @@ export const desktopDocumentStyles = css`
     opacity: 0;
     pointer-events: none;
   }
-  @media (max-width: 430px) {
+  @media (max-width: 560px) {
     .desktop-touch-action {
       min-width: 44px;
       padding: 0 7px;
     }
     .desktop-touch-action__label {
       display: none;
+    }
+  }
+  @media (max-width: 400px) {
+    .desktop-touch-toolbar {
+      display: grid;
+      width: calc(100% - 24px);
+      grid-template-columns: repeat(3, minmax(44px, 1fr));
+    }
+    .desktop-touch-toolbar .desktop-sizing {
+      box-sizing: border-box;
+      width: 100%;
     }
   }
 `;

@@ -1,4 +1,3 @@
-// ACP Core module implements errors behavior.
 import { redactSensitiveText, stringifyNonErrorCause } from "../error-format.js";
 
 export const ACP_ERROR_CODES = [
@@ -100,18 +99,13 @@ export function toAcpRuntimeError(params: {
       cause: params.error,
     });
   }
-  if (params.error instanceof Error) {
-    return new AcpRuntimeError(
-      params.fallbackCode,
-      messageWithAcpRequestErrorDetails(params.error),
-      {
-        cause: params.error,
-      },
-    );
-  }
-  return new AcpRuntimeError(params.fallbackCode, params.fallbackMessage, {
-    cause: params.error,
-  });
+  return new AcpRuntimeError(
+    params.fallbackCode,
+    params.error instanceof Error
+      ? messageWithAcpRequestErrorDetails(params.error)
+      : params.fallbackMessage,
+    { cause: params.error },
+  );
 }
 
 /**

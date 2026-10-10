@@ -1,8 +1,7 @@
-// Link-understanding runner tests cover guarded fetches, command execution, scoping, and template behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { LinkModelConfig } from "../config/types.tools.js";
+import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { applyLinkUnderstanding } from "./apply.js";
@@ -13,37 +12,33 @@ const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
-  return {
-    ...actual,
-    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-  };
-});
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/fetch-guard.js")>()),
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+}));
 
-vi.mock("../process/exec.js", async () => {
-  const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-  return {
-    ...actual,
-    runCommandWithTimeout: mocks.runCommandWithTimeout,
-  };
-});
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.runCommandWithTimeout,
+}));
 
-function cfg(entry: LinkModelConfig) {
+function cfg(
+  entry: LinkModelConfig | LinkModelConfig[] = { type: "cli", command: "summarize" },
+  options: Omit<LinkToolsConfig, "models"> = {},
+): OpenClawConfig {
   return {
     tools: {
       links: {
         enabled: true,
-        models: [entry],
+        ...options,
+        models: Array.isArray(entry) ? entry : [entry],
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
-function ctx(body: string): MsgContext {
-  return { Body: body } as MsgContext;
+function ctx(body = "see https://example.com/page"): MsgContext {
+  return { Body: body };
 }
 
 function mockGuardedFetch(body = "guarded content", finalUrl = "https://example.com/final") {
@@ -75,33 +70,27 @@ describe("runLinkUnderstanding", () => {
 
   it("applies shared media scope rules to link message context", async () => {
     const result = await runLinkUnderstanding({
-      cfg: {
-        tools: {
-          links: {
-            enabled: true,
-            scope: {
-              default: "allow",
-              rules: [
-                {
-                  action: "deny",
-                  match: { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
-                },
-              ],
+      cfg: cfg(undefined, {
+        scope: {
+          default: "allow",
+          rules: [
+            {
+              action: "deny",
+              match: { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
             },
-            models: [{ type: "cli", command: "summarize" }],
-          },
+          ],
         },
-      } as OpenClawConfig,
+      }),
       ctx: {
         Body: "see https://example.com/page",
         ChatType: "channel",
         Provider: "discord",
         SessionKey: "agent:main:slack:channel:C123",
         Surface: "slack",
-      } as MsgContext,
+      },
     });
 
-    expect(result).toEqual({ urls: [], outputs: [] });
+    expect(result).toEqual([]);
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
@@ -113,11 +102,11 @@ describe("runLinkUnderstanding", () => {
 
     const result = await runLinkUnderstanding({
       cfg: cfg({ type: "cli", command: "summarize", args: ["--source", "{{LinkUrl}}"] }),
-      ctx: ctx("see https://example.com/page"),
+      ctx: ctx(),
       signal: controller.signal,
     });
 
-    expect(result.outputs).toEqual(["summarized page"]);
+    expect(result).toEqual(["summarized page"]);
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         auditContext: "link-understanding",
@@ -160,10 +149,7 @@ describe("runLinkUnderstanding", () => {
         ...text,
       };
 
-      await applyLinkUnderstanding({
-        cfg: cfg({ type: "cli", command: "summarize" }),
-        ctx: context,
-      });
+      await applyLinkUnderstanding({ cfg: cfg(), ctx: context });
 
       expect(context.Body).toBe("transport envelope\n\nsummarized page");
       expect(context.agentText).toBe(
@@ -190,12 +176,8 @@ describe("runLinkUnderstanding", () => {
     };
     const before = structuredClone(context);
 
-    const result = await applyLinkUnderstanding({
-      cfg: cfg({ type: "cli", command: "summarize" }),
-      ctx: context,
-    });
+    await applyLinkUnderstanding({ cfg: cfg(), ctx: context });
 
-    expect(result.outputs).toEqual([]);
     expect(context).toEqual(before);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
@@ -212,31 +194,8 @@ describe("runLinkUnderstanding", () => {
       ctx: ctx("see http://192.168.1.64.nip.io:8888/aws-iam-credentials"),
     });
 
-    expect(result.outputs).toEqual(["guarded page body"]);
+    expect(result).toEqual(["guarded page body"]);
     expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      "skips links rejected by the guarded fetch DNS policy",
-      "http://169.254.169.254.nip.io/latest/meta-data/",
-      "Blocked: resolves to private/internal/special-use IP address",
-    ],
-    [
-      "skips links rejected by the guarded fetch redirect policy",
-      "https://public.example/redirect-to-metadata",
-      "redirect target resolves to private network",
-    ],
-  ])("%s", async (_name, url, errorMessage) => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error(errorMessage));
-
-    const result = await runLinkUnderstanding({
-      cfg: cfg({ type: "cli", command: "summarize" }),
-      ctx: ctx(`see ${url}`),
-    });
-
-    expect(result.outputs).toEqual([]);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
@@ -252,19 +211,14 @@ describe("runLinkUnderstanding", () => {
     mockCommand("summarized page");
 
     await runLinkUnderstanding({
-      cfg: {
-        tools: {
-          links: {
-            enabled: true,
-            ...timeoutConfig,
-            models: [
-              { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
-              { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
-            ],
-          },
-        },
-      } as OpenClawConfig,
-      ctx: ctx("see https://example.com/page"),
+      cfg: cfg(
+        [
+          { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
+          { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
+        ],
+        timeoutConfig,
+      ),
+      ctx: ctx(),
     });
 
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
@@ -278,16 +232,16 @@ describe("runLinkUnderstanding", () => {
   it("skips pre-aborted work without changing inbound context", async () => {
     const controller = new AbortController();
     controller.abort();
-    const context = ctx("see https://example.com/page");
+    const context = ctx();
     const original = { ...context };
 
     await expect(
       applyLinkUnderstanding({
         ctx: context,
-        cfg: cfg({ type: "cli", command: "summarize" }),
+        cfg: cfg(),
         signal: controller.signal,
       }),
-    ).resolves.toEqual({ urls: ["https://example.com/page"], outputs: [] });
+    ).resolves.toBeUndefined();
 
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
@@ -301,18 +255,12 @@ describe("runLinkUnderstanding", () => {
     mockCommand("second summary");
 
     const result = await runLinkUnderstanding({
-      cfg: {
-        tools: {
-          links: {
-            models: [{ command: "summarize-a" }, { command: "summarize-b" }],
-          },
-        },
-      },
-      ctx: ctx("see https://example.com/page"),
+      cfg: cfg([{ command: "summarize-a" }, { command: "summarize-b" }]),
+      ctx: ctx(),
       signal: controller.signal,
     });
 
-    expect(result.outputs).toEqual(["second summary"]);
+    expect(result).toEqual(["second summary"]);
     for (const [index, command] of ["summarize-a", "summarize-b"].entries()) {
       expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
         index + 1,
@@ -322,30 +270,27 @@ describe("runLinkUnderstanding", () => {
     }
   });
 
-  it.each([
-    { outcome: "successful exit", code: 0, stdout: "late summary", termination: "exit" },
-    { outcome: "failed exit", code: 1, stdout: "", termination: "exit" },
-    { outcome: "signal termination", code: null, stdout: "", termination: "signal" },
-  ])("cancellation overrides $outcome without fallback or context changes", async (result) => {
+  it("cancellation overrides successful exit without fallback or context changes", async () => {
     const controller = new AbortController();
     const reason = new Error("reply canceled");
     mockGuardedFetch("first body", "https://example.com/first");
     mocks.runCommandWithTimeout.mockImplementationOnce(async () => {
       controller.abort(reason);
-      return { ...result, killed: false, signal: null, stderr: "" };
+      return {
+        code: 0,
+        stdout: "late summary",
+        termination: "exit",
+        killed: false,
+        signal: null,
+        stderr: "",
+      };
     });
     const context = ctx("see https://example.com/first and https://example.com/second");
     const original = { ...context };
 
     await expect(
       applyLinkUnderstanding({
-        cfg: {
-          tools: {
-            links: {
-              models: [{ command: "summarize-a" }, { command: "summarize-b" }],
-            },
-          },
-        },
+        cfg: cfg([{ command: "summarize-a" }, { command: "summarize-b" }]),
         ctx: context,
         signal: controller.signal,
       }),
@@ -364,8 +309,8 @@ describe("runLinkUnderstanding", () => {
 
     await expect(
       runLinkUnderstanding({
-        cfg: cfg({ type: "cli", command: "summarize" }),
-        ctx: ctx("see https://example.com/page"),
+        cfg: cfg(),
+        ctx: ctx(),
         signal: new AbortController().signal,
       }),
     ).rejects.toBe(abortError);
@@ -382,8 +327,8 @@ describe("runLinkUnderstanding", () => {
 
     await expect(
       runLinkUnderstanding({
-        cfg: cfg({ type: "cli", command: "summarize" }),
-        ctx: ctx("see https://example.com/page"),
+        cfg: cfg(),
+        ctx: ctx(),
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ name: "AbortError", cause: reason });

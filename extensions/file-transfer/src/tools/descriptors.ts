@@ -1,9 +1,8 @@
-// File Transfer plugin module implements descriptors behavior.
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 
-type FileTransferToolDescriptor = Pick<
+export type FileTransferToolDescriptor = Pick<
   AnyAgentTool,
   "label" | "name" | "description" | "parameters"
 >;
@@ -12,12 +11,8 @@ type FileTransferToolDescriptor = Pick<
 // can attach them and follow-up file_write calls can reuse the media id.
 export const FILE_TRANSFER_SUBDIR = "tool-file-transfer";
 
-export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
-export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
 export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
-export const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
-export const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 export const FILE_WRITE_HARD_MAX_BYTES = 16 * 1024 * 1024;
 
 const PAIRED_NODE_DESCRIPTION =

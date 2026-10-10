@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { hasErrnoCode } from "./errors.js";
 import { mergePathPrepend } from "./path-prepend.js";
-import {
-  resolvePnpmGlobalDirFromGlobalRoot,
-  type ResolvedGlobalInstallTarget,
-} from "./update-global.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import {
   relocateRuntimeLauncher,
@@ -18,7 +18,6 @@ import {
 } from "./update-runtime-relocation.js";
 
 export type NativePackageStage = {
-  prefix: string;
   projectRoot: string;
   liveProjectRoot: string;
   binDir: string;
@@ -101,6 +100,63 @@ async function nativeProjectFingerprint(
   return fingerprint;
 }
 
+export function resolveNativeInstallSpecFromCwd(
+  spec: string,
+  packageName: string,
+  sourceCwd: string,
+  manager: "pnpm" | "bun",
+): string {
+  const trimmed = spec.trim();
+  const aliasPrefix = `${packageName.trim()}@`;
+  const hasAlias = trimmed.toLowerCase().startsWith(aliasPrefix.toLowerCase());
+  const targetSpec = hasAlias ? trimmed.slice(aliasPrefix.length).trim() : trimmed;
+  const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || sourceCwd.startsWith("\\\\");
+  const paths = windowsPath ? path.win32 : path;
+  const localProtocol = /^(file:|git\+file:|link:)(.*)$/iu.exec(targetSpec);
+  if (localProtocol) {
+    const protocol = localProtocol[1] ?? "";
+    // Bun's link: names refer to its global link registry, not caller-relative directories.
+    if (manager === "bun" && protocol.toLowerCase() === "link:") {
+      return spec;
+    }
+    const target = localProtocol[2]?.trim() ?? "";
+    const fragmentIndex = protocol.toLowerCase() === "git+file:" ? target.indexOf("#") : -1;
+    const targetPath = fragmentIndex >= 0 ? target.slice(0, fragmentIndex) : target;
+    const fragment = fragmentIndex >= 0 ? target.slice(fragmentIndex) : "";
+    const resolvedTarget =
+      targetPath &&
+      !/^~[\\/]/u.test(targetPath) &&
+      !path.isAbsolute(targetPath) &&
+      !path.win32.isAbsolute(targetPath)
+        ? paths.resolve(sourceCwd, targetPath)
+        : targetPath;
+    if (protocol.toLowerCase() === "git+file:") {
+      return resolvedTarget === targetPath
+        ? spec
+        : `${hasAlias ? aliasPrefix : ""}git+${pathToFileURL(resolvedTarget, { windows: windowsPath }).href}${fragment}`;
+    }
+    return `${aliasPrefix}${protocol}${resolvedTarget}`;
+  }
+  const isPath =
+    /^(?:\.{1,2}|~)(?:[\\/]|$)/u.test(targetSpec) ||
+    path.isAbsolute(targetSpec) ||
+    path.win32.isAbsolute(targetSpec);
+  // Match the updater's explicit archive targets; bare .tar remains a registry name.
+  if (
+    !isPath &&
+    (hasAlias || /[:@]/u.test(targetSpec) || !/\.(?:tgz|tar\.gz)$/iu.test(targetSpec))
+  ) {
+    return spec;
+  }
+  const target =
+    isPath && !/^\.{1,2}(?:[\\/]|$)/u.test(targetSpec)
+      ? targetSpec
+      : paths.resolve(sourceCwd, targetSpec);
+  // Native pnpm needs a package name; source links must follow atomic file replacements.
+  const protocol = manager === "bun" || /\.(?:tgz|tar\.gz|tar)$/iu.test(target) ? "file" : "link";
+  return `${aliasPrefix}${protocol}:${target}`;
+}
+
 /** Stage a native global project without changing its live package, metadata, or launchers. */
 export async function prepareNativePackageStage(params: {
   installTarget: ResolvedGlobalInstallTarget;
@@ -127,10 +183,7 @@ export async function prepareNativePackageStage(params: {
     installTarget.manager === "bun"
       ? resolveBunGlobalInstallOwner(installTarget.packageRoot, env)
       : null;
-  const ownerRoot =
-    installTarget.manager === "pnpm"
-      ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
-      : bunOwner?.globalProjectRoot;
+  const ownerRoot = resolveNativePackageProjectRoot(installTarget, env);
   const liveBinDir = params.globalBinDir?.trim();
   if (!ownerRoot || !liveBinDir) {
     throw new Error(
@@ -141,7 +194,7 @@ export async function prepareNativePackageStage(params: {
   const fingerprint = await nativeProjectFingerprint(liveProjectRoot);
   // pnpm cleans unreferenced children of its global layout. Keep both the stage and
   // retained project backup outside that layout so validation cannot race its cleaner.
-  const prefix = await fs.mkdtemp(
+  const projectRoot = await fs.mkdtemp(
     path.join(
       path.dirname(liveProjectRoot),
       `.${path.basename(params.packageName)}-update-native-`,
@@ -149,10 +202,9 @@ export async function prepareNativePackageStage(params: {
   );
   // A sibling project preserves the depth of relative file:/link: dependency specs.
   // Its separate bin directory is disposable even after activation moves the project.
-  const projectRoot = prefix;
   let binDir: string | undefined;
   try {
-    binDir = await fs.mkdtemp(`${prefix}.bin-`);
+    binDir = await fs.mkdtemp(`${projectRoot}.bin-`);
     await fs.cp(liveProjectRoot, projectRoot, { recursive: true, verbatimSymlinks: true });
     await fs.chmod(projectRoot, (await fs.stat(liveProjectRoot)).mode);
     const relocations: RuntimeRelocation[] = [
@@ -173,12 +225,7 @@ export async function prepareNativePackageStage(params: {
         path.relative(ownerRoot, path.dirname(installTarget.globalRoot)),
         ".pnpm",
       );
-      const store = await fs.lstat(privateStore).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const store = await fs.lstat(privateStore).catch(ignoreMissingUpdateCandidateFile);
       if (store?.isSymbolicLink()) {
         const sourceRoot = await fs.realpath(privateStore);
         await fs.unlink(privateStore);
@@ -193,6 +240,11 @@ export async function prepareNativePackageStage(params: {
       installTarget.manager === "pnpm"
         ? [`--config.global-dir=${projectRoot}`, `--config.global-bin-dir=${binDir}`]
         : [];
+    if (installTarget.manager === "pnpm") {
+      // pnpm 12 ignores the CLI bin override; its lower-case env key wins.
+      env.pnpm_config_global_bin_dir = binDir;
+      env.PNPM_CONFIG_GLOBAL_BIN_DIR = binDir;
+    }
     if (installTarget.manager === "bun") {
       env.BUN_INSTALL_GLOBAL_DIR = projectRoot;
       env.BUN_INSTALL_BIN = binDir;
@@ -203,7 +255,6 @@ export async function prepareNativePackageStage(params: {
     const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
     env[pathKey] = mergePathPrepend(env[pathKey], [binDir]);
     return {
-      prefix,
       projectRoot,
       liveProjectRoot,
       binDir,
@@ -220,7 +271,7 @@ export async function prepareNativePackageStage(params: {
       },
     };
   } catch (error) {
-    await fs.rm(prefix, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
     if (binDir) {
       await fs.rm(binDir, { recursive: true, force: true });
     }

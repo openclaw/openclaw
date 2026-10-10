@@ -1,8 +1,30 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { NewSessionCapabilityController } from "./capability-controller.ts";
+import { buildDraftSessionCreateParams } from "./create-params.ts";
 
 describe("create-as-draft availability", () => {
+  const capabilities = new NewSessionCapabilityController(
+    () => {},
+    () => {},
+  );
+  const canStartSessionAsDraft = (policy: {
+    allowedVisibilities?: string[];
+    hasMultipleIdentities?: boolean;
+  }) =>
+    capabilities.canStartAsDraft({
+      gateway: {
+        snapshot: {
+          hello: {
+            policy: {
+              allowedSessionVisibilities: policy.allowedVisibilities,
+              hasMultipleSessionSharingIdentities: policy.hasMultipleIdentities,
+            },
+          },
+        },
+      },
+    } as ApplicationContext);
   it("requires both draft policy and multiple creator identities", () => {
     expect(
       canStartSessionAsDraft({
@@ -32,6 +54,52 @@ describe("create-as-draft availability", () => {
 });
 
 describe("buildDraftSessionCreateParams", () => {
+  it("creates an empty workspace without carrying a previous checkout source", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "Start a new project",
+        deferInitialTurn: true,
+        worktree: true,
+        worktreeSource: "empty",
+        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+        projectId: "old-clone",
+        projectGitUrl: "https://github.com/openclaw/openclaw.git",
+        cwd: "/old/checkout",
+        workspace: "/workspace",
+        baseRef: "old-branch",
+        worktreeName: "old-name",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "",
+      titleSource: "Start a new project",
+      worktree: true,
+      worktreeSource: "empty",
+    });
+  });
+
+  it("retains a cloud repository through the empty create without sending local checkout options", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: `${"x".repeat(999)}🦞 longer prompt`,
+        deferInitialTurn: true,
+        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+        projectId: "old-clone",
+        worktree: true,
+        baseRef: "ignored-local-ref",
+        worktreeName: "ignored-local-name",
+        cwd: "/local/clone",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "",
+      titleSource: "x".repeat(999),
+      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+    });
+  });
   it("keeps plain chats minimal", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -46,16 +114,24 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
-  it("adds incognito only when that visibility is selected", () => {
-    expect(
-      buildDraftSessionCreateParams({
+  it.each([false, true])(
+    "keeps incognito prompts out of early naming (deferred=%s)",
+    (deferInitialTurn) => {
+      expect(
+        buildDraftSessionCreateParams({
+          agentId: "main",
+          message: "private task",
+          deferInitialTurn,
+          visibility: "incognito",
+          worktree: false,
+        }),
+      ).toEqual({
         agentId: "main",
-        message: "private task",
-        visibility: "incognito",
-        worktree: false,
-      }),
-    ).toEqual({ agentId: "main", message: "private task", incognito: true });
-  });
+        message: deferInitialTurn ? "" : "private task",
+        incognito: true,
+      });
+    },
+  );
 
   it("adds draft visibility only when selected", () => {
     expect(
@@ -136,21 +212,6 @@ describe("buildDraftSessionCreateParams", () => {
         contextWindow: "200k",
         thinkingLevel: "medium",
         fastMode: true,
-        worktree: false,
-        catalogId: "claude",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "start coding",
-      catalogId: "claude",
-    });
-  });
-
-  it("submits the catalog target for server-side resolution", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "start coding",
         worktree: false,
         catalogId: "claude",
       }),

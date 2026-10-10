@@ -3,19 +3,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import type { PluginManifest as RuntimePluginManifest } from "../src/plugins/manifest-types.js";
-import type { PackageManifest as RuntimePackageManifest } from "../src/plugins/package-manifest.js";
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
+import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mts";
 import {
-  assertPluginInventoryCoverage,
-  resolvePluginSurface,
-} from "./lib/plugin-inventory-doc.mts";
+  collectPluginSourceEntries,
+  exportPluginInventory,
+  resolvePluginStatus,
+  type PluginManifest,
+  type PluginPackageJson,
+  type PluginSourceEntry,
+  type PluginStatus,
+} from "./lib/plugin-inventory.mts";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
 const REFERENCE_DIR = "docs/plugins/reference";
 const ROOT = process.cwd();
-const EXTENSIONS_DIR = path.join(ROOT, "extensions");
 
 const PROVIDER_DOC_ALIASES = new Map([
   ["amazon-bedrock", "/providers/bedrock"],
@@ -43,6 +46,14 @@ const PLUGIN_DOC_ALIASES = new Map([
 const SKIPPED_REFERENCE_PAGE_IDS = new Set(["parallel"]);
 const MANUAL_SECTION_START = "<!-- openclaw-plugin-reference:manual-start -->";
 const MANUAL_SECTION_END = "<!-- openclaw-plugin-reference:manual-end -->";
+const GENERATED_NOTICE = `<!-- Generated file. Do not edit by hand.
+Run \`pnpm plugins:inventory:gen\` to rebuild it. -->`;
+// Keep the marker names in this notice unbracketed. A bracketed copy would make
+// extractManualReferenceSections match the notice instead of the real marker.
+const GENERATED_REFERENCE_NOTICE = `<!-- Generated file. Do not edit by hand.
+Run \`pnpm plugins:inventory:gen\` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->`;
 // Generated link labels are user-visible product names and translation source.
 const RELATED_DOC_PRODUCT_IDS = new Set([
   "chutes",
@@ -64,24 +75,10 @@ const RELATED_DOC_PRODUCT_IDS = new Set([
   "whatsapp",
 ]);
 
-type PluginManifest = Partial<RuntimePluginManifest>;
-type PluginPackageJson = Partial<RuntimePackageManifest> & {
-  openclaw?: RuntimePackageManifest["openclaw"] & {
-    release?: Partial<Record<"publishToClawHub" | "publishToNpm", boolean>>;
-  };
-};
 type DocLink = { label: string; href: string };
-type PluginStatus = "core" | "external" | "source";
-type PluginSourceEntry = {
-  dirName: string;
-  id: string;
-  manifest: PluginManifest;
-  packageJson: PluginPackageJson;
-};
 
-function createPluginRecord(entry: PluginSourceEntry, excludedDirs: Set<string>) {
+function createPluginRecord(entry: PluginSourceEntry, status: PluginStatus) {
   const { id, manifest, packageJson } = entry;
-  const status = resolveStatus(entry, excludedDirs);
   return {
     description: resolveDescription(entry),
     docs: resolveDocs(entry),
@@ -147,6 +144,9 @@ function pluginReferenceLabel(record: PluginRecord) {
 }
 
 function humanizeId(value: string) {
+  if (value === "slack-huddles") {
+    return "Slack huddles";
+  }
   if (value === "teams-meetings") {
     return "Microsoft Teams meetings";
   }
@@ -266,6 +266,7 @@ function resolveDescription({ manifest, packageJson }: PluginSourceEntry) {
     realtimeTranscriptionProviders: "Adds realtime transcription provider support.",
     realtimeVoiceProviders: "Adds realtime voice provider support.",
     speechProviders: "Adds text-to-speech provider support.",
+    storageProviders: "Adds storage location transport support.",
     tools: "Adds agent-callable tools.",
     videoGenerationProviders: "Adds video generation provider support.",
     webContentExtractors: "Adds readable web content extraction.",
@@ -342,23 +343,13 @@ function resolveDocs({ dirName, manifest, packageJson }: PluginSourceEntry) {
     if (typeof candidate !== "string") {
       continue;
     }
-    if (fileExists(`docs/channels/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/channels/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
-    }
-    if (fileExists(`docs/providers/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/providers/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
-    }
-    if (fileExists(`docs/plugins/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/plugins/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
+    for (const section of ["channels", "providers", "plugins"]) {
+      if (fileExists(`docs/${section}/${candidate}.md`)) {
+        pushUniqueDocLink(links, {
+          href: `/${section}/${candidate}`,
+          label: relatedDocLabel(candidate),
+        });
+      }
     }
   }
 
@@ -376,7 +367,7 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
     }
     const release = packageJson.openclaw?.release;
     if (release?.publishToClawHub === true || release?.publishToNpm === true) {
-      return `included in OpenClaw; ${resolveInstallRoute(packageJson, "external")}`;
+      return `included in OpenClaw, and also from ${resolveInstallRoute(packageJson, "external")}`;
     }
     return "included in OpenClaw";
   }
@@ -390,9 +381,9 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
       : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
     if (install?.defaultChoice === "clawhub") {
-      return clawhubSpec ? `ClawHub${clawhubSpec}; npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
+      return clawhubSpec ? `ClawHub${clawhubSpec} or npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
     }
-    return clawhubSpec ? `npm${npmSpec}; ClawHub${clawhubSpec}` : `npm${npmSpec}; ClawHub`;
+    return clawhubSpec ? `npm${npmSpec} or ClawHub${clawhubSpec}` : `npm${npmSpec} or ClawHub`;
   }
   if (release?.publishToClawHub === true) {
     return `ClawHub${clawhubSpec || npmSpec}`;
@@ -401,23 +392,6 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
     return `npm${npmSpec}`;
   }
   return "installable plugin";
-}
-
-function resolveStatus(
-  { dirName, packageJson }: PluginSourceEntry,
-  excludedDirs: Set<string>,
-): PluginStatus {
-  const release = packageJson.openclaw?.release;
-  const hasInstallSpec =
-    typeof packageJson.openclaw?.install?.clawhubSpec === "string" ||
-    typeof packageJson.openclaw?.install?.npmSpec === "string";
-  if (!excludedDirs.has(dirName)) {
-    return "core";
-  }
-  if (release?.publishToClawHub === true || release?.publishToNpm === true || hasInstallSpec) {
-    return "external";
-  }
-  return "source";
 }
 
 function escapeInventoryText(value: unknown) {
@@ -446,7 +420,13 @@ function renderRelatedDocs(record: PluginRecord) {
 ${record.docs.map((link) => `- ${docLink(link)}`).join("\n")}`;
 }
 
-function extractManualReferenceSections(content: string) {
+function stripGeneratedNotice(value: string) {
+  const noticeStart = value.indexOf(GENERATED_REFERENCE_NOTICE);
+  return noticeStart === -1 ? value : value.slice(noticeStart + GENERATED_REFERENCE_NOTICE.length);
+}
+
+function extractManualReferenceSections(rawContent: string) {
+  const content = stripGeneratedNotice(rawContent);
   const markerStart = content.indexOf(MANUAL_SECTION_START);
   if (markerStart !== -1) {
     const contentStart = markerStart + MANUAL_SECTION_START.length;
@@ -456,7 +436,9 @@ function extractManualReferenceSections(content: string) {
     }
   }
 
-  const surfaceMatch = /\n## Surface\n\n[^\n]*(?:\n|$)/u.exec(content);
+  // The surface block is a list, so consume every non-blank line under the heading.
+  // A single-line pattern here would treat later surface bullets as manual text.
+  const surfaceMatch = /\n## Surface\n\n(?:[^\n]+\n)*/u.exec(content);
   if (!surfaceMatch?.index) {
     return "";
   }
@@ -485,6 +467,19 @@ ${manualSections}
 ${MANUAL_SECTION_END}`;
 }
 
+// Generated reference titles carry a "reference" suffix so they never collide with a
+// hand-written plugin guide title such as "Beam plugin" in docs/plugins/<id>.md.
+function referencePageTitle(record: PluginRecord) {
+  return `${record.name} plugin reference`;
+}
+
+function renderSurface(surface: string[]) {
+  if (surface.length === 0) {
+    return "This plugin declares no channels, providers, commands, or contracts.";
+  }
+  return surface.map((part) => `- ${part}`).join("\n");
+}
+
 function renderReferencePage(record: PluginRecord, manualSections = "") {
   const relatedDocs = renderRelatedDocs(record);
   const manualBlock = renderManualReferenceSections(manualSections);
@@ -492,10 +487,10 @@ function renderReferencePage(record: PluginRecord, manualSections = "") {
 summary: "${record.description.replaceAll('"', '\\"')}"
 read_when:
   - You are installing, configuring, or auditing the ${record.id} plugin
-title: "${record.name} plugin"
+title: "${referencePageTitle(record)}"
 ---
 
-# ${record.name} plugin
+${GENERATED_REFERENCE_NOTICE}
 
 ${record.description}
 
@@ -506,68 +501,40 @@ ${record.description}
 
 ## Surface
 
-${record.surface}${manualBlock ? `\n\n${manualBlock}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
+${renderSurface(record.surface)}${manualBlock ? `\n\n${manualBlock}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
 `;
 }
 
 function renderReferenceIndex(records: PluginRecord[]) {
   const referenceCount = records.filter(hasGeneratedReferencePage).length;
   return `---
-summary: "Generated index of OpenClaw plugin reference pages"
+summary: "Pointer to the generated OpenClaw plugin reference pages"
 read_when:
   - You need a reference page for a specific OpenClaw plugin
   - You are auditing plugin docs coverage
 title: "Plugin reference"
 ---
 
-# Plugin reference
+${GENERATED_NOTICE}
 
-This page is generated from top-level \`extensions/*/openclaw.plugin.json\`
-manifests. Package metadata enriches entries when \`package.json\` is present.
-Regenerate it with:
+This section holds one reference page for each OpenClaw plugin. Each page states
+the package, the install route, and the surface the plugin adds.
+
+This page is a pointer, not the index. The browsable list of all
+${referenceCount} generated plugin reference pages lives in
+[Plugin inventory](/plugins/plugin-inventory), sorted by distribution, package,
+and description.
+
+## How this page is built
+
+OpenClaw generates this page from the top-level
+\`extensions/*/openclaw.plugin.json\` manifests. Package metadata enriches
+entries when \`package.json\` is present. Regenerate the page with:
 
 \`\`\`bash
 pnpm plugins:inventory:gen
 \`\`\`
-
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all ${referenceCount}
-generated plugin reference pages by distribution, package, and description.
 `;
-}
-
-function collectPluginSourceEntries(): PluginSourceEntry[] {
-  const entries: PluginSourceEntry[] = [];
-  for (const dirName of fs
-    .readdirSync(EXTENSIONS_DIR)
-    .toSorted((left, right) => left.localeCompare(right))) {
-    const packagePath = path.join(EXTENSIONS_DIR, dirName, "package.json");
-    const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-    const packageJson = fs.existsSync(packagePath)
-      ? (readJsonPath(packagePath) as PluginPackageJson)
-      : {};
-    const manifest = readJsonPath(manifestPath) as PluginManifest;
-    const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
-    entries.push({ dirName, id, manifest, packageJson });
-  }
-  return entries;
-}
-
-function enumerateTopLevelPluginManifests() {
-  return fs
-    .readdirSync(EXTENSIONS_DIR)
-    .toSorted((left, right) => left.localeCompare(right))
-    .flatMap((dirName) => {
-      const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
-      if (!fs.existsSync(manifestPath)) {
-        return [];
-      }
-      const manifest = readJsonPath(manifestPath) as PluginManifest;
-      const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
-      return [{ dirName, id }];
-    });
 }
 
 type ExternalPluginDocsInventorySeedEntry = {
@@ -620,63 +587,31 @@ function collectExternalPluginDocsInventoryEntries(): PluginSourceEntry[] {
 function collectPluginRecords() {
   const rootPackageJson = readJsonPath(path.join(ROOT, "package.json")) as { files?: unknown[] };
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
-  const sourceEntries = collectPluginSourceEntries();
-  assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
-  const records = sourceEntries.map((entry) => createPluginRecord(entry, excludedDirs));
+  const sourceEntries = collectPluginSourceEntries(ROOT);
+  const records = sourceEntries.map((entry) =>
+    createPluginRecord(entry, resolvePluginStatus(entry, excludedDirs)),
+  );
 
   const sourceIds = new Set(sourceEntries.map((entry) => entry.id));
-  for (const {
-    dirName,
-    id,
-    manifest,
-    packageJson,
-  } of collectExternalPluginDocsInventoryEntries()) {
-    if (sourceIds.has(id)) {
-      continue;
+  for (const entry of collectExternalPluginDocsInventoryEntries()) {
+    if (!sourceIds.has(entry.id)) {
+      records.push(createPluginRecord(entry, "external"));
     }
-    records.push({
-      description: resolveDescription({ dirName, id, manifest, packageJson }),
-      docs: resolveDocs({ dirName, id, manifest, packageJson }),
-      id,
-      installRoute: resolveInstallRoute(packageJson, "external"),
-      name: humanizeId(id),
-      packageName: packageJson.name ?? "-",
-      status: "external",
-      surface: resolvePluginSurface(manifest),
-    });
   }
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function writeGeneratedDocs(records: PluginRecord[]) {
-  fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
+function* referencePages(records: PluginRecord[]) {
   for (const record of records.filter(hasGeneratedReferencePage)) {
     const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
-    const manualSections = readManualReferenceSections(relativePath);
-    fs.writeFileSync(
-      path.join(ROOT, relativePath),
-      renderReferencePage(record, manualSections),
-      "utf8",
-    );
+    yield [
+      relativePath,
+      renderReferencePage(record, readManualReferenceSections(relativePath)),
+    ] as const;
   }
-  fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
 }
 
-function readGeneratedDocs(records: PluginRecord[]) {
-  return [
-    [REFERENCE_INDEX_PATH, renderReferenceIndex(records)] satisfies [string, string],
-    ...records.filter(hasGeneratedReferencePage).map((record) => {
-      const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
-      return [
-        relativePath,
-        renderReferencePage(record, readManualReferenceSections(relativePath)),
-      ] satisfies [string, string];
-    }),
-  ];
-}
-
-function renderDocument() {
-  const records = collectPluginRecords();
+function renderDocument(records: PluginRecord[]) {
   const groups = {
     core: records.filter((record) => record.status === "core"),
     external: records.filter((record) => record.status === "external"),
@@ -692,15 +627,12 @@ read_when:
 title: "Plugin inventory"
 ---
 
-# Plugin inventory
+${GENERATED_NOTICE}
 
-This page is generated from top-level \`extensions/*/openclaw.plugin.json\`
-manifests and the root npm package \`files\` exclusions. Optional \`package.json\`
-metadata enriches package and distribution details. Regenerate it with:
-
-\`\`\`bash
-pnpm plugins:inventory:gen
-\`\`\`
+This page lists every OpenClaw plugin with its package, install route, and
+description. Operators use it to find a plugin and to see whether that plugin
+needs a separate install. Maintainers use it to check bundled plugin metadata
+and release automation.
 
 ## Definitions
 
@@ -716,20 +648,20 @@ dependencies are available.
 
 Use the install route in each entry to decide whether install is needed. Plugins
 that say \`included in OpenClaw\` are already present in the core package.
-Official external packages need one install, then a Gateway restart.
+Official external packages need one install. Installation applies to the running
+local Gateway without restarting it; start the Gateway if it was stopped.
 
 For example, Discord is an official external package:
 
 \`\`\`bash
 openclaw plugins install @openclaw/discord
-openclaw gateway restart
 openclaw plugins inspect discord --runtime --json
 \`\`\`
 
-During the launch cutover, ordinary bare package specs still install from npm.
-Use \`clawhub:@openclaw/discord\` or \`npm:@openclaw/discord\` when you need an
-explicit source. After install, follow the plugin's setup doc, such as
-[Discord](/channels/discord), to add credentials and channel config. See
+Ordinary bare package specs install from npm. Use \`clawhub:@openclaw/discord\`
+or \`npm:@openclaw/discord\` when you need an explicit source. After install,
+follow the plugin's setup doc, such as [Discord](/channels/discord), to add
+credentials and channel config. See
 [Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
 commands.
 
@@ -752,41 +684,74 @@ ${renderInventoryList(groups.external)}
 ${groups.source.length} plugins
 
 ${renderInventoryList(groups.source)}
+
+## How this page is built
+
+OpenClaw generates this page from the top-level
+\`extensions/*/openclaw.plugin.json\` manifests and the root npm package
+\`files\` exclusions. Optional \`package.json\` metadata enriches package and
+distribution details. Regenerate the page with:
+
+\`\`\`bash
+pnpm plugins:inventory:gen
+\`\`\`
 `;
 }
 
 function main(argv = process.argv.slice(2)) {
-  const write = argv.includes("--write");
-  const check = argv.includes("--check");
-  if (write === check) {
+  const [mode = "", ...args] = argv;
+  if (
+    !["--write", "--check", "--json"].includes(mode) ||
+    (mode === "--json"
+      ? args.length !== 0 && (args.length !== 2 || args[0] !== "--commit")
+      : args.length !== 0)
+  ) {
     console.error(
-      "usage: node --import tsx scripts/generate-plugin-inventory-doc.mts --write|--check",
+      "usage: node scripts/generate-plugin-inventory-doc.mts --write|--check|--json [--commit <SHA>]",
     );
-    process.exit(2);
+    console.error("[plugin-inventory] FAILED (exit 2)");
+    process.exitCode = 2;
+    return;
   }
+  if (mode === "--json") {
+    console.log(JSON.stringify(exportPluginInventory(ROOT, args[1]), null, 2));
+    return;
+  }
+  const write = mode === "--write";
 
   const records = collectPluginRecords();
-  const next = renderDocument();
+  const next = renderDocument(records);
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
     fs.writeFileSync(docPath, next, "utf8");
-    writeGeneratedDocs(records);
+    fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
+    for (const [relativePath, content] of referencePages(records)) {
+      fs.writeFileSync(path.join(ROOT, relativePath), content, "utf8");
+    }
+    fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
     return;
   }
 
   const current = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
   if (current !== next) {
-    console.error(`${DOC_PATH} is stale. Run \`pnpm plugins:inventory:gen\`.`);
-    process.exit(1);
+    throw new Error(`${DOC_PATH} is stale. Run \`pnpm plugins:inventory:gen\`.`);
   }
-  for (const [relativePath, expected] of readGeneratedDocs(records)) {
+  for (const [relativePath, expected] of [
+    [REFERENCE_INDEX_PATH, renderReferenceIndex(records)] as const,
+    ...referencePages(records),
+  ]) {
     const fullPath = path.join(ROOT, relativePath);
     const actual = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : "";
     if (actual !== expected) {
-      console.error(`${relativePath} is stale. Run \`pnpm plugins:inventory:gen\`.`);
-      process.exit(1);
+      throw new Error(`${relativePath} is stale. Run \`pnpm plugins:inventory:gen\`.`);
     }
   }
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  console.error("[plugin-inventory] FAILED (exit 1)");
+  process.exitCode = 1;
+}

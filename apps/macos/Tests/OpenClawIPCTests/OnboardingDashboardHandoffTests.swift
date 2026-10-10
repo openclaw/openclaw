@@ -56,8 +56,11 @@ private func respondToOnboardingHealth(
     return true
 }
 
-private func verifiedInferenceResponse(id: String) -> Data {
-    Data(
+private let verifiedInferenceModelRef = "openai/gpt-5.5"
+
+private func verifiedInferenceResponse(id: String, utility: Bool = false) -> Data {
+    let targetField = utility ? ",\"modelTarget\":\"utility\"" : ""
+    return Data(
         """
         {
           "type": "res",
@@ -65,15 +68,21 @@ private func verifiedInferenceResponse(id: String) -> Data {
           "ok": true,
           "payload": {
             "ok": true,
-            "modelRef": "openai/gpt-5.5",
-            "latencyMs": 42
+            "modelRef": "\(verifiedInferenceModelRef)",
+            "latencyMs": 42\(targetField)
           }
         }
         """.utf8)
 }
 
-private func configuredAgentsResponse(id: String) -> Data {
-    Data(
+private func configuredAgentsResponse(
+    id: String, modelRef: String, utility: Bool = false, primaryModel: String? = nil) -> Data
+{
+    let modelField = utility
+        ? #""utilityModel": "\#(modelRef)""#
+        : #""model": { "primary": "\#(modelRef)" }"#
+    let primaryField = primaryModel.map { #", "model": { "primary": "\#($0)" }"# } ?? ""
+    return Data(
         """
         {
           "type": "res",
@@ -85,7 +94,7 @@ private func configuredAgentsResponse(id: String) -> Data {
             "scope": "per-sender",
             "agents": [{
               "id": "main",
-              "model": { "primary": "openai/gpt-5.5" }
+              \(modelField)\(primaryField)
             }]
           }
         }
@@ -125,11 +134,18 @@ struct OnboardingDashboardHandoffTests {
         #expect(handoffs == [.custodianOnboarding])
     }
 
-    @Test(arguments: [false, true])
-    func `first run effective model is live verified before handoff`(receiptDuringVerification: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func `first run configured model waits for selection and honors activation ownership`(
+        receiptDuringActivation: Bool, utility: Bool) async throws
+    {
         let suiteName = "OnboardingFirstRunEffectiveModelTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        let selectedModel = "fixture/demo-model"
+        let targetField = utility ? ",\"modelTarget\":\"utility\"" : ""
+        let configuredField = utility
+            ? #""utilityModel":"\#(selectedModel)","setupModel":"\#(selectedModel)","setupComplete":false"#
+            : #""configuredModel":"\#(selectedModel)","setupComplete":true"#
         let methods = OnboardingMethodRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
@@ -141,20 +157,42 @@ struct OnboardingDashboardHandoffTests {
                 if respondToOnboardingHealth(task: task, id: id, method: method) { return }
                 switch method {
                 case "agents.list":
-                    task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
-                case "openclaw.setup.verify":
-                    if receiptDuringVerification {
+                    task.emitReceiveSuccess(.data(configuredAgentsResponse(
+                        id: id, modelRef: selectedModel, utility: utility)))
+                case "openclaw.setup.detect":
+                    task.emitReceiveSuccess(.data(Data("""
+                    {"type":"res","id":"\(id)","ok":true,"payload":{
+                      "candidates":[{"kind":"existing-model","label":"Current model",
+                        "detail":"Configured route","modelRef":"\(selectedModel)",
+                        "recommended":false,"credentials":true\(targetField)}],
+                      "manualProviders":[],"prepareOptions":[],
+                      "workspace":"/tmp/openclaw-workspace",
+                      \(configuredField)}}
+                    """.utf8)))
+                case "openclaw.setup.activate":
+                    if receiptDuringActivation {
                         let callbackDefaults = try #require(UserDefaults(suiteName: suiteName))
-                        // An expired ownerless marker can arrive during an existing-model probe.
-                        // Completing it does not turn that probe into a fresh activation.
+                        // A late ownerless marker cannot be completed by this click's owned activation.
                         OnboardingSystemAgentResumeStore.markPending(
-                            routeIdentity: "local", activationTimeoutMs: 0,
-                            defaults: callbackDefaults, now: Date(timeIntervalSinceNow: -10))
+                            routeIdentity: "local",
+                            activationTimeoutMs: 0,
+                            defaults: callbackDefaults,
+                            now: Date(timeIntervalSinceNow: -10))
                     }
-                    task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
+                    task.emitReceiveSuccess(.data(Data("""
+                    {"type":"res","id":"\(id)","ok":true,"payload":{
+                      "ok":true,"modelRef":"\(selectedModel)","latencyMs":42\(targetField)}}
+                    """.utf8)))
                 default:
                     break
                 }
+            }, receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    capabilities: ["openclaw-setup-model-ref"]))
             })
         })
         let url = try #require(URL(string: "ws://localhost:18789"))
@@ -173,23 +211,55 @@ struct OnboardingDashboardHandoffTests {
 
         let initialProbe = try #require(view.onboardingDidAppear())
         await initialProbe.value
+        #expect(!view.aiSetup.connected)
+        #expect(!view.finishState.didFinish)
+        #expect(handoffs.isEmpty)
+        #expect(await methods.snapshot().filter { $0 != "health" } == ["agents.list"])
+
+        view.currentPage = try #require(view.pageOrder.firstIndex(of: view.aiPageIndex))
+        view.prepareSystemAgentHandoff()
+        let choiceProbe = try #require(view.probeConfiguredGatewayForDashboard(
+            intent: .startSetup, knownVisible: true, knownAISetupPage: true))
+        await choiceProbe.value
         for _ in 0..<200 {
-            if view.aiSetup.connected {
+            if view.aiSetup.phase == .ready { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try #require(view.aiSetup.phase == .ready)
+        #expect(!view.aiSetup.connected)
+        #expect(!view.finishState.didFinish)
+        #expect(handoffs.isEmpty)
+        #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
+        #expect(await methods.snapshot().filter { $0 != "health" } == [
+            "agents.list", "agents.list", "openclaw.setup.detect",
+        ])
+
+        view.aiSetup.userSelect(kind: "existing-model")
+        for _ in 0..<200 {
+            if view.aiSetup.connected ||
+                (view.aiSetup.phase == .ready && view.aiSetup.selectedKind == "existing-model")
+            {
                 break
             }
-            try? await Task.sleep(nanoseconds: 5_000_000)
+            try await Task.sleep(nanoseconds: 5_000_000)
         }
-
-        #expect(view.aiSetup.connected)
-        #expect(view.finishState.didFinish)
-        // A live-verified pre-existing setup reopens the normal dashboard.
-        #expect(handoffs == [.dashboard])
-        #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
-        #expect(await methods.snapshot() == [
-            "agents.list",
-            "health",
-            "openclaw.setup.verify",
+        if receiptDuringActivation {
+            #expect(!view.aiSetup.connected)
+            #expect(!view.finishState.didFinish)
+            #expect(handoffs.isEmpty)
+            #expect(OnboardingSystemAgentResumeStore.pendingState(
+                for: "local", defaults: defaults) == .activationExpired)
+            #expect(OnboardingSystemAgentResumeStore.activationOwner(for: "local", defaults: defaults) == nil)
+        } else {
+            #expect(view.aiSetup.connected)
+            #expect(view.finishState.didFinish)
+            #expect(handoffs == [utility ? .custodianOnboarding : .dashboard])
+            #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
+        }
+        #expect(await methods.snapshot().filter { $0 != "health" } == [
+            "agents.list", "agents.list", "openclaw.setup.detect", "openclaw.setup.activate",
         ])
+        await gateway.shutdown()
     }
 
     @Test func `relaunch with pending inference resumes OpenClaw`() async throws {
@@ -388,7 +458,10 @@ struct OnboardingDashboardHandoffTests {
         #expect(await methods.snapshot() == ["health", "openclaw.setup.verify"])
     }
 
-    @Test func `cold launch resumes a completed activation immediately`() async throws {
+    @Test(arguments: ["primary", "utility-only", "utility-with-primary", "utility-unknown-with-primary"])
+    func `cold launch verifies the exact activation role`(configuration: String) async throws {
+        let utility = configuration != "primary"
+        let pendingUtility = configuration == "utility-unknown-with-primary"
         let suiteName = "OnboardingColdPendingHandoffTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -403,9 +476,21 @@ struct OnboardingDashboardHandoffTests {
                 if respondToOnboardingHealth(task: task, id: id, method: method) { return }
                 switch method {
                 case "agents.list":
-                    task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
+                    task.emitReceiveSuccess(.data(configuredAgentsResponse(
+                        id: id,
+                        modelRef: verifiedInferenceModelRef,
+                        utility: utility,
+                        primaryModel: configuration.hasSuffix("with-primary") ? "fixture/primary" : nil)))
                 case "openclaw.setup.verify":
-                    task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
+                    let requestData: Data? = switch message {
+                    case let .data(data): data
+                    case let .string(text): text.data(using: .utf8)
+                    @unknown default: nil
+                    }
+                    let request = try JSONSerialization.jsonObject(with: #require(requestData)) as? [String: Any]
+                    let params = request?["params"] as? [String: Any]
+                    #expect(params?["modelTarget"] as? String == (utility ? "utility" : nil))
+                    task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id, utility: utility)))
                 default:
                     break
                 }
@@ -425,11 +510,15 @@ struct OnboardingDashboardHandoffTests {
         OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: routeIdentity,
             activationOwner: activationOwner,
+            modelTarget: utility ? .utility : nil,
+            utilityModel: utility && !pendingUtility ? verifiedInferenceModelRef : nil,
             defaults: defaults)
-        OnboardingSystemAgentResumeStore.markCompleted(
-            ifOwnedBy: routeIdentity,
-            activationOwner: activationOwner,
-            defaults: defaults)
+        if !pendingUtility {
+            OnboardingSystemAgentResumeStore.markCompleted(
+                ifOwnedBy: routeIdentity,
+                activationOwner: activationOwner,
+                defaults: defaults)
+        }
         var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: appState,
@@ -442,22 +531,46 @@ struct OnboardingDashboardHandoffTests {
         let initialProbe = try #require(view.onboardingDidAppear())
         await initialProbe.value
         for _ in 0..<200 {
-            if aiSetup.connected {
+            if aiSetup.connected || (pendingUtility && aiSetup.waitingForPendingActivationDeadline) {
                 break
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        #expect(aiSetup.connected)
-        #expect(view.finishState.didFinish)
-        #expect(handoffs == [.custodianOnboarding])
-        #expect(OnboardingSystemAgentResumeStore.pendingState(
-            for: routeIdentity,
-            defaults: defaults) == .none)
+        if pendingUtility {
+            #expect(!aiSetup.connected)
+            #expect(aiSetup.detectError == nil)
+            #expect(aiSetup.waitingForPendingActivationDeadline)
+            #expect(!view.finishState.didFinish)
+            #expect(handoffs.isEmpty)
+            switch OnboardingSystemAgentResumeStore.pendingState(
+                for: routeIdentity, defaults: defaults)
+            {
+            case .verified:
+                break
+            default:
+                Issue.record("Expected utility verification to preserve the pending activation lease")
+            }
+            let receipt = OnboardingSystemAgentResumeStore.activationModel(
+                for: routeIdentity, activationOwner: activationOwner, defaults: defaults)
+            #expect(receipt?.modelTarget == .utility)
+            #expect(receipt?.utilityModel == nil)
+        } else {
+            #expect(aiSetup.connected)
+            #expect(!aiSetup.verifiedExistingInference)
+            #expect(view.finishState.didFinish)
+            #expect(handoffs == [.custodianOnboarding])
+            #expect(OnboardingSystemAgentResumeStore.pendingState(
+                for: routeIdentity,
+                defaults: defaults) == .none)
+        }
         #expect(await methods.snapshot() == [
             "agents.list",
             "health",
             "openclaw.setup.verify",
         ])
+        view.configuredGatewayProbe.cancelPendingActivationRecheck()
+        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+        await gateway.shutdown()
     }
 }

@@ -3,13 +3,18 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type {
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
-import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  matchesPluginProviderEndpoint,
+  normalizePluginProviderBaseUrl,
+} from "../plugins/plugin-metadata-provider-facts.js";
+import {
+  getCurrentPluginMetadataSnapshotRequiredRuntime as getCurrentPluginMetadataSnapshot,
+  loadPluginMetadataSnapshotRuntime as loadPluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot-required.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
@@ -27,7 +32,6 @@ type ProviderAttributionHook =
   | "user-agent-extra"
   | "custom-user-agent";
 
-/** Product attribution policy emitted for verified provider hooks. */
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
@@ -40,14 +44,9 @@ export type ProviderAttributionPolicy = {
   headers?: Record<string, string>;
 };
 
-type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
-
-/** Transport family used when resolving provider-specific request policy. */
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
-/** Capability family used when endpoint rules differ by media or LLM request type. */
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
 
-/** Normalized endpoint class used by provider policy and SSRF/attribution decisions. */
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
@@ -68,6 +67,7 @@ export type ProviderEndpointClass =
   | "opencode-go-native"
   | "azure-openai"
   | "openrouter"
+  | "vercel-ai-gateway"
   | "xai-native"
   | "xiaomi-native"
   | "zai-native"
@@ -77,14 +77,12 @@ export type ProviderEndpointClass =
   | "custom"
   | "invalid";
 
-/** Parsed endpoint facts derived from provider id and base URL. */
 export type ProviderEndpointResolution = {
   endpointClass: ProviderEndpointClass;
   hostname?: string;
   googleVertexRegion?: string;
 };
 
-/** Raw model/provider fields accepted by policy resolution. */
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
   api?: string | null;
@@ -110,16 +108,13 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
-/** Policy input plus model compatibility fields for feature-level capability resolution. */
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: unknown;
 };
 
-/** Known compatibility family that needs provider-specific request adjustments. */
 export type ProviderRequestCompatibilityFamily = "moonshot";
 
-/** Feature capability facts for one resolved provider/model request route. */
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
@@ -145,8 +140,8 @@ function readCompatBoolean(
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
-const OPENROUTER_ATTRIBUTION_CATEGORIES =
-  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
+// OpenRouter honors at most two recognized categories per request and silently drops the rest.
+const OPENROUTER_ATTRIBUTION_CATEGORIES = "personal-agent,cli-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const OPENAI_RESPONSES_APIS = new Set([
@@ -156,10 +151,6 @@ const OPENAI_RESPONSES_APIS = new Set([
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 
-function formatOpenClawUserAgent(version: string): string {
-  return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
-}
-
 function resolveUrlHostname(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -168,11 +159,7 @@ function resolveUrlHostname(value: unknown): string | undefined {
   const candidate = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
     ? `https://${trimmed}`
     : trimmed;
-  try {
-    return normalizeOptionalLowercaseString(new URL(candidate).hostname);
-  } catch {
-    return undefined;
-  }
+  return normalizeOptionalLowercaseString(URL.parse(candidate)?.hostname);
 }
 
 type ProviderMetadataOwners = {
@@ -206,15 +193,6 @@ function resolveManifestProviderRequest(params: {
     : undefined;
 }
 
-function hostMatchesSuffix(host: string, suffix: string): boolean {
-  if (!suffix) {
-    return false;
-  }
-  return suffix.startsWith(".") || suffix.startsWith("-")
-    ? host.endsWith(suffix)
-    : host === suffix || host.endsWith(`.${suffix}`);
-}
-
 function buildManifestEndpointResolution(
   endpoint: PluginManifestProviderEndpoint,
   host: string,
@@ -237,13 +215,7 @@ function resolveManifestProviderEndpoint(params: {
 }): ProviderEndpointResolution | undefined {
   for (const endpoint of resolveProviderMetadataOwners(params.providerMetadataOwners)
     .providerEndpoints) {
-    if ((endpoint.hosts ?? []).includes(params.host)) {
-      return buildManifestEndpointResolution(endpoint, params.host);
-    }
-    if ((endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix))) {
-      return buildManifestEndpointResolution(endpoint, params.host);
-    }
-    if (params.normalizedBaseUrl && (endpoint.baseUrls ?? []).includes(params.normalizedBaseUrl)) {
+    if (matchesPluginProviderEndpoint(endpoint, params)) {
       return buildManifestEndpointResolution(endpoint, params.host);
     }
   }
@@ -257,6 +229,12 @@ function isLocalEndpointHost(host: string): boolean {
     host.endsWith(".local") ||
     host.endsWith(".internal")
   );
+}
+
+/** Classify loopback and private-network endpoint names without loading plugin metadata. */
+export function isLocalProviderEndpoint(baseUrl: string | null | undefined): boolean {
+  const host = resolveUrlHostname(baseUrl);
+  return host !== undefined && isLocalEndpointHost(host);
 }
 
 export function resolveProviderEndpoint(
@@ -297,198 +275,9 @@ function resolveKnownProviderFamily(
   if (manifestFamily) {
     return manifestFamily;
   }
-  switch (provider) {
-    case "openai":
-    case "azure-openai":
-    case "azure-openai-responses":
-      return "openai-family";
-    default:
-      return provider || "unknown";
-  }
-}
-
-function isOpenAIResponsesApi(api: string | null | undefined): boolean {
-  const normalizedApi = normalizeOptionalLowercaseString(api);
-  return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
-}
-
-function isCanonicalOrLegacyOpenAIProvider(provider: string | undefined): boolean {
-  return provider === "openai";
-}
-
-function resolveProviderAttributionIdentity(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionIdentity {
-  return {
-    product: OPENCLAW_ATTRIBUTION_PRODUCT,
-    version: resolveRuntimeServiceVersion(env),
-  };
-}
-
-function buildOpenRouterAttributionPolicy(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy {
-  const identity = resolveProviderAttributionIdentity(env);
-  return {
-    provider: "openrouter",
-    enabledByDefault: true,
-    verification: "vendor-documented",
-    hook: "request-headers",
-    docsUrl: "https://openrouter.ai/docs/app-attribution",
-    reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
-    ...identity,
-    headers: {
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": identity.product,
-      "X-OpenRouter-Categories": OPENROUTER_ATTRIBUTION_CATEGORIES,
-    },
-  };
-}
-
-function buildNvidiaAttributionPolicy(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy {
-  return {
-    provider: "nvidia",
-    enabledByDefault: true,
-    verification: "vendor-documented",
-    hook: "request-headers",
-    reviewNote:
-      "NVIDIA NIM billing invoke-origin attribution header. Applied only on verified NVIDIA routes.",
-    ...resolveProviderAttributionIdentity(env),
-    headers: {
-      "X-BILLING-INVOKE-ORIGIN": OPENCLAW_ATTRIBUTION_PRODUCT,
-    },
-  };
-}
-
-function buildGoogleAttributionPolicy(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy {
-  const identity = resolveProviderAttributionIdentity(env);
-  return {
-    provider: "google",
-    enabledByDefault: true,
-    verification: "vendor-documented",
-    hook: "request-headers",
-    docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
-    reviewNote:
-      "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
-    ...identity,
-    headers: {
-      "x-goog-api-client": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
-    },
-  };
-}
-
-function buildOpenAIAttributionPolicy(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy {
-  const identity = resolveProviderAttributionIdentity(env);
-  return {
-    provider: "openai",
-    enabledByDefault: true,
-    verification: "vendor-hidden-api-spec",
-    hook: "request-headers",
-    reviewNote:
-      "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
-    ...identity,
-    headers: {
-      originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
-      version: identity.version,
-      "User-Agent": formatOpenClawUserAgent(identity.version),
-    },
-  };
-}
-
-function buildOpenCodeGoAttributionPolicy(env: RuntimeVersionEnv): ProviderAttributionPolicy {
-  const identity = resolveProviderAttributionIdentity(env);
-  return {
-    provider: "opencode-go",
-    enabledByDefault: true,
-    verification: "vendor-documented",
-    hook: "request-headers",
-    docsUrl: "https://opencode.ai/docs/go/",
-    reviewNote:
-      "OpenCode Go requires coding agents to identify themselves with a specific User-Agent.",
-    ...identity,
-    headers: {
-      "User-Agent": formatOpenClawUserAgent(identity.version),
-    },
-  };
-}
-
-function buildXaiAttributionPolicy(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy {
-  const identity = resolveProviderAttributionIdentity(env);
-  return {
-    provider: "xai",
-    enabledByDefault: true,
-    verification: "vendor-hidden-api-spec",
-    hook: "request-headers",
-    reviewNote:
-      "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
-    ...identity,
-    headers: {
-      originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
-      version: identity.version,
-      "User-Agent": formatOpenClawUserAgent(identity.version),
-    },
-  };
-}
-
-function buildSdkHookOnlyPolicy(
-  provider: string,
-  hook: ProviderAttributionHook,
-  reviewNote: string,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy {
-  return {
-    provider,
-    enabledByDefault: false,
-    verification: "vendor-sdk-hook-only",
-    hook,
-    reviewNote,
-    ...resolveProviderAttributionIdentity(env),
-  };
-}
-
-function listProviderAttributionPolicies(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy[] {
-  return [
-    buildOpenRouterAttributionPolicy(env),
-    buildNvidiaAttributionPolicy(env),
-    buildGoogleAttributionPolicy(env),
-    buildOpenAIAttributionPolicy(env),
-    buildOpenCodeGoAttributionPolicy(env),
-    buildXaiAttributionPolicy(env),
-    buildSdkHookOnlyPolicy(
-      "anthropic",
-      "default-headers",
-      "Anthropic JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "groq",
-      "default-headers",
-      "Groq JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "mistral",
-      "custom-user-agent",
-      "Mistral JS SDK exposes a custom userAgent option, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "together",
-      "default-headers",
-      "Together JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
-      env,
-    ),
-  ];
+  return provider && OPENAI_RESPONSES_PROVIDERS.has(provider)
+    ? "openai-family"
+    : provider || "unknown";
 }
 
 function resolveProviderAttributionPolicy(
@@ -496,8 +285,110 @@ function resolveProviderAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy | undefined {
   const normalized = normalizeProviderId(provider ?? "");
-  const canonical = normalized === "openai" ? "openai" : normalized;
-  return listProviderAttributionPolicies(env).find((policy) => policy.provider === canonical);
+  const version = resolveRuntimeServiceVersion(env);
+  const userAgent = `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
+  const policy = {
+    provider: normalized,
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    product: OPENCLAW_ATTRIBUTION_PRODUCT,
+    version,
+  } satisfies ProviderAttributionPolicy;
+  switch (normalized) {
+    case "openrouter":
+      return {
+        ...policy,
+        docsUrl: "https://openrouter.ai/docs/app-attribution",
+        reviewNote:
+          "Documented app attribution headers. Applied on OpenRouter endpoints regardless of configured provider id.",
+        headers: {
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-OpenRouter-Title": policy.product,
+          "X-OpenRouter-Categories": OPENROUTER_ATTRIBUTION_CATEGORIES,
+        },
+      };
+    case "nvidia":
+      return {
+        ...policy,
+        reviewNote:
+          "NVIDIA NIM billing invoke-origin attribution header. Applied only on verified NVIDIA routes.",
+        headers: { "X-BILLING-INVOKE-ORIGIN": policy.product },
+      };
+    case "google":
+      return {
+        ...policy,
+        docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
+        reviewNote:
+          "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
+        headers: { "x-goog-api-client": userAgent },
+      };
+    case "vercel-ai-gateway":
+      return {
+        ...policy,
+        docsUrl: "https://vercel.com/docs/ai-gateway/ecosystem/app-attribution",
+        reviewNote:
+          'Vercel documents: "AI Gateway reads two request headers when present: http-referer … x-title". Applied on ai-gateway.vercel.sh regardless of configured provider id.',
+        headers: {
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-Title": policy.product,
+        },
+      };
+    case "perplexity":
+      return {
+        ...policy,
+        docsUrl: "https://docs.perplexity.ai/docs/getting-started/integrations/opencode",
+        reviewNote:
+          'Perplexity documents integrations identifying themselves with "X-Pplx-Integration": "<client>/<version>". Applied only on the direct Perplexity API.',
+        headers: { "X-Pplx-Integration": userAgent },
+      };
+    case "openai":
+    case "xai":
+      return {
+        ...policy,
+        verification: "vendor-hidden-api-spec",
+        reviewNote:
+          normalized === "openai"
+            ? "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract."
+            : "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
+        headers: {
+          originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
+          version,
+          "User-Agent": userAgent,
+        },
+      };
+    case "opencode-go":
+      return {
+        ...policy,
+        docsUrl: "https://opencode.ai/docs/go/",
+        reviewNote:
+          "OpenCode Go requires coding agents to identify themselves with a specific User-Agent.",
+        headers: { "User-Agent": userAgent },
+      };
+    case "anthropic":
+    case "groq":
+    case "together":
+    case "mistral": {
+      const reviewNotes = {
+        anthropic:
+          "Anthropic JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
+        groq: "Groq JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
+        together:
+          "Together JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
+        mistral:
+          "Mistral JS SDK exposes a custom userAgent option, but app attribution is not yet verified.",
+      };
+      return {
+        ...policy,
+        enabledByDefault: false,
+        verification: "vendor-sdk-hook-only",
+        hook: normalized === "mistral" ? "custom-user-agent" : "default-headers",
+        reviewNote: reviewNotes[normalized],
+      };
+    }
+    default:
+      return undefined;
+  }
 }
 
 export function resolveProviderRequestPolicy(
@@ -513,25 +404,16 @@ export function resolveProviderRequestPolicy(
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
     endpointClass === "azure-openai";
-  const usesOpenAIPublicAttributionHost = endpointClass === "openai-public";
-  const usesOpenAICodexAttributionHost = endpointClass === "openai";
   const usesVerifiedOpenAIAttributionHost =
-    usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
-  const usesXaiNativeAttributionHost = endpointClass === "xai-native";
+    endpointClass === "openai-public" || endpointClass === "openai";
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
-  if (isCanonicalOrLegacyOpenAIProvider(provider) && usesVerifiedOpenAIAttributionHost) {
+  if (provider === "openai" && usesVerifiedOpenAIAttributionHost) {
     attributionProvider = "openai";
-  } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented, but only apply it to known
-    // OpenRouter endpoints or the default (unset) baseUrl path.
-    if (endpointClass === "openrouter" || endpointClass === "default") {
-      attributionProvider = "openrouter";
-    }
   } else if (provider === "xai" && policy?.enabledByDefault) {
     // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
-    if (usesXaiNativeAttributionHost || endpointClass === "default") {
+    if (endpointClass === "xai-native" || endpointClass === "default") {
       attributionProvider = "xai";
     }
   } else if (
@@ -542,6 +424,26 @@ export function resolveProviderRequestPolicy(
     // The documented identification contract belongs to Go's native endpoint.
     // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
     attributionProvider = "opencode-go";
+  }
+  // OpenRouter and Vercel AI Gateway attribution follows the endpoint, so custom provider
+  // ids pointed at their hosts are attributed too; custom proxy baseUrls are withheld.
+  if (
+    !attributionProvider &&
+    (endpointClass === "openrouter" || (provider === "openrouter" && endpointClass === "default"))
+  ) {
+    attributionProvider = "openrouter";
+  }
+  if (
+    !attributionProvider &&
+    (endpointClass === "vercel-ai-gateway" ||
+      (provider === "vercel-ai-gateway" && endpointClass === "default"))
+  ) {
+    attributionProvider = "vercel-ai-gateway";
+  }
+  // Perplexity's API is only reached through its own plugin, which resolves the direct
+  // host as the provider default; any configured baseUrl is a proxy.
+  if (!attributionProvider && provider === "perplexity" && endpointClass === "default") {
+    attributionProvider = "perplexity";
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
@@ -573,9 +475,7 @@ export function resolveProviderRequestPolicy(
       attributionPolicy?.verification === "vendor-hidden-api-spec",
     usesKnownNativeOpenAIEndpoint,
     usesKnownNativeOpenAIRoute:
-      endpointClass === "default"
-        ? isCanonicalOrLegacyOpenAIProvider(provider)
-        : usesKnownNativeOpenAIEndpoint,
+      endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint,
     usesVerifiedOpenAIAttributionHost,
     usesExplicitProxyLikeEndpoint,
   };
@@ -622,7 +522,7 @@ export function resolveProviderRequestCapabilities(
   });
   const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
-  const isResponsesApi = isOpenAIResponsesApi(api);
+  const isResponsesApi = api !== undefined && OPENAI_RESPONSES_APIS.has(api);
   const promptCacheKeySupport = readCompatBoolean(input.compat, "supportsPromptCacheKey");
   // Default strip behavior (proxy-like endpoints with responses APIs) is
   // preserved as a safety net for providers that reject prompt_cache_key,
@@ -643,17 +543,15 @@ export function resolveProviderRequestCapabilities(
     ...policy,
     isKnownNativeEndpoint,
     allowsOpenAIServiceTier:
-      (isCanonicalOrLegacyOpenAIProvider(provider) &&
-        api === "openai-responses" &&
-        endpointClass === "openai-public") ||
-      (isCanonicalOrLegacyOpenAIProvider(provider) &&
+      (provider === "openai" && api === "openai-responses" && endpointClass === "openai-public") ||
+      (provider === "openai" &&
         (api === "openai-chatgpt-responses" || api === "openai-responses") &&
         endpointClass === "openai"),
     supportsOpenAIReasoningCompatPayload:
       provider !== undefined &&
       api !== undefined &&
       !policy.usesExplicitProxyLikeEndpoint &&
-      (isCanonicalOrLegacyOpenAIProvider(provider) ||
+      (provider === "openai" ||
         provider === "azure-openai" ||
         provider === "azure-openai-responses") &&
       (api === "openai-completions" ||
@@ -687,7 +585,7 @@ export function resolveProviderRequestCapabilities(
 
 function describeProviderRequestRoutingPolicy(
   policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "sdk-hook-only" | "none" {
+): "hidden" | "documented" | "none" {
   if (!policy.attributionProvider) {
     return "none";
   }
@@ -696,8 +594,6 @@ function describeProviderRequestRoutingPolicy(
       return "hidden";
     case "vendor-documented":
       return "documented";
-    case "vendor-sdk-hook-only":
-      return "sdk-hook-only";
     default:
       return "none";
   }
@@ -706,19 +602,17 @@ function describeProviderRequestRoutingPolicy(
 function describeProviderRequestRouteClass(
   policy: ProviderRequestPolicyResolution,
 ): "default" | "native" | "proxy-like" | "local" | "invalid" {
-  if (policy.endpointClass === "default") {
-    return "default";
+  switch (policy.endpointClass) {
+    case "default":
+    case "invalid":
+    case "local":
+      return policy.endpointClass;
+    case "custom":
+    case "openrouter":
+      return "proxy-like";
+    default:
+      return "native";
   }
-  if (policy.endpointClass === "invalid") {
-    return "invalid";
-  }
-  if (policy.endpointClass === "local") {
-    return "local";
-  }
-  if (policy.endpointClass === "custom" || policy.endpointClass === "openrouter") {
-    return "proxy-like";
-  }
-  return "native";
 }
 
 export function describeProviderRequestRoutingSummary(

@@ -3,7 +3,6 @@ import type { PluginControlUiDiagnostic } from "../../../../packages/gateway-pro
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -60,14 +59,33 @@ if (!customElements.get(externalPluginPageTag)) {
   customElements.define(externalPluginPageTag, ExternalPluginPage);
 }
 
-function createLogbookPage(): DeferredPluginPage {
+function createBundledPage(loads: Promise<TestBundledView>[], includeExternal = false) {
+  const hello: GatewayHelloOk = {
+    type: "hello-ok",
+    protocol: 3,
+    auth: { role: "operator", scopes: ["operator.write"] },
+    controlUiTabs: [
+      { pluginId: "logbook", id: "logbook", label: "Logbook" },
+      ...(includeExternal
+        ? [{ pluginId: "external-plugin", id: "panel", label: "External panel" }]
+        : []),
+    ],
+  };
+  const snapshot = createSnapshot(hello);
   const page = document.createElement(deferredPluginPageTag) as DeferredPluginPage;
-  // Import the real owner modules before test timing begins; this suite verifies
-  // PluginPage lifecycle, not Vite's concurrent dynamic-transform latency.
-  page.loads = new Map([["logbook/logbook", [Promise.resolve(logbookBundledView)]]]);
+  page.loads = new Map([["logbook/logbook", loads]]);
   page.pluginId = "logbook";
   page.tabId = "logbook";
-  return page;
+  (page as unknown as { context: ApplicationContext }).context = {
+    gateway: { snapshot, subscribe: () => () => undefined },
+    plugins: {
+      errors: [],
+      registrations: () => [],
+      isLoading: () => false,
+      subscribe: () => () => undefined,
+    },
+  } as unknown as ApplicationContext;
+  return { page, hello, snapshot };
 }
 
 function externalPluginConfig(
@@ -96,8 +114,52 @@ function externalPluginConfig(
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,
+    uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
     pluginFrameGrants,
+  };
+}
+
+function logbookResponse(method: string) {
+  if (method === "logbook.status") {
+    return {
+      captureEnabled: true,
+      capturePaused: false,
+      captureIntervalSeconds: 30,
+      analysisIntervalMinutes: 15,
+      retentionDays: 30,
+      pendingFrames: 0,
+      analysisRunning: false,
+      visionModelSource: "missing",
+      today: "2026-07-05",
+      todayCards: 0,
+      timeZone: "UTC",
+    };
+  }
+  if (method === "logbook.days") {
+    return { days: [] };
+  }
+  return {
+    day: "2026-07-05",
+    cards: [],
+    stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
+  };
+}
+
+function createSnapshot(
+  hello: GatewayHelloOk,
+  client: GatewayBrowserClient | null = null,
+): ApplicationGatewaySnapshot {
+  return {
+    client,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    hello,
+    assistantAgentId: null,
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
   };
 }
 
@@ -120,21 +182,11 @@ function createExternalPluginPage(
       },
     ],
   };
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  const snapshot = createSnapshot(hello);
   const page = document.createElement(externalPluginPageTag) as ExternalPluginPage;
   page.pluginId = "external-plugin";
   page.tabId = "panel";
-  (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+  (page as unknown as { context: ApplicationContext }).context = {
     gateway: {
       snapshot,
       subscribe: () => () => undefined,
@@ -143,8 +195,32 @@ function createExternalPluginPage(
       current: externalPluginConfig([]),
       refresh,
     },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
   return page;
+}
+
+function createHungRenewal() {
+  let activeRefreshes = 0;
+  let maxActiveRefreshes = 0;
+  const refresh = vi
+    .fn<ApplicationConfigCapability["refresh"]>()
+    .mockResolvedValueOnce(externalPluginConfig())
+    .mockImplementation(
+      (options) =>
+        new Promise<ApplicationConfig | null>((resolve) => {
+          activeRefreshes += 1;
+          maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
+          options?.signal?.addEventListener(
+            "abort",
+            () => {
+              activeRefreshes -= 1;
+              resolve(null);
+            },
+            { once: true },
+          );
+        }),
+    );
+  return { refresh, maxActiveRefreshes: () => maxActiveRefreshes };
 }
 
 describe("PluginPage", () => {
@@ -195,7 +271,6 @@ describe("PluginPage", () => {
       listeners.forEach((listener) => listener());
       await page.updateComplete;
       expect(page.textContent).toContain("Custom plugin UI is off");
-      expect(page.textContent).toContain("restart the Gateway and reload this browser tab");
       expect(page.params).toEqual({ document: "saved-draft" });
       const link = page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
       expect(link?.textContent?.trim()).toBe("Open Labs");
@@ -238,6 +313,33 @@ describe("PluginPage", () => {
     }
   });
 
+  it("uses the development transport for a plugin frame and its auth probe", async () => {
+    const basePath = "/openclaw";
+    const gatewayUrl = `ws://gateway.example${basePath}`;
+    const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+    const path = `${basePath}/plugins/external/panel?view=activity#settings`;
+    const refresh = vi.fn(async () =>
+      externalPluginConfig([
+        {
+          pluginId: "external-plugin",
+          path: `${proxyPath}${basePath}/plugins/external`,
+          match: "prefix",
+        },
+      ]),
+    );
+    const page = createExternalPluginPage(refresh, true, path);
+    document.body.append(page);
+    try {
+      await waitForFast(() =>
+        expect(page.querySelector("iframe")?.getAttribute("src")).toBe(`${proxyPath}${path}`),
+      );
+      expect(page.probeCalls).toEqual([`${proxyPath}${path}`]);
+    } finally {
+      page.remove();
+    }
+  });
+
   it("keeps the frame unmounted when browser policy blocks the sandbox cookie", async () => {
     const refresh = vi.fn(async () => externalPluginConfig());
     const page = createExternalPluginPage(refresh);
@@ -247,19 +349,6 @@ describe("PluginPage", () => {
       await waitForFast(() => expect(page.textContent).toContain("Plugin panel unavailable"));
       expect(page.probeCalls).toEqual(["/plugins/external/panel"]);
       expect(page.querySelector("iframe")).toBeNull();
-    } finally {
-      page.remove();
-    }
-  });
-
-  it("matches a route grant against tab URLs with query strings and fragments", async () => {
-    const refresh = vi.fn(async () => externalPluginConfig());
-    const path = "/plugins/external/panel?view=activity#settings";
-    const page = createExternalPluginPage(refresh, true, path);
-    document.body.append(page);
-    try {
-      await waitForFast(() => expect(page.querySelector("iframe")?.getAttribute("src")).toBe(path));
-      expect(page.probeCalls).toEqual([path]);
     } finally {
       page.remove();
     }
@@ -303,26 +392,7 @@ describe("PluginPage", () => {
 
   it("unmounts an external frame when renewal hangs past grant expiry", async () => {
     vi.useFakeTimers();
-    let activeRefreshes = 0;
-    let maxActiveRefreshes = 0;
-    const refresh = vi
-      .fn<ApplicationConfigCapability["refresh"]>()
-      .mockResolvedValueOnce(externalPluginConfig())
-      .mockImplementation(
-        (options) =>
-          new Promise<ApplicationConfig | null>((resolve) => {
-            activeRefreshes += 1;
-            maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
-            options?.signal?.addEventListener(
-              "abort",
-              () => {
-                activeRefreshes -= 1;
-                resolve(null);
-              },
-              { once: true },
-            );
-          }),
-      );
+    const { refresh, maxActiveRefreshes } = createHungRenewal();
     const page = createExternalPluginPage(refresh);
     document.body.append(page);
     try {
@@ -341,7 +411,7 @@ describe("PluginPage", () => {
       await page.updateComplete;
       expect(page.querySelector("iframe")).toBeNull();
       expect(refresh.mock.calls.length).toBeGreaterThan(2);
-      expect(maxActiveRefreshes).toBe(1);
+      expect(maxActiveRefreshes()).toBe(1);
     } finally {
       page.remove();
       vi.useRealTimers();
@@ -351,26 +421,7 @@ describe("PluginPage", () => {
   it("serially replaces a hung renewal when an expired page resumes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
-    let activeRefreshes = 0;
-    let maxActiveRefreshes = 0;
-    const refresh = vi
-      .fn<ApplicationConfigCapability["refresh"]>()
-      .mockResolvedValueOnce(externalPluginConfig())
-      .mockImplementation(
-        (options) =>
-          new Promise<ApplicationConfig | null>((resolve) => {
-            activeRefreshes += 1;
-            maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
-            options?.signal?.addEventListener(
-              "abort",
-              () => {
-                activeRefreshes -= 1;
-                resolve(null);
-              },
-              { once: true },
-            );
-          }),
-      );
+    const { refresh, maxActiveRefreshes } = createHungRenewal();
     const page = createExternalPluginPage(refresh);
     document.body.append(page);
     try {
@@ -391,7 +442,7 @@ describe("PluginPage", () => {
 
       expect(page.querySelector("iframe")).toBeNull();
       expect(refresh).toHaveBeenCalledTimes(3);
-      expect(maxActiveRefreshes).toBe(1);
+      expect(maxActiveRefreshes()).toBe(1);
     } finally {
       page.remove();
       vi.useRealTimers();
@@ -404,14 +455,14 @@ describe("PluginPage", () => {
     document.body.append(page);
     try {
       await waitForFast(() => expect(page.querySelector("iframe")).not.toBeNull());
-      const context = (page as unknown as { context: ApplicationContext<RouteId> }).context;
+      const context = (page as unknown as { context: ApplicationContext }).context;
       const gateway = context.gateway;
       const snapshot = gateway.snapshot;
 
       snapshot.phase = "stopped";
       (
         page as unknown as {
-          updateGatewaySource: (source: ApplicationContext<RouteId>["gateway"]) => void;
+          updateGatewaySource: (source: ApplicationContext["gateway"]) => void;
         }
       ).updateGatewaySource(gateway);
       await page.updateComplete;
@@ -420,7 +471,7 @@ describe("PluginPage", () => {
       snapshot.phase = "connected";
       (
         page as unknown as {
-          updateGatewaySource: (source: ApplicationContext<RouteId>["gateway"]) => void;
+          updateGatewaySource: (source: ApplicationContext["gateway"]) => void;
         }
       ).updateGatewaySource(gateway);
       await waitForFast(() => expect(page.querySelector("iframe")).not.toBeNull());
@@ -431,13 +482,9 @@ describe("PluginPage", () => {
   });
 
   it("refuses external plugin auth outside a secure browser context", async () => {
+    vi.stubGlobal("isSecureContext", false);
     const refresh = vi.fn(async () => externalPluginConfig());
     const page = createExternalPluginPage(refresh);
-    (
-      page as unknown as {
-        isExternalTabAuthSupported: () => boolean;
-      }
-    ).isExternalTabAuthSupported = () => false;
     document.body.append(page);
     try {
       await page.updateComplete;
@@ -449,51 +496,55 @@ describe("PluginPage", () => {
     }
   });
 
-  it("keeps plugin-auth external panels available outside a secure context", async () => {
+  it("forwards initial and live themes only while the current plugin frame is mounted", async () => {
+    vi.stubGlobal("isSecureContext", false);
     const refresh = vi.fn(async () => externalPluginConfig());
     const page = createExternalPluginPage(refresh, false);
-    (
-      page as unknown as {
-        isExternalTabAuthSupported: () => boolean;
-      }
-    ).isExternalTabAuthSupported = () => false;
+    document.documentElement.dataset.themeMode = "dark";
     document.body.append(page);
     try {
       await page.updateComplete;
+      const frame = page.querySelector<HTMLIFrameElement>("iframe");
+      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(frame?.getAttribute("src")).toBe("/plugins/external/panel");
       expect(refresh).not.toHaveBeenCalled();
-      expect(page.querySelector("iframe")?.getAttribute("src")).toBe("/plugins/external/panel");
+      if (!frame?.contentWindow) {
+        throw new Error("Expected the plugin frame to be mounted.");
+      }
+      const postMessage = vi.spyOn(frame.contentWindow, "postMessage");
+
+      frame.dispatchEvent(new Event("load"));
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "openclaw:widget-theme", mode: "dark" }),
+        "*",
+      );
+
+      postMessage.mockClear();
+      document.documentElement.dataset.themeMode = "light";
+      await waitForFast(() =>
+        expect(postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+          "*",
+        ),
+      );
+
+      postMessage.mockClear();
+      page.remove();
+      await page.updateComplete;
+      document.documentElement.dataset.themeMode = "dark";
+      frame.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+      expect(postMessage).not.toHaveBeenCalled();
     } finally {
       page.remove();
+      delete document.documentElement.dataset.themeMode;
     }
   });
 
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const bundledView = createDeferred<TestBundledView>();
     const stop = vi.fn();
-    const hello: GatewayHelloOk = {
-      type: "hello-ok",
-      protocol: 3,
-      auth: { role: "operator", scopes: ["operator.write"] },
-      controlUiTabs: [{ pluginId: "logbook", id: "logbook", label: "Logbook" }],
-    };
-    const snapshot: ApplicationGatewaySnapshot = {
-      client: null,
-      phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      hello,
-      assistantAgentId: null,
-      sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
-    const page = document.createElement(deferredPluginPageTag) as DeferredPluginPage;
-    page.loads = new Map([["logbook/logbook", [bundledView.promise]]]);
-    page.pluginId = "logbook";
-    page.tabId = "logbook";
-    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
-      gateway: { snapshot, subscribe: () => () => undefined },
-    } as unknown as ApplicationContext<RouteId>;
+    const { page, hello } = createBundledPage([bundledView.promise]);
 
     document.body.append(page);
     try {
@@ -512,85 +563,7 @@ describe("PluginPage", () => {
     }
   });
 
-  it("drops bundled view state and reloads immediately when the gateway source changes", async () => {
-    const hello: GatewayHelloOk = {
-      type: "hello-ok",
-      protocol: 3,
-      auth: { role: "operator", scopes: ["operator.write"] },
-      controlUiTabs: [{ pluginId: "logbook", id: "logbook", label: "Logbook" }],
-    };
-    const responseFor = (method: string) => {
-      if (method === "logbook.status") {
-        return {
-          captureEnabled: true,
-          capturePaused: false,
-          captureIntervalSeconds: 30,
-          analysisIntervalMinutes: 15,
-          retentionDays: 30,
-          pendingFrames: 0,
-          analysisRunning: false,
-          visionModelSource: "missing",
-          today: "2026-07-05",
-          todayCards: 0,
-          timeZone: "UTC",
-        };
-      }
-      if (method === "logbook.days") {
-        return { days: [] };
-      }
-      return {
-        day: "2026-07-05",
-        cards: [],
-        stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-      };
-    };
-    const firstRequest = vi.fn(async (method: string) => responseFor(method));
-    const secondRequest = vi.fn(async (method: string) => responseFor(method));
-    const createContext = (request: typeof firstRequest) => {
-      const snapshot: ApplicationGatewaySnapshot = {
-        client: { request } as unknown as GatewayBrowserClient,
-        phase: "connected",
-        offlineStable: false,
-        canvasPluginSurfaceUrl: null,
-        hello,
-        assistantAgentId: null,
-        sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-      };
-      return {
-        gateway: { snapshot, subscribe: () => () => undefined },
-      } as unknown as ApplicationContext<RouteId>;
-    };
-    const page = createLogbookPage();
-    (page as unknown as { context: ApplicationContext<RouteId> }).context =
-      createContext(firstRequest);
-    document.body.append(page);
-    try {
-      await waitForFast(() => expect(firstRequest).toHaveBeenCalled());
-      const firstHost = bundledViewHost(page);
-      expect(getLogbookState(firstHost).pollTimer).not.toBeNull();
-
-      (page as unknown as { context: ApplicationContext<RouteId> }).context =
-        createContext(secondRequest);
-      page.requestUpdate();
-      await page.updateComplete;
-
-      await waitForFast(() => expect(secondRequest).toHaveBeenCalledWith("logbook.status", {}));
-      expect(bundledViewHost(page)).not.toBe(firstHost);
-      expect(getLogbookState(firstHost).pollTimer).toBeNull();
-    } finally {
-      page.remove();
-    }
-  });
-
   it("isolates an in-flight bundled load across a same-client reconnect", async () => {
-    const hello: GatewayHelloOk = {
-      type: "hello-ok",
-      protocol: 3,
-      auth: { role: "operator", scopes: ["operator.write"] },
-      controlUiTabs: [{ pluginId: "logbook", id: "logbook", label: "Logbook" }],
-    };
     const staleStatus = createDeferred<unknown>();
     const staleDays = createDeferred<unknown>();
     const staleTimeline = createDeferred<unknown>();
@@ -599,47 +572,13 @@ describe("PluginPage", () => {
       ["logbook.days", staleDays],
       ["logbook.timeline", staleTimeline],
     ]);
-    const responseFor = (method: string) => {
-      if (method === "logbook.status") {
-        return {
-          captureEnabled: true,
-          capturePaused: false,
-          captureIntervalSeconds: 30,
-          analysisIntervalMinutes: 15,
-          retentionDays: 30,
-          pendingFrames: 0,
-          analysisRunning: false,
-          visionModelSource: "missing",
-          today: "2026-07-05",
-          todayCards: 0,
-          timeZone: "UTC",
-        };
-      }
-      if (method === "logbook.days") {
-        return { days: [] };
-      }
-      return {
-        day: "2026-07-05",
-        cards: [],
-        stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-      };
-    };
     const request = vi.fn((method: string) => {
       const deferredResponse = pending.get(method);
-      return deferredResponse ? deferredResponse.promise : Promise.resolve(responseFor(method));
+      return deferredResponse ? deferredResponse.promise : Promise.resolve(logbookResponse(method));
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const snapshot: ApplicationGatewaySnapshot = {
-      client,
-      phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      hello,
-      assistantAgentId: null,
-      sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
+    const { page, snapshot } = createBundledPage([Promise.resolve(logbookBundledView)]);
+    snapshot.client = client;
     let listener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
     const gateway = {
       snapshot,
@@ -651,26 +590,27 @@ describe("PluginPage", () => {
           }
         };
       },
-    } as unknown as ApplicationContext<RouteId>["gateway"];
-    const page = createLogbookPage();
-    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+    } as unknown as ApplicationContext["gateway"];
+    (page as unknown as { context: ApplicationContext }).context = {
       gateway,
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
     document.body.append(page);
     try {
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
       const staleHost = bundledViewHost(page);
+      expect(getLogbookState(staleHost).pollTimer).not.toBeNull();
 
       snapshot.phase = "stopped";
       listener?.(snapshot);
       await page.updateComplete;
       const disconnectedHost = bundledViewHost(page);
       expect(disconnectedHost).not.toBe(staleHost);
+      expect(getLogbookState(staleHost).pollTimer).toBeNull();
 
       pending.clear();
-      staleStatus.resolve(responseFor("logbook.status"));
-      staleDays.resolve(responseFor("logbook.days"));
-      staleTimeline.resolve(responseFor("logbook.timeline"));
+      staleStatus.resolve(logbookResponse("logbook.status"));
+      staleDays.resolve(logbookResponse("logbook.days"));
+      staleTimeline.resolve(logbookResponse("logbook.timeline"));
       await waitForFast(() => expect(getLogbookState(staleHost).timeline).not.toBeNull());
       expect(getLogbookState(disconnectedHost).timeline).toBeNull();
 
@@ -684,43 +624,32 @@ describe("PluginPage", () => {
     }
   });
 
-  it("does not install an earlier bundled view after switching away and back", async () => {
-    const firstLogbookLoad = createDeferred<TestBundledView>();
-    const currentLogbookLoad = createDeferred<TestBundledView>();
-    const hello: GatewayHelloOk = {
-      type: "hello-ok",
-      protocol: 3,
-      auth: { role: "operator", scopes: ["operator.write"] },
-      controlUiTabs: [
-        { pluginId: "logbook", id: "logbook", label: "Logbook" },
-        {
-          pluginId: "external-plugin",
-          id: "panel",
-          label: "External panel",
-        },
-      ],
-    };
-    const snapshot: ApplicationGatewaySnapshot = {
-      client: null,
-      phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      hello,
-      assistantAgentId: null,
-      sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
-    const page = document.createElement(deferredPluginPageTag) as DeferredPluginPage;
-    page.loads = new Map([
-      ["logbook/logbook", [firstLogbookLoad.promise, currentLogbookLoad.promise]],
-    ]);
-    page.pluginId = "logbook";
-    page.tabId = "logbook";
-    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
-      gateway: { snapshot, subscribe: () => () => undefined },
-    } as unknown as ApplicationContext<RouteId>;
+  it("shows the current rejection and recovers when Retry succeeds", async () => {
+    const failedLoad = createDeferred<TestBundledView>();
+    const retryLoad = createDeferred<TestBundledView>();
+    const { page } = createBundledPage([failedLoad.promise, retryLoad.promise]);
+    document.body.append(page);
+    try {
+      await waitForFast(() => expect(page.querySelector('[role="status"]')).not.toBeNull());
+      failedLoad.reject(new Error("Logbook chunk failed"));
+      await waitForFast(() =>
+        expect(page.querySelector('[role="alert"]')?.textContent).toContain("Logbook chunk failed"),
+      );
 
+      page.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+      await waitForFast(() => expect(page.querySelector('[role="status"]')).not.toBeNull());
+      retryLoad.resolve({ render: () => "recovered Logbook view", stop: vi.fn() });
+      await waitForFast(() => expect(page.textContent).toContain("recovered Logbook view"));
+      expect(page.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      page.remove();
+    }
+  });
+
+  it("ignores a stale rejection after switching away and back", async () => {
+    const staleLoad = createDeferred<TestBundledView>();
+    const currentLoad = createDeferred<TestBundledView>();
+    const { page } = createBundledPage([staleLoad.promise, currentLoad.promise], true);
     document.body.append(page);
     try {
       await page.updateComplete;
@@ -731,13 +660,13 @@ describe("PluginPage", () => {
       page.tabId = "logbook";
       await page.updateComplete;
 
-      currentLogbookLoad.resolve({ render: () => "current Logbook view", stop: vi.fn() });
+      currentLoad.resolve({ render: () => "current Logbook view", stop: vi.fn() });
       await waitForFast(() => expect(page.textContent).toContain("current Logbook view"));
-
-      firstLogbookLoad.resolve({ render: () => "stale Logbook view", stop: vi.fn() });
+      staleLoad.reject(new Error("Failed to fetch dynamically imported module"));
       await Promise.resolve();
       await page.updateComplete;
-      expect(page.textContent).not.toContain("stale Logbook view");
+
+      expect(page.querySelector('[role="alert"]')).toBeNull();
       expect(page.textContent).toContain("current Logbook view");
     } finally {
       page.remove();

@@ -2,7 +2,6 @@ import { css } from "lit";
 
 export const terminalPanelUploadStyles = css`
   .rail-header__action:disabled {
-    opacity: var(--rail-header-action-disabled-opacity, 0.4);
     pointer-events: none;
   }
   .tp-file-input {
@@ -36,7 +35,7 @@ export const terminalPanelUploadStyles = css`
     border: 1px solid var(--border, #262b34);
     border-radius: 7px;
     background: color-mix(in srgb, var(--bg, #0e1015) 94%, var(--text, #d7dae0));
-    box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+    box-shadow: var(--overlay-shadow);
     color: var(--text, #d7dae0);
     font-size: 11px;
   }
@@ -76,6 +75,9 @@ export const terminalPanelUploadStyles = css`
   .tp-upload-card__actions {
     display: flex;
     gap: 4px;
+  }
+  .tp-upload-card__recovery {
+    margin-top: 8px;
   }
   .tp-upload-card__action {
     margin: -3px 0;

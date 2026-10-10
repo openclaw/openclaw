@@ -1,8 +1,10 @@
-import fs from "node:fs/promises";
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { GitBackupIdentity } from "../snapshot/git-backup-codec.js";
@@ -39,7 +41,7 @@ type BackupGitScopeOptions = {
 export const GIT_BACKUP_PUSH_CREDENTIAL_WARNING =
   "Warning: pushed backup history contains credential material; keep the Git remote private.";
 
-async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
+async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   const normalizedAgents = [
     ...new Set(
       (options.agents ?? []).map((agent) => {
@@ -71,28 +73,18 @@ async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCre
     identity: GitBackupIdentity;
   }> = [];
   if (options.all || options.global) {
+    const selectedPath = resolveOpenClawStateSqlitePath();
+    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
     databases.push({
-      path: await fs.realpath(resolveOpenClawStateSqlitePath()),
+      path: selectedPath,
       identity: { role: "global" },
     });
   }
   // Config owns both the current roster and each agent root; durable registry
   // rows can retain stale paths after an agent moves or is removed.
   for (const { agentId, databasePath } of agents) {
-    let resolvedPath: string;
-    try {
-      resolvedPath = await fs.realpath(databasePath);
-    } catch (error) {
-      if (options.all && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        runtime.error(`Warning: skipping agent ${agentId}: no database at ${databasePath}`);
-        continue;
-      }
-      throw error;
-    }
-    databases.push({ path: resolvedPath, identity: { role: "agent", agentId } });
-  }
-  if (databases.length === 0) {
-    throw new Error("No Git backup databases were found for the selected scope.");
+    assertNotUpdateCapturePath(databasePath, resolveStateDir());
+    databases.push({ path: databasePath, identity: { role: "agent", agentId } });
   }
   return databases;
 }
@@ -132,23 +124,29 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
   if (options.push && !options.excludeSecrets) {
     runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
+  const releaseCustody = beginLifecycleWriteCustody("backup");
+  let failure: unknown;
   try {
-    const result = await createGitBackup({
-      repositoryPath,
-      stateDir: resolveStateDir(),
-      databases: await resolveCreateDatabases(runtime, options),
-      all: options.all,
-      excludeSecrets: options.excludeSecrets,
-      push: options.push,
-    });
+    const result = await withCommandProcessScope(async () =>
+      createGitBackup({
+        repositoryPath,
+        stateDir: resolveStateDir(),
+        databases: await resolveCreateDatabases(options),
+        all: options.all,
+        excludeSecrets: options.excludeSecrets,
+        push: options.push,
+      }),
+    );
     // A completed local backup remains successful even when requested remote replication fails;
     // pushFailed records that durable degradation without discarding the recoverable local commit.
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "git",
       archivePath: repositoryPath,
       status: "ok",
       target: result.commit,
-      error: result.pushWarning,
+      error:
+        [...result.warnings, ...(result.pushWarning ? [result.pushWarning] : [])].join("\n") ||
+        undefined,
       ...(result.pushWarning ? { pushFailed: true } : {}),
     });
     if (options.json) {
@@ -161,15 +159,21 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     if (result.pushWarning) {
       runtime.error(`Warning: Git backup committed, but push failed: ${result.pushWarning}`);
     }
+    for (const warning of result.warnings) {
+      runtime.error(`Warning: ${warning}`);
+    }
     return result;
   } catch (error) {
-    recordBackupOutcomeBestEffort(runtime, {
+    failure = error;
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "git",
       archivePath: repositoryPath,
       status: "failed",
       error: formatErrorMessage(error),
     });
     throw error;
+  } finally {
+    releaseCustody(failure);
   }
 }
 

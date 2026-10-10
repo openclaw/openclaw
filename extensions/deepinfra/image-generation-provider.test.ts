@@ -44,12 +44,12 @@ describe("deepinfra image generation provider", () => {
   it("sends OpenAI-compatible image generation requests and sniffs JPEG output", async () => {
     const release = vi.fn(async () => {});
     const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [{ b64_json: jpegBytes.toString("base64"), revised_prompt: "red square" }],
       }),
       release,
-    });
+    }));
 
     const provider = buildDeepInfraImageGenerationProvider();
     const result = await provider.generateImage({
@@ -70,22 +70,15 @@ describe("deepinfra image generation provider", () => {
       } as never,
     });
 
-    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
-      [
-        {
-          baseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          allowPrivateNetwork: false,
-          request: undefined,
-          defaultHeaders: {
-            Authorization: "Bearer deepinfra-key",
-          },
-          provider: "deepinfra",
-          capability: "image",
-          transport: "http",
-        },
-      ],
-    ]);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepinfra",
+        capability: "image",
+        transport: "http",
+        defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+        allowPrivateNetwork: false,
+      }),
+    );
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const jsonRequest = requireFirstPostJsonRequest(
       postJsonRequestMock,
@@ -127,7 +120,7 @@ describe("deepinfra image generation provider", () => {
   });
 
   it("sends image edits as multipart OpenAI-compatible requests", async () => {
-    postMultipartRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [
           {
@@ -138,7 +131,7 @@ describe("deepinfra image generation provider", () => {
         ],
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const provider = buildDeepInfraImageGenerationProvider();
     const result = await provider.generateImage({

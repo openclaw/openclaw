@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -15,11 +16,11 @@ struct ChatModelMenuPresentationTests {
     }
 
     @Test func `provider identities use canonical repository brand palettes`() {
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "openai") == .openAI)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "anthropic") == .anthropic)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "claude-cli") == .anthropic)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "google-gemini-cli") == .google)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "openrouter") == .adaptiveMonochrome)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "openai") == OpenClawBrand.providerOpenAI)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "anthropic") == OpenClawBrand.providerAnthropic)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "claude-cli") == OpenClawBrand.providerAnthropic)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "google-gemini-cli") == OpenClawBrand.providerGoogle)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "openrouter") == .primary)
     }
 
     @Test func `unknown provider keeps a stable branded fallback`() {
@@ -30,8 +31,8 @@ struct ChatModelMenuPresentationTests {
 
     @Test func `model provider prefers metadata and falls back to qualified id`() {
         let metadata = OpenClawChatModelChoice(
-            modelID: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol",
+            modelID: "gpt-5.6-luna",
+            name: "GPT-5.6 Luna",
             provider: " OpenAI ",
             contextWindow: 200_000)
         let qualified = OpenClawChatModelChoice(
@@ -53,10 +54,10 @@ struct ChatModelMenuPresentationTests {
     @Test func `agent model fills an unresolved default label`() {
         #expect(ChatModelMenuPresentation.resolvedDefaultLabel(
             sessionDefaultLabel: "Default",
-            agentModelReference: " openai/gpt-5.6-sol ") == "Default: openai/gpt-5.6-sol")
+            agentModelReference: " openai/gpt-5.6-luna ") == "Default: openai/gpt-5.6-luna")
         #expect(ChatModelMenuPresentation.resolvedDefaultLabel(
             sessionDefaultLabel: "Default: anthropic/claude-opus-4-7",
-            agentModelReference: "openai/gpt-5.6-sol") == "Default: anthropic/claude-opus-4-7")
+            agentModelReference: "openai/gpt-5.6-luna") == "Default: anthropic/claude-opus-4-7")
         #expect(ChatModelMenuPresentation.resolvedDefaultLabel(
             sessionDefaultLabel: "Default",
             agentModelReference: nil) == "Default")
@@ -64,13 +65,13 @@ struct ChatModelMenuPresentationTests {
 
     @Test func `agent model reference carries provider identity into the default row`() {
         #expect(ChatModelMenuPresentation.qualifiedModelReference(
-            modelID: "gpt-5.6-sol",
-            providerID: "openai") == "openai/gpt-5.6-sol")
+            modelID: "gpt-5.6-luna",
+            providerID: "openai") == "openai/gpt-5.6-luna")
         #expect(ChatModelMenuPresentation.qualifiedModelReference(
-            modelID: "openai/gpt-5.6-sol",
-            providerID: "anthropic") == "openai/gpt-5.6-sol")
+            modelID: "openai/gpt-5.6-luna",
+            providerID: "anthropic") == "openai/gpt-5.6-luna")
         #expect(ChatModelMenuPresentation.providerID(
-            forModelReference: "openai/gpt-5.6-sol") == "openai")
+            forModelReference: "openai/gpt-5.6-luna") == "openai")
     }
 
     @Test func `thinking slider maps gateway stops without inventing levels`() {
@@ -93,7 +94,7 @@ struct ChatModelMenuPresentationTests {
         #expect(ChatThinkingSliderPresentation.selectionID(index: 9, options: options) == nil)
     }
 
-    @Test func `thinking slider labels inherited and explicit effort distinctly`() {
+    @Test func `thinking slider labels show the effective level without a default caption`() {
         let options = [
             OpenClawChatThinkingLevelOption(id: "low", label: "Low"),
             OpenClawChatThinkingLevelOption(id: "high", label: "High"),
@@ -102,7 +103,7 @@ struct ChatModelMenuPresentationTests {
         #expect(ChatThinkingSliderPresentation.valueLabel(
             selectionID: OpenClawChatViewModel.inheritedThinkingSelectionID,
             effectiveLevelID: "high",
-            options: options) == "Default (High)")
+            options: options) == "High")
         #expect(ChatThinkingSliderPresentation.valueLabel(
             selectionID: "low",
             effectiveLevelID: "high",
@@ -110,18 +111,7 @@ struct ChatModelMenuPresentationTests {
         #expect(ChatThinkingSliderPresentation.valueLabel(
             selectionID: OpenClawChatViewModel.inheritedThinkingSelectionID,
             effectiveLevelID: "ultra",
-            options: options) == "Default (Ultra)")
-    }
-
-    @Test func `thinking slider exposes one notch per gateway stop`() {
-        let options = [
-            OpenClawChatThinkingLevelOption(id: "off", label: "Off"),
-            OpenClawChatThinkingLevelOption(id: "low", label: "Low"),
-            OpenClawChatThinkingLevelOption(id: "medium", label: "Medium"),
-            OpenClawChatThinkingLevelOption(id: "high", label: "High"),
-        ]
-
-        #expect(ChatThinkingSliderPresentation.notchIndices(options: options) == [0, 1, 2, 3])
+            options: options) == "Ultra")
     }
 
     @Test func `fast switch reflects effective inheritance and emits only binary values`() {

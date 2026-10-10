@@ -47,6 +47,9 @@ dump_debug_logs() {
 openclaw_e2e_enable_failure_diagnostics
 
 if [ "$mode" = mock ]; then
+  # Keep provider requests private; the client prints only matched result facts.
+  export MOCK_REQUEST_LOG="$log_prefix-requests.jsonl"
+  (umask 077; : >"$MOCK_REQUEST_LOG")
   mock_pid="$(openclaw_e2e_start_mock_openai "$mock_port" /tmp/mcp-code-mode-mock-openai.log)"
   openclaw_e2e_wait_mock_openai "$mock_port"
 fi

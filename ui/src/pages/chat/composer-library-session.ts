@@ -7,10 +7,8 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
-import {
-  invalidateChatMetadataStore,
-  revalidateChatMetadata,
-} from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateSessionSlashCommands } from "./chat-commands.ts";
 
@@ -74,6 +72,12 @@ export class ComposerLibrarySession {
   private current(target: LibrarySessionTarget) {
     return this.target === target && target.isCurrent();
   }
+  private finish(target: LibrarySessionTarget, flag: "loading" | "busy") {
+    if (this.current(target)) {
+      this[flag] = false;
+      this.notify();
+    }
+  }
   closeRead() {
     this.readOwner = null;
     this.read = null;
@@ -100,10 +104,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.loading = false;
-        this.notify();
-      }
+      this.finish(target, "loading");
     }
   }
 
@@ -132,10 +133,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.busy = false;
-        this.notify();
-      }
+      this.finish(target, "busy");
     }
   }
 
@@ -175,10 +173,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.busy = false;
-        this.notify();
-      }
+      this.finish(target, "busy");
     }
   }
 }

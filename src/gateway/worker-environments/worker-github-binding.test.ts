@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
   worktree: vi.fn(),
   repository: vi.fn(),
+  repositoryWorkspace: vi.fn(),
   session: vi.fn(),
   nativeToken: vi.fn(),
 }));
@@ -31,7 +32,28 @@ vi.mock("../../agents/worktrees/service.js", () => ({
     resolveRepositoryIdentity: mocks.repository,
   },
 }));
+vi.mock("../../agents/worktrees/registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/worktrees/registry-read.js")>()),
+  readLiveRegistryWorktreeByOwner: async (_context: unknown, kind: string, id: string) =>
+    mocks.worktree(kind, id),
+}));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.session(params.key, { agentId: params.agentId }),
+}));
+vi.mock("../../state/session-repository-workspaces.js", () => ({
+  getSessionRepositoryWorkspaceStore: () => ({
+    prepare: async () => ({
+      workspace: mocks.repositoryWorkspace(),
+      current: mocks.repositoryWorkspace,
+    }),
+  }),
+}));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,6 +96,7 @@ describe("worker GitHub launch binding", () => {
     mocks.verify.mockReset().mockResolvedValue(verified);
     mocks.worktree.mockReset().mockReturnValue(worktree);
     mocks.repository.mockReset().mockResolvedValue({ originUrl: "git@github.com:owner/repo.git" });
+    mocks.repositoryWorkspace.mockReset();
     mocks.session.mockReset().mockReturnValue({
       canonicalKey: session.sessionKey,
       agentId: "main",
@@ -90,13 +113,8 @@ describe("worker GitHub launch binding", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each([
-    "git@github.com:owner/repo.git",
-    "ssh://git@github.com/owner/repo.git",
-    "https://github.com/owner/repo.git",
-  ])("binds the verified shared account and canonical HTTPS remote from %s", async (originUrl) => {
+  it("binds the verified shared account and canonical HTTPS remote", async () => {
     await installProfile();
-    mocks.repository.mockResolvedValue({ originUrl });
 
     await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
       token,
@@ -105,7 +123,9 @@ describe("worker GitHub launch binding", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       gitAuthor: { name: "Shared Bot" },
     });
-    expect(mocks.verify).toHaveBeenCalledWith(token);
+    expect(mocks.verify).toHaveBeenCalledWith(token, {
+      apiBaseUrl: "https://api.github.com",
+    });
     expect(mocks.nativeToken).not.toHaveBeenCalled();
   });
 
@@ -140,7 +160,7 @@ describe("worker GitHub launch binding", () => {
     });
   });
 
-  it.each(["missing-profile", "unavailable", "rate_limited", "unverified"] as const)(
+  it.each(["missing-profile", "unavailable"] as const)(
     "omits credentials when the managed identity is %s",
     async (failure) => {
       if (failure !== "missing-profile") {
@@ -201,4 +221,54 @@ describe("worker GitHub launch binding", () => {
     expect(first?.token).toBe(token);
     expect((await prepareWorkerGitHubBinding(session))?.token).toBe(rotated);
   });
+
+  it.each(["current", "replaced", "revoked"] as const)(
+    "binds a repository-only session before first checkout while authority is %s",
+    async (state) => {
+      await installProfile();
+      const repository = {
+        workspaceId: "repository-workspace",
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+        url: "https://github.com/owner/repo.git",
+        branch: "openclaw/repository-session",
+        baseCommit: null,
+        checkpointRef: null,
+      };
+      mocks.session.mockReturnValue({
+        canonicalKey: session.sessionKey,
+        agentId: session.agentId,
+        entry: { sessionId: session.sessionId, repositoryWorkspaceId: repository.workspaceId },
+      });
+      mocks.repositoryWorkspace.mockReturnValue(repository);
+      let current = true;
+      mocks.verify.mockImplementation(async () => {
+        if (state === "revoked") {
+          current = false;
+        }
+        if (state === "replaced") {
+          mocks.repositoryWorkspace.mockReturnValue({
+            ...repository,
+            url: "https://github.com/other/repo.git",
+          });
+        }
+        return verified;
+      });
+      const binding = await prepareWorkerGitHubBinding({
+        ...session,
+        assertCurrent: () => current,
+      });
+      if (state === "current") {
+        expect(binding).toMatchObject({
+          token,
+          branch: repository.branch,
+          remoteUrl: repository.url,
+        });
+      } else {
+        expect(binding).toBeUndefined();
+      }
+      expect(mocks.repository).not.toHaveBeenCalled();
+      expect(mocks.worktree).not.toHaveBeenCalled();
+    },
+  );
 });

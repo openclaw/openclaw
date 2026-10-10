@@ -2,40 +2,26 @@ import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
-  listSessionEntriesReadOnly,
-  updateSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import type { AssembleResult } from "../../../context-engine/types.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
-import { buildActiveSubagentSystemPromptAddition } from "../../subagents/registry/subagent-active-context.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
-import { prependSystemPromptAddition } from "./attempt-prompt-helpers.js";
-import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
-import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
-
-/**
- * Prepares restored transcript history and applies context-engine assembly.
- */
-
-type PreparedEmbeddedAttemptHistory = {
-  contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
-  contextEngineAssemblySucceeded: boolean;
-  unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
-};
 
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
-): Promise<PreparedEmbeddedAttemptHistory> {
+  assertActive: SessionSourceAssertion,
+) {
   const { attempt, activeContextEngine, isRawModelRun } = input;
   const {
     agentSession: { activeSession, settingsManager, setActiveSessionSystemPrompt },
@@ -93,69 +79,54 @@ export async function prepareEmbeddedAttemptHistory(
       const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: sessionAgentId,
       });
-      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({
-        agentId: sessionAgentId,
-        storePath,
-        sessionKey: attempt.sessionKey,
-      });
+      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance(
+        { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
+        assertActive,
+      );
+      assertActive();
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
-        const subagents = listSessionEntriesReadOnly({
+        const entries = await readSessionEntrySummariesInWorker({
           agentId: sessionAgentId,
           storePath,
-          clone: false,
-        })
-          .map(({ entry }) => entry)
-          .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
-          .map((entry) => ({
-            sessionId: entry.sessionId,
-            role: entry.subagentRole,
-            lastStatus: entry.status,
-          }));
+        });
+        assertActive();
+        const subagents = entries.flatMap(({ entry }) =>
+          entry.spawnedBy === sessionEntry.sessionId
+            ? [{ sessionId: entry.sessionId, role: entry.subagentRole, lastStatus: entry.status }]
+            : [],
+        );
         validated.push(
           buildHierarchyReinforcementMessage({
             summary: suspension.summary ?? "No recovery briefing was captured.",
             activeSubagents: subagents,
           }),
         );
-        await updateSessionEntry(
+        await patchSessionEntryCore(
           { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
-          async (entry) => {
-            if (entry.quotaSuspension?.state !== "resuming") {
+          (entry) => {
+            if (
+              entry.sessionId !== sessionEntry.sessionId ||
+              entry.quotaSuspension?.state !== "resuming"
+            ) {
               return null;
             }
             return {
               quotaSuspension: { ...entry.quotaSuspension, state: "active" },
             };
           },
-          { skipMaintenance: true, takeCacheOwnership: true },
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+            ...sessionEntryCommitGuardOptions(assertActive),
+          },
         );
+        assertActive();
       }
     }
 
-    if (attempt.sessionKey && attempt.config && !isSettledTurnFinalization) {
-      // Capability guidance must include deferred OpenClaw tools without
-      // interpreting arbitrary client tool names as native capabilities.
-      const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
-        cfg: attempt.config,
-        controllerSessionKey: attempt.sessionKey,
-        controllerAgentId: sessionAgentId,
-        hasSessionsYield: capabilityToolNames.has("sessions_yield"),
-      });
-      if (activeSubagentPromptAddition) {
-        setSystemPrompt(
-          prependSystemPromptAddition({
-            systemPrompt: systemPromptText,
-            systemPromptAddition: activeSubagentPromptAddition,
-          }),
-        );
-      }
-    }
-
-    const limited = (() => {
-      if (isSettledTurnFinalization) {
-        return validated;
-      }
+    let limited = validated;
+    if (!isSettledTurnFinalization) {
       const heartbeatSummary =
         attempt.config && sessionAgentId
           ? resolveHeartbeatSummaryForAgent(attempt.config, sessionAgentId)
@@ -178,104 +149,50 @@ export async function prepareEmbeddedAttemptHistory(
         attempt.model,
         {
           sessionId: attempt.sessionId,
-          authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: compactionReplayEnabled,
         },
       );
       // Truncation can orphan tool_result blocks by removing the assistant message
       // that contained the matching tool_use, so repair the pairs once more.
-      return transcriptPolicy.repairToolUseResultPairing
+      limited = transcriptPolicy.repairToolUseResultPairing
         ? sanitizeToolUseResultPairingForModel(truncated, isOpenAIResponsesApi)
         : truncated;
-    })();
+    }
     cacheTrace?.recordStage("session:limited", { messages: limited });
     if (limited.length > 0 || prior.length > 0) {
       activeSession.agent.state.messages = limited;
     }
   }
 
-  let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> = "assembled";
-  let contextEngineAssemblySucceeded = false;
-  let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
-  if (activeContextEngine) {
-    try {
-      // Assemble may window the input in place. Preserve the original history for
-      // the overflow precheck when the engine says preassembly can still overflow.
-      const preassemblyMessages = activeSession.messages.slice();
-      const reserveTokens = Math.max(0, Math.floor(settingsManager.getCompactionReserveTokens()));
-      const contextTokenBudget = Math.max(
-        1,
-        Math.floor(
-          attempt.contextTokenBudget ??
-            attempt.model.contextWindow ??
-            attempt.model.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
-        ),
-      );
-      const promptBudget = Math.max(1, contextTokenBudget - reserveTokens);
-      const prompt = orphanRepair?.contextEnginePrompt ?? attempt.prompt ?? "";
-      const renderedPromptTokens = estimateRenderedLlmBoundaryTokenPressure({
-        systemPrompt: systemPromptText,
-        prompt,
-      });
-      const messageBudget = Math.max(1, promptBudget - renderedPromptTokens);
-      const transcriptReadFence = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const assembled = await assembleHarnessContextEngine({
-        contextEngine: activeContextEngine,
-        sessionId: attempt.sessionId,
-        sessionKey: attempt.sessionKey,
-        agentId: sessionAgentId,
-        appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
-        messages: activeSession.messages,
-        tokenBudget: messageBudget,
-        availableTools: new Set(capabilityToolNames),
-        citationsMode: attempt.config?.memory?.citations,
-        sandboxed,
-        modelId: attempt.modelId,
-        maxOutputTokens: reserveTokens,
-        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        providerId: attempt.provider,
-        requestedModelId: attempt.requestedModelId,
-        fallbackReason: attempt.fallbackReason,
-        degradedReason: attempt.degradedReason,
-        transcriptReadFence,
-        ...(attempt.prompt !== undefined ? { prompt } : {}),
-      });
-      if (!assembled) {
-        throw new Error("context engine assemble returned no result");
-      }
-      const assembledMessages = transcriptPolicy.repairToolUseResultPairing
-        ? sanitizeToolUseResultPairingForModel(assembled.messages, isOpenAIResponsesApi)
-        : assembled.messages;
-      if (assembledMessages !== activeSession.messages) {
-        activeSession.agent.state.messages = assembledMessages;
-      }
-      contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
-      contextEngineAssemblySucceeded = true;
-      if (contextEnginePromptAuthority === "preassembly_may_overflow") {
-        unwindowedContextEngineMessagesForPrecheck = preassemblyMessages;
-      }
-      if (assembled.systemPromptAddition) {
-        setSystemPrompt(
-          prependSystemPromptAddition({
-            systemPrompt: systemPromptText,
-            systemPromptAddition: assembled.systemPromptAddition,
-          }),
-        );
-        log.debug(
-          `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
-        );
-      }
-    } catch (error) {
-      log.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
-    }
+  const prompt = orphanRepair?.contextEnginePrompt ?? attempt.prompt ?? "";
+  const { messages, systemPrompt, ...prepared } = await prepareHarnessContextEnginePrompt({
+    ...attempt,
+    contextEngine: activeContextEngine,
+    agentId: sessionAgentId,
+    appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
+    messages: activeSession.messages,
+    availableTools: new Set(capabilityToolNames),
+    citationsMode: attempt.config?.memory?.citations,
+    sandboxed,
+    promptBudget: {
+      contextTokens:
+        attempt.contextTokenBudget ?? attempt.model.contextWindow ?? attempt.model.maxTokens,
+      reserveTokens: settingsManager.getCompactionReserveTokens(),
+      systemPrompt: systemPromptText,
+      prompt,
+    },
+    contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+    providerId: attempt.provider,
+    transcriptReadFence: attempt.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+    ...(attempt.prompt !== undefined ? { prompt } : {}),
+    repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
+    isOpenAIResponsesApi,
+    warn: (message) => log.warn(message),
+  });
+  activeSession.agent.state.messages = messages;
+  if (systemPrompt !== systemPromptText) {
+    setSystemPrompt(systemPrompt);
   }
-
-  return {
-    contextEnginePromptAuthority,
-    contextEngineAssemblySucceeded,
-    ...(unwindowedContextEngineMessagesForPrecheck
-      ? { unwindowedContextEngineMessagesForPrecheck }
-      : {}),
-  };
+  return prepared;
 }

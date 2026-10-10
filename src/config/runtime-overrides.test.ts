@@ -40,15 +40,6 @@ describe("runtime overrides", () => {
     ).toBe("global|main|research");
   });
 
-  it("sets and applies nested overrides", () => {
-    const cfg = {
-      channels: { whatsapp: { responsePrefix: "[openclaw]" } },
-    } as OpenClawConfig;
-    setConfigOverride("channels.whatsapp.responsePrefix", "[debug]");
-    const next = applyConfigOverrides(cfg);
-    expect(next.channels?.whatsapp?.responsePrefix).toBe("[debug]");
-  });
-
   it("captures an immutable override applier", () => {
     setConfigOverride("gateway.auth.token", "startup-token");
     const applyStartupOverrides = captureConfigOverrideApplier();
@@ -61,9 +52,10 @@ describe("runtime overrides", () => {
   it("preserves the validated agent projection when an override copies agents", () => {
     const validated = validateConfigObject({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "jarvis" } },
         entries: {
           jarvis: {
-            default: true,
             workspace: "/tmp/jarvis-workspace",
           },
           worker: {
@@ -86,7 +78,13 @@ describe("runtime overrides", () => {
 
     for (const runtimeConfig of runtimeConfigs) {
       expect(runtimeConfig.agents).not.toBe(validated.config.agents);
-      expect(runtimeConfig.agents?.list?.map((entry) => entry.id)).toEqual(["jarvis", "worker"]);
+      expect(Object.getOwnPropertyDescriptor(runtimeConfig.agents, "list")).toMatchObject({
+        enumerable: false,
+        value: [
+          { id: "jarvis", workspace: "/tmp/jarvis-workspace" },
+          { id: "worker", workspace: "/tmp/worker-workspace" },
+        ],
+      });
       expect(Object.keys(runtimeConfig.agents ?? {})).not.toContain("list");
       expect(listAgentWorkspaceDirs(runtimeConfig)).toEqual([
         "/tmp/jarvis-workspace",

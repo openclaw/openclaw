@@ -78,7 +78,7 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).toContain(
-      "Be extremely selective: reply only when directly addressed or clearly helpful.",
+      "reply only when directly addressed or you can add clear value",
     );
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     const channelToolOnlyContext = isolatedGroups.buildGroupChatContext({
@@ -88,7 +88,7 @@ describe("group runtime loading", () => {
       silentToken: "NO_REPLY",
     });
     expect(channelToolOnlyContext).toContain("visible channel response");
-    expect(channelToolOnlyContext).toContain("posted to this channel");
+    expect(channelToolOnlyContext).toContain("not automatically sent to this channel");
     expect(channelToolOnlyContext).not.toContain("visible group response");
     expect(channelToolOnlyContext).not.toContain("posted to the group");
     expect(
@@ -113,19 +113,19 @@ describe("group runtime loading", () => {
 
   it("builds direct chat context without silent-token guidance", () => {
     expect(
-      groups.buildDirectChatContext({
+      groups.buildSourceConversationContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).toBe(
       "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
     );
     expect(
-      groups.buildDirectChatContext({
+      groups.buildSourceConversationContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).not.toContain("NO_REPLY");
 
-    const toolOnlyContext = groups.buildDirectChatContext({
+    const toolOnlyContext = groups.buildSourceConversationContext({
       sessionCtx: { ChatType: "direct", Provider: "telegram" },
       sourceReplyDeliveryMode: "message_tool_only",
     });
@@ -167,29 +167,6 @@ describe("group runtime loading", () => {
     expect(groups.buildGroupChatContext({ sessionCtx: { Provider: "plain-chat" } })).toContain(
       "Avoid Markdown tables",
     );
-  });
-
-  it("gates group silent-token instructions on the resolved silent reply policy", () => {
-    const allowed = groups.buildGroupChatContext({
-      sessionCtx: { Provider: "whatsapp" },
-      silentToken: "NO_REPLY",
-      silentReplyPolicy: "allow",
-    });
-    expect(allowed).toContain('reply with exactly "NO_REPLY"');
-    expect(allowed).toContain('your final answer must still be exactly "NO_REPLY"');
-    expect(allowed).toContain("Never say that you are staying quiet");
-    expect(allowed).toContain(
-      "Be extremely selective: reply only when directly addressed or clearly helpful.",
-    );
-    expect(allowed).not.toContain("Otherwise stay silent.");
-
-    const disallowed = groups.buildGroupChatContext({
-      sessionCtx: { Provider: "whatsapp" },
-      silentToken: "NO_REPLY",
-      silentReplyPolicy: "disallow",
-    });
-    expect(disallowed).not.toContain("NO_REPLY");
-    expect(disallowed).not.toContain("Never say that you are staying quiet");
   });
 
   it("keeps per-message mention state out of stable group context", () => {

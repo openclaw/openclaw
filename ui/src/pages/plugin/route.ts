@@ -1,23 +1,24 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import {
+  INTERNAL_PLUGIN_PATH_PARAM,
+  pluginTabSlugFromPath,
+  routePageSpec,
+} from "../../app-route-paths.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 
 type PluginTabRef = {
   pluginId: string;
   id: string;
 };
 
-/** Reads the plugin tab reference from a `/plugin?plugin=<pluginId>&id=<tab>` search string. */
-export function pluginTabRefFromSearch(search: string): PluginTabRef {
+export function pluginTabRefFromSearch(search: string, pathname = "", basePath = ""): PluginTabRef {
   const params = new URLSearchParams(search);
+  const tab = pluginTabSlugFromPath(params.get(INTERNAL_PLUGIN_PATH_PARAM) ?? pathname, basePath);
   return {
-    pluginId: params.get("plugin")?.trim() ?? "",
-    id: params.get("id")?.trim() ?? "",
+    pluginId: tab?.pluginId ?? params.get("plugin")?.trim() ?? "",
+    id: tab?.id ?? params.get("id")?.trim() ?? "",
   };
-}
-
-export function pluginTabSearch(ref: PluginTabRef): string {
-  return `?${new URLSearchParams({ plugin: ref.pluginId, id: ref.id }).toString()}`;
 }
 
 /** Stable key for one tab; ids are only unique per plugin, so both parts matter. */
@@ -33,13 +34,16 @@ function pluginPageParams(search: string): Readonly<Record<string, string>> {
   );
 }
 
-// One static route hosts every plugin-declared tab; the router only supports
-// exact paths, so the tab reference travels in the query.
+// The synthetic search parameter carries dynamic paths through the exact-path router.
 export const page = definePage({
   ...routePageSpec("plugin"),
-  loaderDeps: (_context, location) => location.search,
-  loader: (_context, options) => ({
-    ...pluginTabRefFromSearch(options.location.search),
+  loaderDeps: (context: ApplicationContext, location) =>
+    JSON.stringify([
+      pluginTabKey(pluginTabRefFromSearch(location.search, location.pathname, context.basePath)),
+      pluginPageParams(location.search),
+    ]),
+  loader: (context: ApplicationContext, options) => ({
+    ...pluginTabRefFromSearch(options.location.search, options.location.pathname, context.basePath),
     params: pluginPageParams(options.location.search),
   }),
   component: () =>

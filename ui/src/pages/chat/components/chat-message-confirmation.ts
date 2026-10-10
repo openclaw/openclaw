@@ -1,7 +1,10 @@
 import { html } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
+
+registerChatMessageMetadataEnglish();
 
 // Persisted preference key: renaming it would reset users' "Don't ask again" choice.
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
@@ -9,37 +12,34 @@ const CONFIRMED_ACTION_VIEWPORT_MARGIN_PX = 8;
 const CONFIRMED_ACTION_TRIGGER_GAP_PX = 6;
 
 type ConfirmedActionDismissOptions = { restoreFocus?: boolean };
-type ConfirmedActionDismisser = (options?: ConfirmedActionDismissOptions) => void;
+const confirmedActions = new Map<
+  Element,
+  { popover: HTMLElement; dismiss: (options?: ConfirmedActionDismissOptions) => void }
+>();
 
-const confirmedActionDismissers = new WeakMap<Element, ConfirmedActionDismisser>();
-const confirmedActionOwners = new WeakMap<Element, Element>();
-const confirmedActionPopovers = new Set<HTMLElement>();
-const confirmedActionPopoversByOwner = new WeakMap<Element, HTMLElement>();
-
-function shouldSkipActionConfirm(preferenceName: string): boolean {
+function shouldSkipRewindConfirm(): boolean {
   try {
-    return getSafeLocalStorage()?.getItem(preferenceName) === "1";
+    return getSafeLocalStorage()?.getItem(SKIP_REWIND_CONFIRM_PREFERENCE) === "1";
   } catch {
     return false;
   }
 }
 
-function dismissConfirmedAction(element: Element, options?: ConfirmedActionDismissOptions) {
-  const dismiss = confirmedActionDismissers.get(element);
-  if (dismiss) {
-    dismiss(options);
-    return;
-  }
-  element.remove();
-}
-
 export function dismissConfirmedActionPopovers(owner: ParentNode): void {
-  for (const popover of confirmedActionPopovers) {
-    const popoverOwner = confirmedActionOwners.get(popover);
-    if (popoverOwner && owner instanceof Node && owner.contains(popoverOwner)) {
-      dismissConfirmedAction(popover);
+  for (const [popoverOwner, { dismiss }] of confirmedActions) {
+    if (owner instanceof Node && owner.contains(popoverOwner)) {
+      dismiss();
     }
   }
+}
+
+export function isConfirmedActionPopoverFocused(owner: Node): boolean {
+  for (const [popoverOwner, { popover }] of confirmedActions) {
+    if (owner.contains(popoverOwner) && popover.contains(document.activeElement)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveViewportBounds() {
@@ -95,21 +95,8 @@ function placeConfirmedActionPopover(trigger: HTMLElement, popover: HTMLElement)
   popover.dataset.placement = placeBelow ? "below" : "above";
 }
 
-type ConfirmedActionParams = {
-  action: () => void;
-  confirmLabel: string;
-  confirmText: string;
-  preferenceName: string;
-};
-
 export function renderRewindButton(onRewind: () => void) {
   const label = t("chat.messages.rewind");
-  const params: ConfirmedActionParams = {
-    action: onRewind,
-    confirmLabel: label,
-    confirmText: t("chat.messages.rewindConfirm"),
-    preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
-  };
   return html`
     <span class="chat-confirm-wrap chat-rewind-wrap">
       <openclaw-tooltip .content=${label}>
@@ -117,7 +104,7 @@ export function renderRewindButton(onRewind: () => void) {
           class="chat-group-rewind"
           aria-label=${label}
           @click=${(event: Event) =>
-            openConfirmedActionPopover(event.currentTarget as HTMLElement, params)}
+            openChatRewindConfirmation(event.currentTarget as HTMLElement, onRewind)}
         >
           ${icons.refresh}
         </button>
@@ -126,35 +113,28 @@ export function renderRewindButton(onRewind: () => void) {
   `;
 }
 
-export function openChatRewindConfirmation(trigger: HTMLElement, action: () => void): void {
-  openConfirmedActionPopover(trigger, {
-    action,
-    confirmLabel: t("chat.messages.rewind"),
-    confirmText: t("chat.messages.rewindConfirm"),
-    preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
-  });
-}
-
-function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionParams): void {
-  if (shouldSkipActionConfirm(params.preferenceName)) {
-    params.action();
+export function openChatRewindConfirmation(btn: HTMLElement, action: () => void): void {
+  const confirmLabel = t("chat.messages.rewind");
+  const confirmText = t("chat.messages.rewindConfirm");
+  if (shouldSkipRewindConfirm()) {
+    action();
     return;
   }
-  const wrap = btn.closest(".chat-confirm-wrap") as HTMLElement | null;
+  const wrap = btn.closest<HTMLElement>(".chat-confirm-wrap");
   if (!wrap) {
     return;
   }
   const owner = wrap;
-  const existing = confirmedActionPopoversByOwner.get(owner);
+  const existing = confirmedActions.get(owner);
   if (existing) {
-    dismissConfirmedAction(existing, { restoreFocus: true });
+    existing.dismiss({ restoreFocus: true });
     return;
   }
   const popover = document.createElement("div");
   popover.className = "chat-confirm-popover";
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-modal", "true");
-  popover.setAttribute("aria-label", params.confirmText);
+  popover.setAttribute("aria-label", confirmText);
   popover.innerHTML = `
     <p class="chat-confirm-popover__text"></p>
     <label class="chat-confirm-popover__remember">
@@ -166,34 +146,22 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
       <button class="chat-confirm-popover__yes" type="button"></button>
     </div>
   `;
-  const confirmText = popover.querySelector(".chat-confirm-popover__text");
-  const rememberText = popover.querySelector(".chat-confirm-popover__remember span");
-  const cancelButton = popover.querySelector(".chat-confirm-popover__cancel");
-  const confirmButton = popover.querySelector(".chat-confirm-popover__yes");
-  if (confirmText) {
-    confirmText.textContent = params.confirmText;
-  }
-  if (confirmButton) {
-    confirmButton.textContent = params.confirmLabel;
-  }
-  if (rememberText) {
-    rememberText.textContent = t("chat.messages.dontAskAgain");
-  }
-  if (cancelButton) {
-    cancelButton.textContent = t("common.cancel");
-  }
+  const cancel = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel")!;
+  const yes = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!;
+  const check = popover.querySelector<HTMLInputElement>(".chat-confirm-popover__check")!;
+  popover.querySelector(".chat-confirm-popover__text")!.textContent = confirmText;
+  yes.textContent = confirmLabel;
+  popover.querySelector(".chat-confirm-popover__remember span")!.textContent = t(
+    "chat.messages.dontAskAgain",
+  );
+  cancel.textContent = t("common.cancel");
   // Virtual transcript rows use transforms for positioning, which makes fixed
   // descendants relative to the row instead of the viewport. Portal the dialog
   // so the viewport-clamped coordinates stay correct in web and native hosts.
   owner.ownerDocument.body.appendChild(popover);
-  confirmedActionOwners.set(popover, owner);
-  confirmedActionPopovers.add(popover);
-  confirmedActionPopoversByOwner.set(owner, popover);
+  confirmedActions.set(owner, { popover, dismiss: dismissPopover });
   placeConfirmedActionPopover(btn, popover);
 
-  const cancel = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel")!;
-  const yes = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!;
-  const check = popover.querySelector<HTMLInputElement>(".chat-confirm-popover__check")!;
   let dismissed = false;
   let ownerObserver: MutationObserver | null = null;
   function dismissPopover(options?: ConfirmedActionDismissOptions) {
@@ -203,12 +171,9 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
     dismissed = true;
     ownerObserver?.disconnect();
     document.removeEventListener("click", closeOnOutside, true);
-    document.removeEventListener("contextmenu", closeOnContextMenu, true);
+    document.removeEventListener("contextmenu", closeOnOutside, true);
     window.removeEventListener("keydown", closeOnEscape, true);
-    confirmedActionDismissers.delete(popover);
-    confirmedActionOwners.delete(popover);
-    confirmedActionPopovers.delete(popover);
-    confirmedActionPopoversByOwner.delete(owner);
+    confirmedActions.delete(owner);
     popover.remove();
     if (options?.restoreFocus && btn.isConnected) {
       btn.focus({ preventScroll: true });
@@ -216,13 +181,11 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
   }
   function closeOnOutside(evt: MouseEvent) {
     const target = evt.target;
-    if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
-      dismissPopover();
-    }
-  }
-  function closeOnContextMenu(evt: MouseEvent) {
-    const target = evt.target;
-    if (target instanceof Node && !popover.contains(target)) {
+    if (
+      target instanceof Node &&
+      !popover.contains(target) &&
+      (evt.type === "contextmenu" || !btn.contains(target))
+    ) {
       dismissPopover();
     }
   }
@@ -238,38 +201,34 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
     if (evt.key !== "Tab") {
       return;
     }
-    const first = check;
-    const last = yes;
-    if (evt.shiftKey && document.activeElement === first) {
+    const from = evt.shiftKey ? check : yes;
+    const to = evt.shiftKey ? yes : check;
+    if (document.activeElement === from) {
       evt.preventDefault();
-      last.focus();
-    } else if (!evt.shiftKey && document.activeElement === last) {
-      evt.preventDefault();
-      first.focus();
+      to.focus();
     }
   }
-  confirmedActionDismissers.set(popover, dismissPopover);
   cancel.addEventListener("click", () => dismissPopover({ restoreFocus: true }));
   yes.addEventListener("click", () => {
     if (check.checked) {
       try {
-        getSafeLocalStorage()?.setItem(params.preferenceName, "1");
+        getSafeLocalStorage()?.setItem(SKIP_REWIND_CONFIRM_PREFERENCE, "1");
       } catch {}
     }
     dismissPopover();
-    params.action();
+    action();
   });
   // Keep this portaled dialog's clicks from dismissing its owning context menu.
   popover.addEventListener("click", (event) => event.stopPropagation());
   popover.addEventListener("keydown", containKeyboardFocus);
-  document.addEventListener("contextmenu", closeOnContextMenu, true);
+  document.addEventListener("contextmenu", closeOnOutside, true);
   window.addEventListener("keydown", closeOnEscape, true);
   ownerObserver = new MutationObserver(() => {
-    if (!wrap.isConnected || !btn.isConnected) {
+    if (!owner.isConnected || !btn.isConnected) {
       dismissPopover();
     }
   });
-  ownerObserver.observe(wrap.ownerDocument.body, { childList: true, subtree: true });
+  ownerObserver.observe(owner.ownerDocument.body, { childList: true, subtree: true });
   cancel.focus({ preventScroll: true });
   requestAnimationFrame(() => {
     if (!dismissed && popover.isConnected) {

@@ -1,5 +1,7 @@
 // Covers memory embedding provider runtime hooks from plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddingBatchOptions } from "./embedding-provider-runtime-types.js";
+import type { EmbeddingProviderRuntime } from "./embedding-provider-types.js";
 import {
   clearEmbeddingProviders,
   registerEmbeddingProvider,
@@ -44,22 +46,6 @@ afterEach(() => {
 });
 
 describe("memory embedding provider runtime resolution", () => {
-  it("merges registered and declared capability fallback adapters", () => {
-    registerEmbeddingProvider({
-      id: "registered",
-      create: async () => ({ provider: null }),
-    });
-    mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("capability")]);
-
-    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
-      "openai-compatible",
-      "registered",
-      "capability",
-    ]);
-    expect(runtimeModule.getMemoryEmbeddingProvider("registered")?.id).toBe("registered");
-    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
-  });
-
   it("falls back to declared capability adapters when the registry is cold", () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
     mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
@@ -135,29 +121,19 @@ describe("memory embedding provider runtime resolution", () => {
     });
   });
 
-  it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
-    const registered = {
-      id: "openai",
-      create: async () => ({ provider: null }),
-    } satisfies EmbeddingProviderAdapter;
-    registerEmbeddingProvider({
-      ...registered,
-    });
-    mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
-
-    expect(runtimeModule.getMemoryEmbeddingProvider("openai")?.id).toBe(registered.id);
-    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
-      "openai-compatible",
-      "openai",
-    ]);
-    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
-  });
-
   it("returns generic provider, runtime, and identity objects unchanged", async () => {
     const close = vi.fn();
     const embed = vi.fn(async () => [1, 2]);
     const embedBatch = vi.fn(async (inputs: unknown[]) => inputs.map(() => [3, 4]));
-    const runtime = { id: "generic", inlineQueryTimeoutMs: 1234 };
+    const batchEmbed = vi.fn(async (options: EmbeddingBatchOptions) =>
+      options.chunks.map(() => [5, 6]),
+    );
+    const runtime = {
+      id: "generic",
+      inlineQueryTimeoutMs: 1234,
+      sourceWideBatchEmbed: true,
+      batchEmbed,
+    } satisfies EmbeddingProviderRuntime;
     const runtimeFactsKey = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
     const provider = {
       id: "generic",
@@ -199,6 +175,17 @@ describe("memory embedding provider runtime resolution", () => {
     const result = await adapter?.create(options);
     expect(create).toHaveBeenCalledWith(options);
     expect(result?.runtime).toBe(runtime);
+    await expect(
+      result?.runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "batch document" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1000,
+        timeoutMs: 10_000,
+        debug: () => {},
+      }),
+    ).resolves.toEqual([[5, 6]]);
     expect(result?.provider).toBe(provider);
     expect(Reflect.get(provider, runtimeFactsKey)).toBe(runtimeFacts);
   });

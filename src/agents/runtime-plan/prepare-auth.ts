@@ -5,23 +5,37 @@
  */
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderModelRouteSource,
+  ProviderResolveModelRoutesContext,
+  ProviderRouteOverridePresence,
+} from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderResolveAuthProfileIdContext } from "../../plugins/provider-runtime.types.js";
+import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import {
   prependAuthProfilePin,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/read-only-availability.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
+import {
+  isProfileInCooldown,
+  resolveProfilesUnavailableReason,
+} from "../auth-profiles/usage-state.js";
+import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
-import { resolveProviderConfigSecretInput } from "../model-auth-provider-config.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import {
   hasUsableCustomProviderApiKey,
+  resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
-} from "../model-auth.js";
+} from "../model-auth-provider-config.js";
+import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
+import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-model-routes.js";
 import {
   buildProviderModelAuthDirectSource,
@@ -29,8 +43,12 @@ import {
   classifyProviderModelAuthSource,
   type ProviderModelAuthDirectSource,
   type ProviderModelAuthProfileSource,
+  type ProviderModelAuthSource,
 } from "../provider-model-auth-source-plan.js";
-import { selectProviderModelAuthSources } from "../provider-model-route-auth.js";
+import {
+  selectProviderModelAuthSources,
+  resolveProviderModelRouteAuthRequirement,
+} from "../provider-model-route-auth.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
@@ -39,8 +57,12 @@ type PrepareAgentRuntimeAuthPlanParams = {
   modelId: string;
   modelApi?: string | null;
   modelBaseUrl?: unknown;
+  /** Physical catalog rows for the logical model; replaces the single api/baseUrl observation. */
+  observedRoutes?: readonly ProviderModelRouteSource[];
   requestTransportOverrides?: ProviderRouteOverridePresence;
   config?: OpenClawConfig;
+  agentId?: string;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
@@ -48,23 +70,39 @@ type PrepareAgentRuntimeAuthPlanParams = {
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user" | "user-link";
+  allowAuthProfileFallback?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";
   allowHarnessAuthProfileForwarding?: boolean;
   allowTransientCooldownProbe?: boolean;
-  resolveProviderPreferredProfileId?(context: {
-    config?: OpenClawConfig;
-    agentDir?: string;
-    workspaceDir?: string;
-    provider: string;
-    modelId: string;
-    preferredProfileId?: string;
-    lockedProfileId?: string;
-    profileOrder: string[];
-    authStore: AuthProfileStore;
-  }): string | undefined;
+  resolveProviderPreferredProfileId?(
+    context: ProviderResolveAuthProfileIdContext,
+  ): string | undefined;
 };
+
+function createAuthProfileCooldownError(
+  params: PrepareAgentRuntimeAuthPlanParams,
+  profileId: string,
+): FailoverError {
+  const reason =
+    (params.authProfileStore &&
+      resolveProfilesUnavailableReason({
+        store: params.authProfileStore,
+        profileIds: [profileId],
+      })) ??
+    "unknown";
+  return new FailoverError(
+    `Auth profile "${profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
+    {
+      reason,
+      status: resolveFailoverStatus(reason),
+      provider: params.provider,
+      model: params.modelId,
+      profileId,
+    },
+  );
+}
 
 export type PreparedAgentRuntimeAuthAttempt =
   | {
@@ -96,6 +134,32 @@ export type PreparedAgentRuntimeAuth = {
   /** Ordered physical attempts; every route/profile tuple was selected by this planner. */
   attempts: readonly PreparedAgentRuntimeAuthAttempt[];
 };
+
+type LogicalAuthAttempt = Extract<
+  ReturnType<typeof selectProviderModelAuthSources>,
+  { kind: "selected" }
+>["attempts"][number];
+
+function prepareAuthAttempts<Attempt extends LogicalAuthAttempt>(
+  attempts: readonly Attempt[],
+  buildPlan: (attempt: Attempt | undefined, index: number) => AgentRuntimeAuthPlan,
+): PreparedAgentRuntimeAuth {
+  const prepared: PreparedAgentRuntimeAuthAttempt[] = attempts.map((attempt, index) => {
+    const plan = buildPlan(attempt, index);
+    return attempt.kind === "profile"
+      ? { kind: "profile", plan, profileId: attempt.source.profileId }
+      : {
+          kind: "direct",
+          plan,
+          allowAuthProfileFallback: attempt.allowAuthProfileFallback,
+          requiresPriorProfileAttempt: attempts
+            .slice(0, index)
+            .some((candidate) => candidate.kind === "profile"),
+        };
+  });
+  const plan = prepared[0]?.plan ?? buildPlan(undefined, 0);
+  return { plan, attempts: prepared.length > 0 ? prepared : [{ kind: "implicit", plan }] };
+}
 
 /** Prevents a direct fallback from bypassing a prepared profile tier. */
 export function canRunPreparedAgentRuntimeAuthAttempt(params: {
@@ -155,13 +219,28 @@ function resolveProfile(
         env: params.env ?? process.env,
       })
     : undefined;
+  const authFlow = credential?.type === "oauth" ? credential.authFlow : undefined;
+  const policy =
+    credential?.type === "oauth" && authFlow
+      ? resolveProviderModelAuthPolicy({
+          provider: credential.provider,
+          mode: credential.type,
+          authFlow,
+        })
+      : undefined;
+  const pendingOAuthRefresh =
+    credential?.type === "oauth" && isPendingOAuthRefreshFence(credential);
   return {
     kind: "profile",
     profileId,
     provider: credential?.provider ?? configured?.provider,
     mode: credential?.type ?? configured?.mode,
+    ...(authFlow ? { authFlow, authRequirement: policy?.authRequirement } : {}),
     // Runtime materialization owns secret readiness; only proven-invalid facts are terminal here.
-    readiness: availability === false ? "unavailable" : "unknown",
+    readiness:
+      policy?.compatible === false || (availability === false && !pendingOAuthRefresh)
+        ? "unavailable"
+        : "unknown",
     cooldown:
       !options.ignoreCooldown &&
       params.authProfileStore &&
@@ -197,8 +276,9 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
     );
   }
   if (isProfileInCooldown(params.store, reference.profileId, undefined, params.modelId)) {
-    throw new Error(
-      `Auth profile "${reference.profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
+    throw createAuthProfileCooldownError(
+      { ...params, authProfileStore: params.store },
+      reference.profileId,
     );
   }
   return reference;
@@ -206,8 +286,9 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 
 /** Selects concrete provider routes and ordered credentials as one immutable preparation. */
 export function prepareAgentRuntimeAuth(
-  params: PrepareAgentRuntimeAuthPlanParams,
+  input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
+  const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
     params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
@@ -237,9 +318,20 @@ export function prepareAgentRuntimeAuth(
           store,
           provider: authProfileSelectionProvider,
           profileId: userPinnedProfileId,
+          includePendingOAuthRefresh: true,
         })
       : { eligible: false };
     if (!eligibility.eligible) {
+      if (
+        !store?.profiles[userPinnedProfileId] &&
+        params.config?.auth?.profiles?.[userPinnedProfileId]?.mode !== "aws-sdk"
+      ) {
+        throw createSelectedAuthProfileUnavailableError({
+          profileId: userPinnedProfileId,
+          provider: authProfileSelectionProvider,
+          modelId: params.modelId,
+        });
+      }
       throw new Error(
         `Auth profile "${userPinnedProfileId}" is not configured for ${authProfileSelectionProvider}.`,
       );
@@ -288,7 +380,8 @@ export function prepareAgentRuntimeAuth(
   // Explicit auth owns the physical route; apiKey is only its bearer material.
   const selectedConfiguredAuthMode =
     configuredAuthMode ?? (providerHasDirectMaterial ? "api-key" : undefined);
-  const selectedProfileId = boundProfileId;
+  const selectedProfileId =
+    boundProfileId ?? (params.allowAuthProfileFallback === false ? userPinnedProfileId : undefined);
   const resolvedAutomaticOrder =
     !harnessAllowsAuthProfileForwarding ||
     selectedProfileId ||
@@ -307,6 +400,7 @@ export function prepareAgentRuntimeAuth(
           preferredProfile: requestedProfileId,
           forModel: params.modelId,
           readinessMode: "read-only",
+          includePendingOAuthRefresh: true,
         });
   const automaticOrderResolution = prependAuthProfilePin(
     resolvedAutomaticOrder,
@@ -363,11 +457,11 @@ export function prepareAgentRuntimeAuth(
         },
       )
     : null;
-  // OpenAI native account discovery is harness-owned synthetic auth, not a
-  // bearer credential for an OpenClaw request route.
+  // A setup hint does not supply a credential for a harness-owned login.
   const directPlanningEvidence =
     directPlanningCandidate?.kind === "setup-provider" &&
-    authProfileSelectionProvider.trim().toLowerCase() === "openai"
+    (params.harnessAuthBootstrap === "harness" ||
+      authProfileSelectionProvider.trim().toLowerCase() === "openai")
       ? null
       : directPlanningCandidate;
   const directPlanningMode = directPlanningEvidence
@@ -391,12 +485,15 @@ export function prepareAgentRuntimeAuth(
       ? directSource(selectedConfiguredAuthMode)
       : undefined;
   const automaticRouteAuthMode =
-    fallbackDirectSource && configuredAuthMode && !providerBindingSuppressesProfiles
+    fallbackDirectSource && !providerBindingSuppressesProfiles && !configuredAuthMode
       ? undefined
       : selectedConfiguredAuthMode;
   const ownership = selectedProfileId
     ? {
-        reason: "provider-binding" as const,
+        reason:
+          selectedProfileId === userPinnedProfileId
+            ? ("runtime-binding" as const)
+            : ("provider-binding" as const),
         source: resolveProfile(params, selectedProfileId, { ignoreCooldown: true }),
       }
     : configuredAwsSdkAuth
@@ -417,18 +514,80 @@ export function prepareAgentRuntimeAuth(
       ? { preferredProfileId: userPinnedProfileId ?? providerPreferredProfileId }
       : {}),
     explicitOrder: automaticOrderResolution.hasExplicitOrder,
+    preserveProfilePriority: Boolean(userPinnedProfileId),
     ...(fallbackDirectSource ? { fallback: fallbackDirectSource } : {}),
     allowCooldown: params.allowTransientCooldownProbe,
   });
+  const pinnedSource =
+    sourcePlan.kind === "required"
+      ? sourcePlan.source
+      : sourcePlan.orderedProfiles.find((source) => source.profileId === userPinnedProfileId);
   const resolution = resolveOpenAIModelRoutes({
     provider: params.provider,
     modelId: params.modelId,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
+    observedRoutes: params.observedRoutes,
     config: params.config,
+    agentId: params.agentId,
+    primaryModel:
+      !params.routeIntent && params.config
+        ? resolveDefaultModelForAgent({
+            cfg: params.config,
+            agentId: params.agentId,
+            allowManifestNormalization: false,
+            allowPluginNormalization: false,
+          })
+        : undefined,
+    resolveProfileAuthMode: (profileId) => params.authProfileStore?.profiles[profileId]?.type,
+    resolveProfileAuthFlow: (profileId) => {
+      const credential = params.authProfileStore?.profiles[profileId];
+      return credential?.type === "oauth" ? credential.authFlow : undefined;
+    },
+    routeIntent: params.routeIntent,
+    pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
+      sourcePlan.kind === "required"
+        ? sourcePlan.source.mode
+        : (pinnedSource?.mode ?? configuredAuthMode),
+      pinnedSource?.kind === "profile" ? pinnedSource.authRequirement : undefined,
+    ),
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
   });
+  const authPlanParams = {
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.metadataSnapshot,
+    harnessId: params.harnessId,
+    harnessRuntime: params.harnessRuntime,
+    allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
+  };
+  const buildAttemptPlan = (
+    source: ProviderModelAuthSource | undefined,
+    candidateIds: string[] | undefined,
+    modelRoute?: AgentRuntimeAuthPlan["modelRoute"],
+  ) => {
+    const profile = source?.kind === "profile" ? source : undefined;
+    return buildAgentRuntimeAuthPlan({
+      ...authPlanParams,
+      authProfileProvider: profile?.provider,
+      authProfileFlow: profile?.authFlow,
+      authProfileMode:
+        profile?.mode ?? (source?.kind === "direct" ? source.mode : selectedConfiguredAuthMode),
+      sessionAuthProfileId: profile?.profileId,
+      sessionAuthProfileSource: profile
+        ? profile.profileId === userPinnedProfileId
+          ? "user"
+          : "auto"
+        : undefined,
+      sessionAuthProfileCandidateIds: candidateIds,
+      credentialSource: source ? classifyProviderModelAuthSource(source) : { kind: "none" },
+      modelRoute,
+    });
+  };
   if (!resolution || resolution.kind === "indeterminate") {
     const sourceDecision = selectProviderModelAuthSources({
       provider: authProfileSelectionProvider,
@@ -436,9 +595,7 @@ export function prepareAgentRuntimeAuth(
     });
     if (sourceDecision.kind === "rejected") {
       if (sourceDecision.reason === "all-cooldown" && sourceDecision.source) {
-        throw new Error(
-          `Auth profile "${sourceDecision.source.profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
-        );
+        throw createAuthProfileCooldownError(params, sourceDecision.source.profileId);
       }
       throw new Error(sourceDecision.message);
     }
@@ -446,65 +603,22 @@ export function prepareAgentRuntimeAuth(
       attempt: (typeof sourceDecision.attempts)[number] | undefined,
       candidateIndex: number,
     ) => {
-      const profile = attempt?.kind === "profile" ? attempt.source : undefined;
       const candidateIds = sourceDecision.attempts
         .slice(candidateIndex)
         .flatMap((candidate) => (candidate.kind === "profile" ? [candidate.source.profileId] : []));
-      return buildAgentRuntimeAuthPlan({
-        provider: params.provider,
-        modelId: params.modelId,
-        authProfileProvider: profile?.provider,
-        authProfileMode:
-          profile?.mode ??
-          (attempt?.kind === "direct" ? attempt.source.mode : selectedConfiguredAuthMode),
-        sessionAuthProfileId: profile?.profileId,
-        sessionAuthProfileSource: profile
-          ? profile.profileId === userPinnedProfileId
-            ? "user"
-            : "auto"
-          : undefined,
-        sessionAuthProfileCandidateIds: candidateIds.length > 0 ? candidateIds : undefined,
-        credentialSource: attempt
-          ? classifyProviderModelAuthSource(attempt.source)
-          : { kind: "none" },
-        config: params.config,
-        env: params.env,
-        workspaceDir: params.workspaceDir,
-        metadataSnapshot: params.metadataSnapshot,
-        harnessId: params.harnessId,
-        harnessRuntime: params.harnessRuntime,
-        allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
-      });
+      return buildAttemptPlan(attempt?.source, candidateIds.length > 0 ? candidateIds : undefined);
     };
-    const attempts: PreparedAgentRuntimeAuthAttempt[] = sourceDecision.attempts.map(
-      (attempt, index) => {
-        const plan = buildGenericPlan(attempt, index);
-        return attempt.kind === "profile"
-          ? { kind: "profile", plan, profileId: attempt.source.profileId }
-          : {
-              kind: "direct",
-              plan,
-              allowAuthProfileFallback: attempt.allowAuthProfileFallback,
-              requiresPriorProfileAttempt: sourceDecision.attempts
-                .slice(0, index)
-                .some((candidate) => candidate.kind === "profile"),
-            };
-      },
-    );
-    const plan = attempts[0]?.plan ?? buildGenericPlan(undefined, 0);
+    const prepared = prepareAuthAttempts(sourceDecision.attempts, buildGenericPlan);
     if (
       selectedProfileId &&
       harnessOwnsOpenAIAuth &&
-      plan.forwardedAuthProfileId !== selectedProfileId
+      prepared.plan.forwardedAuthProfileId !== selectedProfileId
     ) {
       throw new Error(
         `Auth profile "${selectedProfileId}" cannot be forwarded to the codex runtime.`,
       );
     }
-    return {
-      plan,
-      attempts: attempts.length > 0 ? attempts : [{ kind: "implicit", plan }],
-    };
+    return prepared;
   }
   if (resolution.kind === "incompatible") {
     throw new Error(resolution.message);
@@ -529,15 +643,7 @@ export function prepareAgentRuntimeAuth(
   });
   if (routeAuthDecision.kind === "deferred") {
     const plan = buildAgentRuntimeAuthPlan({
-      provider: params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      env: params.env,
-      workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
-      harnessId: params.harnessId,
-      harnessRuntime: params.harnessRuntime,
-      allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
+      ...authPlanParams,
       deferredRouteSupport: routeAuthDecision.routeSupport,
     });
     return { plan, attempts: [{ kind: "implicit", plan }] };
@@ -548,61 +654,22 @@ export function prepareAgentRuntimeAuth(
       routeAuthDecision.reason === "all-cooldown" &&
       routeAuthDecision.source
     ) {
-      throw new Error(
-        `Auth profile "${routeAuthDecision.source.profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
-      );
+      throw createAuthProfileCooldownError(params, routeAuthDecision.source.profileId);
     }
     throw new Error(routeAuthDecision.message);
   }
   const buildRoutedPlan = (attempt: (typeof routeAuthDecision.attempts)[number] | undefined) => {
-    const profile = attempt?.kind === "profile" ? attempt.source : undefined;
     const route = attempt?.route ?? routeAuthDecision.selection.route;
-    return buildAgentRuntimeAuthPlan({
-      provider: params.provider,
-      modelId: params.modelId,
-      authProfileProvider: profile?.provider,
-      authProfileMode:
-        profile?.mode ??
-        (attempt?.kind === "direct" ? attempt.source.mode : selectedConfiguredAuthMode),
-      sessionAuthProfileId: profile?.profileId,
-      sessionAuthProfileSource: profile
-        ? profile.profileId === userPinnedProfileId
-          ? "user"
-          : "auto"
-        : undefined,
-      sessionAuthProfileCandidateIds:
-        attempt?.kind === "profile" ? [...attempt.sameRouteProfileIds] : undefined,
-      credentialSource: attempt
-        ? classifyProviderModelAuthSource(attempt.source)
-        : { kind: "none" },
-      modelRoute: toPreparedRoute(route),
-      config: params.config,
-      env: params.env,
-      workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
-      harnessId: params.harnessId,
-      harnessRuntime: params.harnessRuntime,
-      allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
-    });
+    return buildAttemptPlan(
+      attempt?.source,
+      attempt?.kind === "profile" ? [...attempt.sameRouteProfileIds] : undefined,
+      toPreparedRoute(route),
+    );
   };
-  const attempts: PreparedAgentRuntimeAuthAttempt[] = routeAuthDecision.attempts.map(
-    (attempt, index) => {
-      const plan = buildRoutedPlan(attempt);
-      return attempt.kind === "profile"
-        ? { kind: "profile", plan, profileId: attempt.source.profileId }
-        : {
-            kind: "direct",
-            plan,
-            allowAuthProfileFallback: attempt.allowAuthProfileFallback,
-            requiresPriorProfileAttempt: routeAuthDecision.attempts
-              .slice(0, index)
-              .some((candidate) => candidate.kind === "profile"),
-          };
-    },
-  );
-  const plan = attempts[0]?.plan ?? buildRoutedPlan(undefined);
-  for (const attempt of attempts) {
+  const prepared = prepareAuthAttempts(routeAuthDecision.attempts, buildRoutedPlan);
+  for (const attempt of prepared.attempts) {
     if (
+      attempt.kind !== "implicit" &&
       attempt.profileId &&
       harnessOwnsOpenAIAuth &&
       attempt.plan.forwardedAuthProfileId !== attempt.profileId
@@ -612,8 +679,5 @@ export function prepareAgentRuntimeAuth(
       );
     }
   }
-  return {
-    plan,
-    attempts: attempts.length > 0 ? attempts : [{ kind: "implicit", plan }],
-  };
+  return prepared;
 }

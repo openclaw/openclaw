@@ -103,9 +103,9 @@ the verb pay no cost.
 openclaw plugins enable oc-path
 ```
 
-Restart the Gateway (if you run one) so the manifest snapshot picks up the new
-state. Bare `openclaw path` invocations work immediately on the same host;
-the CLI loads the plugin on demand.
+Bare `openclaw path` invocations work immediately on the same host; the CLI
+loads the plugin on demand. A running Gateway applies enablement automatically;
+see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Disable with:
 

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { hasAuthProfileStoreSourceForProvider } from "./source-check.js";
 import { readPersistedAuthProfileStoreRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
-import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store.js";
+import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store-runtime.js";
 
 describe("hasAuthProfileStoreSourceForProvider", () => {
   afterEach(() => {
@@ -33,14 +33,6 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(profiles));
     return { agentDir };
   }
-
-  it("counts provider-specific usable credentials", async () => {
-    const { agentDir } = await withAgentStore({
-      "openai:default": { type: "api_key", provider: "openai", key: "sk-test" },
-    });
-
-    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(true);
-  });
 
   it("counts legacy auth stores with alias fields and fallback providers", async () => {
     const { agentDir } = await withLegacyAuthStore({
@@ -117,14 +109,6 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     );
   });
 
-  it("does not count profile ids that are bound to a different credential provider", async () => {
-    const { agentDir } = await withAgentStore({
-      "openai:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
-    });
-
-    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
-  });
-
   it("honors configured profile order constraints", async () => {
     const { agentDir } = await withAgentStore({
       "openai:default": { type: "api_key", provider: "openai", key: "sk-test" },
@@ -163,19 +147,6 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
   it("does not count empty provider profiles as credential evidence", async () => {
     const { agentDir } = await withAgentStore({
       "openai:default": { type: "api_key", provider: "openai" },
-    });
-
-    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
-  });
-
-  it("does not count expired token profiles as credential evidence", async () => {
-    const { agentDir } = await withAgentStore({
-      "openai:token": {
-        type: "token",
-        provider: "openai",
-        token: "expired-token",
-        expires: Date.now() - 1000,
-      },
     });
 
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);

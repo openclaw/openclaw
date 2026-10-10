@@ -14,6 +14,8 @@ export type UpdateProgress = {
   connected: boolean;
   /** Set once the update produced a definitive failure. */
   failure: string | null;
+  /** Reading fresh progress failed; the retained run remains authoritative. */
+  readError?: string | null;
 };
 
 // Keep the lazy confirmation entry independent of the application context.
@@ -27,7 +29,8 @@ type UpdateProgressSources = {
       updateRun: UpdateRunRecord | null;
       updateRunning: boolean;
       updateReconciliationPending: boolean;
-      updateStatusBanner: { tone: string; text: string } | null;
+      updateStatusBanner: { tone: string; text: string; source?: "read" } | null;
+      updateStatusCheckBanner: { text: string } | null;
     };
     subscribe: (listener: () => void) => () => void;
   };
@@ -44,7 +47,9 @@ export function createUpdateProgressWatcher(
         run: update.updateRun,
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
-        failure: banner && banner.tone !== "info" ? banner.text : null,
+        failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
+        readError:
+          update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
     };
     const stopOverlays = context.overlays.subscribe(emit);
@@ -61,7 +66,7 @@ export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   existingRun?: UpdateRunRecord;
-  onCheckStatus?: () => Promise<void>;
+  onCheckStatus?: () => Promise<boolean>;
   onReviewUpdate?: () => void;
   onAcknowledge?: () => void;
   /**

@@ -1,6 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { discussionSessionKey } from "./naming.js";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 
 export type ClickClackDiscussionBinding = {
   accountId: string;
@@ -43,6 +45,15 @@ export function bindingMatchesActiveSessionIncarnation(
   );
 }
 
+export async function readDiscussionSessionEntry(runtime: PluginRuntime, sessionKey: string) {
+  const params = { sessionKey, readConsistency: "latest" } as const;
+  // Released hosts predate the worker companion. Select their native contract
+  // before reading; a failed worker read never falls back to native storage.
+  return runtime.agent.session.getSessionEntryAsync
+    ? await runtime.agent.session.getSessionEntryAsync(params)
+    : runtime.agent.session.getSessionEntry(params);
+}
+
 /**
  * Refresh the replaceable session attachment without changing the durable room identity.
  * The store registers persisted state before reindexing, so a failed write leaves the
@@ -61,13 +72,8 @@ export function attachBindingToCurrentActiveSession(params: {
   if (!entry?.sessionId || entry.archivedAt !== undefined) {
     return undefined;
   }
-  if (entry.sessionId === params.binding.sessionId) {
-    if (params.binding.detachedAt === undefined) {
-      return params.binding;
-    }
-    const { detachedAt: _detachedAt, ...attached } = params.binding;
-    params.store.set(params.sessionKey, attached);
-    return attached;
+  if (entry.sessionId === params.binding.sessionId && params.binding.detachedAt === undefined) {
+    return params.binding;
   }
   const { detachedAt: _detachedAt, ...retained } = params.binding;
   const attached = { ...retained, sessionId: entry.sessionId };
@@ -77,6 +83,11 @@ export function attachBindingToCurrentActiveSession(params: {
 
 const DISCUSSION_BINDINGS_NAMESPACE = "discussion-bindings";
 const MAX_DISCUSSION_BINDINGS = 10_000;
+const BINDING_STORE_OPTIONS = {
+  namespace: DISCUSSION_BINDINGS_NAMESPACE,
+  maxEntries: MAX_DISCUSSION_BINDINGS,
+  overflowPolicy: "reject-new",
+} as const;
 export const MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS = 1_000;
 const storesByRuntime = new WeakMap<PluginRuntime, ClickClackDiscussionBindingStore>();
 
@@ -87,30 +98,41 @@ function channelKey(serverBaseUrl: string, channelId: string): string {
 /** SQLite-backed session/channel bindings with a process-local inbound lookup index. */
 export class ClickClackDiscussionBindingStore {
   readonly #store: PluginStateSyncKeyedStore<ClickClackDiscussionBinding>;
+  #asyncStore: PluginStateKeyedStore<ClickClackDiscussionBinding> | undefined;
   readonly #sessionByChannel = new Map<string, string>();
-  readonly #mainByDiscussionSession = new Map<string, string>();
   readonly #detachedAtBySession = new Map<string, number>();
+  readonly #channelBySession = new Map<string, string>();
   readonly #runtime: PluginRuntime;
+  #prepared = false;
+  #preparing:
+    | Promise<Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }>>
+    | undefined;
+  readonly #changedDuringPreparation = new Set<string>();
 
   constructor(runtime: PluginRuntime) {
     this.#runtime = runtime;
-    this.#store = runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>({
-      namespace: DISCUSSION_BINDINGS_NAMESPACE,
-      maxEntries: MAX_DISCUSSION_BINDINGS,
-      overflowPolicy: "reject-new",
-    });
-    for (const entry of this.#store.entries()) {
-      this.#index(entry.key, entry.value);
+    this.#store =
+      runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS);
+  }
+
+  async prepare(): Promise<void> {
+    if (!this.#prepared) {
+      await this.entries();
     }
+  }
+
+  async getAsync(sessionKey: string): Promise<ClickClackDiscussionBinding | undefined> {
+    return await this.#workerStore().lookup(sessionKey);
   }
 
   get(sessionKey: string): ClickClackDiscussionBinding | undefined {
     return this.#store.lookup(sessionKey);
   }
 
-  hasCapacity(sessionKey: string): boolean {
+  async hasCapacity(sessionKey: string): Promise<boolean> {
     return (
-      this.get(sessionKey) !== undefined || this.#store.entries().length < MAX_DISCUSSION_BINDINGS
+      (await this.getAsync(sessionKey)) !== undefined ||
+      (await this.countAsync()) < MAX_DISCUSSION_BINDINGS
     );
   }
 
@@ -124,7 +146,7 @@ export class ClickClackDiscussionBindingStore {
       return undefined;
     }
     const binding = this.get(sessionKey);
-    if (!binding) {
+    if (!binding || channelKey(binding.serverBaseUrl, binding.channelId) !== key) {
       this.#sessionByChannel.delete(key);
       return undefined;
     }
@@ -132,40 +154,64 @@ export class ClickClackDiscussionBindingStore {
   }
 
   set(sessionKey: string, binding: ClickClackDiscussionBinding): void {
-    const previous = this.get(sessionKey);
     this.#store.register(sessionKey, binding);
-    if (previous) {
-      this.#unindex(sessionKey, previous);
+    if (!this.#prepared) {
+      this.#changedDuringPreparation.add(sessionKey);
     }
+    this.#unindex(sessionKey);
     this.#index(sessionKey, binding);
   }
 
   delete(sessionKey: string): boolean {
-    const previous = this.get(sessionKey);
     const deleted = this.#store.delete(sessionKey);
-    if (deleted && previous) {
-      this.#unindex(sessionKey, previous);
+    if (deleted && !this.#prepared) {
+      this.#changedDuringPreparation.add(sessionKey);
+    }
+    if (deleted) {
+      this.#unindex(sessionKey);
     }
     return deleted;
   }
 
-  getByDiscussionSession(
-    sideSessionKey: string,
-  ): { sessionKey: string; binding: ClickClackDiscussionBinding } | undefined {
-    const sessionKey = this.#mainByDiscussionSession.get(sideSessionKey);
-    if (!sessionKey) {
-      return undefined;
+  async entries(): Promise<Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }>> {
+    const load = async () =>
+      (await this.#workerStore().entries()).map((entry) => ({
+        sessionKey: entry.key,
+        binding: entry.value,
+      }));
+    if (this.#prepared) {
+      return await load();
     }
-    const binding = this.get(sessionKey);
-    return binding ? { sessionKey, binding } : undefined;
+    this.#preparing ??= load()
+      .then((entries) => {
+        for (const { sessionKey, binding } of entries) {
+          // A synchronous mutation may commit while the worker snapshot is in flight.
+          if (!this.#changedDuringPreparation.has(sessionKey)) {
+            this.#index(sessionKey, binding);
+          }
+        }
+        this.#prepared = true;
+        this.#changedDuringPreparation.clear();
+        return entries;
+      })
+      .finally(() => {
+        this.#preparing = undefined;
+      });
+    return await this.#preparing;
   }
 
-  entries(): Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }> {
-    return this.#store.entries().map((entry) => ({ sessionKey: entry.key, binding: entry.value }));
+  async countAsync(): Promise<number> {
+    const store = this.#workerStore();
+    return store.count ? await store.count() : (await this.entries()).length;
   }
 
   detachedCount(): number {
     return this.#detachedAtBySession.size;
+  }
+
+  #workerStore(): PluginStateKeyedStore<ClickClackDiscussionBinding> {
+    return (this.#asyncStore ??=
+      this.#runtime.state.openKeyedStore<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS));
   }
 
   oldestDetached(): { sessionKey: string; binding: ClickClackDiscussionBinding } | undefined {
@@ -193,39 +239,19 @@ export class ClickClackDiscussionBindingStore {
   }
 
   #index(sessionKey: string, binding: ClickClackDiscussionBinding): void {
-    this.#sessionByChannel.set(channelKey(binding.serverBaseUrl, binding.channelId), sessionKey);
-    const sideSessionKey = discussionSessionKey({
-      runtime: this.#runtime,
-      agentId: binding.agentId,
-      mainSessionKey: sessionKey,
-      sessionId: binding.sessionId,
-      accountId: binding.accountId,
-      serverBaseUrl: binding.serverBaseUrl,
-      channelId: binding.channelId,
-      externalRef: binding.externalRef,
-    });
-    if (sideSessionKey) {
-      this.#mainByDiscussionSession.set(sideSessionKey, sessionKey);
-    }
+    const channel = channelKey(binding.serverBaseUrl, binding.channelId);
+    this.#channelBySession.set(sessionKey, channel);
+    this.#sessionByChannel.set(channel, sessionKey);
     if (binding.detachedAt !== undefined) {
       this.#detachedAtBySession.set(sessionKey, binding.detachedAt);
     }
   }
 
-  #unindex(sessionKey: string, binding: ClickClackDiscussionBinding): void {
-    this.#sessionByChannel.delete(channelKey(binding.serverBaseUrl, binding.channelId));
-    const sideSessionKey = discussionSessionKey({
-      runtime: this.#runtime,
-      agentId: binding.agentId,
-      mainSessionKey: sessionKey,
-      sessionId: binding.sessionId,
-      accountId: binding.accountId,
-      serverBaseUrl: binding.serverBaseUrl,
-      channelId: binding.channelId,
-      externalRef: binding.externalRef,
-    });
-    if (sideSessionKey) {
-      this.#mainByDiscussionSession.delete(sideSessionKey);
+  #unindex(sessionKey: string): void {
+    const channel = this.#channelBySession.get(sessionKey);
+    this.#channelBySession.delete(sessionKey);
+    if (channel) {
+      this.#sessionByChannel.delete(channel);
     }
     this.#detachedAtBySession.delete(sessionKey);
   }

@@ -8,8 +8,8 @@ export {
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
-export { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 export { setMaxMemoryHostEventsForTests } from "../memory-host-sdk/event-store.js";
+export { createPluginBlobKernelStore } from "../plugin-state/plugin-blob-store.test-helpers.js";
 export {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,

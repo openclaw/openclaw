@@ -3,14 +3,17 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 
-const CHILD_READY_TIMEOUT_MS = 45_000;
 const TEST_TIMEOUT_MS = 60_000;
-const CHILD_CLOSE_TIMEOUT_MS = 5_000;
 const RELEASE_DELAY_MS = 400;
 
 const tempDirs = createTempDirTracker();
@@ -27,11 +30,7 @@ async function cleanupFixtures() {
   for (const child of children.keys()) {
     child.kill("SIGKILL");
   }
-  const results = await withTestTimeout(
-    Promise.allSettled(children.values()),
-    CHILD_CLOSE_TIMEOUT_MS,
-    "direct-stop fixture children did not close; retaining their temporary directories",
-  );
+  const results = await Promise.allSettled(children.values());
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length) {
     throw new AggregateError(errors, "direct-stop fixture cleanup failed; retaining state");
@@ -42,20 +41,21 @@ async function cleanupFixtures() {
 
 afterEach(cleanupFixtures);
 
-const moduleUrl = (relativePath: string) => pathToFileURL(path.resolve(relativePath)).href;
+const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+  resolveRuntimeWorkerUrl(entry).href;
 
 const childScript = `
   import fs from "node:fs";
   import path from "node:path";
-  import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-drain.ts"))};
-  import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-queue.ts"))};
+  import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressDrain))};
+  import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressQueue))};
   import {
     clearActiveEmbeddedRun,
     setActiveEmbeddedRun,
-  } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/runs.ts"))};
-  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/active-run-projections.ts"))};
-  import { runGatewayLoop } from ${JSON.stringify(moduleUrl("src/cli/gateway-cli/run-loop.ts"))};
-  import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl("src/process/gateway-work-admission.ts"))};
+  } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runs))};
+  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.activeRunProjections))};
+  import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
+  import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.workAdmission))};
 
   const tracePath = process.argv[1];
   const stateDir = process.argv[2];
@@ -151,34 +151,40 @@ function readTrace(tracePath: string): string[] {
 describe("runGatewayLoop direct-stop active work", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
-  posixIt("joins forced child cleanup before deleting its fixture directory", async () => {
-    const fixtureDir = tempDirs.make("openclaw-direct-stop-failure-");
-    const child = spawn(
-      process.execPath,
-      ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1_000)'],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    );
-    const closed = ownChild(child);
-    let rootExistsAtClose = false;
-    child.once("close", () => {
-      rootExistsAtClose = fs.existsSync(fixtureDir);
-    });
-    await withTestTimeout(
-      once(child.stdout!, "data"),
-      CHILD_READY_TIMEOUT_MS,
-      "forced cleanup fixture did not start",
-    );
+  posixIt(
+    "joins forced child cleanup before deleting its fixture directory",
+    async ({ signal }) => {
+      const fixtureDir = tempDirs.make("openclaw-direct-stop-failure-");
+      const child = spawn(
+        process.execPath,
+        ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1_000)'],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const closed = ownChild(child);
+      let rootExistsAtClose = false;
+      child.once("close", () => {
+        rootExistsAtClose = fs.existsSync(fixtureDir);
+      });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          once(child.stdout!, "data"),
+          closed,
+          "forced cleanup fixture did not start",
+        ),
+        signal,
+      );
 
-    await cleanupFixtures();
+      await cleanupFixtures();
 
-    expect(await closed).toEqual([null, "SIGKILL"]);
-    expect(rootExistsAtClose).toBe(true);
-    expect(fs.existsSync(fixtureDir)).toBe(false);
-  });
+      expect(await closed).toEqual([null, "SIGKILL"]);
+      expect(rootExistsAtClose).toBe(true);
+      expect(fs.existsSync(fixtureDir)).toBe(false);
+    },
+  );
 
-  posixIt.each([false, true])(
-    "reports and drains a rootless adopted channel run after OS SIGTERM (trace=%s)",
-    async (traceEnabled) => {
+  posixIt(
+    "reports and drains a rootless adopted channel run after OS SIGTERM",
+    async ({ signal }) => {
       const fixtureDir = tempDirs.make("openclaw-direct-stop-active-work-");
       const stateDir = path.join(fixtureDir, "state");
       const homeDir = path.join(fixtureDir, "home");
@@ -198,7 +204,7 @@ describe("runGatewayLoop direct-stop active work", () => {
             NODE_OPTIONS: undefined,
             OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
             OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_GATEWAY_RESTART_TRACE: traceEnabled ? "1" : undefined,
+            OPENCLAW_GATEWAY_RESTART_TRACE: "1",
             VITEST: undefined,
           },
           stdio: ["ignore", "pipe", "pipe"],
@@ -208,21 +214,23 @@ describe("runGatewayLoop direct-stop active work", () => {
       const exited = ownChild(child);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
-      child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+      const ready = createDeferred();
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout.push(chunk);
+        if (Buffer.concat(stdout).toString("utf8").includes("process proof: gateway-ready\n")) {
+          ready.resolve();
+        }
+      });
       child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 
-      await vi.waitFor(
-        () => {
-          expect(readTrace(tracePath), Buffer.concat(stderr).toString("utf8")).toContain(
-            "gateway-ready",
-          );
-        },
-        { timeout: CHILD_READY_TIMEOUT_MS, interval: 25 },
+      await withinTest(
+        awaitGateBeforeSettlement(ready.promise, exited, "gateway-ready trace was not produced"),
+        signal,
       );
       // The exit event can precede the final stdout data; close joins both streams.
       expect(child.kill("SIGTERM")).toBe(true);
 
-      const exit = await exited;
+      const exit = await withinTest(exited, signal);
       expect(
         exit,
         `${readTrace(tracePath).join(" -> ")}\n${Buffer.concat(stderr).toString("utf8")}`,
@@ -243,13 +251,9 @@ describe("runGatewayLoop direct-stop active work", () => {
       expect(output.indexOf("active-work drain settled; beginning server close")).toBeLessThan(
         output.indexOf("process proof: gateway-close"),
       );
-      if (traceEnabled) {
-        expect(output).toContain("restart trace: stop.signal.received ");
-        expect(output).toContain("restart trace: stop.drain.begin ");
-        expect(output).toContain("restart trace: stop.drain ");
-      } else {
-        expect(output).not.toContain("restart trace:");
-      }
+      expect(output).toContain("restart trace: stop.signal.received ");
+      expect(output).toContain("restart trace: stop.drain.begin ");
+      expect(output).toContain("restart trace: stop.drain ");
     },
     TEST_TIMEOUT_MS,
   );

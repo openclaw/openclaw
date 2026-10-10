@@ -28,7 +28,7 @@ type ReservableChildAdmission = { ok: true } | { ok: false };
 
 type ChildAdmissionReservation<TAdmission extends ReservableChildAdmission> =
   | Extract<TAdmission, { ok: false }>
-  | (Extract<TAdmission, { ok: true }> & { release: () => void });
+  | (Extract<TAdmission, { ok: true }> & { release: () => void; retain: () => () => void });
 
 type ChildAdmissionReservationParams<TAdmission extends ReservableChildAdmission> = {
   controllerSessionKey: string;
@@ -57,15 +57,44 @@ export function reserveChildAdmissionSlot(
   const reservation = params.childSessionKey ?? Symbol("pending child admission");
   pending.add(reservation);
   pendingChildAdmissions.set(params.controllerSessionKey, pending);
+  let references = 1;
+  let released = false;
+  const releaseReference = () => {
+    references -= 1;
+    if (references > 0) {
+      return;
+    }
+    pending.delete(reservation);
+    if (pending.size === 0 && pendingChildAdmissions.get(params.controllerSessionKey) === pending) {
+      pendingChildAdmissions.delete(params.controllerSessionKey);
+    }
+  };
   return {
     ...admission,
     release() {
-      if (!pending.delete(reservation)) {
+      if (released) {
         return;
       }
-      if (pending.size === 0) {
-        pendingChildAdmissions.delete(params.controllerSessionKey);
+      released = true;
+      releaseReference();
+    },
+    retain() {
+      if (
+        released ||
+        pendingChildAdmissions.get(params.controllerSessionKey) !== pending ||
+        !pending.has(reservation)
+      ) {
+        throw new Error("Child admission reservation is no longer current");
       }
+      references += 1;
+      let retainedReleased = false;
+      return () => {
+        if (retainedReleased) {
+          return;
+        }
+        retainedReleased = true;
+        releaseReference();
+      };
     },
   };
 }

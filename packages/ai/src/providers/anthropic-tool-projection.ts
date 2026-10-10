@@ -2,6 +2,7 @@ import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnthropicOptions } from "../provider-options.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 type AnthropicToolDescriptor = {
@@ -101,66 +102,53 @@ const schemaValueKeywords = new Set([
   "unevaluatedProperties",
 ]);
 const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
-const schemaMapKeywords = new Set([
-  "$defs",
-  "definitions",
-  "dependencies",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
 
-function normalizeAnthropicJsonSchema(schema: unknown): unknown {
+/** Normalize the detached JSON projection and report tuple changes to enclosing schemas. */
+function normalizeAnthropicJsonSchema(schema: unknown): boolean {
   if (!isRecord(schema)) {
-    return schema;
+    return false;
   }
 
   let changed = false;
-  const normalized: Record<string, unknown> = { ...schema };
   for (const [key, value] of Object.entries(schema)) {
     if (schemaValueKeywords.has(key) && !Array.isArray(value)) {
-      const next = normalizeAnthropicJsonSchema(value);
-      normalized[key] = next;
-      changed ||= next !== value;
+      changed = normalizeAnthropicJsonSchema(value) || changed;
       continue;
     }
     if (schemaArrayKeywords.has(key) && Array.isArray(value)) {
-      const next = value.map(normalizeAnthropicJsonSchema);
-      normalized[key] = next;
-      changed ||= next.some((entry, index) => entry !== value[index]);
+      for (const entry of value) {
+        changed = normalizeAnthropicJsonSchema(entry) || changed;
+      }
       continue;
     }
-    if (schemaMapKeywords.has(key) && isRecord(value)) {
-      const next = Object.fromEntries(
-        Object.entries(value).map(([entryKey, entryValue]) => [
-          entryKey,
-          normalizeAnthropicJsonSchema(entryValue),
-        ]),
-      );
-      normalized[key] = next;
-      changed ||= Object.entries(value).some(
-        ([entryKey, entryValue]) => next[entryKey] !== entryValue,
-      );
+    if (SCHEMA_MAP_KEYS.has(key) && isRecord(value)) {
+      for (const entry of Object.values(value)) {
+        changed = normalizeAnthropicJsonSchema(entry) || changed;
+      }
     }
   }
 
   if (Array.isArray(schema.items)) {
-    normalized.prefixItems = schema.items.map(normalizeAnthropicJsonSchema);
+    for (const entry of schema.items) {
+      normalizeAnthropicJsonSchema(entry);
+    }
+    schema.prefixItems = schema.items;
     const additionalItems = schema.additionalItems;
     if (typeof additionalItems === "boolean" || isRecord(additionalItems)) {
-      normalized.items = normalizeAnthropicJsonSchema(additionalItems);
+      normalizeAnthropicJsonSchema(additionalItems);
+      schema.items = additionalItems;
     } else {
-      delete normalized.items;
+      delete schema.items;
     }
-    delete normalized.additionalItems;
+    delete schema.additionalItems;
     changed = true;
   }
 
   if (changed) {
     // Converted tuples use 2020-12 syntax, including inside referenced schema resources.
-    delete normalized.$schema;
+    delete schema.$schema;
   }
-  return changed ? normalized : schema;
+  return changed;
 }
 
 /** Snapshots direct/custom tool descriptors before Anthropic payload construction. */
@@ -169,6 +157,7 @@ export function projectAnthropicTools(
   toWireName: (name: string) => string,
 ): AnthropicToolProjection {
   const projectedTools: AnthropicProjectedTool[] = [];
+  const originalNameByWireName = new Map<string, string>();
   const unavailableOriginalNames = new Set<string>();
   for (const tool of tools) {
     let projectedTool: AnthropicProjectedTool;
@@ -187,11 +176,8 @@ export function projectAnthropicTools(
         unavailableOriginalNames.add(name);
         continue;
       }
-      const anthropicSchema = normalizeAnthropicJsonSchema(schemaProjection.schema);
-      if (!isRecord(anthropicSchema)) {
-        unavailableOriginalNames.add(name);
-        continue;
-      }
+      const anthropicSchema = schemaProjection.schema;
+      normalizeAnthropicJsonSchema(anthropicSchema);
       const properties = anthropicSchema.properties;
       const required = anthropicSchema.required;
       if (
@@ -229,14 +215,13 @@ export function projectAnthropicTools(
       }
       continue;
     }
-    const conflictingTool = projectedTools.find(
-      (entry) => entry.wireName === projectedTool.wireName,
-    );
-    if (conflictingTool && conflictingTool.originalName !== projectedTool.originalName) {
+    const conflictingName = originalNameByWireName.get(projectedTool.wireName);
+    if (conflictingName !== undefined && conflictingName !== projectedTool.originalName) {
       throw new Error(
-        `Anthropic tool names "${conflictingTool.originalName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
+        `Anthropic tool names "${conflictingName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
       );
     }
+    originalNameByWireName.set(projectedTool.wireName, projectedTool.originalName);
     projectedTools.push(projectedTool);
   }
   return {
@@ -258,16 +243,11 @@ export function reconcileAnthropicToolChoice(
   }
   if (choice.type === "tool") {
     const requestedName = choice.name;
-    const originalMatch = projection.tools.find((tool) => tool.originalName === requestedName);
-    if (originalMatch) {
-      return { ...choice, name: originalMatch.wireName };
-    }
-    if (projection.unavailableOriginalNames.has(requestedName)) {
-      throw new Error(
-        `Anthropic tool_choice requested unavailable tool "${requestedName}" after schema conversion`,
-      );
-    }
-    const matchedTool = projection.tools.find((tool) => tool.wireName === requestedName);
+    const matchedTool =
+      projection.tools.find((tool) => tool.originalName === requestedName) ??
+      (projection.unavailableOriginalNames.has(requestedName)
+        ? undefined
+        : projection.tools.find((tool) => tool.wireName === requestedName));
     if (!matchedTool) {
       throw new Error(
         `Anthropic tool_choice requested unavailable tool "${requestedName}" after schema conversion`,

@@ -1,6 +1,10 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   objectFieldEquals,
+  readFixtureLog,
   startTuiFixture,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-fixture-test-support.js";
@@ -11,6 +15,53 @@ const cancelKeys = [
   { key: "\x1b[99;5u", name: "Kitty Ctrl+C" },
   { key: "\x1b[27;5;99~", name: "modifyOtherKeys Ctrl+C" },
 ];
+
+it("returns to the editor as soon as a model is selected, before the update finishes", async ({
+  signal,
+}) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openclaw-picker-selection-"));
+  const releasePath = path.join(directory, "release-patch");
+  const fixture = await startTuiFixture({
+    env: {
+      TERM_PROGRAM: "vscode",
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_PATCH_RELEASE_PATH: releasePath,
+      OPENCLAW_TUI_PTY_COLS: "100",
+      OPENCLAW_TUI_PTY_ROWS: "30",
+    },
+  });
+  const waitForRows = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
+    waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
+  try {
+    await fixture.run.waitForOutput("local ready", 20_000);
+    await fixture.run.write("/models\r", { delay: false });
+    await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
+    await fixture.run.write("\x1b[B\r", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "patchSession", signal);
+
+    const message = "draft after model selection";
+    await fixture.run.write("\r" + message, { delay: false });
+    const rows = await waitForRows((frame) => frame.some((row) => row.includes(message)));
+    const patches = (await readFixtureLog(fixture.logPath)).filter(
+      (entry) => entry.method === "patchSession",
+    );
+    console.log("[picker-selection-frame] " + JSON.stringify({ rows, patches }));
+    expect(patches).toHaveLength(1);
+    expect(rows.some((row) => row.trimStart().startsWith("search:"))).toBe(false);
+
+    await writeFile(releasePath, "release");
+    await fixture.run.waitForOutput("model set to fixture-provider/fixture-model-2", 20_000);
+    await fixture.run.write("\r", { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+      signal,
+    );
+    await waitForRows((frame) => frame.some((row) => row.includes("PTY_RESPONSE: " + message)));
+  } finally {
+    await fixture.cleanup();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 30_000);
 
 it.each(
   ["/models", "/sessions"].flatMap((command) =>
@@ -94,9 +145,11 @@ it.each(
       console.log("[picker-frame] " + JSON.stringify({ command, name, phase: "chat", rows }));
       expect(rows.some((row) => row.includes("PTY_RESPONSE: " + message))).toBe(true);
       expect(rows.some((row) => row.trimStart().startsWith(prompt))).toBe(false);
-      await fixture.waitForLogEntry(
-        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-      );
+      expect(
+        (await readFixtureLog(fixture.logPath)).some(
+          (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+        ),
+      ).toBe(true);
       await fixture.run.write("/exit\r", { delay: false });
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
     } finally {

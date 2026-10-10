@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
-import { testing as authStoreTesting } from "../agents/auth-profiles/store.test-support.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import * as providerAuthPersistence from "../plugins/provider-auth-persistence.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
@@ -19,7 +19,7 @@ const ORDER_BUSY_MESSAGE =
 const STALE_PROFILE_ID = "openai:stale-login";
 
 const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn(async () => ({})),
+  callGateway: vi.fn(async () => ({ refreshed: true })),
   runAuth: vi.fn(async () => ({
     profiles: [
       {
@@ -36,7 +36,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: mocks.callGateway,
+}));
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
   resolvePluginSetupRegistry: () => ({ providers: [] }),
@@ -78,7 +81,6 @@ describe("models auth login owner integration", () => {
   let lock: DatabaseSync | undefined;
 
   const releaseLock = () => {
-    authStoreTesting.resetRuntimeSnapshotPublisherForTest();
     if (lock?.isOpen) {
       if (lock.isTransaction) {
         lock.exec("ROLLBACK");
@@ -100,7 +102,7 @@ describe("models auth login owner integration", () => {
       { label: "models-auth-login-owner", scenario: "minimal" },
       async (state) => {
         await state.writeConfig({
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
@@ -123,6 +125,13 @@ describe("models auth login owner integration", () => {
           FRESH_PROFILE_ID,
           STALE_PROFILE_ID,
         ]);
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "models.authRefresh",
+            params: { operation: "login", agentId: "main" },
+            requireLocalBackendSharedAuth: true,
+          }),
+        );
       },
     );
   });
@@ -132,7 +141,7 @@ describe("models auth login owner integration", () => {
       { label: "models-auth-login-order-busy", scenario: "minimal" },
       async (state) => {
         await state.writeConfig({
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
@@ -149,14 +158,15 @@ describe("models auth login owner integration", () => {
         const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
           throw new Error(`exit:${code}`);
         });
-        authStoreTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-          publish();
-          if (lock) {
-            return;
-          }
-          lock = new DatabaseSync(resolveAuthProfileDatabasePath(state.agentDir()));
-          lock.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE;");
-        });
+        const persist = providerAuthPersistence.persistProviderAuthProfilesAfterLogin;
+        const credentialSave = vi
+          .spyOn(providerAuthPersistence, "persistProviderAuthProfilesAfterLogin")
+          .mockImplementationOnce(async (params) => {
+            const profiles = await persist(params);
+            lock = new DatabaseSync(resolveAuthProfileDatabasePath(state.agentDir()));
+            lock.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE;");
+            return profiles;
+          });
 
         try {
           await expect(
@@ -180,6 +190,7 @@ describe("models auth login owner integration", () => {
             STALE_PROFILE_ID,
           ]);
         } finally {
+          credentialSave.mockRestore();
           releaseLock();
           error.mockRestore();
           log.mockRestore();

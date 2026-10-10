@@ -1,0 +1,168 @@
+import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
+import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
+
+const key = "agent:main:probe";
+
+export function measureSessionSchemaProbes(
+  database: { agentId: string; db: DatabaseSync },
+  label?: string,
+) {
+  const reads = {
+    cache: () => {
+      const entry = readSessionEntryCache(database, {
+        cache: true,
+        projection: "list",
+      }).entries.get(key);
+      return entry?.sessionId === "probe" && entry.label === label;
+    },
+    exact: () => {
+      const entry = readExactSessionEntryRowValidated(database, key, "list")?.entry;
+      return entry?.sessionId === "probe" && entry.label === label;
+    },
+    owner: () => hasSqliteSessionOwnerColumns(database.db),
+  };
+  return Object.fromEntries(
+    Object.entries(reads).map(([name, read]) => [
+      name,
+      measureSqliteSchemaProbes(database.db, read),
+    ]),
+  );
+}
+
+export function measureSqliteSchemaProbes(database: DatabaseSync, read: () => boolean) {
+  read();
+  read();
+  const admitted = getAdmittedSqliteSchemaFacts(database) !== undefined;
+  if (!admitted) {
+    throw new Error("Schema probe measurement requires an admitted handle without an authorizer");
+  }
+  const counts = { schemaVersion: 0, userVersion: 0, dataVersion: 0 };
+  const native = requireNodeSqlite();
+  const prototype = native.StatementSync.prototype;
+  const restores: Array<() => void> = [];
+  let observingTablePragmas = false;
+  // These synthetic handles have no native authorizer. Preserve the owner's setter
+  // wrappers: using them for this passive observer would disable admitted caches.
+  native.DatabaseSync.prototype.setAuthorizer.call(database, (action, name) => {
+    if (observingTablePragmas && action === native.constants.SQLITE_PRAGMA) {
+      if (name === "schema_version") {
+        counts.schemaVersion++;
+      } else if (name === "user_version") {
+        counts.userVersion++;
+      } else if (name === "data_version") {
+        counts.dataVersion++;
+      }
+    }
+    return native.constants.SQLITE_OK;
+  });
+  restores.push(() => native.DatabaseSync.prototype.setAuthorizer.call(database, null));
+  const tablePragmas = (sql: string) => /\bpragma_(?:schema|user|data)_version\s*\(/i.test(sql);
+  const recordStatement = (sql: string) => {
+    // Table-valued pragmas authorize when SQLite evaluates them, so a skipped
+    // CASE branch costs no probe. Cached direct pragmas still count every step.
+    if (tablePragmas(sql)) {
+      return;
+    }
+    if (/\b(?:pragma_schema_version|schema_version)\b/i.test(sql)) {
+      counts.schemaVersion++;
+    }
+    if (/\buser_version\b/i.test(sql)) {
+      counts.userVersion++;
+    }
+    if (/\bdata_version\b/i.test(sql)) {
+      counts.dataVersion++;
+    }
+  };
+  const observeStep = <T>(sql: string, step: () => T): T => {
+    const previous = observingTablePragmas;
+    observingTablePragmas = tablePragmas(sql);
+    try {
+      return step();
+    } finally {
+      observingTablePragmas = previous;
+    }
+  };
+  const instrument = <Method extends "get" | "all" | "iterate">(
+    method: Method,
+    wrap: (original: (typeof prototype)[Method]) => (typeof prototype)[Method],
+  ) => {
+    const original = prototype[method];
+    prototype[method] = wrap(original);
+    restores.push(() => {
+      prototype[method] = original;
+    });
+  };
+  for (const method of ["get", "all"] as const) {
+    instrument(
+      method,
+      (original) =>
+        function (this: StatementSync, ...args: unknown[]) {
+          const sql = this.sourceSQL;
+          recordStatement(sql);
+          return observeStep(sql, () => Reflect.apply(original, this, args));
+        },
+    );
+  }
+  instrument(
+    "iterate",
+    (original) =>
+      function* (this: StatementSync, ...args: unknown[]) {
+        const sql = this.sourceSQL;
+        recordStatement(sql);
+        const rows: ReturnType<StatementSync["iterate"]> = observeStep(sql, () =>
+          Reflect.apply(original, this, args),
+        );
+        try {
+          while (true) {
+            const next = observeStep(sql, () => rows.next());
+            if (next.done) {
+              return next.value;
+            }
+            yield next.value;
+          }
+        } finally {
+          observeStep(sql, () => rows.return?.());
+        }
+      },
+  );
+  const start = performance.now();
+  try {
+    for (let i = 0; i < 100; i++) {
+      if (!read()) {
+        throw new Error("Session probe did not read the seeded session");
+      }
+    }
+    return { admitted, ...counts, elapsedMs: performance.now() - start };
+  } finally {
+    for (const restore of restores) {
+      restore();
+    }
+  }
+}
+
+export type SessionProbeOperations = {
+  read: {
+    input: { label?: string } | undefined;
+    output: ReturnType<typeof measureSessionSchemaProbes>;
+  };
+};
+
+export function createSqliteWorkerBackend(
+  _input: unknown,
+  context: { databasePath: string },
+): SqliteWorkerBackend<SessionProbeOperations> {
+  const opened = openOpenClawAgentDatabaseReadOnly({ agentId: "main", path: context.databasePath });
+  if (!opened.found) {
+    throw new Error("Session probe database is missing");
+  }
+  return {
+    execute: (command) => measureSessionSchemaProbes(opened.database, command.input?.label),
+    close: opened.database.close,
+  };
+}

@@ -5,8 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
@@ -15,6 +13,7 @@ import {
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
   type PluginActivationState,
@@ -27,29 +26,34 @@ import {
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
-import { createPluginRecord } from "./loader-records.js";
+import type { PluginLoadCacheContext } from "./loader-load-context.js";
+import {
+  createPluginRecord,
+  formatAutoEnabledActivationReason,
+  markPluginActivationDisabled,
+} from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
   resolvePluginManifestInstallOwner,
 } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { shippedNativeSessionCatalogs } from "./native-session-catalog-config.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
   commitStagedPluginRegistry,
+  getActivePluginRegistry,
+  getActivePluginRegistryVersion,
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { PluginLogger } from "./types.js";
-
-export function createPluginLoaderLogger(): PluginLogger {
-  return createSubsystemLogger("plugins");
-}
 
 export function detailPluginStartupTrace(
   startupTrace: PluginLoadOptions["startupTrace"] | undefined,
@@ -67,25 +71,6 @@ export type AuthorizedDreamingSidecar = {
   selectedMemoryPluginId: string;
 };
 
-function resolveDreamingSidecarEngineId(params: {
-  cfg: OpenClawConfig;
-  memorySlot: string | null | undefined;
-}): string | null {
-  const normalizedMemorySlot = normalizeLowercaseStringOrEmpty(params.memorySlot);
-  if (
-    !normalizedMemorySlot ||
-    normalizedMemorySlot === "none" ||
-    normalizedMemorySlot === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-  ) {
-    return null;
-  }
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
-    cfg: params.cfg,
-  });
-  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
-}
-
 export function resolveAuthorizedDreamingSidecar(params: {
   cfg: OpenClawConfig;
   normalized: NormalizedPluginsConfig;
@@ -93,17 +78,26 @@ export function resolveAuthorizedDreamingSidecar(params: {
   manifestRegistry: PluginManifestRegistry;
   memorySlot: string | null | undefined;
 }): AuthorizedDreamingSidecar | null {
-  const engineId = resolveDreamingSidecarEngineId({
-    cfg: params.cfg,
-    memorySlot: params.memorySlot,
-  });
-  if (!engineId || !params.normalized.enabled || !params.activationSource.plugins.enabled) {
-    return null;
-  }
   const selectedMemoryPluginId = normalizeLowercaseStringOrEmpty(params.memorySlot);
-  if (!selectedMemoryPluginId || selectedMemoryPluginId === engineId) {
+  if (
+    !selectedMemoryPluginId ||
+    selectedMemoryPluginId === "none" ||
+    selectedMemoryPluginId === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+  ) {
     return null;
   }
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
+    cfg: params.cfg,
+  });
+  if (
+    !dreamingConfig.enabled ||
+    !params.normalized.enabled ||
+    !params.activationSource.plugins.enabled
+  ) {
+    return null;
+  }
+  const engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
   if (
     params.normalized.deny.includes(engineId) ||
     params.activationSource.plugins.deny.includes(engineId) ||
@@ -133,13 +127,6 @@ export function resolveAuthorizedDreamingSidecar(params: {
     activationSource: params.activationSource,
   });
   return selectedEnableState.enabled ? { engineId, selectedMemoryPluginId } : null;
-}
-
-export function isAuthorizedDreamingSidecarPlugin(params: {
-  sidecar: AuthorizedDreamingSidecar | null;
-  pluginId: string;
-}): boolean {
-  return params.sidecar?.engineId === params.pluginId;
 }
 
 export function matchesScopedPluginOrDreamingSidecar(params: {
@@ -183,12 +170,11 @@ export function createPluginCandidatesFromManifestRegistry(
   });
 }
 
-class PluginLoadFailureError extends Error {
+export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
 
-  constructor(registry: PluginRegistry) {
-    const failedPlugins = registry.plugins.filter((entry) => entry.status === "error");
+  constructor(registry: PluginRegistry, failedPlugins: readonly PluginRecord[]) {
     const summary = failedPlugins
       .map((entry) => `${entry.id}: ${entry.error ?? "unknown plugin load error"}`)
       .join("; ");
@@ -228,7 +214,7 @@ export function validatePluginConfig(params: {
   const result = validatePluginSchemaValue({
     origin: params.origin,
     schema,
-    cacheKey: params.cacheKey ?? JSON.stringify(schema),
+    cacheKey: params.cacheKey,
     value: value ?? {},
     sourceValue: params.sourceValue,
     applyDefaults: true,
@@ -273,15 +259,19 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */
-export function createManifestPluginRecord(params: {
+function createManifestPluginRecord(params: {
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
   enabled: boolean;
   activationState: PluginActivationState;
+  shouldLoadModules: boolean;
 }): PluginRecord {
   const { candidate, manifestRecord } = params;
-  return createPluginRecord({
+  const record = createPluginRecord({
     id: manifestRecord.id,
+    nativeSessionCatalog:
+      manifestRecord.setup?.nativeSessionCatalog ??
+      shippedNativeSessionCatalogs.find(({ pluginId }) => pluginId === manifestRecord.id),
     name: manifestRecord.name ?? manifestRecord.id,
     description: manifestRecord.description,
     packageVersion: manifestRecord.packageVersion,
@@ -309,40 +299,133 @@ export function createManifestPluginRecord(params: {
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
     controlUi: manifestRecord.controlUi,
+    uiCapabilities: manifestRecord.uiCapabilities,
     mcpServers: manifestRecord.mcpServers,
   });
+  if (!params.shouldLoadModules) {
+    record.cliBackendIds = [
+      ...(manifestRecord.cliBackends ?? []),
+      ...(manifestRecord.setup?.cliBackends ?? []),
+    ];
+    record.commands = (manifestRecord.commandAliases ?? []).map((alias) => alias.name);
+  }
+  return record;
 }
 
-export function applyPluginManifestRecordDetails(
-  record: PluginRecord,
-  manifestRecord: PluginManifestRecord,
-): void {
+/** Prepares one candidate; import and registration policy stays with each loader. */
+export function preparePluginLoadRecord(params: {
+  candidate: PluginCandidate;
+  manifestRecord: PluginManifestRecord;
+  context: Pick<
+    PluginLoadCacheContext,
+    "cfg" | "normalized" | "activationSource" | "autoEnabledReasons" | "shouldLoadModules"
+  >;
+  onlyPluginIdSet: ReadonlySet<string> | null;
+  dreamingSidecar: AuthorizedDreamingSidecar | null;
+  registry: Pick<PluginRegistry, "plugins">;
+  seenIds: ReadonlyMap<string, PluginRecord["origin"]>;
+}) {
+  const { candidate, manifestRecord, context, dreamingSidecar } = params;
+  const pluginId = manifestRecord.id;
+  const policyId = normalizePluginPolicyId(pluginId);
+  // Manifest filtering scopes diagnostics; this final guard also blocks imports
+  // and registration outside the requested snapshot.
+  if (
+    !matchesScopedPluginOrDreamingSidecar({
+      onlyPluginIdSet: params.onlyPluginIdSet,
+      pluginId,
+      sidecar: dreamingSidecar,
+    })
+  ) {
+    return null;
+  }
+  const isDreamingSidecar = dreamingSidecar?.engineId === pluginId;
+  const activationState = isDreamingSidecar
+    ? {
+        enabled: true,
+        activated: true,
+        explicitlyEnabled: false,
+        source: "auto" as const,
+        reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+      }
+    : resolveEffectivePluginActivationState({
+        id: pluginId,
+        origin: candidate.origin,
+        config: context.normalized,
+        rootConfig: context.cfg,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
+        activationSource: context.activationSource,
+        autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
+      });
+  const existingOrigin = params.seenIds.get(pluginId);
+  if (existingOrigin) {
+    const duplicate = createManifestPluginRecord({
+      candidate,
+      manifestRecord,
+      enabled: false,
+      activationState,
+      shouldLoadModules: context.shouldLoadModules,
+    });
+    markPluginActivationDisabled(duplicate, `overridden by ${existingOrigin} plugin`);
+    params.registry.plugins.push(duplicate);
+    return null;
+  }
+  // Activation carries auto-enable provenance; enablement independently controls loading.
+  // An auto-enabled reason can activate a record without enabling its module load.
+  const enableState = isDreamingSidecar
+    ? { enabled: true }
+    : resolveEffectiveEnableState({
+        id: pluginId,
+        origin: candidate.origin,
+        config: context.normalized,
+        rootConfig: context.cfg,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
+        activationSource: context.activationSource,
+      });
+  const entry = context.normalized.entries[policyId];
+  const record = createManifestPluginRecord({
+    candidate,
+    manifestRecord,
+    enabled: enableState.enabled,
+    activationState,
+    shouldLoadModules: context.shouldLoadModules,
+  });
   record.kind = manifestRecord.kind;
   record.configUiHints = manifestRecord.configUiHints;
   record.configJsonSchema = manifestRecord.configSchema;
   // Manifest ownership survives rollback of executable registrations.
   record.commandAliases = manifestRecord.commandAliases;
-}
-
-export function applyManifestSnapshotMetadata(
-  record: PluginRecord,
-  manifestRecord: PluginManifestRecord,
-): void {
-  record.channelIds = [...(manifestRecord.channels ?? [])];
-  record.providerIds = [...(manifestRecord.providers ?? [])];
-  record.cliBackendIds = [
-    ...(manifestRecord.cliBackends ?? []),
-    ...(manifestRecord.setup?.cliBackends ?? []),
-  ];
-  record.commands = (manifestRecord.commandAliases ?? []).map((alias) => alias.name);
+  return { pluginId, isDreamingSidecar, activationState, enableState, entry, record };
 }
 
 export function maybeThrowOnPluginLoadError(
   registry: PluginRegistry,
   throwOnLoadError: boolean | undefined,
+  retained?: ReadonlyMap<string, PluginRecord>,
+  previousRegistry?: PluginRegistry,
+  replacedIds?: ReadonlySet<string>,
 ): void {
-  if (throwOnLoadError && registry.plugins.some((entry) => entry.status === "error")) {
-    throw new PluginLoadFailureError(registry);
+  if (!throwOnLoadError) {
+    return;
+  }
+  // Startup diagnostics remain visible; only newly evaluated failures reject a replacement.
+  const failedPlugins = registry.plugins.filter((entry) => {
+    if (entry.status !== "error" || retained?.get(entry.id) === entry) {
+      return false;
+    }
+    const previous = previousRegistry?.plugins.find((record) => record.id === entry.id);
+    return (
+      replacedIds?.has(entry.id) ||
+      previous?.status !== "error" ||
+      previous.source !== entry.source ||
+      previous.failurePhase !== entry.failurePhase ||
+      previous.error !== entry.error
+    );
+  });
+  if (failedPlugins.length > 0) {
+    throw new PluginLoadFailureError(registry, failedPlugins);
   }
 }
 
@@ -351,27 +434,67 @@ export function activatePluginRegistry(
   cacheKey: string | null,
   runtimeSubagentMode: PluginRuntimeSubagentMode,
   workspaceDir?: string,
+  previousRegistry?: PluginRegistry,
+  trackActivationCleanup?: (completion: Promise<void>) => void,
 ): void {
   const activeSnapshot = captureActivePluginRegistrySnapshot();
+  const retainedRegistry = previousRegistry ?? activeSnapshot.activeRegistry;
   const previousHookRegistry = getGlobalPluginRegistry();
+  let stagedVersion: number | undefined;
+  const isCurrentStage = () =>
+    stagedVersion !== undefined &&
+    getActivePluginRegistry() === registry &&
+    getActivePluginRegistryVersion() === stagedVersion;
   try {
-    // Install the complete bundle before hook-runner initialization so hook composition never
-    // observes contributions from two loads. Activation failure restores the prior selection.
-    stageActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+    // Install the complete bundle before hooks, but never resume a displaced activation.
+    stagedVersion = stageActivePluginRegistry(
+      registry,
+      cacheKey,
+      runtimeSubagentMode,
+      workspaceDir,
+    );
+    if (!isCurrentStage()) {
+      throw new Error("Plugin registry activation was superseded");
+    }
+    const activationAuthority = trackActivationCleanup
+      ? capturePluginLifecycleAuthority(registry)
+      : undefined;
     initializeGlobalHookRunner(registry);
-    activateContextEngineRegistrations(registry);
-    commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
+    activateContextEngineRegistrations(
+      registry,
+      trackActivationCleanup
+        ? {
+            trackCleanup: trackActivationCleanup,
+            assertCurrent: () => {
+              // A peer Gateway can change the process projection while this owner stays live.
+              if (stagedVersion === undefined || !activationAuthority?.()) {
+                throw new Error("Plugin registry activation was superseded");
+              }
+            },
+          }
+        : undefined,
+    );
+    commitStagedPluginRegistry(retainedRegistry, registry);
+    if (!isCurrentStage()) {
+      throw new Error("Plugin registry activation was superseded");
+    }
   } catch (error) {
-    rollbackStagedPluginRegistry(activeSnapshot);
-    if (previousHookRegistry) {
-      initializeGlobalHookRunner(previousHookRegistry);
-    } else {
-      resetGlobalHookRunner();
+    const rollbackCurrentStage = isCurrentStage();
+    // Cached registry rollback can keep its epoch; this failed attempt still loses authority.
+    stagedVersion = undefined;
+    if (rollbackCurrentStage) {
+      const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot, retainedRegistry);
+      if (
+        getActivePluginRegistry() === activeSnapshot.activeRegistry &&
+        getActivePluginRegistryVersion() === rollbackVersion
+      ) {
+        if (previousHookRegistry) {
+          initializeGlobalHookRunner(previousHookRegistry);
+        } else {
+          resetGlobalHookRunner();
+        }
+      }
     }
     throw error;
   }
-}
-
-export function safeRealpathOrResolve(value: string): string {
-  return resolveRealpathOrAbsolute(value);
 }

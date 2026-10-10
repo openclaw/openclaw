@@ -18,14 +18,6 @@ export const detected: SystemAgentSetupDetectResult = {
       icon: "https://cdn.example.com/codex.png",
     },
   ],
-  unavailableCandidates: [
-    {
-      id: "pi-cli",
-      label: "Pi",
-      detail: "installed; no setup route available",
-      reason: "This local runtime must be configured outside OpenClaw.",
-    },
-  ],
   manualProviders: [
     {
       id: "gemini-api-key",
@@ -131,7 +123,6 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
     onStartAuth: vi.fn(),
     onStartPrepare: vi.fn(),
     onManualProviderChange: vi.fn(),
-    onUseManualProvider: vi.fn(),
     onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
     onMoreSignInToggle: vi.fn(),

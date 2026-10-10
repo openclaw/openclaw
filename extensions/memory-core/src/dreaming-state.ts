@@ -1,10 +1,11 @@
-// Memory Core dreaming state lives in SQLite-backed plugin state.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
@@ -18,6 +19,7 @@ export const SHORT_TERM_META_NAMESPACE = "short-term-meta";
 export const SHORT_TERM_LOCK_NAMESPACE = "short-term-locks";
 
 const DREAMING_WORKSPACE_STATE_MAX_ENTRIES = 50_000;
+const WORKSPACE_STATE_YIELD_EVERY = 10;
 export const SHORT_TERM_LOCK_MAX_ENTRIES = 4_096;
 export const SESSION_SEEN_HASHES_PER_CHUNK = 512;
 
@@ -47,19 +49,17 @@ type WriteMemoryCoreWorkspaceEntriesParams<T> = MemoryCoreWorkspaceParams & {
 type WriteMemoryCoreWorkspaceEntryParams<T> = MemoryCoreWorkspaceParams &
   MemoryCoreWorkspaceEntry<T>;
 
-let configuredOpenKeyedStore: MemoryCoreOpenKeyedStore | undefined;
+const dreamingState = createPluginRuntimeStore<MemoryCoreOpenKeyedStore>({
+  key: "memory-core:dreaming-state",
+  errorMessage: "memory-core dreaming SQLite state store is not configured",
+});
 
-export function configureMemoryCoreDreamingState(openKeyedStore: MemoryCoreOpenKeyedStore): void {
-  configuredOpenKeyedStore = openKeyedStore;
-}
+export const configureMemoryCoreDreamingState = dreamingState.setRuntime;
 
 export function openMemoryCoreStateStore<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateKeyedStore<T> {
-  if (!configuredOpenKeyedStore) {
-    throw new Error("memory-core dreaming SQLite state store is not configured");
-  }
-  return configuredOpenKeyedStore<T>(options);
+  return dreamingState.getRuntime()<T>(options);
 }
 
 export function normalizeMemoryCoreWorkspaceKey(workspaceDir: string): string {
@@ -88,32 +88,46 @@ function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<Workspa
   });
 }
 
-// Caller owns typed decoding for values read from plugin state.
-export function readMemoryCoreWorkspaceEntries<T>(
-  params: MemoryCoreWorkspaceParams,
-): Promise<Array<MemoryCoreWorkspaceEntry<T>>>;
-export async function readMemoryCoreWorkspaceEntries(
-  params: MemoryCoreWorkspaceParams,
-): Promise<Array<MemoryCoreWorkspaceEntry<unknown>>> {
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
+async function readWorkspaceStoreEntries<T>(store: PluginStateKeyedStore<T>, workspaceKey: string) {
   const prefix = `${workspaceKey}:`;
-  const entries = await openWorkspaceStore<unknown>(params.namespace).entries();
+  // Lexical range reads remain optional for existing Plugin SDK adapters.
+  if (!store.entriesInKeyRange) {
+    return (await store.entries()).filter((entry) => entry.key.startsWith(prefix));
+  }
+  // Stable sorting retains the range's binary-key order for creation-time ties.
+  return (
+    await store.entriesInKeyRange({
+      keyStartInclusive: prefix,
+      keyEndExclusive: `${workspaceKey};`,
+      limit: Number.MAX_SAFE_INTEGER,
+      order: "asc",
+    })
+  ).toSorted((left, right) => left.createdAt - right.createdAt);
+}
+
+// Caller owns typed decoding for values read from plugin state.
+export async function readMemoryCoreWorkspaceEntries<T>(
+  params: MemoryCoreWorkspaceParams,
+): Promise<Array<MemoryCoreWorkspaceEntry<T>>> {
+  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
+  const entries = await readWorkspaceStoreEntries(
+    openWorkspaceStore<T>(params.namespace),
+    workspaceKey,
+  );
   return entries
-    .filter((entry) => entry.key.startsWith(prefix) && entry.value.workspaceKey === workspaceKey)
+    .filter((entry) => entry.value.workspaceKey === workspaceKey)
     .map((entry) => ({ key: entry.value.key, value: entry.value.value }));
 }
 
 // Caller owns typed encoding for values written to plugin state.
-export function writeMemoryCoreWorkspaceEntries<T>(
+export async function writeMemoryCoreWorkspaceEntries<T>(
   params: WriteMemoryCoreWorkspaceEntriesParams<T>,
-): Promise<void>;
-export async function writeMemoryCoreWorkspaceEntries(
-  params: WriteMemoryCoreWorkspaceEntriesParams<unknown>,
 ): Promise<void> {
-  const store = openWorkspaceStore<unknown>(params.namespace);
+  const store = openWorkspaceStore<T>(params.namespace);
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  const prefix = `${workspaceKey}:`;
   const replacementKeys = new Set<string>();
+  // Scalar store calls can finish synchronously; await alone does not service I/O.
+  let completed = 0;
   for (const entry of params.entries) {
     const stateKey = memoryCoreWorkspaceEntryKey(params.workspaceDir, entry.key);
     replacementKeys.add(stateKey);
@@ -124,23 +138,26 @@ export async function writeMemoryCoreWorkspaceEntries(
       key: entry.key,
       value: entry.value,
     });
+    if (++completed % WORKSPACE_STATE_YIELD_EVERY === 0) {
+      await yieldToEventLoop();
+    }
   }
-  for (const entry of await store.entries()) {
-    if (entry.key.startsWith(prefix) && !replacementKeys.has(entry.key)) {
+  for (const entry of await readWorkspaceStoreEntries(store, workspaceKey)) {
+    if (!replacementKeys.has(entry.key)) {
       await store.delete(entry.key);
+      if (++completed % WORKSPACE_STATE_YIELD_EVERY === 0) {
+        await yieldToEventLoop();
+      }
     }
   }
 }
 
 // Caller owns typed encoding for values written to plugin state.
-export function writeMemoryCoreWorkspaceEntry<T>(
+export async function writeMemoryCoreWorkspaceEntry<T>(
   params: WriteMemoryCoreWorkspaceEntryParams<T>,
-): Promise<void>;
-export async function writeMemoryCoreWorkspaceEntry(
-  params: WriteMemoryCoreWorkspaceEntryParams<unknown>,
 ): Promise<void> {
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  await openWorkspaceStore<unknown>(params.namespace).register(
+  await openWorkspaceStore<T>(params.namespace).register(
     memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
     {
       version: 1,
@@ -152,18 +169,10 @@ export async function writeMemoryCoreWorkspaceEntry(
   );
 }
 
-export async function clearMemoryCoreWorkspaceNamespace(params: {
-  namespace: string;
-  workspaceDir: string;
-}): Promise<void> {
-  const store = openWorkspaceStore(params.namespace);
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  const prefix = `${workspaceKey}:`;
-  for (const entry of await store.entries()) {
-    if (entry.key.startsWith(prefix)) {
-      await store.delete(entry.key);
-    }
-  }
+export async function clearMemoryCoreWorkspaceNamespace(
+  params: MemoryCoreWorkspaceParams,
+): Promise<void> {
+  await writeMemoryCoreWorkspaceEntries({ ...params, entries: [] });
 }
 
 export async function deleteMemoryCoreWorkspaceEntry(params: {

@@ -1,32 +1,63 @@
 import { execFile } from "node:child_process";
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
+import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import * as sessionAccess from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { withTimeout } from "../infra/fs-safe.js";
-import { registerProjectRegistry } from "../projects/project-registry.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { registerProjectRegistry, removeProjectRegistry } from "../projects/project-registry.js";
 import {
   getSessionWorkAdmissionRelease,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import { createWorktreeSpawnRepositoryFixture } from "./server.sessions.create-worktree-spawn.test-support.js";
+import { settleWorkspaceRuns } from "./server.sessions.create.projects.test-support.js";
+import { agentDiscoveryMock, dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const projectCloneMocks = vi.hoisted(() => ({
+  materializeProjectClone: vi.fn(),
+  refreshProjectClone: vi.fn(),
+}));
+vi.mock("../projects/project-clone.js", () => projectCloneMocks);
+
+let createRepository: ReturnType<typeof createWorktreeSpawnRepositoryFixture>;
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness(async (makeTempDir) => {
+  createRepository = createWorktreeSpawnRepositoryFixture(
+    makeTempDir("openclaw-spawn-repo-seeds-"),
+  );
+});
 const execFileAsync = promisify(execFile);
 const parentKey = "agent:main:dashboard:project-parent";
 const parentCreateParams = {
@@ -54,7 +85,6 @@ const adminRequest = {
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let repository: string;
 let storePath: string;
-let parent: SessionEntry;
 
 type CreatedWorktreeSession = {
   key: string;
@@ -62,101 +92,366 @@ type CreatedWorktreeSession = {
   worktree: { id: string; path: string };
 };
 
-async function createRepository(name: string): Promise<string> {
-  const root = path.join(state.root, name);
-  await fs.mkdir(path.join(root, ".openclaw"), { recursive: true });
-  await fs.writeFile(path.join(root, "README.md"), `${name}\n`);
-  await fs.writeFile(
-    path.join(root, ".openclaw", "worktree-setup.sh"),
-    "#!/bin/sh\ntouch setup-marker.txt\n",
-    { mode: 0o755 },
-  );
-  await execFileAsync("git", ["init", "-b", "main", root]);
-  await execFileAsync("git", ["-C", root, "add", "."]);
-  await execFileAsync("git", [
-    "-C",
-    root,
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-m",
-    "Initialize fixture",
-  ]);
-  return await fs.realpath(root);
-}
-
-function spawnClient(admin = false) {
+function spawnClient(requesterSessionKey = parentKey) {
   return {
-    connect: { scopes: [admin ? "operator.admin" : "operator.write"] },
+    connect: { scopes: ["operator.write"] },
     internal: {
       syntheticClient: true as const,
       sessionCreation: {
         via: "spawn" as const,
         actor: { type: "agent" as const, id: "main" },
-        requesterSessionKey: parentKey,
+        requesterSessionKey,
         inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
       },
     },
   };
 }
 
-async function createChild(params: Record<string, unknown> = {}, admin = false) {
+async function createChild(params: Record<string, unknown> = {}, requesterSessionKey = parentKey) {
   return await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
     {
       agentId: "main",
       label: "Project child",
-      parentSessionKey: parentKey,
+      parentSessionKey: requesterSessionKey,
       spawnDepth: 1,
       worktree: true,
       ...params,
     },
-    { client: spawnClient(admin) as never },
+    { client: spawnClient(requesterSessionKey) as never },
   );
 }
 
-beforeEach(async () => {
-  state = await createOpenClawTestState({ layout: "state-only", prefix: "openclaw-spawn-repo-" });
-  const defaultWorkspace = path.join(state.root, "non-git-workspace");
-  await fs.mkdir(defaultWorkspace);
-  repository = await createRepository("selected-project");
-  closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace: defaultWorkspace };
-  ({ storePath } = await createSessionStoreDir());
+async function createDirectProjectParent() {
+  const project = await registerProjectRegistry({ path: repository });
+  const created = await directSessionReq<{ key: string; entry: SessionEntry }>(
+    "sessions.create",
+    { agentId: "main", projectId: project.id },
+    adminRequest,
+  );
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    projectId: project.id,
+    spawnedCwd: repository,
+    sessionRoot: repository,
+  });
+  expect(created.payload?.entry.worktree).toBeUndefined();
+  return { ...created.payload!, project };
+}
+
+async function createManagedProjectParent(required = false) {
   const created = await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
     { ...parentCreateParams, cwd: repository },
     adminRequest,
   );
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  parent = created.payload!.entry;
+  if (required) {
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parentKey, storePath },
+      { ...created.payload!.entry, sandbox: "required" },
+    );
+  }
+  return created.payload!;
+}
+
+async function createVisibleSpawnTool() {
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const context = createDirectChatContext({
+    getRuntimeConfig,
+    trackExecution: async (run) => await run(),
+  });
+  const registerRun = vi.fn();
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: parentKey,
+    config: getRuntimeConfig(),
+    registerRun,
+    countActiveRuns: () => 0,
+  });
+  const spawn = (options: Record<string, unknown>) =>
+    withPluginRuntimeGatewayContextResolver(
+      () => context,
+      () => tool.execute("select-project", { task: "Read README.md", visible: true, ...options }),
+    );
+  return { context, registerRun, spawn };
+}
+
+beforeEach(async () => {
+  state = await createOpenClawTestState({ layout: "state-only", prefix: "openclaw-spawn-repo-" });
+  const defaultWorkspace = path.join(state.root, "non-git-workspace");
+  await fs.mkdir(defaultWorkspace);
+  repository = await createRepository(state.root, "selected-project");
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace: defaultWorkspace };
+  ({ storePath } = await createSessionStoreDir());
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const { provider, model } = resolveDefaultModelForAgent({
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+  });
+  agentDiscoveryMock.models = [
+    { provider, id: model, name: "Default fixture model", reasoning: false },
+  ];
 });
 
 afterEach(async () => {
+  await disposeSessionReadContexts();
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
+  projectCloneMocks.materializeProjectClone.mockReset();
+  projectCloneMocks.refreshProjectClone.mockReset();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   await state?.cleanup();
 });
 
-test("trusted same-agent worktree spawns inherit the parent's selected project", async () => {
-  const created = await createChild();
+test.each(["registered", "github", "inherited"] as const)(
+  "required visible spawn selects %s project through the write-scope Gateway",
+  async (source) => {
+    const { entry: parent } = await createManagedProjectParent(true);
+    const projectName = "tool-selected-project";
+    const otherRepository = await createRepository(state.root, projectName);
+    const project = await registerProjectRegistry({ path: otherRepository });
+    projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
+    const { context, registerRun, spawn } = await createVisibleSpawnTool();
+    dispatchInboundMessageMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+    let childKey: string | undefined;
+    try {
+      const result = await spawn({
+        label: "Selected project child",
+        ...(source === "registered"
+          ? { projectId: project.id }
+          : source === "github"
+            ? { projectGitUrl: "git@github.com:example/selected.git" }
+            : {}),
+        worktree: true,
+        worktreeName: "selected-child",
+        worktreeBaseRef: "main",
+      });
+      expect(result.details).toMatchObject({ status: "accepted" });
+      if (!isRecord(result.details) || typeof result.details.childSessionKey !== "string") {
+        throw new Error("Missing child session key");
+      }
+      childKey = result.details.childSessionKey;
+      await settleWorkspaceRuns(context, storePath, childKey);
+      const child = loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath });
+      expect(child).toMatchObject({ parentSessionId: parent.sessionId, sandbox: "required" });
+      if (source !== "inherited") {
+        expect(child?.projectId).toBe(project.id);
+      }
+      expect(child?.worktree?.repoRoot).toBe(source === "inherited" ? repository : otherRepository);
+      expect(await fs.readFile(path.join(child!.spawnedCwd!, "README.md"), "utf8")).toBe(
+        source === "inherited" ? "selected-project\n" : `${projectName}\n`,
+      );
+      if (source === "github") {
+        expect(projectCloneMocks.materializeProjectClone).toHaveBeenCalledWith(
+          expect.objectContaining({ gitUrl: "https://github.com/example/selected.git" }),
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+      } else {
+        expect(projectCloneMocks.materializeProjectClone).not.toHaveBeenCalled();
+      }
+      await expect(fs.stat(path.join(child!.spawnedCwd!, "setup-marker.txt"))).rejects.toThrow();
+      expect(registerRun).toHaveBeenCalledOnce();
+    } finally {
+      await settleWorkspaceRuns(context, storePath, childKey, true);
+      dispatchInboundMessageMock.mockReset();
+    }
+  },
+);
+
+test.each(["registered", "github"] as const)(
+  "required parent rejects external %s project before binding or allocation with global sandbox off",
+  async (source) => {
+    await createManagedProjectParent(true);
+    const otherRepository = await createRepository(state.root, "sandbox-external-project");
+    const project = await registerProjectRegistry({ path: otherRepository });
+    projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
+    const { context, registerRun, spawn } = await createVisibleSpawnTool();
+    const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
+    const bindChild = vi.spyOn(sessionAccess, "createSessionEntryWithTranscript");
+    dispatchInboundMessageMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+    let childKey: string | undefined;
+    let creationError: unknown;
+    try {
+      const result = await spawn(
+        source === "registered"
+          ? { projectId: project.id }
+          : { projectGitUrl: "https://github.com/example/restricted.git" },
+      ).catch((error: unknown) => {
+        creationError = error;
+        return undefined;
+      });
+      if (isRecord(result?.details) && typeof result.details.childSessionKey === "string") {
+        childKey = result.details.childSessionKey;
+      }
+      await settleWorkspaceRuns(context, storePath, childKey);
+      const child = childKey
+        ? loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath })
+        : undefined;
+      if (source === "registered") {
+        expect(creationError).toMatchObject({
+          message: expect.stringContaining("outside the sandboxed agent workspace"),
+        });
+        expect(childKey).toBeUndefined();
+        expect(bindChild).not.toHaveBeenCalled();
+        expect(registerRun).not.toHaveBeenCalled();
+      } else {
+        expect(creationError).toBeUndefined();
+        expect(child).toMatchObject({ sandbox: "required", status: "failed" });
+        expect(child?.lastRunError).toContain("outside the sandboxed agent workspace");
+      }
+      expect(createWorktree).not.toHaveBeenCalled();
+      if (childKey) {
+        expect(await managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
+      }
+      expect(child?.worktree).toBeUndefined();
+      expect(child?.projectId).toBeUndefined();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      await settleWorkspaceRuns(context, storePath, childKey, true);
+      dispatchInboundMessageMock.mockReset();
+    }
+  },
+);
+
+test("required project preparation isolates host filters without rejecting the registered source", async () => {
+  await createManagedProjectParent(true);
+  const marker = path.join(state.root, "host-filter-marker");
+  const script = path.join(state.root, "host-filter.cjs");
+  await fs.writeFile(
+    script,
+    `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed"); process.stdin.pipe(process.stdout);`,
+  );
+  await fs.writeFile(path.join(repository, ".gitattributes"), "README.md filter=synthetic\n");
+  await execFileAsync("git", ["-C", repository, "add", ".gitattributes"]);
+  await execFileAsync("git", [
+    "-C",
+    repository,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "-qm",
+    "filter declaration",
+  ]);
+  await execFileAsync("git", [
+    "-C",
+    repository,
+    "config",
+    "filter.synthetic.smudge",
+    `"${process.execPath}" "${script}"`,
+  ]);
+  const project = await registerProjectRegistry({ path: repository });
+  const key = "agent:main:dashboard:filtered-project";
+  const result = await createChild({ key, projectId: project.id });
+  expect(result).toMatchObject({ ok: true });
+  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  expect(child).toMatchObject({ sandbox: "required", projectId: project.id });
+  expect(child?.worktree?.id).toBe((await managedWorktrees.findLiveByOwner("session", key))?.id);
+  expect(child?.spawnedCwd).not.toBe(repository);
+  expect(await fs.readFile(path.join(child!.spawnedCwd!, "README.md"), "utf8")).toBe(
+    await fs.readFile(path.join(repository, "README.md"), "utf8"),
+  );
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.stat(path.join(child!.spawnedCwd!, "setup-marker.txt"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+test("visible spawn tool preserves project validation and external cwd authorization", async () => {
+  await createManagedProjectParent();
+  const project = await registerProjectRegistry({ path: repository });
+  const { registerRun, spawn } = await createVisibleSpawnTool();
+  const gitUrl = "https://github.com/example/selected.git";
+  for (const options of [
+    { projectId: project.id, cwd: repository },
+    { projectGitUrl: gitUrl, cwd: repository },
+    { projectId: project.id, projectGitUrl: gitUrl },
+  ]) {
+    await expect(spawn(options)).rejects.toThrow(/cannot be combined/);
+  }
+  for (const projectGitUrl of [
+    "/tmp/repo",
+    "file:///tmp/repo",
+    "https://example.com/repo.git",
+    "not-a-url",
+  ]) {
+    await expect(spawn({ projectGitUrl })).rejects.toThrow(
+      "Use a GitHub HTTPS or git@github.com repository URL",
+    );
+  }
+  await expect(spawn({ projectId: "missing-project" })).rejects.toThrow("unknown project id");
+  const result = await spawn({ cwd: repository, worktree: true });
+  expect(result.details).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("requires operator.admin"),
+  });
+  expect(registerRun).not.toHaveBeenCalled();
+  expect(projectCloneMocks.materializeProjectClone).not.toHaveBeenCalled();
+});
+
+test.each(["archive", "unregister"] as const)(
+  "direct-project worktree spawns roll back after parent %s during preparation",
+  async (change) => {
+    const selectedParent = await createDirectProjectParent();
+    let createdPath: string | undefined;
+    const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+    vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome").mockImplementation(
+      async function (this: ManagedWorktreeService, params) {
+        const outcome = await createWorktree(this, params);
+        createdPath = outcome.record.path;
+        if (change === "unregister") {
+          expect(await removeProjectRegistry(selectedParent.project)).toBe(true);
+        } else {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: selectedParent.key, storePath },
+            { ...selectedParent.entry, archivedAt: Date.now() },
+          );
+        }
+        return outcome;
+      },
+    );
+    const key = `agent:main:dashboard:direct-parent-${change}-child`;
+    await expect(createChild({ key }, selectedParent.key)).rejects.toThrow(
+      "Spawn parent project changed",
+    );
+    expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+    if (!createdPath) {
+      throw new Error("Expected the preparation to allocate a checkout");
+    }
+    await expect(fs.stat(createdPath)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+test("worktree spawns do not inherit an unregistered parent working directory", async () => {
+  const created = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    { agentId: "main", cwd: repository },
+    adminRequest,
+  );
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry.worktree?.repoRoot).toBe(repository);
-  expect(created.payload?.entry.parentSessionId).toBe(parent.sessionId);
-  expect(created.payload?.worktree.id).not.toBe(parent.worktree?.id);
-  const childPath = created.payload!.worktree.path;
-  expect(await fs.readFile(path.join(childPath, "README.md"), "utf8")).toBe("selected-project\n");
-  await expect(fs.stat(path.join(childPath, "setup-marker.txt"))).rejects.toThrow();
+  const child = await createChild({}, created.payload!.key);
+  expect(child).toMatchObject({
+    ok: false,
+    error: { message: "agent workspace is not a git checkout" },
+  });
 });
 
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
+  const { entry: parent } = await createManagedProjectParent();
   const params = { ...parentCreateParams, cwd: repository };
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   const reused = await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
@@ -166,7 +461,7 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
   expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
   expect(reused.payload?.entry.sessionId).toBe(parent.sessionId);
   expect(reused.payload?.worktree.id).toBe(parent.worktree?.id);
-  const recorded = managedWorktrees.findLiveByOwner("session", parentKey);
+  const recorded = await managedWorktrees.findLiveByOwner("session", parentKey);
   expect(recorded?.baseRef).toBe("main");
 
   for (const changed of [{ worktreeBaseRef: "HEAD" }, { worktreeName: "other-name" }]) {
@@ -180,7 +475,7 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("already bound") },
     });
   }
-  const otherRepository = await createRepository("other-replay-project");
+  const otherRepository = await createRepository(state.root, "other-replay-project");
   const wrongRepository = await directSessionReq(
     "sessions.create",
     { ...params, cwd: otherRepository },
@@ -209,38 +504,25 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
     ok: false,
     error: { message: "session worktree binding has a different owner" },
   });
-  expect(managedWorktrees.findLiveByOwner("session", parentKey)).toEqual(recorded);
+  expect(await managedWorktrees.findLiveByOwner("session", parentKey)).toEqual(recorded);
 });
 
-test.each(["cwd", "project", "cross-agent"] as const)(
-  "trusted worktree spawns preserve %s source selection",
-  async (selection) => {
-    const otherRepository = await createRepository("other-project");
-    let params: Record<string, unknown>;
-    if (selection === "project") {
-      const project = await registerProjectRegistry({ path: otherRepository });
-      params = { projectId: project.id };
-    } else if (selection === "cross-agent") {
-      testState.agentsConfig = {
-        list: [
-          { id: "main", default: true },
-          { id: "other", workspace: otherRepository },
-        ],
-      };
-      const config = await getGatewayConfigModule();
-      config.clearRuntimeConfigSnapshot();
-      config.clearConfigCache();
-      params = { agentId: "other" };
-    } else {
-      params = { cwd: otherRepository };
-    }
-    const created = await createChild(params, selection === "cwd");
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.entry.worktree?.repoRoot).toBe(otherRepository);
-  },
-);
+test("trusted cross-agent worktree spawns select the target agent's workspace", async () => {
+  await createManagedProjectParent();
+  const otherRepository = await createRepository(state.root, "other-project");
+  testState.agentsConfig = {
+    entries: { main: {}, other: { workspace: otherRepository } },
+  };
+  const config = await getGatewayConfigModule();
+  config.clearRuntimeConfigSnapshot();
+  config.clearConfigCache();
+  const created = await createChild({ agentId: "other" });
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry.worktree?.repoRoot).toBe(otherRepository);
+});
 
 test("parent linkage does not authorize an operator's out-of-workspace source", async () => {
+  await createManagedProjectParent();
   const linked = await directSessionReq(
     "sessions.create",
     { agentId: "main", label: "Operator child", parentSessionKey: parentKey, worktree: true },
@@ -258,6 +540,7 @@ test("parent linkage does not authorize an operator's out-of-workspace source", 
 });
 
 test("trusted worktree spawns reject a stale parent registry binding", async () => {
+  const { entry: parent } = await createManagedProjectParent();
   replaceSessionEntrySync(
     { agentId: "main", sessionKey: parentKey, storePath },
     { ...parent, worktree: { ...parent.worktree!, id: "another-worktree" } },
@@ -266,27 +549,162 @@ test("trusted worktree spawns reject a stale parent registry binding", async () 
 });
 
 test("trusted worktree spawns roll back when the parent changes during preparation", async () => {
-  const createWorktree = managedWorktrees.create.bind(managedWorktrees);
-  vi.spyOn(managedWorktrees, "create").mockImplementation(async (params) => {
-    const created = await createWorktree(params);
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: parentKey, storePath },
-      { ...parent, sessionId: "replaced-parent" },
-    );
-    return created;
-  });
+  const { entry: parent } = await createManagedProjectParent();
+  const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+  vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome").mockImplementation(
+    async function (this: ManagedWorktreeService, params) {
+      const outcome = await createWorktree(this, params);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: parentKey, storePath },
+        { ...parent, sessionId: "replaced-parent" },
+      );
+      return outcome;
+    },
+  );
   const key = "agent:main:dashboard:retired-parent-child";
   await expect(createChild({ key })).rejects.toThrow("Spawn parent managed worktree changed");
-  expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+  expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 });
 
-test.each(["archive", "replace", "rebind", "stale-child"] as const)(
+test("publishes a failed worktree spawn only after its durable session failure", async () => {
+  await createManagedProjectParent();
+  const key = "agent:main:dashboard:failed-worktree-child";
+  const target = { agentId: "main", sessionKey: key, storePath };
+  const preparation = createDeferredCore<never>();
+  const preparationStarted = createDeferredCore();
+  const createWorktree = vi
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementationOnce(() => {
+      preparationStarted.resolve();
+      return preparation.promise;
+    });
+  const failure = new Error(
+    "git ls-tree -r --format=%(objectsize) c79ad267ba623c1a323f1f6e8b60228bd5a30ce5 -- failed (timed out after 120 seconds; signal SIGTERM):\n4514\n4168\nCheck repository access and disk space.",
+  );
+  let registryStartedAt = 0;
+  let publishedEntry: SessionEntry | undefined;
+  let registryProjection: Promise<void> | undefined;
+  const context = {
+    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+    dedupe: new Map(),
+    broadcast: vi.fn((event: string, payload: unknown) => {
+      if (
+        event !== "chat" ||
+        !isRecord(payload) ||
+        payload.state !== "error" ||
+        typeof payload.runId !== "string"
+      ) {
+        return;
+      }
+      publishedEntry = loadSessionEntry(target);
+      // The completion waiter observes the terminal after the spawn ACK registered
+      // its own later start time. Exercise the real registry projection as it settles.
+      registryProjection = persistSubagentSessionTiming({
+        runId: payload.runId,
+        childSessionKey: key,
+        requesterSessionKey: parentKey,
+        requesterDisplayKey: parentKey,
+        task: "Read README.md",
+        cleanup: "keep",
+        createdAt: registryStartedAt,
+        sessionStartedAt: registryStartedAt,
+        execution: {
+          status: "terminal",
+          startedAt: registryStartedAt,
+          endedAt: Date.now(),
+          outcome: { status: "error", error: String(failure) },
+        },
+        completion: { required: false },
+        delivery: { status: "not_required" },
+        endedReason: "subagent-error",
+      });
+    }),
+  };
+  const client = spawnClient();
+  const created = await directSessionReq<{
+    key: string;
+    sessionId: string;
+    runId: string;
+    runStarted: boolean;
+  }>(
+    "sessions.create",
+    {
+      key,
+      agentId: "main",
+      label: "Failed worktree child",
+      parentSessionKey: parentKey,
+      spawnDepth: 1,
+      worktree: true,
+      worktreeName: "failed-child",
+      task: "Read README.md",
+    },
+    {
+      client: {
+        ...client,
+        connect: {
+          ...client.connect,
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            version: "test",
+            platform: "node",
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+        },
+      },
+      context,
+    },
+  );
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.runStarted).toBe(true);
+  const { runId, sessionId } = created.payload!;
+  const admittedRun = context.chatAbortControllers.get(runId)!;
+  registryStartedAt = Math.max(Date.now(), admittedRun.startedAtMs + 1);
+  const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+  expect(released).toBeDefined();
+  expect(loadSessionEntry(target)?.pendingWorktree?.workspace).toBe(repository);
+  await preparationStarted.promise;
+  expect(createWorktree).toHaveBeenCalledOnce();
+  preparation.reject(failure);
+  await withTimeout(released!, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS, "failed workspace proof");
+  await registryProjection;
+
+  expect.soft(publishedEntry).toMatchObject({
+    sessionId,
+    status: "failed",
+    lastRunId: runId,
+    lastRunError: expect.stringContaining("git ls-tree"),
+  });
+  expect.soft(loadSessionEntry(target)).toMatchObject({
+    status: "failed",
+    lastRunId: runId,
+    lastRunError: expect.stringContaining("timed out after 120 seconds"),
+  });
+  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  const notices = (await loadTranscriptEvents({ ...target, sessionId })).filter(
+    (event) => isRecord(event) && event.customType === "run-failed-before-reply",
+  );
+  expect(notices).toMatchObject([
+    { details: { runId, error: expect.stringContaining("git ls-tree") }, display: true },
+  ]);
+  const listed = await directSessionReq<{
+    sessions: Array<{ key: string; lastRunError?: string }>;
+  }>("sessions.list", { agentId: "main" }, adminRequest);
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+  expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
+    lastRunError: expect.stringContaining("git ls-tree"),
+  });
+});
+
+test.each(["archive", "stale-child"] as const)(
   "deferred worktree preparation follows its child owner after %s",
   async (change) => {
-    const { chatHandlers } = await import("./server-methods/chat.js");
+    const { entry: parent } = await createManagedProjectParent();
+    const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
     const initialSend = vi
-      .spyOn(chatHandlers, "chat.send")
+      .spyOn(chatSendOwner, "handleDirectExternalChatSend")
       .mockImplementation(async ({ respond }) => {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "initial turn unavailable"));
       });
@@ -295,6 +713,8 @@ test.each(["archive", "replace", "rebind", "stale-child"] as const)(
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     const acceptedChild = loadSessionEntry({ agentId: "main", sessionKey: key, storePath })!;
     expect(acceptedChild.pendingWorktree?.workspace).toBe(repository);
+    expect(acceptedChild.worktree).toBeUndefined();
+    expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
     initialSend.mockRestore();
     const context = {
       broadcast: vi.fn(),
@@ -329,25 +749,13 @@ test.each(["archive", "replace", "rebind", "stale-child"] as const)(
       expect(
         loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath })?.archivedAt,
       ).toBeDefined();
-    } else if (change === "replace" || change === "rebind") {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: parentKey, storePath },
-        {
-          ...parent,
-          ...(change === "replace"
-            ? { sessionId: "replacement-parent" }
-            : {
-                worktree: { ...parent.worktree!, id: "replacement-parent-worktree" },
-              }),
-        },
-      );
     }
     dispatchInboundMessageMock.mockResolvedValue({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
     });
-    const resolveRepository = vi.spyOn(managedWorktrees, "resolveRepositoryPaths");
-    const createWorktree = vi.spyOn(managedWorktrees, "create");
+    const resolveRepository = vi.spyOn(ManagedWorktreeService.prototype, "resolveRepositoryPaths");
+    const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     let replaced = false;
     const unsubscribe = onAgentEvent((event) => {
       if (
@@ -407,7 +815,7 @@ test.each(["archive", "replace", "rebind", "stale-child"] as const)(
         expect(child.parentSessionId).toBe(parent.sessionId);
         expect(child.pendingWorktree).toBeUndefined();
         expect(child.worktree?.repoRoot).toBe(repository);
-        const owned = managedWorktrees.findLiveByOwner("session", key)!;
+        const owned = (await managedWorktrees.findLiveByOwner("session", key))!;
         expect(owned.id).toBe(child.worktree?.id);
         expect(await fs.readFile(path.join(owned.path, "README.md"), "utf8")).toBe(
           "selected-project\n",
@@ -417,7 +825,33 @@ test.each(["archive", "replace", "rebind", "stale-child"] as const)(
       }
     } finally {
       unsubscribe();
+      await settleWorkspaceRuns(context, storePath, key, true);
       dispatchInboundMessageMock.mockReset();
     }
   },
 );
+
+test("an existing child row does not replace an unaccepted parent project source", async () => {
+  const selectedParent = await createDirectProjectParent();
+  const key = "agent:main:dashboard:unaccepted-parent-source";
+  const created = await createChild({ key, worktree: false }, selectedParent.key);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  if (!child) {
+    throw new Error("Expected the initial child row");
+  }
+  expect(child.worktree).toBeUndefined();
+  expect(child.pendingWorktree).toBeUndefined();
+  expect(await removeProjectRegistry(selectedParent.project)).toBe(true);
+
+  await expect(createChild({ key }, selectedParent.key)).rejects.toThrow(
+    "Spawn parent project changed",
+  );
+  expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    sessionId: child.sessionId,
+  });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.worktree,
+  ).toBeUndefined();
+});

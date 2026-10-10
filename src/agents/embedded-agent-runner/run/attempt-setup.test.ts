@@ -8,7 +8,10 @@ import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook
 import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -26,14 +29,19 @@ vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
 
 import {
   installEmbeddedAttemptContextGuards,
-  prepareEmbeddedAttemptSkills,
   prepareEmbeddedAttemptSetup,
-  resolveAttemptWorkspaceSandbox,
 } from "./attempt-setup.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const attemptModel = makeProviderModelFixture({
+  id: "gpt-5.4",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: true,
+});
 
 function sandboxContext(workspaceAccess: SandboxContext["workspaceAccess"]): SandboxContext {
   return {
@@ -69,9 +77,10 @@ describe("prepareEmbeddedAttemptSetup", () => {
 
   it("prepares the identity that owns the current agent session", async () => {
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {
         agents: {
-          list: [{ id: "main", default: true }, { id: "marketing" }],
+          entries: { main: {}, marketing: {} },
         },
       },
       modelId: "gpt-5.4",
@@ -116,7 +125,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
           agents: {
             ownership: "explicit",
             defaults: { sandbox: { mode: "off" } },
-            list: [{ id: "main" }, { id: "marketing" }],
+            entries: { main: {}, marketing: {} },
           },
         },
       });
@@ -133,7 +142,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       resolveAttemptWorkspaceSandbox({
         agentId: "marketing",
         config: {
-          agents: { ownership: "explicit", list: [{ id: "main" }, { id: "marketing" }] },
+          agents: { ownership: "explicit", entries: { main: {}, marketing: {} } },
         },
         sessionId: "policy-attempt",
         sessionKey: "agent:marketing:main",
@@ -155,7 +164,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       activeSession: { agent, settingsManager } as never,
       agentDir: workspaceDir,
       attempt: {
-        config: { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } },
+        config: { agents: { entries: { marketing: { workspace: workspaceDir } } } },
         contextTokenBudget: 32_000,
         model: { input: ["text", "image"] },
         modelId: "gpt-5.4",
@@ -202,6 +211,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   it("prepares one closed session permission policy", async () => {
     const root = path.join(os.tmpdir(), "openclaw-attempt-permission-root");
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       permissionMode: "workspace",
@@ -226,6 +236,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     };
 
     await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       provider: "openai",
@@ -250,27 +261,10 @@ describe("prepareEmbeddedAttemptSetup", () => {
       config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
       sessionId: "session-collection-review-rw",
       sessionKey: "agent:main:skill-collection-review",
-      requireWritableSandbox: true,
       workspaceDir,
     });
 
     expect(setup.effectiveWorkspace).toBe(workspaceDir);
-  });
-
-  it("fails closed before collection review enters a read-only sandbox workspace", async () => {
-    const workspaceDir = tempDirs.make("openclaw-attempt-setup-collection-review-ro-");
-    resolveSandboxContext.mockResolvedValueOnce(sandboxContext("ro"));
-
-    await expect(
-      resolveAttemptWorkspaceSandbox({
-        agentId: "main",
-        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
-        sessionId: "session-collection-review-ro",
-        sessionKey: "agent:main:skill-collection-review",
-        requireWritableSandbox: true,
-        workspaceDir,
-      }),
-    ).rejects.toThrow("sandbox workspace is not read-write; collection review skipped");
   });
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
@@ -284,6 +278,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       plugin: {} as never,
     };
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       provider: "openai",
@@ -309,6 +304,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveProviderRuntimePluginHandle.mockReturnValue(resolvedHandle);
     const metadataSnapshot = { pluginIds: ["other"] };
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       provider: "openai",
@@ -334,7 +330,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   });
 });
 
-describe("prepareEmbeddedAttemptSkills", () => {
+describe("prepareEmbeddedSkills", () => {
   it.each([
     { label: "unrestricted", toolExecutionAllow: undefined, readable: true },
     { label: "read allowed", toolExecutionAllow: ["read"], readable: true },
@@ -359,7 +355,8 @@ describe("prepareEmbeddedAttemptSkills", () => {
     await writeSkill(executionWorkspace, "execution-workspace-skill");
 
     try {
-      const prepared = prepareEmbeddedAttemptSkills({
+      const prepared = await prepareEmbeddedSkills({
+        includeCodeModeSkills: true,
         attempt: {
           bootstrapWorkspaceDir: agentWorkspace,
           config: {},

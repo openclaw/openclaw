@@ -1,4 +1,5 @@
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
 
 export type ShutdownHardExitWatchdog = {
   cancel: () => void;
@@ -17,7 +18,7 @@ export function armShutdownHardExitWatchdog(params: {
   };
   let worker: Worker;
   try {
-    worker = new Worker(
+    worker = createCpuTrackedWorker(
       `const { parentPort, workerData } = require("node:worker_threads");
        const timer = setTimeout(() => process.kill(process.pid, "SIGKILL"), workerData.delayMs);
        parentPort.once("message", () => {

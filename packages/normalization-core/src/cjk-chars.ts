@@ -13,25 +13,68 @@ export type StringCharBudgetOptions = { minimumRawWeight?: number };
 const DEFAULT_BUDGET_OPTIONS: StringCharBudgetOptions = {};
 const ASCII_RUN_OR_NON_ASCII_CODE_POINT_RE = /[\p{ASCII}]+|[^\p{ASCII}]/gu;
 const NON_ASCII_RE = /[\u0080-\u{10FFFF}]/u;
-const COMMON_CJK_RE = /[\u00B7\u3000-\u319F\u4E00-\u9FA5\uAC00-\uD7AF\uFF01-\uFF60]/gu;
-const RARE_BMP_CJK_RE =
-  /[\u1100-\u11FF\u2E80-\u2FFF\u31A0-\u4DFF\u9FA6-\u9FFF\uA000-\uA4FF\uA700-\uA707\uA960-\uA97F\uD7B0-\uD7FF\uF900-\uFAFF]/gu;
-const TWO_TOKEN_CJK_RE =
-  /[\u{02C7}\u{02C9}-\u{02CB}\u{02D9}\u{02EA}-\u{02EB}\uFE10-\uFE4F\uFF61-\uFFDC\uFFE0-\uFFE6]|\u{0305}|\u{0323}/gu;
-const THREE_TOKEN_SUPPLEMENTARY_CJK_RE = /[\u{1D360}-\u{1D371}]/gu;
-const SUPPLEMENTARY_CJK_RE =
-  /[\u{16FE0}-\u{16FFF}\u{1AFF0}-\u{1AFFF}\u{1B000}-\u{1B16F}\u{1F200}-\u{1F2FF}\u{20000}-\u{2FA1F}\u{30000}-\u{3347F}]/gu;
-const SPECIAL_CJK_RE =
-  /[\u{02C7}\u{02C9}-\u{02CB}\u{02D9}\u{02EA}-\u{02EB}\u1100-\u11FF\u2E80-\u2FFF\u31A0-\u4DFF\u9FA6-\u9FFF\uA000-\uA4FF\uA700-\uA707\uA960-\uA97F\uD7B0-\uD7FF\uF900-\uFAFF\uFE10-\uFE4F\uFF61-\uFFDC\uFFE0-\uFFE6\u{16FE0}-\u{16FFF}\u{1AFF0}-\u{1AFFF}\u{1B000}-\u{1B16F}\u{1D360}-\u{1D371}\u{1F200}-\u{1F2FF}\u{20000}-\u{2FA1F}\u{30000}-\u{3347F}]|\u{0305}|\u{0323}/u;
 
-function countMatches(text: string, pattern: RegExp): number {
-  let count = 0;
-  // Every pattern consumes a code point; the final failed test resets its cursor.
-  while (pattern.test(text)) {
-    count += 1;
+const WEIGHTED_CJK_RANGES = [
+  [
+    [0x00b7, 0x00b7],
+    [0x3000, 0x319f],
+    [0x4e00, 0x9fa5],
+    [0xac00, 0xd7af],
+    [0xff01, 0xff60],
+  ],
+  [
+    [0x1100, 0x11ff],
+    [0x2e80, 0x2fff],
+    [0x31a0, 0x4dff],
+    [0x9fa6, 0x9fff],
+    [0xa000, 0xa4ff],
+    [0xa700, 0xa707],
+    [0xa960, 0xa97f],
+    [0xd7b0, 0xd7ff],
+    [0xf900, 0xfaff],
+  ],
+  [
+    [0x02c7, 0x02c7],
+    [0x02c9, 0x02cb],
+    [0x02d9, 0x02d9],
+    [0x02ea, 0x02eb],
+    [0x0305, 0x0305],
+    [0x0323, 0x0323],
+    [0xfe10, 0xfe4f],
+    [0xff61, 0xffdc],
+    [0xffe0, 0xffe6],
+  ],
+  [[0x1d360, 0x1d371]],
+  [
+    [0x16fe0, 0x16fff],
+    [0x1aff0, 0x1afff],
+    [0x1b000, 0x1b16f],
+    [0x1f200, 0x1f2ff],
+    [0x20000, 0x2fa1f],
+    [0x30000, 0x3347f],
+  ],
+] as const;
+
+const WEIGHTED_CJK_RE = new RegExp(
+  `[${WEIGHTED_CJK_RANGES.flatMap((ranges) =>
+    ranges.map(([start, end]) => `\\u{${start.toString(16)}}-\\u{${end.toString(16)}}`),
+  ).join("")}]`,
+  "u",
+);
+
+// A fixed 205 KiB lookup avoids rescanning multilingual text for each weight.
+const CJK_CATEGORY: Readonly<ArrayLike<number>> = (() => {
+  const maxCodePoint = Math.max(
+    ...WEIGHTED_CJK_RANGES.flatMap((ranges) => ranges.map(([, end]) => end)),
+  );
+  const categories = new Uint8Array(maxCodePoint + 1);
+  for (const [bucket, ranges] of WEIGHTED_CJK_RANGES.entries()) {
+    for (const [start, end] of ranges) {
+      categories.fill(bucket + 1, start, end + 1);
+    }
   }
-  return count;
-}
+  return categories;
+})();
 
 export function estimateStringChars(text: string): number {
   return estimateStringCharsWithMinimumRawWeight(text);
@@ -59,19 +102,55 @@ export function estimateStringCharsWithMinimumRawWeight(
   if (!NON_ASCII_RE.test(text)) {
     return text.length * minimumRawWeight;
   }
-  const commonEstimate =
-    text.length * minimumRawWeight +
-    countMatches(text, COMMON_CJK_RE) * (CHARS_PER_TOKEN_ESTIMATE - minimumRawWeight);
-  if (!SPECIAL_CJK_RE.test(text)) {
-    return commonEstimate;
+  const firstWeighted = text.search(WEIGHTED_CJK_RE);
+  if (firstWeighted < 0) {
+    return text.length * minimumRawWeight;
   }
+  let common = 0;
+  let rareBmp = 0;
+  let twoToken = 0;
+  let threeTokenSupplementary = 0;
+  let supplementary = 0;
+  for (let index = firstWeighted; index < text.length; index += 1) {
+    let codePoint = text.charCodeAt(index);
+    if (codePoint < 0x80) {
+      continue;
+    }
+    if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
+      const low = text.charCodeAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        codePoint = 0x10000 + (codePoint - 0xd800) * 0x400 + low - 0xdc00;
+        index += 1;
+      }
+    }
+    switch (CJK_CATEGORY[codePoint]) {
+      case 1:
+        common += 1;
+        break;
+      case 2:
+        rareBmp += 1;
+        break;
+      case 3:
+        twoToken += 1;
+        break;
+      case 4:
+        threeTokenSupplementary += 1;
+        break;
+      case 5:
+        supplementary += 1;
+        break;
+      default:
+        break;
+    }
+  }
+  const commonEstimate =
+    text.length * minimumRawWeight + common * (CHARS_PER_TOKEN_ESTIMATE - minimumRawWeight);
   return (
     commonEstimate +
-    countMatches(text, RARE_BMP_CJK_RE) * (CHARS_PER_TOKEN_ESTIMATE * 3 - minimumRawWeight) +
-    countMatches(text, TWO_TOKEN_CJK_RE) * (CHARS_PER_TOKEN_ESTIMATE * 2 - minimumRawWeight) +
-    countMatches(text, THREE_TOKEN_SUPPLEMENTARY_CJK_RE) *
-      (CHARS_PER_TOKEN_ESTIMATE * 3 - 2 * minimumRawWeight) +
-    countMatches(text, SUPPLEMENTARY_CJK_RE) * (CHARS_PER_TOKEN_ESTIMATE * 4 - 2 * minimumRawWeight)
+    rareBmp * (CHARS_PER_TOKEN_ESTIMATE * 3 - minimumRawWeight) +
+    twoToken * (CHARS_PER_TOKEN_ESTIMATE * 2 - minimumRawWeight) +
+    threeTokenSupplementary * (CHARS_PER_TOKEN_ESTIMATE * 3 - 2 * minimumRawWeight) +
+    supplementary * (CHARS_PER_TOKEN_ESTIMATE * 4 - 2 * minimumRawWeight)
   );
 }
 

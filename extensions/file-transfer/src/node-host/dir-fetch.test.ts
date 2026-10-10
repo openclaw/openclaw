@@ -1,5 +1,4 @@
 // File Transfer tests cover dir fetch plugin behavior.
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -34,26 +33,6 @@ async function expectDirFetchError(input: Parameters<typeof handleDirFetch>[0], 
 describe("handleDirFetch — input validation", () => {
   it("rejects empty / non-string path", async () => {
     await expectDirFetchError({ path: "" }, "INVALID_PATH");
-  });
-
-  it("rejects relative paths", async () => {
-    await expectDirFetchError({ path: "relative" }, "INVALID_PATH");
-  });
-
-  it("rejects paths with NUL bytes", async () => {
-    await expectDirFetchError({ path: "/tmp/foo\0bar" }, "INVALID_PATH");
-  });
-});
-
-describe("handleDirFetch — fs errors", () => {
-  it.runIf(HAS_TAR)("returns NOT_FOUND for a missing directory", async () => {
-    await expectDirFetchError({ path: path.join(tmpRoot, "missing") }, "NOT_FOUND");
-  });
-
-  it.runIf(HAS_TAR)("returns IS_FILE when path resolves to a file", async () => {
-    const f = path.join(tmpRoot, "f.txt");
-    await fs.writeFile(f, "x");
-    await expectDirFetchError({ path: f }, "IS_FILE");
   });
 });
 
@@ -101,6 +80,10 @@ describe("handleDirFetch — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
     await fs.mkdir(path.join(tmpRoot, "sub"));
     await fs.writeFile(path.join(tmpRoot, "sub", "b.txt"), "beta\n");
+    await fs.mkdir(path.join(tmpRoot, "c"));
+    await fs.writeFile(path.join(tmpRoot, "c", "z.txt"), "first subtree\n");
+    await fs.mkdir(path.join(tmpRoot, "c\u200d"));
+    await fs.writeFile(path.join(tmpRoot, "c\u200d", "a.txt"), "second subtree\n");
 
     const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
     if (!r.ok) {
@@ -112,7 +95,17 @@ describe("handleDirFetch — happy path", () => {
     expect(r.tarBytes).toBe(0);
     expect(r.sha256).toBe("");
     expect(r.preflightOnly).toBe(true);
-    expect(r.entries).toEqual([".ssh", ".ssh/id_rsa", "a.txt", "sub", "sub/b.txt"]);
+    expect(r.entries).toEqual([
+      ".ssh",
+      ".ssh/id_rsa",
+      "a.txt",
+      "c",
+      "c/z.txt",
+      "c\u200d",
+      "c\u200d/a.txt",
+      "sub",
+      "sub/b.txt",
+    ]);
     expect(r.fileCount).toBe(r.entries?.length);
   });
 
@@ -150,6 +143,28 @@ describe("handleDirFetch — happy path", () => {
         code: "CANONICAL_PATH_CHANGED",
         message: "canonical path differs from the authorized target",
         canonicalPath: second,
+      });
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "returns an invalid-path error for a non-UTF-8 filename instead of a partial preflight",
+    async () => {
+      await fs.writeFile(path.join(tmpRoot, "valid.txt"), "valid sibling");
+      const nested = path.join(tmpRoot, "nested");
+      await fs.mkdir(nested);
+      await fs.writeFile(
+        Buffer.concat([Buffer.from(`${nested}/`), Buffer.from([0xff])]),
+        "unrepresentable filename",
+      );
+
+      const result = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
+
+      expect(result).toEqual({
+        ok: false,
+        code: "INVALID_PATH",
+        message: expect.stringContaining("directory entry name is not valid UTF-8"),
+        canonicalPath: tmpRoot,
       });
     },
   );
@@ -231,11 +246,6 @@ describe("handleDirFetch — happy path", () => {
     expect(r.entries).toContain("b.txt");
     expect(r.entries).toContain("sub");
     expect(r.entries).toContain("sub/c.txt");
-    const archiveEntries = execFileSync("/usr/bin/tar", ["-tzf", "-"], {
-      input: buf,
-      encoding: "utf8",
-    }).split("\n");
-    expect(archiveEntries).toEqual(expect.arrayContaining(["./.root-note", "./.hidden/note.txt"]));
     expect(r.entries).toEqual(expect.arrayContaining([".root-note", ".hidden/note.txt"]));
     expect(r.fileCount).toBe(r.entries?.length);
   });

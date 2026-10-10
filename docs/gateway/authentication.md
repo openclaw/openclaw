@@ -64,6 +64,16 @@ The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a
 [CLI backend plugin](/plugins/cli-backend-plugins).
 
+### Anthropic setup-token
+
+Run `claude setup-token` on any machine with Claude Code installed. It prints a long-lived token starting with `sk-ant-oat01-`. Store it on the gateway host with:
+
+```bash
+openclaw models auth login --provider anthropic --method setup-token
+```
+
+The command requires an interactive TTY. See [`openclaw models`](/cli/models#auth-profiles) for the auth-profile commands that manage the stored token afterwards, and [Anthropic](/providers/anthropic) for the provider-side details.
+
 ## Manual token entry
 
 Works for any provider; writes the per-agent SQLite auth store and updates config:
@@ -97,7 +107,7 @@ Automation-friendly check, exit `1` when expired/missing, `2` when expiring:
 openclaw models status --check
 ```
 
-Live auth probes (add `--probe-provider`, `--probe-profile`, `--probe-timeout`, `--probe-concurrency`, or `--probe-max-tokens` to narrow scope):
+Live auth checks (add `--probe-provider`, `--probe-profile`, `--probe-timeout`, `--probe-concurrency`, or `--probe-max-tokens` to narrow scope):
 
 ```bash
 openclaw models status --probe
@@ -105,9 +115,9 @@ openclaw models status --probe
 
 Notes:
 
-- Probe rows can come from auth profiles, env credentials, or `models.json`.
-- If `auth.order.<provider>` omits a stored profile, probe reports `excluded_by_auth_order` for that profile instead of trying it.
-- If auth exists but OpenClaw can't resolve a probeable model for that provider, probe reports `status: no_model`.
+- Check rows can come from auth profiles, env credentials, or `models.json`.
+- If `auth.order.<provider>` omits a stored profile, the check reports `excluded_by_auth_order` for that profile instead of trying it.
+- If auth exists but OpenClaw can't resolve a model that can be tested for that provider, the check reports `status: no_model`.
 - Rate-limit cooldowns can be model-scoped: a profile cooling down for one model can still serve a sibling model on the same provider.
 
 Optional ops scripts (systemd/Termux): [Auth monitoring scripts](/help/scripts#auth-monitoring-scripts).
@@ -190,7 +200,7 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 
 ### "No credentials found"
 
-Configure an Anthropic API key on the **gateway host**, or set up the Anthropic setup-token path, then re-check:
+Configure an Anthropic API key on the **gateway host**, or set up the [Anthropic setup-token](#anthropic-setup-token) path, then re-check:
 
 ```bash
 openclaw models status
@@ -198,7 +208,7 @@ openclaw models status
 
 ### Token expiring/expired
 
-Run `openclaw models status` to see which profile is expiring. If an Anthropic token profile is missing or expired, refresh it via setup-token or migrate to an Anthropic API key.
+Run `openclaw models status` to see which profile is expiring. If an Anthropic token profile is missing or expired, refresh it via [setup-token](#anthropic-setup-token) or migrate to an Anthropic API key.
 
 ## Related
 

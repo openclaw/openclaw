@@ -3,8 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -16,6 +16,7 @@ import {
   resetAgentRunRegistryForTest,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
   type SystemAgentApprovalRequestPayload,
@@ -23,15 +24,17 @@ import {
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { installTestApprovalClock } from "../exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
@@ -39,15 +42,29 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference: vi.fn() }));
 const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
+  appendReset: vi.fn(),
+  appendTurn: vi.fn(),
+  readTranscriptTailAsync: vi
+    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
+    .mockResolvedValue([]),
 }));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
 }));
-vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
+// mock-isolation: Exercise delegated approval ownership without opening the machine-wide audit store.
+vi.mock("../../system-agent/transcript-store.js", () => ({
+  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: transcriptStoreMocks.appendTurn,
+    appendReset: transcriptStoreMocks.appendReset,
+    readTail: (limit: number, afterLastReset = false) =>
+      afterLastReset
+        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
+        : transcriptStoreMocks.readTranscriptTailAsync(limit),
+  }),
+}));
 
 afterEach(() => {
   resetAgentRunRegistryForTest();
@@ -66,37 +83,36 @@ describe("Full Access delegated chat", () => {
   let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
   beforeAll(() => {
-    pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
-  });
-
-  afterAll(() => {
-    pluginMetadataSnapshot?.restore();
+    pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
   });
 
   afterEach(async () => {
     for (const { manager, databasePath } of approvalManagers.splice(0)) {
       await manager.drain();
-      closeOpenClawStateDatabaseByPath(databasePath);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
     }
     vi.restoreAllMocks();
     vi.resetAllMocks();
     resetPluginStateStoreForTests();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
-    pluginMetadataSnapshot?.rebindForCurrentEnv();
+
     systemAgentTempDirs.cleanup();
   });
 
   async function createDelegatedChatFixture(
-    source: "typed" | "model tool" = "typed",
+    scheduler: GatewayScheduler,
+    source: "typed" | "model tool" | "repair" = "typed",
     previousRun = "live",
   ) {
     const stateDir = systemAgentTempDirs.make("openclaw-full-access-change-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(verifiedConfig));
-    pluginMetadataSnapshot?.rebindForCurrentEnv();
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+
+    const fixture = await pluginMetadataSnapshot!.run(() =>
+      createSystemAgentVerifiedInferenceTestFixture(verifiedConfig),
+    );
     setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
       fixture.binding.execution,
     );
@@ -122,7 +138,7 @@ describe("Full Access delegated chat", () => {
         runConfigSet,
       },
       runAgentTurn: async (params) => {
-        if (source === "typed" || proposed) {
+        if (source === "typed" || (proposed && source !== "repair")) {
           return { text: "Config verified." };
         }
         proposed = true;
@@ -134,8 +150,8 @@ describe("Full Access delegated chat", () => {
         });
         await tool.execute("propose-config", {
           action: "config_set",
-          path: "logging.level",
-          value: "debug",
+          path: source === "repair" ? "gateway.port" : "logging.level",
+          value: source === "repair" ? "18789" : "debug",
         });
         return { text: "Change proposed." };
       },
@@ -169,6 +185,7 @@ describe("Full Access delegated chat", () => {
       fs.mkdirSync(approvalDatabasePath);
     }
     const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      scheduler,
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
@@ -196,15 +213,17 @@ describe("Full Access delegated chat", () => {
     const callChat = async (params: Record<string, unknown>) => {
       const respond = vi.fn<(ok: boolean, payload?: unknown, error?: unknown) => void>();
       const handler = expectDefined(systemAgentHandlers["openclaw.chat"], "chat handler");
-      await handler({
-        params,
-        respond,
-        context,
-        client: {
-          connId: "conn-test",
-          connect: { device: { id: "device-test" } },
-        } as GatewayClient,
-      } as never);
+      await pluginMetadataSnapshot!.run(() =>
+        handler({
+          params,
+          respond,
+          context,
+          client: {
+            connId: "conn-test",
+            connect: { device: { id: "device-test" } },
+          } as GatewayClient,
+        } as never),
+      );
       const [ok, payload, error] = expectDefined(respond.mock.calls[0], "chat response");
       return { ok, payload, error };
     };
@@ -223,6 +242,181 @@ describe("Full Access delegated chat", () => {
       approvalDatabasePath,
     };
   }
+
+  it.each([
+    "apply",
+    "closed-before",
+    "closed-after",
+    "tool-cancelled",
+    "denied",
+    "failed-correction",
+  ] as const)("settles a separately approved correction with outcome %s", async (outcome) => {
+    const {
+      engine,
+      manager,
+      authority,
+      operationalRunInstance,
+      runConfigSet,
+      broadcast,
+      callChat,
+      requested,
+    } = await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
+    runConfigSet.mockRejectedValueOnce(
+      new Error(
+        "Config validation failed: gateway.port: Invalid input: expected number, received string",
+      ),
+    );
+    if (outcome === "failed-correction") {
+      runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
+    }
+    if (outcome === "closed-before") {
+      const resolve = engine.resolveOperatorApproval.bind(engine);
+      vi.spyOn(engine, "resolveOperatorApproval").mockImplementationOnce(async (...args) => {
+        const reply = await resolve(...args);
+        releaseAgentRunDelegatedAuthority(authority);
+        return reply;
+      });
+    }
+    const controller = new AbortController();
+    let settled = false;
+    const pending = withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance,
+        approvalSignals: [controller.signal],
+      },
+      () =>
+        callChat({
+          sessionId: "delegate-full",
+          message: "config set gateway.port banana",
+          delegation: { agentId: "main", sessionKey: "agent:main:main" },
+        }),
+    ).then((reply) => {
+      settled = true;
+      return reply;
+    });
+    try {
+      await requested.promise;
+      const original = expectDefined((await manager.listPendingRecords())[0], "original approval");
+      const correctionRequested = createDeferred();
+      broadcast.mockImplementation((event) => {
+        if (event === "openclaw.approval.requested") {
+          correctionRequested.resolve();
+        }
+      });
+      expect(runConfigSet).not.toHaveBeenCalled();
+      expect(await manager.resolve(original.id, "allow-once", "operator")).toBe(true);
+      if (outcome === "closed-before") {
+        await pending;
+        expect(await manager.listPendingRecords()).toEqual([]);
+        expect(engine.getPendingOperatorProposal()).toBeNull();
+        expect(runConfigSet).toHaveBeenCalledOnce();
+        expect(
+          broadcast.mock.calls.filter(([event]) => event === "openclaw.approval.requested"),
+        ).toHaveLength(1);
+        return;
+      }
+      expect(
+        await Promise.race([
+          correctionRequested.promise.then(() => "requested"),
+          pending.then(() => "completed"),
+        ]),
+      ).toBe("requested");
+      const correction = expectDefined(
+        (await manager.listPendingRecords())[0],
+        "corrective approval",
+      );
+      expect(
+        broadcast.mock.calls.filter(([event]) => event === "openclaw.approval.requested"),
+      ).toHaveLength(2);
+      expect(correction.id).not.toBe(original.id);
+      expect(correction.request.proposalHash).not.toBe(original.request.proposalHash);
+      await runSystemAgentGatewayTask(async () => undefined);
+      expect(settled).toBe(false);
+      expect(runConfigSet).toHaveBeenCalledOnce();
+      expect(await manager.resolve(original.id, "allow-once", "stale-operator")).toBe(false);
+      if (outcome === "closed-after" || outcome === "tool-cancelled" || outcome === "denied") {
+        if (outcome === "closed-after") {
+          releaseAgentRunDelegatedAuthority(authority);
+          await manager.forceDenyIfRuntimeAuthorityClosed(correction.id);
+        } else if (outcome === "tool-cancelled") {
+          controller.abort();
+        } else {
+          expect(await manager.resolve(correction.id, "deny", "operator")).toBe(true);
+        }
+        expect((await pending).payload).toMatchObject({
+          reply: expect.stringContaining(outcome === "denied" ? "Denied" : "cancelled"),
+        });
+        expect(runConfigSet).toHaveBeenCalledOnce();
+        expect(engine.getPendingOperatorProposal()).toBeNull();
+        expect(await manager.listPendingRecords()).toEqual([]);
+        return;
+      }
+      expect(await manager.resolve(correction.id, "allow-once", "operator")).toBe(true);
+      const result = await pending;
+      expect(result.payload).toMatchObject({
+        reply: expect.stringContaining("gateway.port: Invalid input"),
+      });
+      if (outcome === "failed-correction") {
+        expect(result.payload).toMatchObject({
+          reply: expect.stringContaining("stopped after one corrective attempt"),
+        });
+        expect(
+          broadcast.mock.calls.filter(([event]) => event === "openclaw.approval.requested"),
+        ).toHaveLength(2);
+      }
+      expect(runConfigSet).toHaveBeenCalledTimes(2);
+      expect(runConfigSet).toHaveBeenLastCalledWith({
+        path: "gateway.port",
+        value: "18789",
+        cliOptions: {},
+        beforePersistentApply: expect.any(Function),
+      });
+      expect(engine.getPendingOperatorProposal()).toBeNull();
+    } finally {
+      for (const record of await manager.listPendingRecords()) {
+        await manager.resolve(record.id, "deny", "cleanup");
+      }
+      await pending;
+    }
+  });
+
+  it.each([false, true])(
+    "bounds Full Access repair when the correction fails=%s",
+    async (fails) => {
+      const { engine, manager, operationalRunInstance, runConfigSet, callChat } =
+        await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
+      runConfigSet.mockRejectedValueOnce(
+        new Error("Config validation failed: fixture write rejected"),
+      );
+      if (fails) {
+        runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
+      }
+      const reply = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          fullPermission: true,
+        },
+        () =>
+          callChat({
+            sessionId: "delegate-full",
+            message: "config set gateway.port banana",
+            delegation: { agentId: "main", sessionKey: "agent:main:main" },
+          }),
+      );
+      expect(runConfigSet).toHaveBeenCalledTimes(2);
+      expect(await manager.listPendingRecords()).toEqual([]);
+      expect(engine.getPendingOperatorProposal()).toBeNull();
+      expect(reply.payload).toMatchObject({
+        reply: expect.stringContaining(
+          fails ? "stopped after one corrective attempt" : "[openclaw] done: config.set",
+        ),
+      });
+    },
+  );
 
   it.each([
     "allow",
@@ -247,14 +441,21 @@ describe("Full Access delegated chat", () => {
         callChat,
         requested,
         approvalDatabasePath,
-      } = await createDelegatedChatFixture("typed", "durable");
+      } = await createDelegatedChatFixture(
+        createTestGatewayScheduler(outcome === "expired" ? "fake-timers" : undefined),
+        "typed",
+        "durable",
+      );
       const controller = new AbortController();
       const observation = new AsyncWorkScope();
       if (outcome === "expired") {
         vi.useFakeTimers();
+        installTestApprovalClock();
       }
       const applyStarted = createDeferred();
       const releaseApply = createDeferred();
+      const historyStarted = createDeferred();
+      const releaseHistory = createDeferred();
       const execution = await setupInferenceMocks.resolvePersistentApplyInference();
       if (outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
         setupInferenceMocks.resolvePersistentApplyInference.mockImplementationOnce(async () => {
@@ -292,7 +493,7 @@ describe("Full Access delegated chat", () => {
       });
       try {
         await requested.promise;
-        const record = expectDefined(manager.listPendingRecords()[0], "pending approval");
+        const record = expectDefined((await manager.listPendingRecords())[0], "pending approval");
         await runSystemAgentGatewayTask(async () => undefined);
         expect.soft(settled).toBe(false);
         expect(runConfigSet).not.toHaveBeenCalled();
@@ -302,7 +503,7 @@ describe("Full Access delegated chat", () => {
           await rejected;
           await observation.drain();
           expect(
-            getOperatorApprovalDetailed({
+            await getOperatorApprovalDetailed({
               id: record.id,
               databaseOptions: { path: approvalDatabasePath },
             }),
@@ -322,13 +523,18 @@ describe("Full Access delegated chat", () => {
               }),
           );
           await runSystemAgentGatewayTask(async () => undefined);
-          expect(manager.listPendingRecords()).toHaveLength(1);
+          expect(await manager.listPendingRecords()).toHaveLength(1);
+          // Both proposal observers have released the task queue; gate only terminal persistence.
+          transcriptStoreMocks.appendTurn.mockImplementation(async () => {
+            historyStarted.resolve();
+            await releaseHistory.promise;
+          });
         }
         if (outcome === "expired") {
           await vi.advanceTimersByTimeAsync(SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
         } else if (outcome === "run-cancelled") {
           releaseAgentRunDelegatedAuthority(authority);
-          manager.forceDenyIfRuntimeAuthorityClosed(record.id);
+          await manager.forceDenyIfRuntimeAuthorityClosed(record.id);
         } else if (outcome === "tool-cancelled") {
           controller.abort();
         } else {
@@ -343,7 +549,11 @@ describe("Full Access delegated chat", () => {
             await applyStarted.promise;
           }
           expect(
-            manager.resolve(record.id, outcome === "deny" ? "deny" : "allow-once", "operator-ui"),
+            await manager.resolve(
+              record.id,
+              outcome === "deny" ? "deny" : "allow-once",
+              "operator-ui",
+            ),
           ).toBe(true);
           if (queued || outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
             await applyStarted.promise;
@@ -354,13 +564,22 @@ describe("Full Access delegated chat", () => {
             await queued;
           }
         }
+        if (outcome === "allow") {
+          await awaitGateBeforeSettlement(
+            historyStarted.promise,
+            pending,
+            "approval completed before history persistence",
+          );
+          expect(settled).toBe(false);
+          releaseHistory.resolve();
+        }
         const result = await pending;
         if (sameOwner) {
           expect((await sameOwner).payload).toEqual(result.payload);
         }
         if (outcome === "queued-cancelled" || outcome === "precommit-cancelled") {
           expect(
-            getOperatorApprovalDetailed({
+            await getOperatorApprovalDetailed({
               id: record.id,
               databaseOptions: { path: approvalDatabasePath },
             }),
@@ -368,7 +587,7 @@ describe("Full Access delegated chat", () => {
             outcome: "found",
             record: { decision: "allow-once", status: "allowed" },
           });
-          expect(manager.resolve(record.id, "allow-once", "late-operator")).toBe(false);
+          expect(await manager.resolve(record.id, "allow-once", "late-operator")).toBe(false);
         }
         const expected =
           outcome === "allow"
@@ -389,7 +608,7 @@ describe("Full Access delegated chat", () => {
         );
         if (outcome === "allow" || outcome === "afterDecision-failed") {
           expect(
-            transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(([turn]) =>
+            transcriptStoreMocks.appendTurn.mock.calls.filter(([turn]) =>
               turn.text.includes(
                 outcome === "allow" ? "[openclaw] done: config.set" : "failed to complete",
               ),
@@ -397,10 +616,11 @@ describe("Full Access delegated chat", () => {
           ).toHaveLength(1);
         }
       } finally {
+        releaseHistory.resolve();
         releaseApply.resolve();
         controller.abort();
-        for (const record of manager.listPendingRecords()) {
-          manager.expire(record.id);
+        for (const record of await manager.listPendingRecords()) {
+          await manager.expire(record.id);
         }
         await Promise.allSettled([pending]);
         await sameOwner;
@@ -435,7 +655,7 @@ describe("Full Access delegated chat", () => {
         broadcast,
         callChat,
         requested,
-      } = await createDelegatedChatFixture(source, previousRun);
+      } = await createDelegatedChatFixture(createTestGatewayScheduler(), source, previousRun);
 
       const call = await withGatewayToolCallerIdentity(
         {
@@ -461,14 +681,14 @@ describe("Full Access delegated chat", () => {
       expect(runConfigSet).toHaveBeenCalledOnce();
       expect(call.payload).not.toHaveProperty("needsApproval");
       expect(call.payload).not.toHaveProperty("proposalId");
-      expect(manager.listPendingRecords()).toEqual([]);
+      expect(await manager.listPendingRecords()).toEqual([]);
       expect(broadcast).not.toHaveBeenCalled();
       expect(engine.getPendingOperatorProposal()).toBeNull();
       expect(readLastSystemAgentAuditEntry()).toMatchObject({
         operation: "config.set",
         summary: "Set config logging.level",
       });
-      expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
+      expect(transcriptStoreMocks.appendTurn).toHaveBeenCalledWith(
         expect.objectContaining({
           role: "assistant",
           text: expect.stringContaining("[openclaw] done: config.set"),
@@ -507,22 +727,22 @@ describe("Full Access delegated chat", () => {
         await expect(proposalCall).rejects.toThrow(
           previousRun === "unregistered-closed"
             ? "system-agent approval authority is no longer active"
-            : /EISDIR|directory|open database/u,
+            : "SQLite worker database path must identify a regular file",
         );
         expect.soft(delegatedSession.pendingApproval).toBeUndefined();
-        expect(manager.listPendingRecords()).toEqual([]);
+        expect(await manager.listPendingRecords()).toEqual([]);
         expect.soft(engine.getPendingOperatorProposal()).toBeNull();
       } else {
         await requested.promise;
-        expect(manager.listPendingRecords()).toHaveLength(1);
+        expect(await manager.listPendingRecords()).toHaveLength(1);
       }
       expect(runConfigSet).toHaveBeenCalledOnce();
-      const pending = manager.listPendingRecords()[0];
+      const pending = (await manager.listPendingRecords())[0];
       if (previousRun === "closed") {
         releaseAgentRunDelegatedAuthority(authority);
         const pendingId = expectDefined(pending, "restricted proposal").id;
-        manager.forceDenyIfRuntimeAuthorityClosed(pendingId);
-        expect(manager.getSnapshot(pendingId)?.status).toBe("cancelled");
+        await manager.forceDenyIfRuntimeAuthorityClosed(pendingId);
+        expect((await manager.getSnapshot(pendingId))?.status).toBe("cancelled");
       }
 
       const replacementRun = createOperationalRunInstanceRef("delegated-replacement-run");
@@ -550,9 +770,9 @@ describe("Full Access delegated chat", () => {
         const forceDeny = manager.forceDenyIfRuntimeAuthorityClosed.bind(manager);
         const storageFailure = vi
           .spyOn(manager, "forceDenyIfRuntimeAuthorityClosed")
-          .mockImplementation((id) => {
+          .mockImplementation(async (id) => {
             if (!delegatedSession.pendingApproval) {
-              manager.forceDenyDetailed(id, "storage-corrupt", { kind: "system", id: null });
+              await manager.forceDenyDetailed(id, "storage-corrupt", { kind: "system", id: null });
               throw new Error("approval storage unavailable");
             }
             return forceDeny(id);
@@ -568,9 +788,9 @@ describe("Full Access delegated chat", () => {
         reply: expect.stringContaining("logging.level: not set"),
       });
       expect(engine.getPendingOperatorProposal()).toBeNull();
-      expect(manager.listPendingRecords()).toEqual([]);
+      expect(await manager.listPendingRecords()).toEqual([]);
       if (pending) {
-        expect(manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
+        expect(await manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
         expect((await proposalCall).payload).toMatchObject({
           reply: expect.stringContaining("cancelled"),
         });

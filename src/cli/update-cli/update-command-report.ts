@@ -6,62 +6,28 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   prepareUpdateFailureReport,
   submitUpdateFailureReport,
-  type PreparedUpdateFailureReport,
-  type UpdateFailureReportInput,
   type UpdateFailureReportSubmitResult,
+  type PreparedUpdateFailureReport,
 } from "../../infra/update-failure-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-type UpdateFailureAction = "triage" | "report" | "dismiss";
+type UpdateFailureAction = "triage" | "report" | "status" | "browser" | "dismiss";
 
-type UpdateFailureReportPrompts = {
-  chooseAction: () => Promise<UpdateFailureAction | symbol>;
-  confirmSubmission: () => Promise<boolean | symbol>;
-};
-
-type UpdateFailureReportDependencies = {
-  prepare: (
-    input: UpdateFailureReportInput,
-    options: { env: NodeJS.ProcessEnv; stateDir: string },
-  ) => Promise<PreparedUpdateFailureReport>;
-  prompts: UpdateFailureReportPrompts;
-  submit: (
-    prepared: PreparedUpdateFailureReport,
-    previewDigest: string,
-    options: { env: NodeJS.ProcessEnv; stateDir: string },
-  ) => Promise<UpdateFailureReportSubmitResult>;
-};
-
-const defaultDependencies: UpdateFailureReportDependencies = {
-  prepare: prepareUpdateFailureReport,
-  prompts: {
-    chooseAction: async () =>
-      await select<UpdateFailureAction>({
-        message: "Choose the next action for this failed update",
-        options: [
-          { value: "triage", label: "Diagnose update failure" },
-          { value: "report", label: "Report update failure" },
-          { value: "dismiss", label: "Exit" },
-        ],
-      }),
-    confirmSubmission: async () =>
-      await confirm({
-        message: "Submit this sanitized report to openclaw/openclaw now?",
-        initialValue: false,
-      }),
-  },
-  submit: submitUpdateFailureReport,
-};
-
-function renderSubmissionResult(result: UpdateFailureReportSubmitResult): string[] {
+function renderSubmissionResult(
+  result: UpdateFailureReportSubmitResult,
+  browserRequested: boolean,
+): string[] {
   if (result.status === "created") {
     return [`Created GitHub issue: ${result.url}`, ...(result.message ? [result.message] : [])];
   }
   if (result.status === "fallback") {
     return [
-      `GitHub issue creation was unavailable: ${result.message}`,
-      `Prefilled issue: ${result.fallbackUrl}`,
+      browserRequested
+        ? result.message
+        : `GitHub issue creation was unavailable: ${result.message}`,
+      ...(browserRequested ? [`Prefilled issue: ${result.fallbackUrl}`] : []),
       `Saved sanitized report: ${result.savedReportPath}`,
     ];
   }
@@ -71,8 +37,9 @@ function renderSubmissionResult(result: UpdateFailureReportSubmitResult): string
   return [
     result.message,
     ...(result.url ? [`Existing issue: ${result.url}`] : []),
-    ...(result.fallbackUrl ? [`Existing prefilled issue: ${result.fallbackUrl}`] : []),
-    `Saved sanitized report: ${result.savedReportPath}`,
+    ...(browserRequested && result.fallbackUrl
+      ? [`Existing prefilled issue: ${result.fallbackUrl}`]
+      : []),
   ];
 }
 
@@ -82,16 +49,28 @@ export async function runInteractiveUpdateFailureAction(params: {
   env: NodeJS.ProcessEnv;
   error?: string;
   result?: UpdateRunResult;
+  rollbackCompleted?: boolean;
   runtime: Pick<RuntimeEnv, "error" | "log">;
-  dependencies?: Partial<UpdateFailureReportDependencies>;
 }): Promise<"triage" | "handled"> {
-  const dependencies: UpdateFailureReportDependencies = {
-    ...defaultDependencies,
-    ...params.dependencies,
-    prompts: params.dependencies?.prompts ?? defaultDependencies.prompts,
-  };
+  let prepared: PreparedUpdateFailureReport | undefined;
+  let browserAvailable = false;
+  let reportPending = false;
+  const stateDir = resolveStateDir(params.env);
   while (true) {
-    const action = await dependencies.prompts.chooseAction();
+    const action = await select<UpdateFailureAction>({
+      message: params.rollbackCompleted
+        ? "Update failed, but rollback completed successfully. Choose the next action"
+        : "Choose the next action for this failed update",
+      ...(params.rollbackCompleted ? { initialValue: "dismiss" as const } : {}),
+      options: [
+        { value: "triage", label: "Diagnose update failure" },
+        reportPending
+          ? { value: "status", label: "Check report status" }
+          : { value: "report", label: "Report update failure" },
+        ...(browserAvailable ? [{ value: "browser" as const, label: "Report in browser" }] : []),
+        { value: "dismiss", label: "Exit" },
+      ],
+    });
     if (isCancel(action) || action === "dismiss") {
       return "handled";
     }
@@ -102,35 +81,68 @@ export async function runInteractiveUpdateFailureAction(params: {
       const result: UpdateRunResult = params.result ?? {
         status: "error",
         mode: "unknown",
-        reason: "unexpected-error",
         steps: [],
         durationMs: 0,
       };
-      const stateDir = resolveStateDir(params.env);
-      const prepared = await dependencies.prepare(
-        {
-          attemptId: params.attemptId,
-          ...(params.error ? { error: params.error } : {}),
-          result,
-          ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
-        },
-        { env: params.env, stateDir },
-      );
+      if (!prepared) {
+        let recordedRun: ReturnType<typeof getUpdateRun>;
+        try {
+          recordedRun = getUpdateRun(params.attemptId, { env: params.env });
+        } catch {
+          // A missing or locked ledger must not prevent reporting the direct failure.
+        }
+        prepared = await prepareUpdateFailureReport(
+          {
+            attemptId: params.attemptId,
+            action: "cli",
+            ...(params.error ? { error: params.error } : {}),
+            result,
+            recordedRun,
+            ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
+          },
+          { env: params.env, stateDir },
+        );
+      }
       params.runtime.log("Sanitized update failure report preview:");
       params.runtime.log(prepared.body);
-      const confirmed = await dependencies.prompts.confirmSubmission();
+      const confirmed = await confirm({
+        message:
+          action === "browser"
+            ? "Prepare a browser link to review and submit this report yourself?"
+            : action === "status"
+              ? "Check whether this report was submitted to openclaw/openclaw?"
+              : "Submit this sanitized report to openclaw/openclaw now?",
+        initialValue: false,
+      });
       if (isCancel(confirmed) || !confirmed) {
         params.runtime.log("Update failure report cancelled.");
         return "handled";
       }
-      const submitted = await dependencies.submit(prepared, prepared.previewDigest, {
+      // A lost upload response must not retain an earlier browser-retry choice.
+      browserAvailable = false;
+      const submitted = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
         env: params.env,
         stateDir,
+        ...(action === "browser"
+          ? { publicationMode: "browser" as const }
+          : action === "status"
+            ? { publicationMode: "reconcile" as const }
+            : { allowBrowserFallback: false }),
       });
-      for (const line of renderSubmissionResult(submitted)) {
+      reportPending = submitted.status === "pending";
+      browserAvailable =
+        prepared.browserFallback.status === "available" &&
+        (submitted.status === "retryable" ||
+          submitted.status === "fallback" ||
+          (submitted.status === "duplicate" && Boolean(submitted.fallbackUrl)));
+      for (const line of renderSubmissionResult(submitted, action === "browser")) {
         params.runtime.log(line);
       }
-      if (submitted.status !== "retryable") {
+      if (
+        submitted.status === "created" ||
+        (submitted.status === "duplicate" && submitted.url) ||
+        (action === "browser" && submitted.fallbackUrl)
+      ) {
         return "handled";
       }
     } catch (error) {
