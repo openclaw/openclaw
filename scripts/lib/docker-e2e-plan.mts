@@ -22,6 +22,7 @@ import {
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "./official-external-provider-catalog.json" with { type: "json" };
 import { isRecord } from "./record-shared.mjs";
+import { supportedUpdateCompatibilityReleases } from "./update-compat-contract.mjs";
 import {
   UPDATE_FIRST_HOP_COMPAT_LANE,
   UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
@@ -418,9 +419,11 @@ function supportsUpdateFirstHopCompatForTarget(
     frozenTarget,
   );
   if (inventory !== null) {
-    const releases = (JSON.parse(inventory).releases as { version: string }[]).map((release) =>
-      updateFirstHopCompatLaneName(release.version),
-    );
+    const manifest = readTargetMetadata(targetRoot, "package.json", frozenTarget);
+    const releases = supportedUpdateCompatibilityReleases(
+      JSON.parse(inventory),
+      manifest === null ? undefined : JSON.parse(manifest).openclaw?.schemaVersions,
+    ).map((release: { version: string }) => updateFirstHopCompatLaneName(release.version));
     if (!releases.includes(laneName)) {
       return false;
     }

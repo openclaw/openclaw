@@ -235,6 +235,8 @@ function listCliDiagnosticCompanionOutputs(params: RuntimeFsParams = {}) {
  * Lists all core runtime postbuild outputs expected after a build.
  */
 export function listCoreRuntimePostBuildOutputs(params: RuntimeFsParams = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const fsImpl = params.fs ?? fs;
   return [
     "dist/build-info.json",
     ...listHookMetadataOutputs(params),
@@ -247,6 +249,8 @@ export function listCoreRuntimePostBuildOutputs(params: RuntimeFsParams = {}) {
     `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
     ...listUpdateCompatibilityChunkPaths(
       readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
+      JSON.parse(fsImpl.readFileSync(path.join(rootDir, "package.json"), "utf8")).openclaw
+        ?.schemaVersions,
     ).map((fileName) => `dist/${fileName}`),
   ].toSorted((left, right) => left.localeCompare(right));
 }

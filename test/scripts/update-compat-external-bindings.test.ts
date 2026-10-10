@@ -78,7 +78,11 @@ it.each([
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
+    JSON.stringify({
+      name: "openclaw",
+      version: "2026.9.1",
+      openclaw: { schemaVersions: { state: 1, agent: 1 } },
+    }),
   );
   fs.writeFileSync(
     path.join(root, "dist/build-info.json"),

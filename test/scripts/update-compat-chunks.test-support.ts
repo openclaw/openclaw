@@ -14,7 +14,16 @@ export const previousReleaseInventory = readUpdateCompatibilityInventory(
 export function writeUpdateCompatibilityBuildFixture(rootDir: string): void {
   const distDir = path.join(rootDir, "dist");
   fs.mkdirSync(distDir, { recursive: true });
-  const hashed = new Set(listUpdateCompatibilityChunkPaths(previousReleaseInventory));
+  const schemas = { state: 20, agent: 25 };
+  const manifestFile = path.join(rootDir, "package.json");
+  const manifest = fs.existsSync(manifestFile)
+    ? JSON.parse(fs.readFileSync(manifestFile, "utf8"))
+    : {};
+  fs.writeFileSync(
+    manifestFile,
+    JSON.stringify({ ...manifest, openclaw: { schemaVersions: schemas } }),
+  );
+  const hashed = new Set(listUpdateCompatibilityChunkPaths(previousReleaseInventory, schemas));
   const symbols = new Map<string, { alias: string; file: string }>();
   const modules = new Map<string, { file: string; lines: string[] }>();
   const stableTargets = new Map<string, Map<string, string>>();

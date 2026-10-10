@@ -336,29 +336,47 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.omittedUnsupportedLanes).toEqual([UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE]);
   });
 
-  it("omits only the first-hop sources a target's own inventory does not record", () => {
-    const targetRoot = tempDirs.make("openclaw-partial-first-hop-target-");
-    mkdirSync(join(targetRoot, "scripts/lib"), { recursive: true });
-    writeFileSync(
-      join(targetRoot, "scripts/runtime-postbuild.mts"),
-      readFileSync("scripts/runtime-postbuild.mts", "utf8"),
-    );
-    const [oldest, ...newer] = firstHopSourceVersions;
-    writeFileSync(
-      join(targetRoot, "scripts/lib/update-compat-inventory.json"),
-      JSON.stringify({ schemaVersion: 1, releases: [{ version: oldest }] }),
-    );
-    const plan = planFor({
-      selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
-      upgradeSurvivorTargetRoot: targetRoot,
-    });
-    expect(plan.lanes.map((lane) => lane.name)).toEqual([updateFirstHopCompatLaneName(oldest)]);
-    expect(plan.lanes[0]?.timeoutMs).toBe(3_500_000);
-    expect(plan.omittedUnsupportedLanes).toEqual([
-      ...newer.map(updateFirstHopCompatLaneName),
-      UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
-    ]);
-  });
+  it.each([1, 2])(
+    "omits unrecorded or unsupported first-hop sources from inventory v%s",
+    (schemaVersion) => {
+      const targetRoot = tempDirs.make("openclaw-partial-first-hop-target-");
+      mkdirSync(join(targetRoot, "scripts/lib"), { recursive: true });
+      writeFileSync(
+        join(targetRoot, "scripts/runtime-postbuild.mts"),
+        readFileSync("scripts/runtime-postbuild.mts", "utf8"),
+      );
+      const [oldest, ...newer] = firstHopSourceVersions;
+      writeFileSync(
+        join(targetRoot, "scripts/lib/update-compat-inventory.json"),
+        JSON.stringify({
+          schemaVersion,
+          releases:
+            schemaVersion === 1
+              ? [{ version: oldest }]
+              : [
+                  { version: oldest, schemaVersions: { state: 1, agent: 1 } },
+                  { version: newer[0], schemaVersions: { state: 21, agent: 25 } },
+                ],
+        }),
+      );
+      if (schemaVersion === 2) {
+        writeFileSync(
+          join(targetRoot, "package.json"),
+          JSON.stringify({ openclaw: { schemaVersions: { state: 20, agent: 25 } } }),
+        );
+      }
+      const plan = planFor({
+        selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
+        upgradeSurvivorTargetRoot: targetRoot,
+      });
+      expect(plan.lanes.map((lane) => lane.name)).toEqual([updateFirstHopCompatLaneName(oldest)]);
+      expect(plan.lanes[0]?.timeoutMs).toBe(3_500_000);
+      expect(plan.omittedUnsupportedLanes).toEqual([
+        ...newer.map(updateFirstHopCompatLaneName),
+        UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+      ]);
+    },
+  );
 
   it("keeps source hops and gates post-convergence proof on candidate admission", () => {
     for (const version of firstHopSourceVersions) {
@@ -474,10 +492,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
     );
 
     mkdirSync(dirname(nestedModule), { recursive: true });
+    copyFileSync("package.json", join(tempRoot, ".release-harness", "package.json"));
     for (const fileName of [
       "docker-e2e-scenarios.mts",
       "update-compat-inventory.json",
       "update-first-hop-lanes.mjs",
+      "update-compat-contract.mjs",
+      "record-shared.mjs",
     ]) {
       copyFileSync(join("scripts/lib", fileName), join(dirname(nestedModule), fileName));
     }

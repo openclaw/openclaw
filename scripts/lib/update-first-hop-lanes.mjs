@@ -1,12 +1,16 @@
 // Plan-time first-hop lane names come from the recorded compatibility inventory.
 // Kept dependency-free: the targeted lane planner runs before pnpm install.
+import manifest from "../../package.json" with { type: "json" };
+import { supportedUpdateCompatibilityReleases } from "./update-compat-contract.mjs";
 import inventory from "./update-compat-inventory.json" with { type: "json" };
 
 export const UPDATE_FIRST_HOP_COMPAT_LANE = "update-first-hop-compat";
 export const UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE = `${UPDATE_FIRST_HOP_COMPAT_LANE}-missing-load-path`;
 
 export function listRecordedFirstHopSourceVersions() {
-  return inventory.releases.map((release) => release.version);
+  return supportedUpdateCompatibilityReleases(inventory, manifest.openclaw.schemaVersions).map(
+    (release) => release.version,
+  );
 }
 
 export function updateFirstHopCompatLaneName(version) {

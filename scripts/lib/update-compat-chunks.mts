@@ -2,10 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { isRecord } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
+  requireUpdateCompatibilitySchemas,
+  supportedUpdateCompatibilityReleases,
 } from "./update-compat-contract.mjs";
 import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
 import { isUpdatePackageAssetImport } from "./update-compat-source-imports.mts";
@@ -62,10 +65,11 @@ export type UpdateCompatibilityRelease = {
   buildId: string;
   commit: string;
   integrity: string;
+  schemaVersions: { state: number; agent: number };
   chunks: UpdateCompatibilityChunk[];
 };
 export type UpdateCompatibilityInventory = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   releases: UpdateCompatibilityRelease[];
 };
 
@@ -166,6 +170,7 @@ export function recordUpdateCompatibilityRelease(params: {
       "Update compatibility inventory requires an OpenClaw release build and npm SHA-512 integrity",
     );
   }
+  const schemaVersions = requireUpdateCompatibilitySchemas(packageJson.openclaw?.schemaVersions);
   const historicalRegistryChunk = COALESCED_REGISTRY_RELEASES.find(
     (release) =>
       release.version === packageJson.version &&
@@ -244,6 +249,7 @@ export function recordUpdateCompatibilityRelease(params: {
     buildId: build.buildId,
     commit: build.commit,
     integrity: params.integrity,
+    schemaVersions,
     chunks: [...chunks.values()]
       .toSorted((a, b) => a.path.localeCompare(b.path))
       .map((chunk) => ({
@@ -254,9 +260,6 @@ export function recordUpdateCompatibilityRelease(params: {
   };
 }
 
-function object(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function safeRelative(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -280,8 +283,8 @@ export function parseUpdateCompatibilityInventory(
   file = "update compatibility inventory",
 ): UpdateCompatibilityInventory {
   if (
-    !object(value) ||
-    value.schemaVersion !== 1 ||
+    !isRecord(value) ||
+    value.schemaVersion !== 2 ||
     !Array.isArray(value.releases) ||
     value.releases.length < 1
   ) {
@@ -289,7 +292,7 @@ export function parseUpdateCompatibilityInventory(
   }
   const releases: UpdateCompatibilityRelease[] = value.releases.map((release) => {
     if (
-      !object(release) ||
+      !isRecord(release) ||
       typeof release.version !== "string" ||
       typeof release.buildId !== "string" ||
       typeof release.commit !== "string" ||
@@ -300,7 +303,7 @@ export function parseUpdateCompatibilityInventory(
     }
     const chunks: UpdateCompatibilityChunk[] = release.chunks.map((chunk) => {
       if (
-        !object(chunk) ||
+        !isRecord(chunk) ||
         !safeRelative(chunk.path) ||
         !/\.m?js$/.test(chunk.path) ||
         !Array.isArray(chunk.imports) ||
@@ -312,7 +315,7 @@ export function parseUpdateCompatibilityInventory(
       }
       const imports = chunk.imports.map((entry) => {
         if (
-          !object(entry) ||
+          !isRecord(entry) ||
           !safeRelative(entry.importer) ||
           !safeRelative(entry.owner) ||
           !Array.isArray(entry.exports) ||
@@ -324,9 +327,9 @@ export function parseUpdateCompatibilityInventory(
       });
       const exports = chunk.exports.map((entry) => {
         if (
-          !object(entry) ||
+          !isRecord(entry) ||
           !identifier(entry.exported) ||
-          !object(entry.origin) ||
+          !isRecord(entry.origin) ||
           !safeRelative(entry.origin.module) ||
           !identifier(entry.origin.symbol)
         ) {
@@ -351,6 +354,7 @@ export function parseUpdateCompatibilityInventory(
       buildId: release.buildId,
       commit: release.commit,
       integrity: release.integrity,
+      schemaVersions: requireUpdateCompatibilitySchemas(release.schemaVersions),
       chunks,
     };
   });
@@ -364,8 +368,7 @@ export function parseUpdateCompatibilityInventory(
     }
     versions.add(release.version);
   }
-  collectRequiredCompatibilityChunks(releases);
-  return { schemaVersion: 1, releases };
+  return { schemaVersion: 2, releases };
 }
 
 function collectRequiredCompatibilityChunks(
@@ -405,10 +408,11 @@ function collectRequiredCompatibilityChunks(
 
 export function listUpdateCompatibilityChunkPaths(
   inventory: UpdateCompatibilityInventory,
+  schemas: { state: number; agent: number },
 ): string[] {
   return [
     ...new Set(
-      inventory.releases.flatMap((release) =>
+      supportedUpdateCompatibilityReleases(inventory, schemas).flatMap((release) =>
         release.chunks.filter((chunk) => HASHED_CHUNK.test(chunk.path)).map((chunk) => chunk.path),
       ),
     ),
@@ -446,7 +450,12 @@ export function writeUpdateCompatibilityChunks(params: {
   using parser = createNativeTypeScriptParser({ cwd: params.sourceDir });
   const graph = new ModuleGraph(parser);
   const sourceGraph = new ModuleGraph(parser, params.sourceDir);
-  const required = collectRequiredCompatibilityChunks(params.inventory.releases);
+  const manifest = JSON.parse(fs.readFileSync(path.join(params.sourceDir, "package.json"), "utf8"));
+  const supported = supportedUpdateCompatibilityReleases(
+    params.inventory,
+    manifest.openclaw?.schemaVersions,
+  );
+  const required = collectRequiredCompatibilityChunks(supported);
   const origins = new Map<string, UpdateCompatibilityOrigin>();
   for (const chunk of required) {
     for (const entry of chunk.exports) {

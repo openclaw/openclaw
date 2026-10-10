@@ -1196,7 +1196,15 @@ describe("previous release update compatibility", () => {
     releases: [UpdateCompatibilityRelease];
   } {
     const root = createTempDir("update-compat-release-");
-    write(root, "package.json", JSON.stringify({ name: "openclaw", version: "2026.9.1" }));
+    write(
+      root,
+      "package.json",
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        openclaw: { schemaVersions: { state: 1, agent: 1 } },
+      }),
+    );
     write(
       root,
       "dist/build-info.json",
@@ -1228,12 +1236,21 @@ describe("previous release update compatibility", () => {
       ].join("\n"),
     );
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
     };
   }
 
   function candidate(root: string): void {
+    write(
+      root,
+      "package.json",
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.9",
+        openclaw: { schemaVersions: { state: 20, agent: 25 } },
+      }),
+    );
     write(root, "src/cli/update-cli/recovery.ts", 'import { resolveMode } from "./mode.js";');
     write(root, "src/cli/update-cli/mode.ts", 'export function resolveMode() { return "npm"; }');
     write(
@@ -1264,7 +1281,12 @@ describe("previous release update compatibility", () => {
     write(
       root,
       "package.json",
-      JSON.stringify({ name: "openclaw", version: identity.version, type: "module" }),
+      JSON.stringify({
+        name: "openclaw",
+        version: identity.version,
+        type: "module",
+        openclaw: { schemaVersions: { state: 1, agent: 1 } },
+      }),
     );
     write(root, "dist/build-info.json", JSON.stringify(identity));
     write(
@@ -1278,7 +1300,7 @@ describe("previous release update compatibility", () => {
       write(root, `dist/${file}`, source);
     }
     const inventory: UpdateCompatibilityInventory = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       releases: [
         recordUpdateCompatibilityRelease({ packageDir: root, integrity: identity.integrity }),
       ],
@@ -1552,7 +1574,11 @@ describe("previous release update compatibility", () => {
         return;
       }
       const current = createTempDir("update-compat-corrected-origin-");
-      write(current, "package.json", '{"type":"module"}');
+      write(
+        current,
+        "package.json",
+        JSON.stringify({ type: "module", openclaw: { schemaVersions: { state: 20, agent: 25 } } }),
+      );
       write(
         current,
         "src/plugins/registry-lifecycle.ts",
@@ -1670,7 +1696,11 @@ describe("previous release update compatibility", () => {
         [target]: '//#region src/infra/original.ts\nexport const x = "original";\n',
       });
       const root = createTempDir("update-compat-existing-stars-");
-      write(root, "package.json", '{"type":"module"}\n');
+      write(
+        root,
+        "package.json",
+        JSON.stringify({ type: "module", openclaw: { schemaVersions: { state: 20, agent: 25 } } }),
+      );
       write(root, `dist/${target}`, 'export * from "./left.mjs"; export * from "./right.mjs";\n');
       write(root, "dist/left.mjs", '//#region src/infra/original.ts\nexport const x = "left";\n');
       write(root, "dist/right.mjs", '//#region src/infra/other.ts\nexport const x = "right";\n');
@@ -1714,7 +1744,11 @@ describe("previous release update compatibility", () => {
         '//#region src/infra/old.ts\nfunction oldName() { return "old"; } export { oldName as x };\n',
     });
     const root = createTempDir("update-compat-source-forwarding-");
-    write(root, "package.json", '{"type":"module"}\n');
+    write(
+      root,
+      "package.json",
+      JSON.stringify({ type: "module", openclaw: { schemaVersions: { state: 20, agent: 25 } } }),
+    );
     write(root, "src/infra/old.ts", owner);
     if (module !== "src/infra/old.ts") {
       write(root, module, 'export function oldName() { return "current"; }\n');
@@ -1739,6 +1773,11 @@ describe("previous release update compatibility", () => {
         '//#region src/infra/old.ts\nfunction oldName() { return "old"; } export { oldName as x };\n',
     });
     const root = createTempDir("update-compat-source-conflict-");
+    write(
+      root,
+      "package.json",
+      JSON.stringify({ type: "module", openclaw: { schemaVersions: { state: 20, agent: 25 } } }),
+    );
     write(root, "src/infra/old.ts", 'export * from "./left.js"; export * from "./right.js";\n');
     for (const side of ["left", "right"]) {
       write(root, `src/infra/${side}.ts`, `export function oldName() { return "${side}"; }\n`);
@@ -1765,7 +1804,7 @@ describe("previous release update compatibility", () => {
       root,
       "inventory.json",
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         releases: [
           release,
           { ...release, version: "2026.9.2", chunks: [] },
@@ -1828,7 +1867,15 @@ describe("previous release update compatibility", () => {
     const args = ["--output", output];
     for (const version of ["2026.9.3", "2026.9.1", "2026.9.2"]) {
       const packageDir = path.join(root, version);
-      write(packageDir, "package.json", JSON.stringify({ name: "openclaw", version }));
+      write(
+        packageDir,
+        "package.json",
+        JSON.stringify({
+          name: "openclaw",
+          version,
+          openclaw: { schemaVersions: { state: 1, agent: 1 } },
+        }),
+      );
       write(
         packageDir,
         "dist/build-info.json",
@@ -1881,13 +1928,15 @@ describe("previous release update compatibility", () => {
       const tags = { latest, beta };
       const expectedCalls = [
         ["view", "openclaw", "dist-tags", "--json"],
+        ["view", `openclaw@${missing}`, "openclaw.schemaVersions", "--json"],
         ["view", `openclaw@${missing}`, "dist.integrity", "--json"],
       ];
       const { result, calls } = runInventoryCli(
         ["--check", "--output", output],
         [
           { args: expectedCalls[0]!, value: latest === beta ? [tags] : tags },
-          { args: expectedCalls[1]!, value: latest === beta ? [newIntegrity] : newIntegrity },
+          { args: expectedCalls[1]!, value: { state: 1, agent: 1 } },
+          { args: expectedCalls[2]!, value: latest === beta ? [newIntegrity] : newIntegrity },
         ],
       );
       expect(result.status).toBe(1);
@@ -1904,6 +1953,64 @@ describe("previous release update compatibility", () => {
       expect(calls).toEqual(expectedCalls);
     },
   );
+
+  it.each(["discovered", "recorded"])(
+    "accounts %s unsupported registry schema sources without requiring bridges",
+    (source) => {
+      const output = writeWindowInventory(createTempDir("update-compat-unsupported-tags-"));
+      if (source === "recorded") {
+        const inventory = readUpdateCompatibilityInventory(output);
+        inventory.releases.push({
+          ...inventory.releases[0],
+          version: "2026.10.1-beta.1",
+          schemaVersions: { state: 21, agent: 25 },
+          chunks: [],
+        });
+        fsSync.writeFileSync(output, JSON.stringify(inventory));
+      }
+      const { result, calls } = runInventoryCli(
+        ["--check", "--output", output],
+        [
+          {
+            args: ["view", "openclaw", "dist-tags", "--json"],
+            value: { latest: "2026.9.3", beta: "2026.10.1-beta.1" },
+          },
+          ...(source === "recorded"
+            ? []
+            : [
+                {
+                  args: ["view", "openclaw@2026.10.1-beta.1", "openclaw.schemaVersions", "--json"],
+                  value: { state: 21, agent: 25 },
+                },
+              ]),
+        ],
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "unsupported first hop (state schema 21 exceeds candidate support 20)",
+      );
+      expect(calls).toHaveLength(source === "recorded" ? 1 : 2);
+    },
+  );
+
+  it("refuses registry sources whose schema support is unknown", () => {
+    const output = writeWindowInventory(createTempDir("update-compat-unknown-schema-"));
+    const { result } = runInventoryCli(
+      ["--check", "--output", output],
+      [
+        {
+          args: ["view", "openclaw", "dist-tags", "--json"],
+          value: { latest: "2026.9.3", beta: "2026.10.1-beta.1" },
+        },
+        {
+          args: ["view", "openclaw@2026.10.1-beta.1", "openclaw.schemaVersions", "--json"],
+          value: {},
+        },
+      ],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires recorded state and agent schema versions");
+  });
 
   it.each([
     { tags: { beta: "2026.9.3" }, invalid: "latest" },
@@ -1932,7 +2039,7 @@ describe("previous release update compatibility", () => {
     inventory.releases.push(newer);
     const conflict =
       /Release inventories disagree about service-abcdefgh.js:mode: 2026.9.1 uses .*; 2026.9.2 uses/;
-    expect(() => parseUpdateCompatibilityInventory(inventory)).toThrow(conflict);
+    expect(parseUpdateCompatibilityInventory(inventory).releases).toHaveLength(2);
     const root = createTempDir("update-compat-conflict-");
     candidate(root);
     expect(() =>
@@ -1943,6 +2050,29 @@ describe("previous release update compatibility", () => {
       }),
     ).toThrow(conflict);
     expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+  });
+
+  it("does not generate bridges or merge binding policy for an unsupported publication", () => {
+    const inventory = recordFixture();
+    const unsupported = structuredClone(inventory.releases[0]);
+    unsupported.version = "2026.10.1-beta.1";
+    unsupported.schemaVersions = { state: 21, agent: 25 };
+    unsupported.chunks[0].exports[0].origin.module = "src/cli/update-cli/unsupported.ts";
+    unsupported.chunks.push({ ...unsupported.chunks[0], path: "unsupported-abcdefgh.js" });
+    inventory.releases.push(unsupported);
+    const root = createTempDir("update-compat-supported-only-");
+    candidate(root);
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(true);
+    expect(fsSync.existsSync(path.join(root, "dist/unsupported-abcdefgh.js"))).toBe(false);
+    expect(
+      readUpdateCompatibilityInventory(path.join(root, "dist/update-compat-inventory.json"))
+        .releases,
+    ).toHaveLength(2);
   });
 
   it("keeps compatibility facades out of current runtime alias selection on rebuild", async () => {

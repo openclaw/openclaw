@@ -74,6 +74,7 @@ describe("first-hop package fixtures", () => {
       empty: createSource("2026.9.3"),
     };
     writeJson(path.join(root, "dist/update-compat-inventory.json"), {
+      schemaVersion: 1,
       releases: Object.values(sources).map(({ version, integrity }) => ({
         version,
         integrity,
@@ -153,6 +154,25 @@ describe("first-hop package fixtures", () => {
     );
   });
 
+  it.each([
+    { state: 2, agent: 1, reason: "state schema 2 exceeds candidate support 1" },
+    { state: 1, agent: 2, reason: "agent schema 2 exceeds candidate support 1" },
+  ])(
+    "accounts for a published newer-schema source without admitting its first hop ($reason)",
+    ({ state, agent, reason }) => {
+      const root = makePackageFixture();
+      writeJson(path.join(root, "dist/update-compat-inventory.json"), {
+        schemaVersion: 2,
+        releases: [
+          { version: "2026.9.1", schemaVersions: { state: 1, agent: 1 }, chunks: [] },
+          { version: "2026.10.1-beta.1", schemaVersions: { state, agent }, chunks: [] },
+        ],
+      });
+      expect(listFirstHopSourceVersions(root)).toEqual(["2026.9.1"]);
+      expect(() => listFirstHopSourceVersions(root, "2026.10.1-beta.1")).toThrow(reason);
+    },
+  );
+
   it("removes the candidate's recorded bridges while retaining its stable entrypoints", () => {
     const root = makePackageFixture();
     const bridge = "new-runtime-12345678.mjs";
@@ -171,6 +191,7 @@ describe("first-hop package fixtures", () => {
       fs.rmSync(path.join(root, "dist", name));
     }
     writeJson(path.join(root, metadata), {
+      schemaVersion: 1,
       releases: [{ chunks: [{ path: bridge }, { path: stable }, { path: native }] }],
     });
     for (const name of [stable, native]) {
@@ -451,7 +472,10 @@ describe("first-hop package fixtures", () => {
           };
         });
       }
-      writeJson(path.join(root, "package/dist/update-compat-inventory.json"), { releases });
+      writeJson(path.join(root, "package/dist/update-compat-inventory.json"), {
+        schemaVersion: 1,
+        releases,
+      });
       execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
       writeJson(path.join(registry, "prepublish-plugin-registry.json"), {
         candidateVersion: "2026.8.1",

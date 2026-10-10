@@ -12,7 +12,11 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
-import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
+import {
+  isUpdateCompatibilityChunk,
+  supportedUpdateCompatibilityReleases,
+  updateCompatibilitySchemaReason,
+} from "../../lib/update-compat-contract.mjs";
 import { readJson } from "./fixtures/common.mjs";
 
 // Frozen candidates predating the recorded inventory retain their original fixture contract.
@@ -22,16 +26,20 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DFJEouXv.js",
 ];
 
-function readFirstHopReleases(packageRoot) {
+function readFirstHopReleases(packageRoot, supported = true) {
   const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");
   if (!fs.existsSync(inventoryPath)) {
     return [];
   }
-  const { releases } = readJson(inventoryPath);
+  const inventory = readJson(inventoryPath);
+  const { releases } = inventory;
   if (!Array.isArray(releases)) {
     throw new Error("package fixture compatibility inventory has no releases");
   }
-  return releases;
+  const manifest = readJson(path.join(packageRoot, "package.json"));
+  return supported
+    ? supportedUpdateCompatibilityReleases(inventory, manifest.openclaw?.schemaVersions)
+    : releases;
 }
 
 export function listFirstHopSourceVersions(packageRoot, filter = "") {
@@ -46,8 +54,17 @@ export function listFirstHopSourceVersions(packageRoot, filter = "") {
   ) {
     throw new Error("first-hop defaults require recorded release versions in the candidate");
   }
+  const all = readFirstHopReleases(packageRoot, false);
   const selected = filter.split(/[\s,]+/u).filter(Boolean);
   const unrecorded = selected.filter((version) => !versions.includes(version));
+  for (const version of unrecorded) {
+    const source = all.find((release) => release.version === version);
+    if (source) {
+      throw new Error(
+        `first-hop source ${version} is unsupported: ${updateCompatibilitySchemaReason(source.schemaVersions, readJson(path.join(packageRoot, "package.json")).openclaw?.schemaVersions)}`,
+      );
+    }
+  }
   if (unrecorded.length > 0) {
     throw new Error(
       `first-hop sources are not recorded in the candidate: ${unrecorded.join(", ")}`,
@@ -57,7 +74,10 @@ export function listFirstHopSourceVersions(packageRoot, filter = "") {
 }
 
 export function inspectFirstHopSource(packageRoot, tarball, options = {}) {
-  const releases = readFirstHopReleases(packageRoot);
+  const releases = readFirstHopReleases(packageRoot, false);
+  if (options.version) {
+    listFirstHopSourceVersions(packageRoot, options.version);
+  }
   const integrity = `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
   const release = options.version
     ? releases.find((entry) => entry.version === options.version)
@@ -78,6 +98,9 @@ export function inspectFirstHopSource(packageRoot, tarball, options = {}) {
     (release && manifest.version !== release.version)
   ) {
     throw new Error("first-hop source package identity does not match its recorded release");
+  }
+  if (release) {
+    listFirstHopSourceVersions(packageRoot, release.version);
   }
   const restartChunk = release?.chunks.find((chunk) =>
     chunk.imports.some(
@@ -155,7 +178,7 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
   const compatibilityPath = path.join(paths.root, "dist", "update-compat-inventory.json");
   const hasRecordedCompatibility = fs.existsSync(compatibilityPath);
   const recordedChunks = hasRecordedCompatibility
-    ? readJson(compatibilityPath).releases.flatMap((release) =>
+    ? readFirstHopReleases(paths.root).flatMap((release) =>
         release.chunks.map((chunk) => chunk.path),
       )
     : [];

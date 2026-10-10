@@ -12,19 +12,22 @@ import {
   readUpdateCompatibilityInventory,
   type UpdateCompatibilityInventory,
 } from "./lib/update-compat-chunks.mts";
+import {
+  requireUpdateCompatibilitySchemas,
+  updateCompatibilitySchemaReason,
+} from "./lib/update-compat-contract.mjs";
 
 const DEFAULT_OUTPUT = "scripts/lib/update-compat-inventory.json";
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 function npmView(packageName: string, field: string): unknown {
-  return JSON.parse(
-    childProcess.execFileSync("npm", ["view", packageName, field, "--json"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30_000,
-      shell: process.platform === "win32",
-    }),
-  );
+  const output = childProcess.execFileSync("npm", ["view", packageName, field, "--json"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 30_000,
+    shell: process.platform === "win32",
+  });
+  return output.trim() ? JSON.parse(output) : undefined;
 }
 
 function sortedReleases<T extends { version: string }>(releases: T[]): T[] {
@@ -55,19 +58,36 @@ function checkRegistryCoverage(inventory: UpdateCompatibilityInventory, output: 
     }
     taggedVersions.push(version);
   }
-  const missing = [...new Set(taggedVersions)].filter(
-    (version) => !inventory.releases.some((release) => release.version === version),
+  const target = requireUpdateCompatibilitySchemas(
+    JSON.parse(fs.readFileSync("package.json", "utf8")).openclaw?.schemaVersions,
   );
-  if (missing.length === 0) {
-    return;
-  }
+  const missing: string[] = [];
   const releases = inventory.releases.map(({ version, integrity }) => ({ version, integrity }));
-  for (const version of missing) {
+  for (const version of new Set(taggedVersions)) {
+    const recorded = inventory.releases.find((release) => release.version === version);
+    const schemaEntries = recorded
+      ? [recorded.schemaVersions]
+      : resolveNpmJsonEntries(npmView(`openclaw@${version}`, "openclaw.schemaVersions"));
+    const schemas = requireUpdateCompatibilitySchemas(
+      schemaEntries.length === 1 ? schemaEntries[0] : undefined,
+    );
+    const reason = updateCompatibilitySchemaReason(schemas, target);
+    if (reason) {
+      console.log(`Accounted published source ${version}: unsupported first hop (${reason}).`);
+      continue;
+    }
+    if (recorded) {
+      continue;
+    }
+    missing.push(version);
     const integrity = resolveNpmJsonString(npmView(`openclaw@${version}`, "dist.integrity"));
     if (!INTEGRITY.test(integrity)) {
       throw new Error(`npm returned invalid SHA-512 integrity for openclaw@${version}`);
     }
     releases.push({ version, integrity });
+  }
+  if (missing.length === 0) {
+    return;
   }
   const command = ["pnpm update:compat:gen"];
   if (output !== DEFAULT_OUTPUT) {
@@ -100,7 +120,7 @@ function runUpdateCompatibilityInventory(args: string[] = process.argv.slice(2))
   let inventory: UpdateCompatibilityInventory;
   if (values.release?.length) {
     inventory = parseUpdateCompatibilityInventory({
-      schemaVersion: 1,
+      schemaVersion: 2,
       releases: sortedReleases(
         values.release.map((release) => {
           const split = release.indexOf("=sha512-");
