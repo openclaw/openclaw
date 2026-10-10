@@ -203,11 +203,17 @@ describe("Gateway agent and artifact APIs", () => {
       await server?.close();
       await releaseClaim?.();
     });
+    // In-process Gateways need a recovery owner before irreversible hot reload.
+    // These RPCs must succeed without using the fixture's explicit restart path.
+    const hotReloadRecovery = vi.fn(() => {
+      throw new Error("Agent and artifact RPCs unexpectedly required Gateway recovery");
+    });
     const startServer = () =>
       startGatewayServer(claim.port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
+        hotReloadRecovery,
       }).catch((error: unknown) => {
         // Incomplete startup rollback can leave the listener bound; keep the port claimed.
         if (
@@ -512,5 +518,6 @@ describe("Gateway agent and artifact APIs", () => {
     await restartGateway("gateway agent artifact APIs after delete");
     const finalAgents = await client.request<{ agents: Array<{ id: string }> }>("agents.list", {});
     expect(finalAgents.agents.map((entry) => entry.id)).not.toContain(createdAgent.agentId);
+    expect(hotReloadRecovery).not.toHaveBeenCalled();
   }, 120_000);
 });
