@@ -441,6 +441,51 @@ describe("chat send retry identity", () => {
     expectConflict(params.respond);
   });
 
+  it.each(["ready", "routing changed", "archived"] as const)(
+    "consumes new-input policy in one current read when recovery needs no work (%s)",
+    async (outcome) => {
+      const { params } = preAdmissionFixture(`prepared-new-input-${outcome}`);
+      const actualRecovery = await vi.importActual<typeof import("./chat-restart-recovery.js")>(
+        "./chat-restart-recovery.js",
+      );
+      vi.mocked(resolveDurableChatClaim).mockImplementation(actualRecovery.resolveDurableChatClaim);
+      if (outcome === "archived") {
+        params.session.entry!.archivedAt = 100;
+      }
+      let authorityReads = 0;
+      let consuming = false;
+      params.assertCurrent = () => {
+        expect(consuming).toBe(true);
+      };
+      params.session.sessionRoutingChanged = () => {
+        params.assertCurrent?.();
+        return outcome === "routing changed";
+      };
+      params.withCurrent = async (consume) => {
+        authorityReads += 1;
+        consuming = true;
+        try {
+          return consume();
+        } finally {
+          consuming = false;
+        }
+      };
+
+      expect(await runChatSendPreAdmission(params)).toBe(outcome === "ready");
+      expect(authorityReads).toBe(1);
+      expect(readSessionSubmittedInput).not.toHaveBeenCalled();
+      if (outcome === "ready") {
+        expect(params.respond).not.toHaveBeenCalled();
+      } else {
+        expect(params.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+      }
+    },
+  );
+
   it("rechecks a competing request admitted while durable recovery yields", async () => {
     const { fixture, params } = preAdmissionFixture("recovery-race");
     let authorityReads = 0;

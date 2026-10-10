@@ -33,6 +33,9 @@ describe("ClickClack discussion binding retention", () => {
     vi.mocked(harness.runtime.agent.session.getSessionEntry).mockImplementation(({ sessionKey }) =>
       entries.get(sessionKey),
     );
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync).mockImplementation(
+      async ({ sessionKey }) => entries.get(sessionKey),
+    );
 
     entries.set(firstKey, { sessionId: "session-a", label: "Detached A", updatedAt: 1 });
     await harness.service.open(firstKey);

@@ -334,9 +334,7 @@ describe("session activity semantics", () => {
               },
               { query: "", ownerId: "", sort: "updated" },
               {
-                onQueryChange: vi.fn(),
-                onOwnerChange: vi.fn(),
-                onSortChange: vi.fn(),
+                onFilterChange: vi.fn(),
               },
             ),
         surfaceContainer,

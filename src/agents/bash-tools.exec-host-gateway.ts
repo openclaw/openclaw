@@ -868,6 +868,12 @@ export async function processGatewayAllowlist(
       return deny("SYSTEM_RUN_DENIED: mutable file approval binding is unavailable");
     }
     const approvalMutableFileBinding = mutableFileBinding;
+    const resolveApprovalDrift = () =>
+      resolveGatewayExecApprovalDrift({
+        binding: approvalMutableFileBinding,
+        cwdSnapshot: approvedCwdSnapshot,
+        cwd: params.workdir,
+      });
     const revalidateBeforeExecution =
       approvedCwdSnapshot || approvalMutableFileBinding.operands.length > 0
         ? () =>
@@ -1117,11 +1123,7 @@ export async function processGatewayAllowlist(
         );
       }
 
-      const deniedReason = await resolveGatewayExecApprovalDrift({
-        binding: approvalMutableFileBinding,
-        cwdSnapshot: approvedCwdSnapshot,
-        cwd: params.workdir,
-      });
+      const deniedReason = await resolveApprovalDrift();
       if (deniedReason) {
         return deny(deniedReason, approvalId);
       }
@@ -1202,11 +1204,7 @@ export async function processGatewayAllowlist(
       }
 
       if (!deniedReason && approvedByAsk) {
-        const bindingDenied = await resolveGatewayExecApprovalDrift({
-          binding: approvalMutableFileBinding,
-          cwdSnapshot: approvedCwdSnapshot,
-          cwd: params.workdir,
-        });
+        const bindingDenied = await resolveApprovalDrift();
         if (bindingDenied) {
           deniedReason = bindingDenied;
         }
@@ -1374,11 +1372,7 @@ export async function processGatewayAllowlist(
             return { status: "run-aborted" as const };
           }
 
-          const bindingDenied = await resolveGatewayExecApprovalDrift({
-            binding: approvalMutableFileBinding,
-            cwdSnapshot: approvedCwdSnapshot,
-            cwd: params.workdir,
-          });
+          const bindingDenied = await resolveApprovalDrift();
           if (bindingDenied) {
             return {
               status: "operand-drift" as const,
@@ -1413,11 +1407,7 @@ export async function processGatewayAllowlist(
               startupSignal: params.signal,
               assertCurrent,
               beforeSpawn: async () => {
-                finalBindingDenied = await resolveGatewayExecApprovalDrift({
-                  binding: approvalMutableFileBinding,
-                  cwdSnapshot: approvedCwdSnapshot,
-                  cwd: params.workdir,
-                });
+                finalBindingDenied = await resolveApprovalDrift();
                 if (finalBindingDenied) {
                   throw finalBindingDeniedError;
                 }

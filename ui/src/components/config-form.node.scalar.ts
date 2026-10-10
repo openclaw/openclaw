@@ -223,17 +223,13 @@ export function renderTextInput(
     };
   };
   const revalidate = (target: HTMLInputElement) => {
-    if (effectiveRedacted) {
-      setControlValidity(target, "");
-      return;
-    }
-    if (inputType === "number") {
-      setControlValidity(target, resolveNumericInputState(target, params).message);
-      return;
-    }
     setControlValidity(
       target,
-      textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
+      effectiveRedacted
+        ? ""
+        : inputType === "number"
+          ? resolveNumericInputState(target, params).message
+          : textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
     );
   };
   const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
@@ -251,22 +247,18 @@ export function renderTextInput(
     const editHint = beginScalarEdit(target, initialBranch);
     const raw = target.value;
     const rawState = textInputState(raw, editHint);
-    if (!rawState.message && !isPhonePresentation) {
-      setControlValidity(target, "");
-      commit(rawState.candidate);
-      finishScalarEdit(target);
-      return;
+    let nextState = rawState;
+    if (rawState.message || isPhonePresentation) {
+      const normalized = raw.trim();
+      nextState = textInputState(normalized, editHint);
+      if (!nextState.message) {
+        target.value = normalized;
+      }
     }
-    const normalized = raw.trim();
-    const normalizedState = textInputState(normalized, editHint);
-    if (normalizedState.message) {
-      setControlValidity(target, rawState.message);
-      finishScalarEdit(target);
-      return;
+    setControlValidity(target, nextState.message ? rawState.message : "");
+    if (!nextState.message) {
+      commit(nextState.candidate);
     }
-    target.value = normalized;
-    setControlValidity(target, "");
-    commit(normalizedState.candidate);
     finishScalarEdit(target);
   };
 

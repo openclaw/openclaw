@@ -18,9 +18,15 @@ import {
   appendSessionTranscriptMessageByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ensureMemorySessionTombstones,
+  recordMemorySessionTombstonesInDatabase,
+} from "../memory-session-tombstones.js";
+import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
 import {
   SessionStartupCatchupHarness,
   emitSessionTranscriptUpdate,
@@ -576,7 +582,7 @@ describe("session startup catch-up", () => {
     expect(harness.corpusListCalls).toBe(0);
   });
 
-  it("resolves identity-targeted updates through a custom session store", async () => {
+  it("checks only targeted tombstones in a custom session store", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
     const session = await writeSqliteSession({
       storePath,
@@ -584,19 +590,38 @@ describe("session startup catch-up", () => {
       sessionKey: "agent:main:chat:custom",
       content: "custom store target",
     });
+    const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
+    await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
+    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    ensureMemorySessionTombstones(db);
+    recordMemorySessionTombstonesInDatabase(db, {
+      agentId: "main",
+      sessionIds: [forgotten.sessionId, "unrelated-thread"],
+    });
     const harness = new SessionStartupCatchupHarness([]);
     harness.addPendingSessionTarget({
       agentId: "main",
       sessionId: "custom-thread",
       sessionKey: "agent:main:chat:custom",
     });
+    harness.addPendingSessionTarget({ agentId: "main", sessionId: forgotten.sessionId });
+    const reads = vi.spyOn(cpuRuntime, "runMemoryOriginRead");
+    try {
+      await harness.processPendingSessionUpdates();
+      await Promise.resolve();
 
-    await harness.processPendingSessionUpdates();
-    await Promise.resolve();
-
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
-    expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
-    expect(harness.syncCalls[0]?.sessions).toHaveLength(1);
+      expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
+      expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
+      expect(harness.syncCalls[0]?.sessions).toHaveLength(2);
+      const queriedSessionIds = reads.mock.calls.flatMap(([request]) =>
+        request.kind === "session-tombstones" ? (request.sessionIds ?? []) : [],
+      );
+      expect(queriedSessionIds.toSorted()).toEqual(
+        [session.sessionId, forgotten.sessionId].toSorted(),
+      );
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {

@@ -9,6 +9,7 @@ import { loadSubagentRunsForSessionsInDatabase } from "../../agents/subagents/re
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
@@ -61,16 +62,12 @@ function observeNativeGrants(
     publication: Record<string, unknown>,
   ) => void,
 ) {
-  const create = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      create((request, grant) => {
-        if (isRecord(request.facts) && isRecord(request.facts.publication)) {
-          observe(request, request.facts.publication);
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(admission, (request, grant, admit) => {
+    if (isRecord(request.facts) && isRecord(request.facts.publication)) {
+      observe(request, request.facts.publication);
+    }
+    admit(request, grant);
+  });
 }
 
 const bindingWrites = (queries: readonly string[]) =>
@@ -387,6 +384,45 @@ it.each([false, true])(
       expect(finalized).toHaveBeenCalledTimes(rollback ? 0 : 1);
       expect(rolledBack).toHaveBeenCalledTimes(rollback ? 1 : 0);
       expect(fixture.readEntry()).toEqual(rollback ? before : undefined);
+    });
+  },
+);
+
+it.each([false, true])(
+  "settles a shipped Agents API binding in the worker (rollback: %s)",
+  async (rollback) => {
+    await withNativeBindingFixture("agentsapi", async (fixture) => {
+      const legacy = {
+        sessionId: "synthetic-agentsapi-session",
+        authFingerprint: "3c26b68488ce497a69d2c9fce9ee19c461fa67a3d959b0dc3bafe5718c56119d",
+      };
+      fixture.bindingStore.register(fixture.bindingKey, legacy);
+      const before = fixture.readEntry();
+      const failure = new Error("synthetic legacy deletion COMMIT refusal");
+      let commitSeen = false;
+      observeNativeGrants((request, facts) => {
+        if (request.stage === "commit" && facts.kind === "session-native-binding") {
+          commitSeen = true;
+          expect(fixture.readBinding()).toBeUndefined();
+          if (rollback) {
+            throw failure;
+          }
+        }
+      });
+      const sql = observeHostDataSql();
+      try {
+        if (rollback) {
+          await expect(fixture.remove()).rejects.toBe(failure);
+        } else {
+          await expect(fixture.remove()).resolves.toMatchObject({ deleted: true });
+        }
+        expect(commitSeen).toBe(true);
+        expect(bindingWrites(sql.queries)).toEqual([]);
+        expect(fixture.readBinding()).toEqual(rollback ? legacy : undefined);
+        expect(fixture.readEntry()).toEqual(rollback ? before : undefined);
+      } finally {
+        sql.restore();
+      }
     });
   },
 );

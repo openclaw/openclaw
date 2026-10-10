@@ -1,4 +1,10 @@
+import type { DatabaseSync } from "node:sqlite";
 import { hasAgentAuthProfileSourceInDatabase } from "../../agents/auth-profiles/sqlite-json.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -11,12 +17,17 @@ import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import {
   readSessionEntryRow,
   readSessionKeyBySessionIdInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import {
+  sessionColdArchiveMetadataColumns,
+  type SessionColdArchive,
+} from "./session-cold-storage-state.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import type {
   SessionEntryCohortRequest,
@@ -26,6 +37,23 @@ import type {
 } from "./session-entry-read.types.js";
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
+
+/** The entry cohort bounds this selection and owns its fresh snapshot. */
+function readSessionColdTranscripts(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): Array<Omit<SessionColdArchive, "archive_blob">> {
+  if (sessionIds.length === 0) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DB>(db)
+      .selectFrom("session_transcript_cold_archives")
+      .select(sessionColdArchiveMetadataColumns)
+      .where("session_id", "in", sqliteStringSet(sessionIds)),
+  ).rows;
+}
 
 /** Captured cohorts retain their native handle and snapshot; standalone reads keep admission. */
 export function createSessionEntryReadScope(capturedDatabase?: OpenClawAgentReadOnlyDatabase) {
@@ -62,7 +90,14 @@ export function readSessionEntryCohort(
   input: SessionEntryCohortRequest,
   readEntries: (request: SessionExactEntriesWorkerInput) => SessionExactEntriesWorkerResult,
 ): SessionEntryCohortResult {
-  const { expected, transcript, runtimeTarget, includeAuthProfileSource, ...selection } = input;
+  const {
+    expected,
+    transcript,
+    runtimeTarget,
+    includeAuthProfileSource,
+    includeColdMetadata,
+    ...selection
+  } = input;
   const count =
     input.sessionKeys.length +
     (input.replyInitializationSessionKey ? 1 : 0) +
@@ -151,6 +186,14 @@ export function readSessionEntryCohort(
     return {
       ...result,
       ...(preparedRuntimeTarget ? { runtimeTarget: preparedRuntimeTarget } : {}),
+      ...(includeColdMetadata
+        ? {
+            coldArchives: readSessionColdTranscripts(
+              database.db,
+              result.entries.map(({ entry: selectedEntry }) => selectedEntry.sessionId),
+            ),
+          }
+        : {}),
       source: {
         agentId: database.agentId,
         path: database.path,

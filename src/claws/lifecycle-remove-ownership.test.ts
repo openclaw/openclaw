@@ -286,8 +286,8 @@ describe("Claw removal operation ownership", () => {
           code: "monitor_cleanup_failed",
           message: expect.stringMatching(
             test.reject
-              ? /original quiescence failure|agent deletion core:agent-deletion\/worker was lost/
-              : /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+              ? /original quiescence failure|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/
+              : /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
           ),
         },
       });
@@ -338,7 +338,7 @@ describe("Claw removal operation ownership", () => {
         error: {
           code: "monitor_cleanup_failed",
           message: expect.stringMatching(
-            /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+            /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
           ),
         },
       });
@@ -405,7 +405,7 @@ describe("Claw removal operation ownership", () => {
           error: {
             code: "monitor_cleanup_failed",
             message: expect.stringMatching(
-              /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+              /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
             ),
           },
         });

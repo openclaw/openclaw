@@ -30,6 +30,7 @@ import {
   updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -372,25 +373,13 @@ test.each(["reply lost", "policy revoked", "callback throws"] as const)(
         throw callbackError;
       }
     });
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    const delivery = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        original(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                if (command.type === "devicePairing.approveBootstrap" && fault === "reply lost") {
-                  throw deliveryError;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const delivery = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      if (command.type === "devicePairing.approveBootstrap" && fault === "reply lost") {
+        throw deliveryError;
+      }
+      return result;
+    });
     let allowed = true;
     try {
       const approval = approveBootstrapDevicePairing(

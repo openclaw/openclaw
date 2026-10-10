@@ -12,6 +12,7 @@ import {
   readOpenClawAgentDatabaseIdentity,
   registerOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -34,6 +35,7 @@ import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { createSessionTranscriptOwnerPredicate } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import {
@@ -72,6 +74,67 @@ describe("SQLite session entry patch commit revalidation", () => {
     database = openOpenClawAgentDatabase({ agentId: "main", env });
   });
 
+  it.each(["native", "worker"] as const)(
+    "publishes the %s patch's exact transcript predicate and rereads a foreign generation next time",
+    async (route) => {
+      const appended = appendTranscriptMessageSync(
+        { ...scope, sessionId: "session-1" },
+        { message: { role: "user", content: "receipt source" } },
+      );
+      if (!appended.ok || !appended.value?.anchor) {
+        throw new Error("Expected committed transcript anchor");
+      }
+      const anchor = appended.value.anchor;
+      const onCommitted = vi.fn();
+      const options = {
+        skipMaintenance: true,
+        onCommitted,
+        ...(route === "native" ? { assertCommitAllowed: () => {} } : {}),
+        workerGuard: {
+          shouldCommitIf: {
+            kind: "transcript" as const,
+            sessionId: "session-1",
+            generation: anchor.generation,
+            leafEntryId: anchor.entryId,
+          },
+        },
+      };
+      await expect(
+        patchSessionEntryCore(scope, () => ({ label: "committed" }), options),
+      ).resolves.toMatchObject({ label: "committed" });
+      expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ label: "committed" }),
+        {
+          sessionId: "session-1",
+          watermark: { generation: anchor.generation, maxSeq: anchor.rawSeq },
+        },
+      );
+      const foreign = new DatabaseSync(database.path);
+      try {
+        foreign
+          .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+          .run("foreign-rewrite", "session-1");
+      } finally {
+        foreign.close();
+      }
+      await expect(
+        patchSessionEntryCore(scope, () => ({ label: "must not commit" }), options),
+      ).resolves.toBeNull();
+      expect(onCommitted).toHaveBeenCalledOnce();
+      expect(loadExactSessionEntry(scope)?.entry.label).toBe("committed");
+      onCommitted.mockClear();
+      await patchSessionEntryCore(scope, () => ({ sessionId: "rotated-session" }), {
+        ...options,
+        workerGuard: {
+          shouldCommitIf: { ...options.workerGuard.shouldCommitIf, generation: "foreign-rewrite" },
+        },
+      });
+      expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionId: "rotated-session" }),
+      );
+    },
+  );
+
   /** Simulate another writer landing between patch preparation and its commit. */
   function mutateRowOutOfBand(patch: Record<string, string>, targetKey = sessionKey): void {
     const other = new DatabaseSync(database.path);
@@ -99,6 +162,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       : patchSessionEntryTarget(
           {
             agentId: scope.agentId,
+            env: scope.env,
             storePath: database.path,
             target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
           },
@@ -577,9 +641,10 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
   });
 
-  it("commits an unchanged persisted row after reopening during preparation", async () => {
-    const persisted = await patchEntry("ordinary", async () => {
-      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+  it("commits an unchanged persisted row after evicting the host handle during preparation", async () => {
+    const persisted = await patchEntry("ordinary", () => {
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.db.isOpen).toBe(false);
       return { label: "renamed" };
     });
     expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
@@ -644,16 +709,17 @@ describe("SQLite session entry patch commit revalidation", () => {
     expect(loadExactSessionEntry(scope)?.entry.label).toBe("exact replacement");
   });
 
-  it("rejects a no-op lifecycle patch after reopening with invalidated unrelated lineage", async () => {
+  it("rejects a no-op lifecycle patch after host eviction with invalidated unrelated lineage", async () => {
     await upsertSessionEntryCore(
       { ...scope, sessionKey: "agent:main:main" },
       { sessionId: "main-session", updatedAt: 10 },
     );
     await expect(
-      patchEntry("lifecycle", async () => {
+      patchEntry("lifecycle", () => {
         setCanonicalSqliteSessionMainKey(database, "work");
         setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-        expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        expect(database.db.isOpen).toBe(false);
         return null;
       }),
     ).rejects.toThrow("openclaw doctor --fix");
@@ -760,6 +826,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       patchSessionEntryTarget(
         {
           agentId: scope.agentId,
+          env: scope.env,
           storePath: database.path,
           target: { canonicalKey: "agent:main:different-target", storeKeys: [sessionKey] },
         },

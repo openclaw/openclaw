@@ -8,6 +8,7 @@ import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type {
   AuthProfileUsageInput,
+  AuthProfileUsageReceipt,
   AuthProfileUsageResult,
   AuthStoreUpdateOperations,
 } from "./store.worker-contract.js";
@@ -28,13 +29,7 @@ export type InlineAuthFailureReceipt = {
   previousStats?: ProfileUsageStats;
   nextStats: ProfileUsageStats;
   now: number;
-  publication: {
-    credentialsChanged: boolean;
-    profileSetChanged: boolean;
-    stateChanged: boolean;
-    selectionChanged: boolean;
-    profileIds: string[];
-  };
+  publication: AuthProfileUsageReceipt["publication"];
 };
 
 type InlineAuthFailureResult =

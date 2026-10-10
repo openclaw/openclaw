@@ -222,8 +222,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   it("disables the binding before any token use when a Windows profile is not owner-only", async () => {
     const remoteHead = await publishEarlierTurn();
-    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.spyOn(os, "platform").mockReturnValue("win32");
     inspectPathPermissions.mockResolvedValueOnce({
       ok: true,
       source: "windows-acl",
@@ -233,11 +232,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
       groupWritable: false,
       worldWritable: false,
     } as never);
-    try {
-      await expect(prepare()).resolves.toBeUndefined();
-    } finally {
-      Object.defineProperty(process, "platform", platform);
-    }
+    await expect(prepare()).resolves.toBeUndefined();
 
     expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
     expect(remoteHead).not.toBe(initialHead);

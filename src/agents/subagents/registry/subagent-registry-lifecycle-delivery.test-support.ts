@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   runSubagentAnnounceDispatch,
@@ -12,8 +12,10 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
+import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
 type CompleteRun = (
@@ -45,6 +47,54 @@ export function registerLifecycleDeliveryReceiptCases({
   completeAndJoinCleanup: CompleteRun;
   waitForLifecycleState: <T>(assertion: () => T | Promise<T>) => Promise<T>;
 }) {
+  it.each([false, true])(
+    "reconciles changed lifecycle owners without reading unrelated runs (rekeyed=%s)",
+    (rekeyed) => {
+      const entry = createRunEntry({ collect: rekeyed, endedAt: 4_000 });
+      const unrelated = Array.from({ length: 8 }, (_, index) =>
+        createRunEntry({
+          runId: `unrelated-${index}`,
+          childSessionKey: `agent:main:subagent:unrelated-${index}`,
+          endedAt: 4_000,
+        }),
+      );
+      const runs = new Map([entry, ...unrelated].map((row) => [row.runId, row]));
+      const controller = createLifecycleController({ entry, runs });
+      for (const row of runs.values()) {
+        controller.bumpTerminalGeneration(row);
+      }
+      let current = runs.get(entry.runId)!;
+      if (rekeyed) {
+        const accepted = copySubagentRunRuntimeOwner(current, {
+          ...current,
+          runId: "accepted-collector",
+          swarmRunId: entry.runId,
+        });
+        runs.delete(entry.runId);
+        runs.set(accepted.runId, accepted);
+        publishSubagentRunChanges([entry.childSessionKey], [entry.runId, accepted.runId]);
+        current = accepted;
+      }
+      // A callback can still hold the queued address after the accepted row is published.
+      const generation = controller.bumpTerminalGeneration(entry);
+      const readRun = vi.spyOn(runs, "get");
+      onTestFinished(() => readRun.mockRestore());
+      for (const endedAt of [4_001, 4_000]) {
+        const updated = copySubagentRunRuntimeOwner(current, {
+          ...current,
+          execution: { ...current.execution, endedAt },
+        });
+        runs.set(updated.runId, updated);
+        publishSubagentRunChanges([updated.childSessionKey], [updated.runId]);
+      }
+      const readIds = new Set(readRun.mock.calls.map(([runId]) => runId));
+      for (const row of unrelated) {
+        expect(readIds.has(row.runId)).toBe(false);
+      }
+      expect(controller.isTerminalCallbackCurrent(entry, generation)).toBe(false);
+    },
+  );
+
   const visibleCompletion = {
     triggerCleanup: true,
     terminalReply: { disposition: "visible", text: "final completion reply" },

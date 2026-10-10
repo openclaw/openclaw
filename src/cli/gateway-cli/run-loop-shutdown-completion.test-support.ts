@@ -35,7 +35,7 @@ async function withHostLifeline(run: (input: PassThrough) => Promise<void>) {
 }
 
 export function registerGracefulGatewayShutdownTests({
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   consumeGatewaySuspendHandoff,
   restartGatewayProcessWithFreshPid,
   respawnGatewayProcessForUpdate,
@@ -126,7 +126,7 @@ export function registerGracefulGatewayShutdownTests({
   it.each([true])("joins host EOF shutdown (closing restart=%s)", async (restart) => {
     await withHostLifeline(async (input) => {
       if (!restart) {
-        consumeGatewayRestartIntentPayloadSync.mockReturnValue({ reason: "gateway.restart" });
+        consumeGatewayRestartIntentPayload.mockResolvedValue({ reason: "gateway.restart" });
         consumeGatewaySuspendHandoff.mockReturnValue({ ok: true, value: true });
       }
       const closing = createDeferredCore();
@@ -152,7 +152,7 @@ export function registerGracefulGatewayShutdownTests({
               reason: "gateway stopping",
               restartExpectedMs: null,
             });
-            expect(consumeGatewayRestartIntentPayloadSync).not.toHaveBeenCalled();
+            expect(consumeGatewayRestartIntentPayload).not.toHaveBeenCalled();
             expect(consumeGatewaySuspendHandoff).not.toHaveBeenCalled();
           }
           closed.resolve();
@@ -302,7 +302,7 @@ export function registerGracefulGatewayShutdownTests({
 }
 
 export function registerShutdownCompletionTests({
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
   idleActiveWorkSnapshot,
@@ -513,7 +513,7 @@ export function registerShutdownCompletionTests({
   );
 
   it("waits for the drain before handing recovery ownership to server close", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
+    consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 0 });
     createGatewayActiveWorkSnapshot.mockReturnValueOnce(
       createActiveWorkSnapshot({ embeddedRuns: 2 }, [
         { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },

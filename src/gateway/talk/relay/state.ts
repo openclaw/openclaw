@@ -245,6 +245,20 @@ export class TalkRealtimeRelayOutputOwnership {
   }
 }
 
+export type RelayAgentRun = {
+  runId: string;
+  sessionKey: string;
+  standalone?: RelayAgentRunRegistration;
+  releaseVoice?: () => void;
+};
+
+export type RelayAgentRunRegistration = {
+  run: RelayAgentRun;
+  isCurrent: () => boolean;
+  release: () => void;
+  abortIfCurrent: () => void;
+};
+
 export type RelaySession = {
   getToolAuthorityOverlay?: (
     authority?: TalkAgentConsultAuthority,
@@ -260,9 +274,9 @@ export type RelaySession = {
   sessionTarget: PreparedTalkSessionTarget;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
-  activeAgentRuns: Map<string, string>;
+  activeAgentRuns: Map<string, RelayAgentRun>;
   provider: string;
-  activeAgentToolCalls: Map<string, string>;
+  activeAgentToolCalls: Map<string, RelayAgentRunRegistration>;
   toolCalls: RelayToolCallLedger;
   providerToolCallIds: Map<string, string>;
   relayToolCallIdsByProviderId: Map<string, string>;
@@ -277,7 +291,9 @@ export type RelaySession = {
   // Turn cancellation invalidates async acceptance callbacks from the prior turn.
   toolResultEpoch: number;
   voiceConfig?: OpenClawConfig;
+  voiceSessionSource?: ClientVoiceSessionSource;
   voiceSessionCreated: boolean;
+  voiceSessionCreation?: Promise<boolean>;
   voiceTranscriptSeq: number;
   voiceTranscriptQueue: BoundedSerialQueue;
   confirmationReadiness: ReturnType<typeof createClientVoiceConfirmationReadiness>;
@@ -285,7 +301,7 @@ export type RelaySession = {
   closing?: {
     reason: "completed" | "error";
     completion?: Promise<void>;
-    runTranscript?: (run: (source: ClientVoiceSessionSource) => boolean) => boolean;
+    runTranscript?: (run: () => boolean) => boolean;
   };
   failSession: (message: string) => void;
 };
@@ -420,14 +436,28 @@ export function ensureRelayTurn(session: RelaySession): string {
   return turn.turnId;
 }
 
+/** The two existing indexes own one run with independent provider-call registrations. */
+export function hasRelayAgentRunRegistrations(
+  session: RelaySession,
+  run: RelayAgentRun,
+  except?: RelayAgentRunRegistration,
+): boolean {
+  return (
+    Boolean(run.standalone && run.standalone !== except) ||
+    [...session.activeAgentToolCalls.values()].some(
+      (registration) => registration.run === run && registration !== except,
+    )
+  );
+}
+
 export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   for (const runId of session.activeAgentRuns.keys()) {
     if (!session.context.chatAbortControllers.has(runId)) {
       session.activeAgentRuns.delete(runId);
     }
   }
-  for (const [callId, runId] of session.activeAgentToolCalls) {
-    if (!session.activeAgentRuns.has(runId)) {
+  for (const [callId, { run }] of session.activeAgentToolCalls) {
+    if (session.activeAgentRuns.get(run.runId) !== run) {
       session.activeAgentToolCalls.delete(callId);
     }
   }
@@ -437,12 +467,19 @@ export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
 /** Omitting the abort reason releases relay correlation while accepted work continues. */
 export function retireRelayAgentRuns(session: RelaySession, reason?: string): void {
   if (reason !== undefined) {
-    for (const [runId, sessionKey] of session.activeAgentRuns) {
-      abortChatRunById(session.context, {
-        runId,
-        sessionKey,
-        stopReason: reason,
-      });
+    for (const [runId, run] of session.activeAgentRuns) {
+      const current =
+        run.standalone?.isCurrent() ||
+        [...session.activeAgentToolCalls.values()].some(
+          (registration) => registration.run === run && registration.isCurrent(),
+        );
+      if (current) {
+        abortChatRunById(session.context, {
+          runId,
+          sessionKey: run.sessionKey,
+          stopReason: reason,
+        });
+      }
     }
   }
   session.activeAgentRuns.clear();

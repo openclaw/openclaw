@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -11,6 +12,10 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  onSessionIdentityMutation,
+  type SessionIdentityMutation,
+} from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -741,18 +746,46 @@ it("publishes only committed removal keys after Worker finalization", async () =
     replaceSessionEntrySync(changed, previousEntry);
     const databaseOptions = { agentId: "main", env: state.env };
     const database = openOpenClawAgentDatabase(databaseOptions);
+    const entries = [
+      { sessionKey: removed.sessionKey, expectedEntry: loadSessionEntry(removed) },
+      { sessionKey: changed.sessionKey, expectedEntry: loadSessionEntry(changed) },
+    ];
     const plan = reclamation.createSessionMaintenanceFinalizationOperation({
       agentId: "main",
       databaseOptions,
-      entries: [
-        { sessionKey: removed.sessionKey, expectedEntry: loadSessionEntry(removed) },
-        { sessionKey: changed.sessionKey, expectedEntry: loadSessionEntry(changed) },
-      ],
+      entries,
       materializedPlans: [],
     });
     replaceSessionEntrySync(changed, { ...previousEntry, label: "changed after planning" });
     const published: SessionRowChange[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => published.push(change));
+    const identities: SessionIdentityMutation[] = [];
+    const unsubscribeIdentities = onSessionIdentityMutation((change) => identities.push(change));
+    // Forward the intercepted prototype method with the actual Worker receiver below.
+    // oxlint-disable-next-line typescript/unbound-method
+    const postMessage = Worker.prototype.postMessage;
+    let mutated = false;
+    const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      ...args
+    ) {
+      const result = postMessage.apply(this, args);
+      const message: unknown = args[0];
+      if (
+        isRecord(message) &&
+        message.type === "reclaim" &&
+        isRecord(message.plan) &&
+        message.plan.kind === "maintenance-finalize" &&
+        isRecord(message.plan.databaseOptions) &&
+        message.plan.databaseOptions.path === database.path
+      ) {
+        entries[0]!.sessionKey = "agent:main:mutated-after-dispatch";
+        entries[0]!.expectedEntry!.sessionId = "mutated-after-dispatch";
+        entries.reverse();
+        mutated = true;
+      }
+      return result;
+    });
     const diagnostics = {};
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
@@ -761,16 +794,26 @@ it("publishes only committed removal keys after Worker finalization", async () =
         plan,
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
+      expect(mutated).toBe(true);
       expect(result).toMatchObject({
         kind: "maintenance-finalize",
-        value: { changedEntries: [plan.entries[1]], committedEntries: [plan.entries[0]] },
+        value: { committedEntryIndices: [0] },
       });
       expect(published).toEqual([
         { agentId: "main", storePath: database.path, sessionKey: removed.sessionKey },
       ]);
+      expect(identities).toEqual([
+        expect.objectContaining({
+          kind: "delete",
+          agentId: "main",
+          previous: { sessionId: removedEntry.sessionId, sessionKeys: [removed.sessionKey] },
+        }),
+      ]);
       expect(loadSessionEntry(removed)).toBeUndefined();
       expect(loadSessionEntry(changed)?.label).toBe("changed after planning");
     } finally {
+      dispatch.mockRestore();
+      unsubscribeIdentities();
       unsubscribe();
     }
   });
@@ -935,6 +978,10 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
         .prepare(
           "UPDATE session_nodes SET updated_at = 1, entry_json = json_set(entry_json, '$.updatedAt', 1) WHERE session_key = ?",
         )
+        .run(foreignVictim.sessionKey);
+      // The foreign writer certifies its canonical timestamp update after triggers clear proof.
+      foreign
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
         .run(foreignVictim.sessionKey);
     } finally {
       foreign.close();

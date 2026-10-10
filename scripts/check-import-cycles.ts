@@ -39,6 +39,7 @@ function createSourceResolver(files: readonly string[]) {
     if (file.endsWith(".ts")) {
       pathMap.set(`${extensionless}.js`, file);
     } else if (file.endsWith(".tsx")) {
+      pathMap.set(`${extensionless}.js`, file);
       pathMap.set(`${extensionless}.jsx`, file);
     } else if (file.endsWith(".mts")) {
       pathMap.set(`${extensionless}.mjs`, file);

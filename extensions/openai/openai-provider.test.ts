@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
+import {
+  OPENAI_API_BASE_URL,
+  OPENAI_CODEX_MODELS_ENDPOINT as OPENAI_CODEX_MODELS_URL,
+  OPENAI_CODEX_RESPONSES_BASE_URL,
+} from "./base-url.js";
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -104,14 +108,6 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: mocks.resolveApiKeyForProvider,
   resolveProviderAuthProfileMetadata: mocks.resolveProviderAuthProfileMetadata,
 }));
-
-// mock-isolation: keep npm Codex version lookups off the network and out of shared cache state.
-vi.mock("./codex-client-version.runtime.js", () => ({
-  resolveOpenAICodexModelsEndpoint: async () =>
-    "https://chatgpt.com/backend-api/codex/models?client_version=0.170.0",
-}));
-
-const OPENAI_CODEX_MODELS_URL = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=0.170.0`;
 
 async function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
@@ -583,12 +579,11 @@ describe("buildOpenAIProvider", () => {
       expect(openai?.api).toBe("openai-chatgpt-responses");
       expect(openai?.auth).toBe("oauth");
       expect(openai?.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
-      expect(openai?.models.map((model) => model.id)).toEqual([
-        "gpt-5.6-sol",
-        "gpt-5.5",
-        "gpt-5.6-terra",
-        "gpt-5.3-codex-spark",
-      ]);
+      const shown = openai?.models.map((model) => model.id) ?? [];
+      expect(shown).toEqual(["gpt-5.6-sol", "gpt-5.5", "gpt-5.6-terra", "gpt-5.3-codex-spark"]);
+      // Entitlement keeps hidden rows that the picker omits.
+      const hidden = ["codex-auto-review", "codex-internal-fallback"];
+      expect(result.outcomes?.[0]?.listedModelIds).toEqual([...shown, ...hidden]);
       expect(openai?.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
         contextWindow: 372_000,
         compat: {
