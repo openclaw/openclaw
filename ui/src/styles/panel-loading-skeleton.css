@@ -260,25 +260,25 @@ openclaw-panel-loading-skeleton {
     padding: 12px;
   }
 
-  @keyframes shimmer {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(100%);
-    }
-  }
-
-  @keyframes panel-skeleton-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .desktop-spinner,
     .skeleton::after {
       animation: none;
     }
+  }
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes panel-skeleton-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
