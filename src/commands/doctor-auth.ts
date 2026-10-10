@@ -28,6 +28,7 @@ import {
   resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
@@ -206,17 +207,24 @@ type AuthProfileHealthTarget = {
 
 function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
   const targets = new Map<string, AuthProfileHealthTarget>();
-  if (hasAnyAuthProfileStoreSource() || Object.keys(cfg.auth?.profiles ?? {}).length > 0) {
-    targets.set(resolveSharedAuthStorePath(), { label: "Shared" });
+  const shared: AuthProfileHealthTarget | undefined =
+    hasAnyAuthProfileStoreSource() || Object.keys(cfg.auth?.profiles ?? {}).length > 0
+      ? { label: "Shared" }
+      : undefined;
+  if (shared) {
+    targets.set(resolveSharedAuthStorePath(), shared);
   }
+  const sharedMainAgentDir = resolveSharedMainAuthAgentDir();
   for (const agentId of listAgentIds(cfg)) {
     const agentDir = resolveAgentDir(cfg, agentId);
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    const existing = targets.get(databasePath);
-    if (existing) {
-      // The agent that owns the shared store addresses it in recovery commands.
-      existing.agentId ??= agentId;
-    } else if (hasLocalAuthProfileStoreSource(agentDir)) {
+    // The agent that owns the shared store addresses it in recovery commands. In the
+    // state-db layout no agent database is the shared store, so match the shared-main dir.
+    const ownsShared = targets.get(databasePath) === shared || agentDir === sharedMainAgentDir;
+    if (shared && !shared.agentId && ownsShared) {
+      shared.agentId = agentId;
+    }
+    if (!targets.has(databasePath) && hasLocalAuthProfileStoreSource(agentDir)) {
       targets.set(databasePath, { label: `Agent ${agentId}`, agentDir, agentId });
     }
   }

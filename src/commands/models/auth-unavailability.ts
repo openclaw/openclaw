@@ -29,7 +29,7 @@ export function listUnavailableAuthProfiles(store: AuthProfileStore) {
 }
 
 /** Status rows for unusable profiles, soonest recovery first, with recovery guidance. */
-export function listUnusableAuthProfilesWithHints(store: AuthProfileStore, agentId: string) {
+export function listUnusableAuthProfilesWithHints(store: AuthProfileStore, agentId: string | null) {
   return listUnavailableAuthProfiles(store)
     .map(({ profileId, provider, kind, reason, classification, until, remainingMs }) =>
       Object.assign(

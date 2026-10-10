@@ -492,8 +492,11 @@ export function buildAuthProfileUnusableHint(params: {
   reason?: AuthProfileFailureReason;
   provider: string;
   profileId: string;
-  /** Store owner; mutation commands require it when several agents are configured. */
-  agentId?: string;
+  /**
+   * Store owner; mutation commands require it when several agents are configured.
+   * `null` means no CLI target reaches the inspected store, so no command is printed.
+   */
+  agentId?: string | null;
 }): string {
   if (
     params.reason === "auth" ||
@@ -513,7 +516,7 @@ export function buildAuthProfileUnusableHint(params: {
   }
   if (params.kind === "disabled" && params.reason === "billing") {
     const profileId = sanitizeOAuthRefreshFailureProfileId(params.profileId);
-    if (!profileId) {
+    if (!profileId || params.agentId === null) {
       return "Top up credits (provider billing) or switch provider.";
     }
     const command = formatCliCommand(
