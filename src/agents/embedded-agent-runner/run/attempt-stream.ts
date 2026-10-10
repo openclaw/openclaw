@@ -1,5 +1,5 @@
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
-import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
+import type { CompactionReplayRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -59,12 +59,12 @@ import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wra
 import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
 };
 
 function wrapStreamFnWithCompactionReplayRepair(
   streamFn: StreamFn,
-  onRejected: (checkpoint: OpenAIResponsesCompactionRejection) => Promise<void>,
+  onRejected: (checkpoint: CompactionReplayRejection) => Promise<void>,
 ): StreamFn {
   return async (model, context, options) => {
     const trackRepair = captureAsyncWorkTracker();
@@ -120,6 +120,7 @@ export function installEmbeddedAttemptStreamGuards(
     state: { systemPromptText },
     transcriptPolicy,
     transport: {
+      compactionReplayEnabled,
       effectiveAgentTransport,
       effectivePromptCacheRetention,
       streamStrategy,
@@ -149,7 +150,7 @@ export function installEmbeddedAttemptStreamGuards(
   }
   const repairRejectedReplay = async (
     kind: "compaction" | "thinking",
-    checkpoint?: OpenAIResponsesCompactionRejection,
+    checkpoint?: CompactionReplayRejection,
   ): Promise<void> => {
     try {
       const repairParams = {
@@ -283,10 +284,14 @@ export function installEmbeddedAttemptStreamGuards(
     );
   }
 
-  if (isOpenAIResponsesApi) {
+  // Responses and eligible Anthropic routes replay provider checkpoints; a rejected one must be
+  // stripped from its transcript owner or every later turn resends it.
+  if (isOpenAIResponsesApi || compactionReplayEnabled) {
     installStreamWrapper(wrapStreamFnWithCompactionReplayRepair, (checkpoint) =>
       repairRejectedReplay("compaction", checkpoint),
     );
+  }
+  if (isOpenAIResponsesApi) {
     installStreamWrapper(wrapStreamFnWithMessageTransform, sanitizeOpenAIResponsesReplayForStream);
   }
 

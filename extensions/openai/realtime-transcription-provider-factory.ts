@@ -14,6 +14,7 @@ import {
   createOpenAIRealtimeClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
+  resolveOpenAIRealtimeRequestHeaders,
 } from "./realtime-provider-shared.js";
 
 type RealtimeEvent = {
@@ -371,18 +372,11 @@ export function buildOpenAIRealtimeTranscriptionProvider(
               }
             }
           }
-          return (
-            runtime.resolveProviderRequestHeaders({
-              provider: "openai",
-              baseUrl: OPENAI_REALTIME_TRANSCRIPTION_URL,
-              capability: "audio",
-              transport: "websocket",
-              defaultHeaders: {
-                Authorization: `Bearer ${bearer}`,
-              },
-            }) ?? {
-              Authorization: `Bearer ${bearer}`,
-            }
+          return resolveOpenAIRealtimeRequestHeaders(
+            runtime,
+            OPENAI_REALTIME_TRANSCRIPTION_URL,
+            { Authorization: `Bearer ${bearer}` },
+            "websocket",
           );
         },
         connectTimeoutMs: 10_000,

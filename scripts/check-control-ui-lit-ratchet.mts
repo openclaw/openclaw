@@ -38,7 +38,13 @@ function totals(counts: ReadonlyMap<string, MigrationMetrics>) {
   );
 }
 
-export function main(root = process.cwd(), argv = process.argv.slice(2)) {
+// Advisory until Lit pages can mount Solid components (the Solid bridge). Feature work
+// in unported Lit UI must keep landing; enforcement returns with that transition.
+export function main(
+  root = process.cwd(),
+  argv = process.argv.slice(2),
+  { enforce = false }: { enforce?: boolean } = {},
+) {
   try {
     const args = parseRatchetArgs(argv);
     if (args.prune) {
@@ -83,10 +89,12 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
             ).increased.map(({ entry, current, allowed }) => `${entry}: ${current} > ${allowed}`),
           },
         ],
-        "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change.",
+        enforce
+          ? "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change."
+          : "Advisory only: Lit growth is reported, not enforced, until Solid components can be mounted from Lit pages.",
       )
     ) {
-      return 1;
+      return enforce ? 1 : 0;
     }
     console.log(`Control UI Lit ratchet OK (${changed.size} changed files, base ${base}).`);
     return 0;

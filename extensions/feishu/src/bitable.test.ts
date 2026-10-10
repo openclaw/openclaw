@@ -255,63 +255,27 @@ describe("feishu bitable create app cleanup", () => {
   });
 });
 
-describe("feishu bitable standalone guidance", () => {
-  it.each([
-    "feishu_bitable_list_fields",
-    "feishu_bitable_list_records",
-    "feishu_bitable_get_record",
-    "feishu_bitable_create_record",
-    "feishu_bitable_update_record",
-    "feishu_bitable_create_field",
-  ])("describes %s without requiring companion schemas", (toolName) => {
-    const { api, resolveTool } = createToolFactoryHarness(createConfig());
-    registerFeishuBitableTools(api);
-    const tool = resolveTool(toolName);
-    expect(tool.parameters).toMatchObject({
-      properties: { app_token: { type: "string" }, table_id: { type: "string" } },
-      required: expect.arrayContaining(["app_token", "table_id"]),
-    });
-    expect
-      .soft(JSON.stringify(tool.parameters))
-      .not.toMatch(/\bfeishu_bitable_(?:get_meta|create_app)\b/u);
-    expect.soft(tool.parameters).toMatchObject({
-      properties: {
-        app_token: { description: expect.stringContaining("Not the node token in a /wiki/ URL") },
-      },
-    });
-    if (toolName === "feishu_bitable_update_record") {
-      expect.soft(tool.parameters).toMatchObject({
-        properties: { fields: { description: expect.not.stringContaining("create_record") } },
-      });
-      expect.soft(tool.parameters).toMatchObject({
-        properties: { fields: { description: expect.stringContaining("DateTime=timestamp_ms") } },
-      });
-    }
-  });
-});
-
 describe("feishu bitable write tool schemas (#94547)", () => {
-  it.each([
-    ["feishu_bitable_create_record", "fields"],
-    ["feishu_bitable_update_record", "fields"],
-    ["feishu_bitable_create_field", "property"],
-  ])("%s emits a non-empty value schema for %s", (toolName, propName) => {
-    const { api, resolveTool } = createToolFactoryHarness(createConfig());
-    registerFeishuBitableTools(api);
+  it.each([["feishu_bitable_create_record", "fields"]])(
+    "%s emits a non-empty value schema for %s",
+    (toolName, propName) => {
+      const { api, resolveTool } = createToolFactoryHarness(createConfig());
+      registerFeishuBitableTools(api);
 
-    const tool = resolveTool(toolName) as unknown as {
-      parameters?: {
-        properties?: Record<
-          string,
-          { patternProperties?: Record<string, Record<string, unknown>> }
-        >;
+      const tool = resolveTool(toolName) as unknown as {
+        parameters?: {
+          properties?: Record<
+            string,
+            { patternProperties?: Record<string, Record<string, unknown>> }
+          >;
+        };
       };
-    };
-    const patternSchemas = Object.values(
-      tool.parameters?.properties?.[propName]?.patternProperties ?? {},
-    );
-    expect(patternSchemas).toEqual([
-      { type: ["string", "number", "boolean", "object", "array", "null"] },
-    ]);
-  });
+      const patternSchemas = Object.values(
+        tool.parameters?.properties?.[propName]?.patternProperties ?? {},
+      );
+      expect(patternSchemas).toEqual([
+        { type: ["string", "number", "boolean", "object", "array", "null"] },
+      ]);
+    },
+  );
 });

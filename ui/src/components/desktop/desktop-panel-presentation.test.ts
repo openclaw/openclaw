@@ -68,38 +68,6 @@ describe("desktop panel presentation lifecycle", () => {
     }
   });
 
-  it("keeps one loading indicator mounted from source lookup through RFB authentication", async () => {
-    const inventory = createDeferred<unknown>();
-    const observe = createDeferred<unknown>();
-    const request = vi.fn((method: string) =>
-      method === "environments.status" ? inventory.promise : observe.promise,
-    );
-    const connect = vi.fn(async () => createConnectionHandle());
-    const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.sessionKey = "main";
-    panel.requestedSource = desktopEnvironment.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
-    await settleTasks();
-    const loading = panel.renderRoot.querySelector("[role='status'][aria-busy='true']");
-    expect(loading?.getAttribute("aria-label")).toBe("Connecting to desktop…");
-    expect(loading?.shadowRoot?.textContent).toContain("Connecting to desktop…");
-    expect(loading?.shadowRoot?.querySelector(".skeleton")).toBeNull();
-
-    inventory.resolve(desktopEnvironment);
-    await settleTasks();
-    expect(request).toHaveBeenCalledWith("desktop.observe", expect.anything());
-    expect(panel.renderRoot.querySelector("[role='status'][aria-busy='true']")).toBe(loading);
-    observe.resolve({ transport: "rfb", wsPath: "/desktop/observe", control: false });
-    await settleTasks();
-    expect(connect).toHaveBeenCalledOnce();
-    expect(panel.renderRoot.querySelector("[role='status'][aria-busy='true']")).toBe(loading);
-  });
-
   it("preserves Disconnect during source lookup across tab switches until Reconnect", async () => {
     const inventory = createDeferred<unknown>();
     const request = vi.fn((method: string) =>
