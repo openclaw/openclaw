@@ -7,15 +7,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { LabsPage } from "./labs-page.tsx";
 import { LAB_FEATURES } from "./labs-registry.ts";
-import "./labs-page.ts";
 
-type LabsPageElement = HTMLElement & { updateComplete: Promise<boolean>; requestUpdate(): void };
-
+type LabsPageElement = HTMLElement;
 type RuntimeConfigState = {
   connected: boolean;
   configLoading: boolean;
@@ -60,6 +58,11 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   return {
     state,
+    notify: () => {
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
     ensureLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
     patch: vi.fn(async (_input: { raw: Record<string, unknown>; note: string }) => true),
@@ -72,7 +75,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
 
 async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
   page: LabsPageElement;
-  provider: ApplicationContextProvider;
+  unmount(): void;
   runtimeConfig: ReturnType<typeof createRuntimeConfig>;
   gateway: ReturnType<typeof createGateway>;
 }> {
@@ -83,12 +86,12 @@ async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
     gateway: gateway.gateway,
     runtimeConfig,
   } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-labs-page") as LabsPageElement;
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  return { page, provider, runtimeConfig, gateway };
+  const provider = createSolidApplicationContextProvider(context);
+  const { container: page, unmount } = mountSolid(() => <LabsPage />, {
+    wrapper: provider.wrapper,
+  });
+  await waitForSolid(() => expect(page.querySelector(".settings-page")).not.toBeNull());
+  return { page, unmount, runtimeConfig, gateway };
 }
 
 function labRow(page: LabsPageElement, title: string) {
@@ -102,7 +105,7 @@ function labRow(page: LabsPageElement, title: string) {
 }
 
 function labToggle(page: LabsPageElement, title: string) {
-  const toggle = labRow(page, title).querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  const toggle = labRow(page, title).querySelector<HTMLInputElement>('input[role="switch"]');
   if (!toggle) {
     throw new Error(`${title} toggle not rendered`);
   }
@@ -141,7 +144,9 @@ describe("LabsPage", () => {
     const introLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(introLink?.textContent?.trim()).toBe("Learn more");
     expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
-    expect(page.querySelectorAll(".settings-row wa-switch")).toHaveLength(LAB_FEATURES.length);
+    expect(page.querySelectorAll('.settings-row input[role="switch"]')).toHaveLength(
+      LAB_FEATURES.length,
+    );
     expect(page.textContent).toContain("Code Mode");
     for (const title of [
       "Swarm",
@@ -207,7 +212,7 @@ describe("LabsPage", () => {
     select!.value = executor;
     select!.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { codeMode: expectedPatch } },
       note: "labs: update codeModeExecutor",
@@ -247,7 +252,7 @@ describe("LabsPage", () => {
       toggle.checked = false;
       toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
-      await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
       expect(runtimeConfig.patch).toHaveBeenCalledWith({
         raw: testCase.expectedPatch,
         note: testCase.note,
@@ -266,13 +271,13 @@ describe("LabsPage", () => {
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
 
     gateway.setPhase("reconnecting");
     gateway.setPhase("connected");
     pendingPatch.resolve(false);
     await pendingPatch.promise;
-    await page.updateComplete;
+    flush();
 
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(toggle.checked).toBe(false);
@@ -319,7 +324,7 @@ describe("LabsPage", () => {
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: testCase.expectedPatch,
       note: testCase.note,
@@ -329,7 +334,7 @@ describe("LabsPage", () => {
   it("shows default provenance", async () => {
     const inherited = await mountPage({});
     expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
-    inherited.provider.remove();
+    inherited.unmount();
 
     const overridden = await mountPage({
       tools: {
@@ -352,10 +357,10 @@ describe("LabsPage code mode enablement", () => {
     ["boolean shorthand false", false, { tools: { codeMode: false } }],
     ["auto shorthand", true, { tools: { codeMode: "auto" } }],
   ])("reads %s as %s", async (_label, expected, config) => {
-    const { page, provider } = await mountPage(config);
+    const { page, unmount } = await mountPage(config);
 
     expect(codeModeToggle(page).checked).toBe(expected);
-    provider.remove();
+    unmount();
   });
 
   it("writes explicit false when disabling the automatic default", async () => {
@@ -366,7 +371,7 @@ describe("LabsPage code mode enablement", () => {
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { codeMode: { enabled: false } } },
       note: "labs: update codeMode",
@@ -382,7 +387,7 @@ describe("LabsPage code mode enablement", () => {
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
@@ -415,11 +420,11 @@ describe("LabsPage tool search enablement", () => {
       { agents: { defaults: { model: "ollama/qwen3.5:4b" } } },
     ],
   ])("reads %s as %s", async (_label, expected, config) => {
-    const { page, provider, runtimeConfig } = await mountPage(config);
+    const { page, unmount, runtimeConfig } = await mountPage(config);
 
     expect(labToggle(page, "Tool Search for all models").checked).toBe(expected);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    provider.remove();
+    unmount();
   });
 
   it.each([
@@ -435,7 +440,7 @@ describe("LabsPage tool search enablement", () => {
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { toolSearch: { enabled: false } } },
       note: "labs: update toolSearch",
@@ -457,7 +462,7 @@ describe("LabsPage tool search enablement", () => {
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(labRow(page, "Tool Search for all models").textContent).toContain("Default: Enabled");
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { toolSearch: null } },
@@ -500,7 +505,7 @@ describe("LabsPage Decision assistance", () => {
         entries: { quiet: { decisionModel: "" } },
       },
     };
-    const { page, runtimeConfig, provider } = await mountPage(initial);
+    const { page, runtimeConfig, unmount } = await mountPage(initial);
     runtimeConfig.patch.mockImplementationOnce(async ({ raw }) => {
       const saved = applyMergePatch(initial, raw) as Record<string, unknown>;
       runtimeConfig.state.configSnapshot = { hash: "saved-hash", sourceConfig: saved };
@@ -509,20 +514,19 @@ describe("LabsPage Decision assistance", () => {
     const toggle = labToggle(page, "Decision assistance");
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    await page.updateComplete;
-    await page.updateComplete;
+    flush();
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { agents: { defaults: { experimental: { decisionAssistance: true } } } },
       note: "labs: update decisionAssistance",
     });
     const saved = runtimeConfig.state.configSnapshot!.sourceConfig;
-    provider.remove();
+    unmount();
     const reloaded = await mountPage(saved);
     const savedToggle = labToggle(reloaded.page, "Decision assistance");
     expect(savedToggle.checked).toBe(true);
     savedToggle.checked = false;
     savedToggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    await reloaded.page.updateComplete;
+    flush();
     expect(reloaded.runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { agents: { defaults: { experimental: { decisionAssistance: null } } } },
       note: "labs: update decisionAssistance",
@@ -533,7 +537,7 @@ describe("LabsPage Decision assistance", () => {
     }
     const reset = applyMergePatch(saved, resetRequest.raw) as Record<string, unknown>;
     expect(reset).toEqual(initial);
-    reloaded.provider.remove();
+    reloaded.unmount();
     const resetPage = await mountPage(reset);
     expect(labToggle(resetPage.page, "Decision assistance").checked).toBe(false);
   });
@@ -545,7 +549,7 @@ describe("LabsPage Decision assistance", () => {
     const toggle = labToggle(page, "Decision assistance");
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    await page.updateComplete;
+    flush();
     expect(toggle.checked).toBe(true);
     expect(toggle.hasAttribute("disabled")).toBe(true);
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
@@ -555,7 +559,7 @@ describe("LabsPage Decision assistance", () => {
     }
     pending.resolve(false);
     await pending.promise;
-    await page.updateComplete;
+    flush();
     expect(toggle.checked).toBe(false);
     expect(page.querySelector('[role="alert"]') !== null).toBe(outcome === "failure");
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();
@@ -585,10 +589,10 @@ describe("LabsPage Decision assistance", () => {
       if (state === "stale") {
         invalidateConfigConnection(runtimeConfig.state);
       }
-      page.requestUpdate();
-      await page.updateComplete;
+      runtimeConfig.notify();
+      flush();
       const row = labRow(page, "Decision assistance");
-      expect(row.querySelector("wa-switch")).toBeNull();
+      expect(row.querySelector('input[role="switch"]')).toBeNull();
       expect(row.textContent).toContain(
         state === "loading" ? "Loading setting" : "Couldn’t load this setting",
       );
@@ -598,8 +602,8 @@ describe("LabsPage Decision assistance", () => {
         row.querySelector<HTMLButtonElement>("button")!.click();
         expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
         runtimeConfig.state.lastError = null;
-        page.requestUpdate();
-        await page.updateComplete;
+        runtimeConfig.notify();
+        flush();
         expect(labToggle(page, "Decision assistance").checked).toBe(true);
       }
     },
