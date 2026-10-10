@@ -106,6 +106,10 @@ export async function ensureLoaded(
     /** A disabled writer commits only its changed rows, so quarantine cleanup
      *  must not turn its fresh read back into a full-store replacement. */
     deferQuarantinePersist?: boolean;
+    /** A teardown settlement writes through the worker's authoritative rows after the
+     *  receipt authority sealed new effects; a sealed store cannot be reloaded, so keep
+     *  the resident snapshot and let the committed rows refresh it. */
+    settlement?: boolean;
   },
 ) {
   // Keep scheduler-local pacing/catch-up mutations while the publication fact
@@ -114,7 +118,8 @@ export async function ensureLoaded(
     const loadedRevision = loadedCronStoreRevisions.get(state)?.revision;
     if (
       loadedRevision === undefined ||
-      loadedRevision === getCronJobsStoreRevision(state.deps.storePath)
+      loadedRevision === getCronJobsStoreRevision(state.deps.storePath) ||
+      opts?.settlement
     ) {
       return;
     }

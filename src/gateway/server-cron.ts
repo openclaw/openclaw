@@ -91,6 +91,7 @@ import {
   type CronExitWatcherHandlers,
   type CronExitWatchers,
 } from "./cron-exit-watchers.js";
+import { createCronStreamServiceBindings } from "./cron-stream-service-bindings.js";
 import { createCronStreamWatchers, resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createScheduledGatewayRunner,
@@ -944,20 +945,7 @@ export function buildGatewayCronService(params: {
     getDefaultAgentId: () => cron.getDefaultAgentId(),
     scheduler: params.scheduler,
     getProcessSupervisor,
-    updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
-      return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
-    },
-    retireSource: async (jobId, streamScheduleKey, streamSourceIdentity) =>
-      await cron.retireExternalStreamSource(jobId, streamScheduleKey, streamSourceIdentity),
-    updateCounters: async (jobId, counters) => {
-      await cron.updateExternalCounters(jobId, counters);
-    },
-    recordFailure: async (jobId, error, patch, streamScheduleKey, streamSourceIdentity) => {
-      await cron.recordExternalFailure(jobId, error, patch, {
-        scheduleKey: streamScheduleKey,
-        identity: streamSourceIdentity,
-      });
-    },
+    ...createCronStreamServiceBindings(cron),
     fireBatch: (job, batch, streamScheduleKey, streamSourceIdentity) =>
       runWithGatewayIndependentRootWorkAdmission(
         async () =>

@@ -25,16 +25,20 @@ import { armTimer } from "./timer.js";
 
 type ExternalOutcome = CronRuntimeMutationContracts["cron.mutateExternalState"]["outcome"];
 
+/** Shutdown teardown settles a running source after the receipt authority sealed new effects. */
+export type CronExternalStateWriteOptions = { settlement?: boolean };
+
 async function mutateExternalState(
   state: CronServiceState,
   jobId: string,
   requested: CronExternalStateChange,
+  options?: CronExternalStateWriteOptions,
 ): Promise<CronJob | undefined> {
   const source = captureCronJobMutationSource(state);
   const change = structuredClone(requested);
   return await locked(state, async () => {
     source.assertCurrent();
-    await ensureLoaded(state);
+    await ensureLoaded(state, options?.settlement ? { settlement: true } : undefined);
     source.assertCurrent();
     if (change.kind === "failure") {
       const job = findJobOrThrow(state, jobId);
@@ -56,6 +60,7 @@ async function mutateExternalState(
         context: source.context,
         type: "cron.mutateExternalState",
         input: { storeKey: source.storeKey, jobId, change },
+        ...(options?.settlement ? { settlement: true } : {}),
         assertCurrent: () => source.assertCurrent(),
         prepare(routing) {
           if (routing.id !== jobId) {
@@ -180,13 +185,15 @@ export async function updateExternalState(
   scheduleKey: string,
   identity: string,
   statePatch: Partial<CronJob["state"]>,
+  options?: CronExternalStateWriteOptions,
 ): Promise<boolean> {
   return (
-    (await mutateExternalState(state, id, {
-      kind: "state",
-      source: { scheduleKey, identity },
-      statePatch,
-    })) !== undefined
+    (await mutateExternalState(
+      state,
+      id,
+      { kind: "state", source: { scheduleKey, identity }, statePatch },
+      options,
+    )) !== undefined
   );
 }
 
@@ -195,12 +202,18 @@ export async function retireExternalStreamSource(
   id: string,
   scheduleKey: string,
   identity: string,
+  options?: CronExternalStateWriteOptions,
 ): Promise<string | undefined> {
-  const job = await mutateExternalState(state, id, {
-    kind: "retire",
-    source: { scheduleKey, identity },
-    nextIdentity: createCronStreamSourceIdentity(),
-  });
+  const job = await mutateExternalState(
+    state,
+    id,
+    {
+      kind: "retire",
+      source: { scheduleKey, identity },
+      nextIdentity: createCronStreamSourceIdentity(),
+    },
+    options,
+  );
   return job?.state.streamSourceIdentity;
 }
 
@@ -209,6 +222,7 @@ export async function updateExternalCounters(
   state: CronServiceState,
   id: string,
   counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
+  options?: CronExternalStateWriteOptions,
 ): Promise<void> {
-  await mutateExternalState(state, id, { kind: "counters", counters });
+  await mutateExternalState(state, id, { kind: "counters", counters }, options);
 }

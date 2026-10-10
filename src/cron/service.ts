@@ -223,6 +223,7 @@ export class CronService implements CronServiceContract {
     streamScheduleKey: string,
     streamSourceIdentity: string,
     statePatch: Partial<CronJob["state"]>,
+    options?: streamOps.CronExternalStateWriteOptions,
   ): Promise<boolean> {
     return await streamOps.updateExternalState(
       this.state,
@@ -230,6 +231,7 @@ export class CronService implements CronServiceContract {
       streamScheduleKey,
       streamSourceIdentity,
       statePatch,
+      options,
     );
   }
 
@@ -237,20 +239,23 @@ export class CronService implements CronServiceContract {
     id: string,
     streamScheduleKey: string,
     streamSourceIdentity: string,
+    options?: streamOps.CronExternalStateWriteOptions,
   ): Promise<string | undefined> {
     return await streamOps.retireExternalStreamSource(
       this.state,
       id,
       streamScheduleKey,
       streamSourceIdentity,
+      options,
     );
   }
 
   async updateExternalCounters(
     id: string,
     counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
+    options?: streamOps.CronExternalStateWriteOptions,
   ): Promise<void> {
-    await streamOps.updateExternalCounters(this.state, id, counters);
+    await streamOps.updateExternalCounters(this.state, id, counters, options);
   }
 
   getDefaultAgentId(): string | undefined {

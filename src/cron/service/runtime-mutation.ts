@@ -37,6 +37,8 @@ type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
   onRolledBackConflict?: (receipt: CronRunReceipt) => void;
   onRolledBackReceiptRevision?: (refusal: CronReceiptRevisionRefusal) => never;
   onRolledBackMutation?: (refusal: CronJobMutationRefusal) => never;
+  /** Settles an already-admitted effect; the caller qualifies it, never a stray late write. */
+  settlement?: boolean;
 };
 
 /** One settlement owner serves typed cron mutations; callbacks and database handles stay local. */
@@ -48,7 +50,9 @@ export function runCronRuntimeMutation<Type extends CronRuntimeMutationType>(
     (authority) => runEnrolledCronRuntimeMutation(params, authority),
     {
       settlement:
-        params.type === "cron.finishReceipt" || params.type === "cron.releaseReservations",
+        params.settlement === true ||
+        params.type === "cron.finishReceipt" ||
+        params.type === "cron.releaseReservations",
     },
   );
 }
