@@ -1002,16 +1002,6 @@ function detachCurrentSharedClient(
   return Boolean(entry && getSharedCodexAppServerClientState().clients.delete(entry.key));
 }
 
-export function clearSharedCodexAppServerClientIfCurrent(
-  client: CodexAppServerClient | undefined,
-): boolean {
-  if (!detachCurrentSharedClient(client)) {
-    return false;
-  }
-  client.close();
-  return true;
-}
-
 /** Captures the physical client lifetime for passive catalog reads. */
 export function captureSharedCodexAppServerCatalogLifetime(
   client: CodexAppServerClient,

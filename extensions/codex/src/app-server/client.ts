@@ -146,19 +146,6 @@ function hasRequestWriteState(error: unknown, code: string, written: boolean): b
   );
 }
 
-export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  if (isCodexAppServerIndeterminateTransportError(error)) {
-    return true;
-  }
-  return (
-    error.message === "codex app-server client is closed" ||
-    error.message.startsWith("codex app-server exited:")
-  );
-}
-
 /** Runtime identity returned by the Codex app-server initialize handshake. */
 export type CodexAppServerRuntimeIdentity = ReturnType<typeof buildCodexAppServerRuntimeIdentity>;
 export { isUnsupportedCodexAppServerVersionError } from "./client-initialize.js";

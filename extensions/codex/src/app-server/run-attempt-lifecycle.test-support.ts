@@ -1,6 +1,5 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
@@ -15,19 +14,6 @@ export function startClockControlledAttempt(params: EmbeddedRunAttemptParams) {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const run = runCodexAppServerAttempt(params);
   return { run, started: run.waitForTurnAccepted() };
-}
-
-export function advanceAttemptRetryBackoff() {
-  const sleep = runtimeEnv.sleepWithAbort;
-  vi.spyOn(runtimeEnv, "sleepWithAbort").mockImplementation(
-    async (delayMs, signal, sleepOptions) => {
-      // Advance the owned backoff on the same clock as the attempt deadline.
-      await Promise.all([
-        sleep(delayMs, signal, sleepOptions),
-        vi.advanceTimersByTimeAsync(delayMs),
-      ]);
-    },
-  );
 }
 
 export function observeAttemptProjectionReady() {

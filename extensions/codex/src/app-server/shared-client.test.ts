@@ -127,7 +127,6 @@ import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let clearSharedCodexAppServerClientAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientAndWait;
-let clearSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrent;
 let clearSharedCodexAppServerClientIfCurrentAndUnclaimed: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrentAndUnclaimed;
 let clearSharedCodexAppServerClientIfCurrentAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrentAndWait;
 let createIsolatedCodexAppServerClient: typeof import("./shared-client.js").createIsolatedCodexAppServerClient;
@@ -253,7 +252,6 @@ describe("shared Codex app-server client", () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
     ({
       clearSharedCodexAppServerClientAndWait,
-      clearSharedCodexAppServerClientIfCurrent,
       clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
       clearSharedCodexAppServerClientIfCurrentAndWait,
       createIsolatedCodexAppServerClient,
@@ -674,7 +672,6 @@ describe("shared Codex app-server client", () => {
     expect(secondClient).toBe(firstClient);
     expect(desktop.process.stdin.destroyed).toBe(true);
     expect(pluginLocal.process.stdin.destroyed).toBe(false);
-    expect(clearSharedCodexAppServerClientIfCurrent(desktop.client)).toBe(false);
     expect(
       retireSharedCodexAppServerClientIfCurrent(desktop.client, { failActiveLeases: true }),
     ).toBeUndefined();
@@ -699,7 +696,6 @@ describe("shared Codex app-server client", () => {
     expect(
       retireSharedCodexAppServerClientIfCurrent(pluginLocal.client, { failActiveLeases: true }),
     ).toEqual({ activeLeases: 0, closed: true });
-    expect(clearSharedCodexAppServerClientIfCurrent(desktop.client)).toBe(false);
     expect(
       retireSharedCodexAppServerClientIfCurrent(desktop.client, { failActiveLeases: true }),
     ).toBeUndefined();
@@ -1147,7 +1143,12 @@ describe("shared Codex app-server client", () => {
       expect(first.stdinDestroyed).toBe(true);
       expect(replacement.stdinDestroyed).toBe(false);
       expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
-      expect(clearSharedCodexAppServerClientIfCurrent(replacement.client)).toBe(true);
+      expect(clearSharedCodexAppServerClientIfCurrentAndUnclaimed(replacement.client)).toEqual({
+        found: true,
+        closed: true,
+        activeLeases: 0,
+        pendingAcquires: 0,
+      });
       expect(replacement.stdinDestroyed).toBe(true);
     },
   );
@@ -1594,7 +1595,7 @@ describe("shared Codex app-server client", () => {
     expect(second.process.kill).not.toHaveBeenCalled();
   });
 
-  it("only clears the shared client that is still current", async () => {
+  it("clears only an unclaimed current shared client", async () => {
     const first = createClientHarness();
     const second = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start")
@@ -1606,7 +1607,12 @@ describe("shared Codex app-server client", () => {
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
-    expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(true);
+    expect(clearSharedCodexAppServerClientIfCurrentAndUnclaimed(first.client)).toEqual({
+      found: true,
+      closed: true,
+      activeLeases: 0,
+      pendingAcquires: 0,
+    });
     expect(first.process.stdin.destroyed).toBe(true);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
@@ -1614,9 +1620,19 @@ describe("shared Codex app-server client", () => {
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
-    expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(false);
+    expect(clearSharedCodexAppServerClientIfCurrentAndUnclaimed(first.client)).toEqual({
+      found: false,
+      closed: false,
+      activeLeases: 0,
+      pendingAcquires: 0,
+    });
     expect(second.process.kill).not.toHaveBeenCalled();
-    expect(clearSharedCodexAppServerClientIfCurrent(second.client)).toBe(true);
+    expect(clearSharedCodexAppServerClientIfCurrentAndUnclaimed(second.client)).toEqual({
+      found: true,
+      closed: true,
+      activeLeases: 0,
+      pendingAcquires: 0,
+    });
     expect(second.process.stdin.destroyed).toBe(true);
   });
 

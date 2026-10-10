@@ -414,7 +414,6 @@ export {
   toolExecuteMock,
   handleCodexAppServerApprovalRequestMock,
   resolveCodexProviderWebSearchSupportForClientMock,
-  withCodexAppServerClientRequestScopeMock,
   runCodexAppServerSideQuestion,
   runCodexAppServerSideQuestionImpl,
   createFakeClient,
@@ -424,7 +423,6 @@ export {
   turnCompleted,
   sideParams,
   TEST_HOST_CAPABILITIES,
-  type RequestScopeParams,
 };
 
 export async function runSideQuestionWithManagedWebSearchCall(

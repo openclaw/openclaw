@@ -32,7 +32,6 @@ const sharedClientMocks = vi.hoisted(() => ({
   retireSharedCodexAppServerClientIfCurrent: vi.fn(
     (_client: unknown): { activeLeases: number; closed: boolean } | undefined => undefined,
   ),
-  clearSharedCodexAppServerClientIfCurrent: vi.fn((_client: unknown) => false),
 }));
 
 const publicBindingMocks = vi.hoisted(() => ({
@@ -414,8 +413,6 @@ describe("codex conversation binding", () => {
       closed: false,
     });
     sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReset();
-    sharedClientMocks.clearSharedCodexAppServerClientIfCurrent.mockReset();
-    sharedClientMocks.clearSharedCodexAppServerClientIfCurrent.mockReturnValue(false);
     execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
     execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
     agentRuntimeMocks.ensureAuthProfileStore.mockReset();

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startFixtureAttempt } from "./attempt-startup-retry.test-support.js";
-import { CodexAppServerClient, isCodexAppServerConnectionClosedError } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
@@ -206,7 +206,6 @@ describe("Codex app-server startup retry", () => {
             getLeasedSharedCodexAppServerClient,
           ).catch((caught: unknown) => caught);
           expect(error).toBeInstanceOf(Error);
-          expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
           expect((error as Error).message).toContain(
             failure === "commit" ? "512-row limit" : "Process inspection exceeded its deadline",
           );
@@ -360,7 +359,7 @@ describe("Codex app-server startup retry", () => {
     expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
   });
 
-  it("preserves spawn failure without classifying it as a retryable exit", async () => {
+  it("preserves spawn failure without retrying", async () => {
     const fixture = await createStartupFailureFixture("refusal");
     const command = path.join(fixture.root, "missing-executable");
     fixture.pluginConfig.appServer.command = command;
@@ -371,7 +370,6 @@ describe("Codex app-server startup retry", () => {
         command,
         cause: expect.objectContaining({ code: "ENOENT" }),
       });
-      expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
       await expect(startFixtureAttempt(fixture)).rejects.toBe(error);
       expect(spawnSpy.mock.calls.filter(([program]) => program === command)).toHaveLength(1);
     } finally {
