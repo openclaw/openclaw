@@ -151,13 +151,14 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         if (current) {
           assertStateDatabaseReadAllowed(databasePath);
           assertAdmission?.();
-          // SAFETY: This branch handles only the observe command's observation output.
-          return observationFromCachedPluginState(
+          const observation = observationFromCachedPluginState(
             identity,
             databasePath,
             command.input,
             current,
-          ) as PluginStateWorkerRequests[Key]["output"];
+          );
+          // SAFETY: This branch handles only the observe command's observation output.
+          return observation as PluginStateWorkerRequests[Key]["output"];
         }
         installObservation = preparePluginStateObservationCacheRead(identity, command.input);
       } else if (command.type !== "pluginState.observe" && current) {
@@ -191,8 +192,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         throw restorePluginStateWorkerFailure(result.error);
       }
       if (command.type === "pluginState.observe") {
-        // SAFETY: The command discriminant fixes this worker result's private row envelope.
         const observation =
+          // SAFETY: The command discriminant fixes this worker result's private row envelope.
           result.value as PluginStateWorkerRequests["pluginState.observe"]["output"];
         installObservation?.(observation.row);
       }
