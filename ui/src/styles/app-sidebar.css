@@ -71,7 +71,8 @@
   }
 
   > .sidebar-recent-session__aside {
-    inset: auto 2px 1px auto;
+    /* layout.css owns the horizontal offset beside an in-flow child toggle. */
+    inset-block: auto 1px;
     transform: none;
   }
 
