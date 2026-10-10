@@ -8,7 +8,7 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import "./chat-skill-learned-notice.tsx";
+import "./chat-skill-learned-notice.ts";
 
 export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
   const archiveActor = activeSession?.archivedBy;
@@ -97,46 +97,33 @@ export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) 
   `;
 }
 
-const skillNoticeHosts = new Map<
-  string,
-  HTMLElementTagNameMap["openclaw-chat-skill-learned-notice"]
->();
-
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
-  let skillNotice: HTMLElementTagNameMap["openclaw-chat-skill-learned-notice"] | undefined;
   if (item.skillChanges) {
-    skillNotice = skillNoticeHosts.get(item.key);
-    if (!skillNotice) {
-      const host = document.createElement("openclaw-chat-skill-learned-notice");
-      host.onDisconnect = () => {
-        if (skillNoticeHosts.get(item.key) === host) {
-          skillNoticeHosts.delete(item.key);
-        }
-      };
-      skillNoticeHosts.set(item.key, host);
-      skillNotice = host;
-    }
-    skillNotice.notice = item.skillChanges;
+    return html`
+      <div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+        <openclaw-chat-skill-learned-notice
+          .notice=${item.skillChanges}
+        ></openclaw-chat-skill-learned-notice>
+      </div>
+    `;
   }
-  const body =
-    !skillNotice && item.text
-      ? html`
-          <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
-            ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
-          </div>
-        `
-      : nothing;
+  const body = item.text
+    ? html`
+        <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
+          ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
+        </div>
+      `
+    : nothing;
   return html`
     <div
-      class="chat-notice ${skillNotice ? "chat-notice--skill" : item.tone === "danger" ? "chat-notice--danger callout danger" : ""}"
+      class="chat-notice ${item.tone === "danger" ? "chat-notice--danger callout danger" : ""}"
       data-chat-row-key=${item.key}
       data-ts=${String(item.timestamp)}
-      role=${!skillNotice && item.tone === "danger" ? "alert" : nothing}
+      role=${item.tone === "danger" ? "alert" : nothing}
     >
-      ${skillNotice ?? nothing}
-      ${!skillNotice && item.label ? renderSystemLine({ icon: item.icon, label: item.label }) : nothing}
+      ${item.label ? renderSystemLine({ icon: item.icon, label: item.label }) : nothing}
       ${
-        !skillNotice && item.collapsedBody && item.text
+        item.collapsedBody && item.text
           ? html`
               <details class="chat-notice__collapse">
                 <summary class="chat-notice__toggle">${t("chat.systemNotice.showContent")}</summary>

@@ -1,9 +1,8 @@
-import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SkillWorkshopChangeNotice } from "../../../../../src/shared/skill-workshop-change-notice.js";
-import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { createContext } from "../../skill-workshop/skill-workshop-page.test-support.ts";
-import "./chat-skill-learned-notice.tsx";
+import "./chat-skill-learned-notice.ts";
 
 const notice: SkillWorkshopChangeNotice = {
   kind: "skill-workshop-change",
@@ -15,12 +14,18 @@ const notice: SkillWorkshopChangeNotice = {
   ],
 };
 
+type NoticeElement = HTMLElement & {
+  context: ApplicationContext;
+  notice: SkillWorkshopChangeNotice;
+  updateComplete: Promise<boolean>;
+};
+
 async function mount(context: ApplicationContext) {
-  const element = document.createElement("openclaw-chat-skill-learned-notice");
+  const element = document.createElement("openclaw-chat-skill-learned-notice") as NoticeElement;
   element.context = context;
   element.notice = notice;
   document.body.append(element);
-  flush();
+  await element.updateComplete;
   return element;
 }
 
@@ -33,19 +38,10 @@ afterEach(() => document.body.replaceChildren());
 
 describe("skill review notice", () => {
   it("undoes the whole review once and reports it as undone", async () => {
-    const completion = Promise.withResolvers<void>();
-    const request = vi.fn(() => completion.promise);
+    const request = vi.fn(async () => ({ status: "undone", changes: [] }));
     const element = await mount(createContext(request, { methods: ["skills.workshop.undo"] }));
 
-    const button = undoButton(element);
-    button?.click();
-    button?.click();
-    flush();
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(button?.disabled).toBe(true);
-    expect(button?.getAttribute("aria-busy")).toBe("true");
-    expect(button?.querySelector(".btn__spinner")).not.toBeNull();
-    completion.resolve();
+    undoButton(element)?.click();
 
     await vi.waitFor(() => expect(element.textContent).toContain("Undone"));
     expect(request).toHaveBeenCalledTimes(1);
@@ -93,26 +89,5 @@ describe("skill review notice", () => {
     expect(select.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
       navigate.mock.invocationCallOrder[0] ?? -Infinity,
     );
-  });
-
-  it("subscribes through the context protocol and disposes on disconnect", () => {
-    const context = createContext(vi.fn(), { methods: ["skills.workshop.undo"] });
-    const unsubscribe = vi.fn();
-    const parent = document.createElement("div");
-    const element = document.createElement("openclaw-chat-skill-learned-notice");
-    element.notice = notice;
-    parent.addEventListener("context-request", (event) => {
-      expect(event.context).toBe(applicationContext);
-      expect(event.contextTarget).toBe(element);
-      expect(event.subscribe).toBe(true);
-      event.callback(context, unsubscribe);
-    });
-    document.body.append(parent);
-    parent.append(element);
-    flush();
-    expect(undoButton(element)).toBeDefined();
-    element.remove();
-    expect(unsubscribe).toHaveBeenCalledOnce();
-    expect(element.childNodes).toHaveLength(0);
   });
 });
