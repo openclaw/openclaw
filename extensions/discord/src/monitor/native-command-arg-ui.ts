@@ -58,13 +58,12 @@ function parseDiscordCommandArgData(
   };
 }
 
-async function handleDiscordCommandArgInteraction(params: {
-  interaction: ButtonInteraction;
-  data: ComponentData;
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}) {
+async function handleDiscordCommandArgInteraction(
+  params: DiscordCommandArgButtonParams & {
+    interaction: ButtonInteraction;
+    data: ComponentData;
+  },
+) {
   const { interaction, data, ctx } = params;
   const clearWithMessage = async (content: string) =>
     await params.safeInteractionCall("command arg update", () =>
@@ -114,27 +113,22 @@ type DiscordCommandArgButtonParams = {
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 };
 
-class DiscordCommandArgButton extends Button {
-  label: string;
-  customId: string;
-  override style: ButtonStyle;
+function createDiscordCommandArgButton(
+  params: DiscordCommandArgButtonParams & {
+    label: string;
+    customId: string;
+    style?: ButtonStyle;
+  },
+): Button {
+  return new (class extends Button {
+    label = params.label;
+    customId = params.customId;
+    override style = params.style ?? ButtonStyle.Secondary;
 
-  constructor(
-    private readonly params: DiscordCommandArgButtonParams & {
-      label: string;
-      customId: string;
-      style?: ButtonStyle;
-    },
-  ) {
-    super();
-    this.label = params.label;
-    this.customId = params.customId;
-    this.style = params.style ?? ButtonStyle.Secondary;
-  }
-
-  override async run(interaction: ButtonInteraction, data: ComponentData) {
-    await handleDiscordCommandArgInteraction({ ...this.params, interaction, data });
-  }
+    override async run(interaction: ButtonInteraction, data: ComponentData) {
+      await handleDiscordCommandArgInteraction({ ...params, interaction, data });
+    }
+  })();
 }
 
 export function buildDiscordCommandArgMenu(
@@ -151,18 +145,17 @@ export function buildDiscordCommandArgMenu(
   const { command, menu, userId, ...buttonContext } = params;
   const commandLabel = command.nativeName ?? command.key;
   const rows = chunkItems(menu.choices, 4).map((choices) => {
-    const buttons = choices.map(
-      (choice) =>
-        new DiscordCommandArgButton({
-          label: choice.label,
-          customId: buildDiscordCommandArgCustomId({
-            command: commandLabel,
-            arg: menu.arg.name,
-            value: choice.value,
-            userId,
-          }),
-          ...buttonContext,
+    const buttons = choices.map((choice) =>
+      createDiscordCommandArgButton({
+        label: choice.label,
+        customId: buildDiscordCommandArgCustomId({
+          command: commandLabel,
+          arg: menu.arg.name,
+          value: choice.value,
+          userId,
         }),
+        ...buttonContext,
+      }),
     );
     return new Row(buttons);
   });
@@ -173,7 +166,7 @@ export function buildDiscordCommandArgMenu(
 export function createDiscordCommandArgFallbackButton(
   params: DiscordCommandArgButtonParams,
 ): Button {
-  return new DiscordCommandArgButton({
+  return createDiscordCommandArgButton({
     ...params,
     label: "cmdarg",
     customId: "cmdarg:seed=1",

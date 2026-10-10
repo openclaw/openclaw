@@ -1,7 +1,6 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
@@ -31,6 +30,7 @@ import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { normalizePositiveLimit } from "./limits.js";
 import {
   getReadPathVariants,
@@ -38,6 +38,7 @@ import {
   resolveLocalPathToCwd,
   resolveToCwd,
 } from "./path-utils.js";
+import { readLocalFile } from "./read-file.js";
 import { createBoundedReadTextPage } from "./read-page.js";
 import { createReadToolDetails } from "./read-tool-contract.js";
 import {
@@ -118,7 +119,7 @@ interface ReadOperations {
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
   decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
-  readFile: (absolutePath: string) => Promise<Buffer>;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string) => Promise<void>;
   /** Detect image MIME type, return null or undefined for non-images */
@@ -131,7 +132,7 @@ interface ReadOperations {
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
   decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
-  readFile: async (filePath) => (await readRegularFile({ filePath })).buffer,
+  readFile: readLocalFile,
   access: assertLocalReadableFile,
 };
 
@@ -408,12 +409,10 @@ export function createReadToolDefinition(
                 async () => {
                   const absoluteInputPath = await inputPathResolution;
                   const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
-                  if (signal?.aborted) {
-                    throw new Error("Operation aborted");
-                  }
+                  assertFileToolNotAborted(signal);
                   return {
                     ...resolved,
-                    buffer: await ops.readFile(resolved.absolutePath),
+                    buffer: await ops.readFile(resolved.absolutePath, signal),
                   };
                 },
               );
@@ -577,9 +576,7 @@ export function createReadToolDefinition(
               ];
             }
 
-            if (signal?.aborted) {
-              throw new Error("Operation aborted");
-            }
+            assertFileToolNotAborted(signal);
             return { content, details: createReadToolDetails(content, textDetails) };
           } catch (error: unknown) {
             throw normalizeReadError(error, path);

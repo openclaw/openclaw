@@ -1,4 +1,3 @@
-/** Prepared plugin metadata handoff for runtime model normalization. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -30,10 +29,7 @@ import {
 
 export function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
-  if (!normalized || normalized === "auto" || normalized === "default") {
-    return "openclaw";
-  }
-  return normalized;
+  return !normalized || normalized === "auto" || normalized === "default" ? "openclaw" : normalized;
 }
 
 export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;

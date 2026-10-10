@@ -94,9 +94,22 @@ internal fun segmentChatMarkdown(
   }
 
   val blocks = mutableListOf<ChatMarkdownSourceBlock>()
+
+  fun appendMarkdownBlock(
+    start: Int,
+    end: Int,
+  ) {
+    var contentStart = start
+    var contentEnd = end
+    while (contentStart < contentEnd && lines[contentStart].isBlank()) contentStart += 1
+    while (contentEnd > contentStart && lines[contentEnd - 1].isBlank()) contentEnd -= 1
+    if (contentStart < contentEnd) {
+      blocks.add(ChatMarkdownSourceBlock.Markdown(lines.subList(contentStart, contentEnd).joinToString("\n")))
+    }
+  }
   var proseStart = 0
   for (extraction in extractions) {
-    appendMarkdownBlock(lines, proseStart, extraction.lines.first, blocks)
+    appendMarkdownBlock(proseStart, extraction.lines.first)
     blocks.add(
       if (extraction.latex.toByteArray(Charsets.UTF_8).size <= CHAT_MATH_MAX_BYTES) {
         ChatMarkdownSourceBlock.Math(extraction.latex)
@@ -106,7 +119,7 @@ internal fun segmentChatMarkdown(
     )
     proseStart = extraction.lines.last + 1
   }
-  appendMarkdownBlock(lines, proseStart, lines.size, blocks)
+  appendMarkdownBlock(proseStart, lines.size)
   return blocks
 }
 
@@ -147,21 +160,6 @@ private fun collectProtectedInlineLines(
       lines.addAll(checkNotNull(spannedLines.minOrNull())..checkNotNull(spannedLines.maxOrNull()))
     }
     collectProtectedInlineLines(node.firstChild, lines)
-  }
-}
-
-private fun appendMarkdownBlock(
-  lines: List<String>,
-  start: Int,
-  end: Int,
-  blocks: MutableList<ChatMarkdownSourceBlock>,
-) {
-  var contentStart = start
-  var contentEnd = end
-  while (contentStart < contentEnd && lines[contentStart].isBlank()) contentStart += 1
-  while (contentEnd > contentStart && lines[contentEnd - 1].isBlank()) contentEnd -= 1
-  if (contentStart < contentEnd) {
-    blocks.add(ChatMarkdownSourceBlock.Markdown(lines.subList(contentStart, contentEnd).joinToString("\n")))
   }
 }
 

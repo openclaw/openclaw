@@ -34,6 +34,7 @@ import * as kyselyCache from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const log = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
@@ -136,22 +137,17 @@ describe("deferred configured-plugin migrations", () => {
             },
           },
           async () => {
-            const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-            const spy = vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, attachment) =>
-                createAdmission((request, grant) => {
-                  if (
-                    request.stage === stage &&
-                    isRecord(request.facts) &&
-                    request.facts.kind === "state-lease"
-                  ) {
-                    observed = true;
-                    current = false;
-                  }
-                  return admit(request, grant);
-                }, attachment),
-              );
+            const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+              if (
+                request.stage === stage &&
+                isRecord(request.facts) &&
+                request.facts.kind === "state-lease"
+              ) {
+                observed = true;
+                current = false;
+              }
+              return admit(request, grant);
+            });
             try {
               await recordDeferredPluginMigrations({ env, pending: [pending] });
             } finally {

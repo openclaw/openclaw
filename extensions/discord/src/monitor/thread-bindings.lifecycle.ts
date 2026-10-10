@@ -46,8 +46,6 @@ export type AcpThreadBindingReconciliationResult = {
   staleSessionKeys: string[];
 };
 
-type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
-
 type AcpThreadBindingHealthProbe = (params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -55,7 +53,7 @@ type AcpThreadBindingHealthProbe = (params: {
   binding: ThreadBindingRecord;
   session: AcpSessionStoreEntry;
 }) => Promise<{
-  status: AcpThreadBindingHealthStatus;
+  status: "healthy" | "stale" | "uncertain";
   reason?: string;
 }>;
 
@@ -71,8 +69,7 @@ export function listThreadBindingsBySessionKey(params: {
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }): ThreadBindingRecord[] {
-  const ids = resolveBindingIdsForTargetSession(params);
-  return ids
+  return resolveBindingIdsForTargetSession(params)
     .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
     .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
 }
@@ -97,6 +94,13 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     return null;
   }
   const managerToken = getThreadBindingToken(manager.accountId);
+  const resolveChannel = (threadId: string) =>
+    resolveChannelIdForBinding({
+      cfg: params.cfg,
+      accountId: manager.accountId,
+      token: managerToken,
+      threadId,
+    });
 
   const requesterThreadId = normalizeOptionalStringifiedId(params.threadId);
   let channelId = "";
@@ -105,13 +109,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     if (existing?.channelId?.trim()) {
       channelId = existing.channelId.trim();
     } else {
-      channelId =
-        (await resolveChannelIdForBinding({
-          cfg: params.cfg,
-          accountId: manager.accountId,
-          token: managerToken,
-          threadId: requesterThreadId,
-        })) ?? "";
+      channelId = (await resolveChannel(requesterThreadId)) ?? "";
     }
   }
   if (!channelId) {
@@ -124,13 +122,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
       if (!target || target.kind !== "channel") {
         return null;
       }
-      channelId =
-        (await resolveChannelIdForBinding({
-          cfg: params.cfg,
-          accountId: manager.accountId,
-          token: managerToken,
-          threadId: target.id,
-        })) ?? "";
+      channelId = (await resolveChannel(target.id)) ?? "";
     } catch {
       return null;
     }
@@ -272,16 +264,12 @@ async function reconcileAcpThreadBindings(
       prepared.assertCurrent();
     }
     const session = prepared ? prepared.session : readAcpSessionEntry(input);
-    if (!session) {
-      staleBindings.push(binding);
-      continue;
-    }
     // Session store read failures are transient; never auto-unbind on uncertain reads.
-    if (session.storeReadFailed) {
+    if (session?.storeReadFailed) {
       continue;
     }
 
-    if (!session.acp) {
+    if (!session?.acp) {
       staleBindings.push(binding);
       continue;
     }

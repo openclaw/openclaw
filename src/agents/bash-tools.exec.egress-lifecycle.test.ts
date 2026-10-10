@@ -2,7 +2,15 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createServer, type Server } from "node:https";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -33,6 +41,34 @@ import {
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 
+// mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
+vi.mock("../auto-reply/dispatch.js", () => ({
+  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
+    typeof dispatchInboundMessageWithRoutedChannelDispatcher
+  >(async ({ replyOptions }) => {
+    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "completion lifecycle");
+    const signal = expectDefined(lifecycle.abortSignal, "completion cancellation");
+    lifecycle.onDeferred?.();
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      try {
+        lifecycle.onAbandoned?.();
+      } finally {
+        lifecycle.onSettled?.();
+      }
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+    return {
+      deferredToActiveRun: "followup",
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    };
+  }),
+}));
+
 const sessionKey = "agent:probe:egress-lifecycle";
 let state: OpenClawTestState;
 let proxy: SecretEgressProxyHandle;
@@ -41,6 +77,7 @@ let target: string;
 let config: OpenClawConfig;
 const admissions: PreparedAgentRunAdmission[] = [];
 const processIds: string[] = [];
+const completions: sessionEvents.SessionEventReceipt[] = [];
 
 function quote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -203,6 +240,21 @@ beforeEach(async () => {
     secrets: { egressProxy: { enabled: true } },
   };
   await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
+  await replaceSessionEntry(
+    { agentId: "probe", sessionKey },
+    {
+      sessionId: "egress-origin",
+      lifecycleRevision: "egress-origin-revision",
+      updatedAt: Date.now(),
+    },
+  );
+  const enqueue = sessionEvents.enqueueSessionEventForHost;
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((...args) => {
+    const receipt = enqueue(...args);
+    completions.push(receipt);
+    return receipt;
+  });
   // A real child retains its inherited proxy environment across caller turns.
   await state.writeText(
     "watcher.cjs",
@@ -246,6 +298,9 @@ afterEach(async () => {
     deleteSession(sessionId);
   }
   drainSystemEvents(sessionKey);
+  await Promise.all(completions.splice(0).map((receipt) => receipt.settled));
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   if (proxy) {
     clearSecretEgressProxy(proxy);
     await proxy.stop();

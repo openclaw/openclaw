@@ -185,6 +185,39 @@ The synchronous fingerprint, projection, binding, and injection methods are depr
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
 
+## Prepare session catalog identities
+
+Use `await prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })`
+from `openclaw/plugin-sdk/session-transcript-runtime` before projecting a source catalog page.
+The returned synchronous projector reads only the prepared profile and verified GitHub facts.
+For receiver attribution, use `await prepareSessionCatalogGitHubLinker({ participants, owners })`,
+passing the page's participants and configured owner references. Its synchronous
+`linkParticipant` and `resolveOwner` methods retain every verified GitHub account and
+login, while source exports use only the person's primary account.
+If multiple hosts prepare concurrently, retain each linker's `assertCurrent` and
+invoke it before publishing a completed host or the aggregate result.
+Recheck each host's snapshot lifecycle at the same publication boundary, including
+hosts that do not link profile identities.
+
+Prepare again for each page after transport work, then project and disclose without another
+await. Profile changes during preparation reject the page; identity claims never grant access.
+Foreign commits after the identity read do not rewrite that page's attribution snapshot;
+the next unpinned page reads fresh facts. This snapshot never replaces a permission check.
+Recheck the source's current sharing policy before disclosure. The existing
+`runtime.agent.session.listSessionEntries` accepts optional `sessionKeys` to restrict
+this final read to exact persisted keys while preserving canonical listing validation.
+Selected reads include derived participants and counts by default. Guards that consume only
+sharing metadata can pass `includeParticipants: false` to skip that hydration; canonical
+validation remains enabled in both read-only and writable listings.
+Its optional `captureSource(assertCurrent)` callback captures the admitted physical store;
+invoke the supplied assertion after preparation and before the final sharing read to reject
+replacement at the same path, even when session IDs were reused.
+
+The released synchronous `createSessionCatalogSourceActorProjector` and
+`createSessionCatalogGitHubLinker` signatures remain available for existing plugins;
+bundled Session Share uses the awaited helpers. Schemas, stored data, retention,
+permissions, and update behavior are unchanged.
+
 ## Await session upstream links
 
 Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from
@@ -214,23 +247,90 @@ update behavior.
 
 ## Await locked transcript preparation
 
-Inside `withSessionTranscriptWriteLock`, use
-`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
-work. Returning `undefined` suppresses a fresh append. Duplicate messages and
-accepted pending inputs retain their original preparation decision. The existing
-`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
-transaction until the next Plugin SDK major.
+Replace `withSessionTranscriptWriteLock` with `withSessionTranscriptWrite` from
+`openclaw/plugin-sdk/session-transcript-runtime`. Pass message preparation and
+the host's prepared source authority in `preparation`:
 
-Await each append to consume its result. The lock also joins accepted operations
-in call order before releasing the writer, including when its callback fails or
-returns without awaiting an append. Retained context methods reject new calls
-after the callback finishes. Keep current authority checks in
-`beforeFreshMessageCommit`.
+```ts
+await withSessionTranscriptWrite(target, async (transcript) => {
+  const result = await transcript.appendMessage({
+    message,
+    idempotencyLookup: "scan",
+    preparation: {
+      prepareMessage: async (candidate) => redactMessage(candidate),
+      source: sourceAuthority,
+    },
+  });
+  if (result?.appended) {
+    await transcript.publishUpdate({ messageId: result.messageId });
+  }
+});
+```
 
-Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
-owner checks through wrappers. Pass existing assertions as sources; a custom
-check may inspect only owned in-memory state. Unprepared callbacks retain their
-native transaction ordering.
+`prepareMessage` runs outside the transaction after duplicate detection. Returning
+`undefined` suppresses a fresh append. Replays retain stored bytes and skip
+preparation. The owner captures the transcript version before preparation and
+checks it again in the committing transaction; a change refuses the prepared
+write. It does not replay preparation automatically. Keep externally visible
+side effects out of preparation, and publish only from an acknowledged result.
+
+`appendSessionTranscriptMessagesByIdentity` remains an atomic batch of
+already-prepared messages. It does not accept per-message `preparation`; use the
+singleton append or the write sequence when duplicate-sensitive preparation is
+needed.
+
+The new scope orders accepted operations, and each append commits independently.
+For actor-bound targets, it is optimistic: callback awaits do not reserve the
+actor queue. Reads capture a transcript version that later fresh appends must
+still match; successful appends advance that version. A duplicate replay can
+return its original receipt after another writer advances the transcript, but
+the stale scope then refuses further mutations.
+
+Durable targets retain their canonical worker writer across callback awaits;
+native compatibility and unbound native incognito targets retain their native
+writer queue. Their reads do not automatically impose an exact version
+precondition on later appends. On every path, awaited
+`prepareMessage` still captures and rechecks its own preparation snapshot before
+a fresh insert, as described above. These process-local reservations do not
+exclude foreign processes or direct synchronous writers.
+
+A callback failure does not roll back earlier appends, but discards its queued
+notifications. The scope joins accepted operations in call order before releasing
+ownership, including when its callback fails or returns without awaiting an
+append. Retained context methods reject new calls after the callback finishes.
+
+`preparation.source` accepts the existing host-owned source assertion. Actor and
+worker-backed writes prepare its exact row predicates for the owning transaction
+and recheck its bounded host lifecycle guard at mutation admission and commit.
+That prepared source remains held through accepted persistence. Native sequence
+writes retain the source's synchronous assertion inside the transaction before
+a fresh insert; they do not acquire a separate prepared-source receipt. Pass the
+original source capability through wrappers with
+`composeSessionTranscriptWriteAssertion`; do not replace it with an opaque
+database-reading lambda. Keep its owner alive until the write scope settles.
+Unprepared source callbacks cannot authorize actor-bound writes.
+
+The scope's captured writer authority is separate from a fresh message's source.
+It remains required for reads, replay, accepted-input custody, and publication.
+Actor scopes retain that prepared authority and its exact predicates until all
+accepted work and publication settle.
+
+The Codex mirror equivalent is `withCodexSessionTranscriptMirrorWrite` in
+`openclaw/plugin-sdk/codex-session-transcript-runtime`; it has the same semantics
+and retains message-sequence receipts.
+
+The old lock functions, `prepareMessageAfterIdempotencyCheck`, and
+`beforeFreshMessageCommit` are deprecated. Durable targets keep their original
+transaction ordering, with one warning per plugin for this legacy contract.
+Incognito targets, including explicitly actor-bound targets, reject the legacy
+form with an error naming `withSessionTranscriptWrite` and
+`preparation.prepareMessage` / `preparation.source`. Removal is scheduled for the
+next Plugin SDK major. `prepareMessageAfterIdempotencyCheckAsync` remains a
+compatible spelling; migrate it to `preparation.prepareMessage` too.
+
+Actor routing remains inactive unless the host explicitly selects an actor.
+Ordinary unbound incognito operations retain their existing host owner. This
+migration changes no schema, retention, or stored data and needs no update step.
 
 ## Await session transcript persistence
 
@@ -312,6 +412,15 @@ context consumer. It retains the actor through scanning, consumption, validation
 and cleanup. Without an actor binding it returns `undefined`, preserving the
 existing host route. The synchronous Codex context reader and validators refuse
 actor-bound access; they never reopen a native incognito database.
+
+Plugins that project durable history in their own worker can await
+`readCodexSessionContextProjection(target, project, signal?)` from the same SDK
+subpath. The projection callback receives the captured target, admission, and
+physical source. Pass those facts to the worker's `readCodexSessionContext`
+call and return `{ value, version }`. The retained transcript reader validates
+the result before returning it, keeping final version and admission checks off
+the Gateway thread. The synchronous validation exports remain compatible until
+the next Plugin SDK major.
 
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset
@@ -850,18 +959,15 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
 
 ## Await strict transcript message preparation
 
-For `appendSessionTranscriptMessageByIdentityStrict`, use
-`prepareMessageAfterIdempotencyCheckAsync` when a message needs preparation after
-duplicate detection. The callback runs outside the writer transaction; returning
-`undefined` suppresses a fresh message. Replayed messages retain their stored bytes
-and skip preparation. A transcript change during awaited message preparation
-refuses that prepared write.
+For `appendSessionTranscriptMessageByIdentityStrict` and
+`appendSessionTranscriptMessageByIdentity`, use `preparation.prepareMessage` for
+awaited preparation after duplicate detection and `preparation.source` for the
+host owner's source authority. They use the same
+[preparation and conflict semantics](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation)
+as `withSessionTranscriptWrite`. Strict appends still require an exact session ID
+and distinguish suppression from a session rebound.
 
-Keep live, synchronous authority assertions in `beforeFreshMessageCommit`. They
-run only for fresh inserts and are checked again at commit. They must not perform
-blocking reads or query the target database from a worker admission callback;
-use the host owner's prepared source authority when storage facts are needed.
-
-The released `prepareMessageAfterIdempotencyCheck` callback keeps its synchronous
-result and transaction ordering until the next Plugin SDK major and an explicitly
-approved breaking release. This change requires no data migration or update step.
+The released synchronous preparation and before-commit callbacks retain their
+durable-target behavior through the next Plugin SDK major, with a one-time
+warning per plugin. They are refused for incognito and actor-bound targets.
+No stored data migration or update step is required.

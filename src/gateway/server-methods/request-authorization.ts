@@ -8,12 +8,24 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withCanonicalSessionValidationDeferral } from "../../config/sessions/session-canonical-validation-deferral.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import {
@@ -27,6 +39,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import {
+  readSessionSharingStringParam,
   resolveChatSendAuthorizationParams,
   resolveDirectIncognitoTargets,
   resolveDirectSessionTargets,
@@ -37,6 +50,7 @@ import {
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import type { SessionSubscribePhase } from "../slow-request-diagnostics.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
 import { authorizeGatewayMethod } from "./method-authorization.js";
@@ -45,6 +59,66 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./types.js";
+
+const STARTUP_READ_WAIT_MS = 20_000;
+const startupReadMethods = new Set([
+  "sessions.list",
+  "sessions.resolve",
+  "sessions.describe",
+  "models.list",
+]);
+
+function startupReadAgents(method: string, requestParams: unknown, cfg: OpenClawConfig) {
+  const refusals = listAgentDatabaseAdmissionRefusals();
+  const targets = resolveDirectSessionTargets(method, requestParams);
+  if (targets.length > 0) {
+    return targets.flatMap((target) => {
+      const resolved = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+      return resolved.ok
+        ? [resolved.agentId]
+        : refusals
+            .filter((refusal) => refusal === resolved.error.details)
+            .map(({ agentId }) => agentId);
+    });
+  }
+  const agentId = readSessionSharingStringParam(requestParams, "agentId");
+  if (method === "models.list") {
+    const resolved = resolveAgentIdOrRespondError({
+      rawAgentId: agentId ?? tryResolveAmbientOwnerAgentId(cfg),
+      cfg,
+      respond: () => {},
+    });
+    return resolved ? [resolved.agentId] : [];
+  }
+  return agentId ? [agentId] : listAgentIds(cfg);
+}
+
+async function prepareStartupReadAgents(
+  method: string,
+  requestParams: unknown,
+  cfg: OpenClawConfig,
+  signal: AbortSignal,
+) {
+  const agents = startupReadAgents(method, requestParams, cfg);
+  if (method === "models.list" && !readSessionSharingStringParam(requestParams, "sessionKey")) {
+    return agents;
+  }
+  const targets = await Promise.all(
+    agents.map((agentId) =>
+      prepareSqliteTargetFromSessionStorePath(
+        resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+        {
+          agentId,
+          defaultAgentId: isPerAgentSessionStoreConfig(cfg.session?.store)
+            ? agentId
+            : resolveSessionStoreCompatibilityAgentId(cfg),
+        },
+        signal,
+      ),
+    ),
+  );
+  return [...new Set([...agents, ...targets.flatMap(({ agentId }) => agentId ?? [])])];
+}
 
 /** Applies the router-owned authorization fence before any transport or typed dispatch. */
 export async function authorizeGatewayRequestPreDispatch(params: {
@@ -55,6 +129,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   methodRegistry: GatewayMethodRegistryView;
   expectedProfileBinding?: ExpectedProfileBinding;
   hasCurrentClientAuthority?: () => boolean;
+  signal?: AbortSignal;
   assertInvocationCurrent?: () => void;
   assertPreparationCurrent?: () => void;
   markSessionSubscribePhase?: (phase: SessionSubscribePhase) => void;
@@ -73,6 +148,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   const signal = params.methodRegistry.isObservation(params.method)
     ? getAsyncWorkSignal()
     : undefined;
+  let startupReadSignal: AbortSignal | undefined;
+  let startupReadDeadline: number | undefined;
+  let startupReadResult: { cfg: OpenClawConfig; agents?: string[]; timedOut: boolean } | undefined;
   signal?.throwIfAborted();
   if (params.context.ensureSessionRowProjection) {
     params.markSessionSubscribePhase?.("projectionReadiness");
@@ -103,6 +181,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   let assertChatRoutingCurrent: (() => void) | undefined;
   while (true) {
     signal?.throwIfAborted();
+    startupReadSignal?.throwIfAborted();
     const scopeAuthorization = authorizeMethod();
     if (scopeAuthorization.error) {
       return { error: scopeAuthorization.error };
@@ -141,6 +220,90 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     const unavailableError = startupError();
     if (unavailableError) {
       return { error: unavailableError };
+    }
+    const startup =
+      startupReadMethods.has(params.method) &&
+      (params.method !== "sessions.list" ||
+        readSessionSharingStringParam(params.requestParams, "agentId"))
+        ? params.context.agentDatabaseStartup
+        : undefined;
+    if (startup?.hasPendingAgents) {
+      startupReadSignal ??= AbortSignal.any(
+        [params.signal, params.client?.connectionSignal, getAsyncWorkSignal()].filter(
+          (candidate): candidate is AbortSignal => candidate !== undefined,
+        ),
+      );
+      startupReadSignal.throwIfAborted();
+      const cfg = params.context.getRuntimeConfig();
+      const previous = startupReadResult?.cfg === cfg ? startupReadResult : undefined;
+      startupReadResult = undefined;
+      if (!previous || previous.timedOut) {
+        const remainingMs =
+          (startupReadDeadline ??= performance.now() + STARTUP_READ_WAIT_MS) - performance.now();
+        if (remainingMs <= 0) {
+          const agents =
+            previous?.agents ?? startupReadAgents(params.method, params.requestParams, cfg);
+          const refusal = agents
+            .map((agentId) => readAgentDatabaseAdmissionRefusal(agentId))
+            .find(Boolean);
+          if (refusal) {
+            return { error: createAgentDatabaseAdmissionErrorShape(refusal) };
+          }
+          if (!previous?.agents) {
+            return {
+              error: errorShape(
+                ErrorCodes.UNAVAILABLE,
+                "Session database discovery did not finish before the startup read deadline. Retry the request.",
+                {
+                  retryable: true,
+                  retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+                },
+              ),
+            };
+          }
+        } else {
+          const observation = new AbortController();
+          const waitSignal = AbortSignal.any([startupReadSignal, observation.signal]);
+          let agents: string[] | undefined;
+          let waited = false;
+          try {
+            const timedOut = await raceWithTimeout(
+              async () => {
+                agents = await prepareStartupReadAgents(
+                  params.method,
+                  params.requestParams,
+                  cfg,
+                  waitSignal,
+                );
+                waitSignal.throwIfAborted();
+                if (params.context.getRuntimeConfig() !== cfg) {
+                  return false;
+                }
+                const waiting = agents.flatMap((agentId) => {
+                  const wait = startup.waitForAgentPreparation(agentId, { signal: waitSignal });
+                  return wait ? [wait] : [];
+                });
+                waited = waiting.length > 0;
+                await Promise.all(waiting);
+                return false;
+              },
+              remainingMs,
+              () => {
+                startupReadDeadline = 0;
+                return true;
+              },
+              { signal: startupReadSignal, ref: false },
+            );
+            if (timedOut || !waited) {
+              startupReadResult = { cfg, agents, timedOut };
+            }
+          } finally {
+            observation.abort();
+          }
+          // Discovery and preparation publish facts only into a fresh authorization iteration.
+          continue;
+        }
+      }
     }
     if (params.method.startsWith("sessions.groups.")) {
       const { ensureSessionGroupCatalog } = await import("../session-group-catalog.js");
@@ -188,6 +351,29 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       assertPreparationCurrent?.();
       assertChatRoutingCurrent?.();
     };
+    const authorizeCurrent = (assertCurrent?: () => void, release?: () => void) => {
+      const current = authorizeMethod();
+      const authorizationError = current.error ?? startupError();
+      if (authorizationError) {
+        release?.();
+        return authorizationError;
+      }
+      try {
+        params.expectedProfileBinding?.assertCurrent();
+        assertCurrent?.();
+      } catch (error) {
+        release?.();
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          return error.error;
+        }
+        throw error;
+      }
+      if (current.sessionScope !== scopeAuthorization.sessionScope) {
+        release?.();
+        return errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed");
+      }
+      return null;
+    };
     const authorizeSession = (sessionRowRead?: SessionRowReadView) => {
       assertSessionInvocationCurrent();
       return sessionPolicy
@@ -197,24 +383,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     const authorizeSessionAndConsume = params.consumeSessionTurn
       ? (sessionRowRead?: SessionRowReadView) => {
           // Consume transient incognito rows before their prepared view closes.
-          const currentAuthorization = authorizeMethod();
-          const currentError = currentAuthorization.error ?? startupError();
-          if (currentError) {
-            return { error: currentError };
-          }
-          try {
-            params.expectedProfileBinding?.assertCurrent();
-            params.assertInvocationCurrent?.();
-          } catch (error) {
-            if (error instanceof SessionMutationAuthorizationChangedError) {
-              return { error: error.error };
-            }
-            throw error;
-          }
-          if (currentAuthorization.sessionScope !== scopeAuthorization.sessionScope) {
-            return {
-              error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
-            };
+          const error = authorizeCurrent(() => params.assertInvocationCurrent?.());
+          if (error) {
+            return { error };
           }
           if (!sessionRowRead) {
             return { error: errorShape(ErrorCodes.UNAVAILABLE, "Session facts are unavailable") };
@@ -335,25 +506,11 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         }),
       };
     }
-    const currentAuthorization = authorizeMethod();
-    const currentError = currentAuthorization.error ?? startupError();
-    if (currentError) {
-      sessionAccessAuthority?.release();
-      return { error: currentError };
-    }
-    try {
-      params.expectedProfileBinding?.assertCurrent();
-      assertSessionInvocationCurrent();
-    } catch (error) {
-      sessionAccessAuthority?.release();
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        return { error: error.error };
-      }
-      throw error;
-    }
-    if (currentAuthorization.sessionScope !== scopeAuthorization.sessionScope) {
-      sessionAccessAuthority?.release();
-      return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
+    const error = authorizeCurrent(assertSessionInvocationCurrent, () =>
+      sessionAccessAuthority?.release(),
+    );
+    if (error) {
+      return { error };
     }
     return {
       error: null,

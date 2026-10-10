@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentIdentityCapability, fetchAgentIdentity } from "./identity.ts";
 
@@ -54,39 +54,53 @@ it.each([undefined, 7_000])(
     await capability.ensure(["main"]);
     clock.mockReturnValue(now + 60_000 + Math.max(500, hint ?? 0));
     await capability.ensure(["main"]);
-    expect(request).toHaveBeenCalledTimes(10);
+    expect(request).toHaveBeenCalledTimes(8);
     expect(capability.get("main")).toBe(recovered);
   },
 );
 
-it("retains the displayed identity while sidebar and chat share a failed refresh", async () => {
-  const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
+it.each([
+  { name: "restart", restartPending: true, suspensionPhase: "accepting" },
+  { name: "suspension preparation", restartPending: false, suspensionPhase: "preparing" },
+  { name: "suspension drain", restartPending: false, suspensionPhase: "draining" },
+  { name: "prepared suspension", restartPending: false, suspensionPhase: "prepared" },
+] as const)("retains identity and pauses refresh during $name", async (unavailable) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(0);
   const original = { agentId: "main", name: "Main", avatar: "/avatar/main?v=old" };
   const replacement = { ...original, avatar: "/avatar/main?v=new" };
-  const failure = new Error("Gateway unavailable");
-  const request = vi.fn().mockResolvedValueOnce(original).mockRejectedValue(failure);
-  const client = createTestGatewayClient(request);
+  const request = vi.fn().mockResolvedValueOnce(original).mockResolvedValue(replacement);
+  const snapshot: Pick<
+    ApplicationGatewaySnapshot,
+    "client" | "phase" | "restartPending" | "suspensionPhase"
+  > = {
+    client: createTestGatewayClient(request),
+    phase: "connected",
+  };
+  let onSnapshot = (_snapshot: typeof snapshot) => {};
   const capability = createAgentIdentityCapability({
-    snapshot: { client, phase: "connected" },
-    subscribe: () => () => undefined,
+    snapshot,
+    subscribe(listener) {
+      onSnapshot = listener;
+      return () => undefined;
+    },
   });
-  const publish = vi.fn();
-  capability.subscribe(publish);
   await capability.ensure(["main"]);
   clock.mockReturnValue(60_000);
-  await capability.ensure(["main"]);
-  await expect(fetchAssistantIdentity(client, "main")).rejects.toBe(failure);
-  await capability.ensure(["main"]);
-  expect(request).toHaveBeenCalledTimes(2);
+  snapshot.restartPending = unavailable.restartPending;
+  snapshot.suspensionPhase = unavailable.suspensionPhase;
+  onSnapshot(snapshot);
+  for (let render = 0; render < 40; render += 1) {
+    await capability.ensure(["main"]);
+  }
+  expect(request).toHaveBeenCalledOnce();
   expect(capability.get("main")).toBe(original);
-  expect(publish).toHaveBeenCalledOnce();
 
-  request.mockResolvedValueOnce(replacement);
-  clock.mockReturnValue(60_500);
+  snapshot.restartPending = false;
+  snapshot.suspensionPhase = "accepting";
+  onSnapshot(snapshot);
   await capability.ensure(["main"]);
-  expect(capability.get("main")).toBe(replacement);
-  expect(publish).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
+  expect(capability.get("main")).toBe(original);
 });
 
 it.each(["reconnect", "config", "agent"])(
@@ -176,31 +190,46 @@ it("rejects stale identities after reconnecting the same client", async () => {
   expect(capability.get("main")?.name).toBe("Current");
 });
 
-it("rejects an in-flight identity after that agent is invalidated", async () => {
-  const staleRequest = createDeferred<AgentIdentityResult>();
-  const currentRequest = createDeferred<AgentIdentityResult>();
-  const request = vi
-    .fn()
-    .mockImplementationOnce(() => staleRequest.promise)
-    .mockImplementationOnce(() => currentRequest.promise);
-  const client = createTestGatewayClient(request);
-  const capability = createAgentIdentityCapability({
-    snapshot: { client, phase: "connected" },
-    subscribe: () => () => undefined,
-  });
+it.each(["local", "Gateway"])(
+  "rejects an in-flight identity after %s invalidation",
+  async (source) => {
+    const staleRequest = createDeferred<AgentIdentityResult>();
+    const currentRequest = createDeferred<AgentIdentityResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => currentRequest.promise);
+    const client = createTestGatewayClient(request);
+    let onEvent = (_event: { event: string; payload?: unknown }) => {};
+    const capability = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+      subscribeEvents(listener) {
+        onEvent = listener;
+        return () => undefined;
+      },
+    });
+    const publish = vi.fn();
+    capability.subscribe(publish);
 
-  const stale = capability.ensure(["main"]);
-  capability.invalidate(["main"]);
-  const current = capability.ensure(["main"]);
+    const stale = capability.ensure(["main"]);
+    if (source === "Gateway") {
+      onEvent({ event: "agent.identity.changed", payload: { agentId: "main" } });
+    } else {
+      capability.invalidate(["main"]);
+    }
+    expect(publish).toHaveBeenCalledOnce();
+    const current = capability.ensure(["main"]);
 
-  staleRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
-  await stale;
-  expect(capability.entries()).toEqual([]);
+    staleRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
+    await stale;
+    expect(capability.entries()).toEqual([]);
 
-  currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
-  await current;
-  expect(capability.get("main")?.name).toBe("Current");
-});
+    currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
+    await current;
+    expect(capability.get("main")?.name).toBe("Current");
+  },
+);
 
 it("publishes each fetched snapshot once under overlapping roster and stream updates", async () => {
   const pending = createDeferred();
@@ -245,7 +274,7 @@ it("shares identity requests between the sidebar and the selected chat", async (
 });
 
 it.each(["sidebar", "chat"])(
-  "revalidates a replaced avatar without events when %s refreshes first",
+  "shares an invalidated identity when %s refreshes first",
   async (first) => {
     const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
     const clock = vi.spyOn(Date, "now").mockReturnValue(0);
@@ -261,18 +290,19 @@ it.each(["sidebar", "chat"])(
     const publish = vi.fn();
     capability.subscribe(publish);
     await capability.ensure(["main"]);
-    clock.mockReturnValue(59_999);
-    await Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
+    clock.mockReturnValue(600_000);
+    const idle = Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
     expect(request).toHaveBeenCalledOnce();
+    await idle;
 
-    clock.mockReturnValue(60_000);
+    capability.invalidate(["main"]);
     const firstRefresh =
       first === "sidebar" ? capability.ensure(["main"]) : fetchAssistantIdentity(client, "main");
-    // A slow refresh stays shared even past another freshness window.
-    clock.mockReturnValue(120_001);
+    // A slow refresh stays shared regardless of elapsed time.
+    clock.mockReturnValue(1_200_000);
     const waitingChat = fetchAssistantIdentity(client, "main");
     expect(request).toHaveBeenCalledTimes(2);
-    expect(capability.get("main")?.avatar).toBe(oldIdentity.avatar);
+    expect(capability.get("main")).toBeNull();
     refresh.resolve(replacement);
     await firstRefresh;
     expect((await waitingChat)?.avatar).toBe(replacement.avatar);
@@ -280,8 +310,8 @@ it.each(["sidebar", "chat"])(
     await capability.ensure(["main"]);
     expect(capability.get("main")?.avatar).toBe(replacement.avatar);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(publish).toHaveBeenCalledTimes(2);
-    clock.mockReturnValue(180_000);
+    expect(publish).toHaveBeenCalledTimes(3);
+    clock.mockReturnValue(1_800_000);
     await Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
     expect(request).toHaveBeenCalledTimes(2);
   },

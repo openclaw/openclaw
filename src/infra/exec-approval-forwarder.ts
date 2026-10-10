@@ -344,10 +344,8 @@ async function resolveForwardTargets(params: {
     });
     if (sessionTarget) {
       const key = buildTargetKey(sessionTarget);
-      if (!seen.has(key)) {
-        seen.add(key);
-        targets.push({ ...sessionTarget, source: "session" });
-      }
+      seen.add(key);
+      targets.push({ ...sessionTarget, source: "session" });
     }
   }
 

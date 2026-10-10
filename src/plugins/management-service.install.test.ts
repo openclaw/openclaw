@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { pluginLifecycleError } from "../gateway/server-methods/plugins-lifecycle-error.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { PluginInstallConfigError } from "./install-config.js";
 import {
@@ -25,6 +26,13 @@ const mocks = vi.hoisted(() => ({
   replaceConfig: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
   slotSelection: vi.fn((config: unknown) => config),
+}));
+
+// A beta package version forces the beta update channel, so pin a stable host to keep
+// the default stable-channel expectations independent of the checkout's release train.
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.7",
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -146,7 +154,10 @@ describe("managed plugin installation", () => {
     mockHostedOfficialCatalog([]);
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("refuses managed installs in Nix mode before config or artifact work", async () => {
     mocks.npmInstall.mockResolvedValue({ ok: false, error: "artifact installer reached" });
@@ -281,6 +292,11 @@ describe("managed plugin installation", () => {
       error: "package absent",
     });
     mockClawHubInstall("diffs", "@openclaw/diffs");
+    mocks.clawhubInstall.mockResolvedValueOnce({
+      ok: false,
+      code: "version_not_found",
+      error: "unpublished cohort",
+    });
     mocks.metadata.mockReturnValue(
       metadataSnapshot({ enabled: true, id: "diffs", origin: "global" }),
     );
@@ -303,6 +319,117 @@ describe("managed plugin installation", () => {
         spec: "clawhub:@openclaw/diffs@2026.6.11",
         expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
       }),
+    );
+  });
+
+  it.each(["available", "missing", "incompatible-fallback", "catalog-cohort", "dev"] as const)(
+    "resolves official install defaults: %s",
+    async (release) => {
+      vi.stubEnv(
+        "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+        release === "catalog-cohort" ? "2026.9.9" : "2026.9.7",
+      );
+      if (release === "dev") {
+        mocks.readConfig.mockResolvedValue(configSnapshot({ update: { channel: "dev" } }));
+      }
+      const packageName = "@openclaw/perplexity-plugin";
+      const catalogSpec = `clawhub:${packageName}@2026.9.9`;
+      const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+      mockHostedOfficialCatalog([
+        {
+          id: packageName,
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          openclaw: { plugin: { id: "perplexity" } },
+          install: {
+            candidates: [
+              { sourceRef: "public-clawhub", package: packageName, version: "2026.9.9", integrity },
+            ],
+          },
+        },
+      ]);
+      const installed = mockClawHubInstall("perplexity", packageName);
+      const refusal = {
+        ok: false,
+        code: "incompatible_plugin_api",
+        error: "requires plugin API >=2026.9.9; choose an explicit compatible plugin version",
+      };
+      mocks.clawhubInstall.mockImplementation(({ spec }: { spec: string }) =>
+        spec.endsWith("@2026.9.7") && release !== "available"
+          ? { ok: false, code: "version_not_found", error: "unpublished" }
+          : spec === catalogSpec && (release === "available" || release === "incompatible-fallback")
+            ? refusal
+            : installed,
+      );
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({ enabled: true, id: "perplexity", origin: "global" }),
+      );
+      const warn = vi.fn();
+      const install = installManagedPlugin({
+        request: {
+          source: "official",
+          pluginId: "perplexity",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
+        },
+        logger: { warn },
+        env: {},
+      });
+      if (release === "incompatible-fallback") {
+        await expect(install).rejects.toThrow(refusal.error);
+        expect(mocks.persistInstall).not.toHaveBeenCalled();
+      } else {
+        await install;
+        expect(mocks.persistInstall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            install: expect.objectContaining({ spec: `clawhub:${packageName}` }),
+          }),
+        );
+      }
+      const attempts = mocks.clawhubInstall.mock.calls.map(([request]) => ({
+        spec: request.spec,
+        expectedIntegrity: request.expectedIntegrity,
+      }));
+      const cohort = { spec: `clawhub:${packageName}@2026.9.7`, expectedIntegrity: undefined };
+      const catalog = { spec: catalogSpec, expectedIntegrity: integrity };
+      expect(attempts).toEqual(
+        release === "available"
+          ? [cohort]
+          : release === "catalog-cohort" || release === "dev"
+            ? [catalog]
+            : [cohort, catalog],
+      );
+      if (release === "missing" || release === "incompatible-fallback") {
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(
+            `No ${cohort.spec} release is published; installing ${catalogSpec} instead.`,
+          ),
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { version: "2026.9.7" },
+    { version: "beta" },
+    { version: "latest", expectedIntegrity: `sha256-${"b".repeat(64)}` },
+  ])("preserves an explicit ClawHub selector or digest: %j", async (selector) => {
+    mockClawHubInstall("perplexity", "@openclaw/perplexity-plugin");
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "perplexity", origin: "global" }),
+    );
+    await installManagedPlugin({
+      request: {
+        source: "clawhub",
+        packageName: "@openclaw/perplexity-plugin",
+        ...selector,
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
+      },
+      env: {},
+    });
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ spec: `clawhub:@openclaw/perplexity-plugin@${selector.version}` }),
     );
   });
 
@@ -426,12 +553,13 @@ describe("managed plugin installation", () => {
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {
-    let releasePersist: ((config: Record<string, unknown>) => void) | undefined;
-    const heldPersist = new Promise<Record<string, unknown>>((resolve) => {
-      releasePersist = resolve;
-    });
+    const heldPersist = createDeferredCore<Record<string, unknown>>();
+    const persistEntered = createDeferredCore();
     mockClawHubInstall("demo", "community/demo");
-    mocks.persistInstall.mockReturnValueOnce(heldPersist);
+    mocks.persistInstall.mockImplementationOnce(() => {
+      persistEntered.resolve();
+      return heldPersist.promise;
+    });
     mocks.replaceConfig.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
@@ -447,14 +575,21 @@ describe("managed plugin installation", () => {
       },
       env: {},
     });
-    await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));
-    const enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
-    await Promise.resolve();
+    let enable: ReturnType<typeof setManagedPluginEnabled> | undefined;
+    try {
+      await Promise.race([persistEntered.promise, install]);
+      expect(mocks.persistInstall).toHaveBeenCalledTimes(1);
+      enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
+      await Promise.resolve();
 
-    expect(mocks.readConfig).toHaveBeenCalledTimes(1);
-    releasePersist?.({});
-    await install;
-    await enable;
-    expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+      expect(mocks.readConfig).toHaveBeenCalledTimes(1);
+      heldPersist.resolve({});
+      await install;
+      await enable;
+      expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      heldPersist.resolve({});
+      await Promise.allSettled(enable ? [install, enable] : [install]);
+    }
   });
 });

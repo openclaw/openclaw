@@ -86,23 +86,6 @@ function buildDiscordButtonComponent(
   return component;
 }
 
-function appendDiscordButtonBlocks(
-  blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
-  buttons: readonly MessagePresentationButton[],
-  options: DiscordPresentationBuildOptions,
-): void {
-  const components = buttons.flatMap((button) => {
-    const component = buildDiscordButtonComponent(button, options);
-    return component ? [component] : [];
-  });
-  for (let index = 0; index < components.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
-    blocks.push({
-      type: "actions",
-      buttons: components.slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE),
-    });
-  }
-}
-
 function appendDiscordSelectBlock(
   blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
   block: MessagePresentationSelectBlock,
@@ -184,7 +167,16 @@ export function buildDiscordPresentationComponents(
       continue;
     }
     if (block.type === "buttons") {
-      appendDiscordButtonBlocks(blocks, block.buttons, options);
+      const components = block.buttons.flatMap((button) => {
+        const component = buildDiscordButtonComponent(button, options);
+        return component ? [component] : [];
+      });
+      for (let index = 0; index < components.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
+        blocks.push({
+          type: "actions",
+          buttons: components.slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE),
+        });
+      }
       continue;
     }
     if (block.type === "select") {

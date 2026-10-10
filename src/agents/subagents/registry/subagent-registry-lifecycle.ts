@@ -151,16 +151,23 @@ export class SubagentLifecycleController {
 
   pruneRetiredRuns = (changedRunIds?: readonly string[]): void => {
     const changed = changedRunIds && new Set(changedRunIds);
+    const changedOwners = changedRunIds && new Set<object>();
+    for (const runId of changedRunIds ?? []) {
+      const entry = this.options.runs.get(runId);
+      if (entry) {
+        changedOwners?.add(getSubagentRunRuntimeKey(entry));
+      }
+    }
     for (const [identity, observed] of this.runtimeRuns) {
-      const current = getCurrentSubagentRunOwner(this.options.runs, observed);
       if (
         changed &&
         !changed.has(observed.runId) &&
         !(observed.collect && observed.swarmRunId && changed.has(observed.swarmRunId)) &&
-        !(current && changed.has(current.runId))
+        !changedOwners?.has(identity)
       ) {
         continue;
       }
+      const current = getCurrentSubagentRunOwner(this.options.runs, observed);
       if (current) {
         this.runtimeRuns.set(identity, current);
       }
@@ -661,6 +668,10 @@ export class SubagentLifecycleController {
             this.options.resumeSubagentRun(runId);
           }
           return;
+        }
+        if (source === "restore" && entry.requesterSettleWake) {
+          // The transfer owns this initial wake even if it settles while restore reads siblings.
+          this.options.resumedRuns.add(getSubagentRunRuntimeKey(entry));
         }
         if (this.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
           this.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));

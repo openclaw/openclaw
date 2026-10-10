@@ -7,6 +7,27 @@ import {
 import { isAbortError } from "../../infra/abort-signal.js";
 import { readErrorName } from "../../infra/errors.js";
 
+export function projectWithdrawnAgentInput(
+  payload: unknown,
+  pendingInputId: string | undefined,
+  stopReason?: string,
+) {
+  if (!pendingInputId || !isRecord(payload)) {
+    return payload;
+  }
+  return {
+    ...payload,
+    ...(stopReason ? { stopReason } : {}),
+    reason: "input_withdrawn_before_turn",
+    pendingInputId,
+    summary:
+      `Input ${pendingInputId} was withdrawn before its turn started and was not delivered.` +
+      ((stopReason ?? payload.stopReason) === "timeout"
+        ? " Raise --timeout and retry."
+        : " Resend it when ready."),
+  };
+}
+
 export function resolveResolvedAgentTimeoutStopReason(
   meta: unknown,
   signal: AbortSignal,

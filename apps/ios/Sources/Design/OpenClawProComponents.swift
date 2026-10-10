@@ -81,7 +81,7 @@ extension View {
                 self
                     .font(OpenClawType.subheadSemiBold)
                     .buttonStyle(.glassProminent)
-                    .tint(tint ?? OpenClawBrand.accent)
+                    .tint(tint ?? OpenClawBrand.accentFill)
             } else {
                 self
                     .font(OpenClawType.subheadSemiBold)
@@ -92,7 +92,7 @@ extension View {
             self
                 .font(OpenClawType.subheadSemiBold)
                 .buttonStyle(.borderedProminent)
-                .tint(tint ?? OpenClawBrand.accent)
+                .tint(tint ?? OpenClawBrand.accentFill)
         } else {
             self
                 .font(OpenClawType.subheadSemiBold)
@@ -405,7 +405,7 @@ struct OpenClawToggleIndicator: View {
 
     var body: some View {
         Capsule()
-            .fill(self.isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
+            .fill(self.isOn ? OpenClawBrand.accentFill : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: self.isOn ? .trailing : .leading) {
                 Circle()
@@ -476,16 +476,18 @@ struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        let presentation = self.presentation
+        let presentation = GatewayStatusBuilder.build(appModel: self.appModel).statusPresentation
         OpenClawStatusBadge(label: .verbatim(presentation.title), tone: presentation.tone)
             .accessibilityLabel(
                 String(
                     format: String(localized: "Gateway %@"),
                     presentation.title))
     }
+}
 
-    private var presentation: (title: String, tone: OpenClawStatusTone) {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
+extension GatewayDisplayState {
+    var statusPresentation: (title: String, tone: OpenClawStatusTone) {
+        switch self {
         case .connected:
             (String(localized: "Online"), .ok)
         case .connecting:

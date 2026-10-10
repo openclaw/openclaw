@@ -2,6 +2,7 @@ import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runt
 import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
@@ -19,6 +20,7 @@ import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
+import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -191,6 +193,7 @@ export function installEmbeddedAttemptStreamGuards(
       );
     }
   };
+  const providerPromptState = getProviderPromptState(attempt.runId);
   const cacheObserver = createPromptCacheRequestObserver(
     {
       sessionId: attempt.sessionId,
@@ -207,7 +210,9 @@ export function installEmbeddedAttemptStreamGuards(
           "no tracked cache input change";
         log.warn(
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
-            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}`,
+            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
+            `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
+            `providerPrefix=${observation.providerPrefix ?? "unavailable"}`,
         );
       }
       cacheTrace?.recordStage("cache:result", { options: { ...observation } });
@@ -425,13 +430,32 @@ export function installEmbeddedAttemptStreamGuards(
     installStreamWrapper(wrapStreamFnCodeModeSource, codeModeExecToolNames);
   }
   return {
-    onModelRequest: cacheObserver.onModelRequest,
-    onModelUsage: (usage: NormalizedUsage | undefined) => {
+    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+      const previous = cacheObserver.getContextUsage();
+      const request = cacheObserver.onModelRequest(...args);
+      if (request.requestIndex > 1) {
+        contextGuards.checkMidTurnPrecheck({
+          context: args[1],
+          previousRequest:
+            previous?.requestIndex === request.requestIndex - 1 &&
+            request.prefixUnchanged &&
+            (request.changes ?? []).every(
+              ({ code }) => code === "pruning" || code === "aggregateToolResultTruncation",
+            )
+              ? previous
+              : undefined,
+        });
+      }
+    },
+    onModelUsage: (
+      usage: NormalizedUsage | undefined,
+      identity?: Pick<AssistantMessage, "responseId" | "turnId">,
+    ) => {
       // Async-tool fragments also end messages. result() marks the terminal
       // response before core commits its final fragment with normalized usage.
       if (modelResponseTerminal) {
         modelResponseTerminal = false;
-        cacheObserver.onModelUsage(usage);
+        cacheObserver.onModelUsage(usage, providerPromptState.lastAttempt, identity);
       }
     },
     getPromptCacheObservation: cacheObserver.getObservation,

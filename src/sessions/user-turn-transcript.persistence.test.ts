@@ -336,6 +336,20 @@ describe("persistUserTurnTranscript", () => {
       const recorder = createUserTurnTranscriptRecorder({
         message,
         target,
+        ...(kind === "blocked"
+          ? {
+              assertOriginalInputCommit: Object.assign(
+                () => {
+                  throw new Error("Original input source revoked");
+                },
+                {
+                  prepareSessionSource: async () => {
+                    throw new Error("Revoked original input source must not be prepared");
+                  },
+                },
+              ),
+            }
+          : {}),
         onOriginalInputCommitted: (commit) => commits.push(commit),
       });
       await (kind === "blocked" ? recorder.persistBlocked(message) : recorder.persistApproved());

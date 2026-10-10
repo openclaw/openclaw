@@ -85,6 +85,14 @@ or still-valid admitted input keeps recovery pending. Native parent rotation mus
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
 
+An interrupted admitted completion keeps its complete recovery claim even when
+the saved run status is failed, timed out, or killed. The next visible message or queued
+follow-up resumes that recovery before taking foreground ownership or entering
+the active transcript. Session reuse must not attach the old completion to the
+new message. Recovery still checks the admitted input, requester lifecycle,
+delivery receipt, and replay safety; it does not infer delivery from a terminal
+run status.
+
 Before parent completion admission, native Codex pending assignments retain their
 run, child-thread, native-parent, and known native-turn identities in the existing
 parent binding metadata. Accepted follow-ups can also retain their submission
@@ -143,6 +151,10 @@ CLI shutdown drains process-wide work. Closing an individual Gateway drains its
 own active chat runs and queued turns, and waits on the process-wide pending-reply
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
+
+When Gateway connection shutdown begins, session observer event subscriptions
+stop before the observer closes. Accepted observer work still settles, while
+chat events and terminal session writes continue through their own drain.
 
 If database closure refuses a follow-up drain, the drain parks its queued input
 instead of retrying against the closing owner. A fresh drain request can resume
@@ -686,6 +698,12 @@ a long recovered turn does not hold a separate startup slot. Deferred database
 admissions join the same startup scheduler. Shutdown stops new preparation and
 joins the current pass, leaving unstarted interruptions available for the next boot.
 
+Recovery follows retained transcript-window ownership when a session moves to a
+new key or rotates its session ID. Claim validation and cleanup read only those
+candidate sessions, so stale recovery claims do not load unrelated saved prompts
+while interactive session changes wait. Claim authority, retry budgets, stored
+data, and upgrade behavior are unchanged.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the
@@ -813,6 +831,9 @@ effective **Full Access**, including an inherited Full Access default, keeps its
 ordinary tools so it can inspect the outcome and finish the task. Recovery does
 not replay the interrupted call automatically or treat its missing result as
 success. Existing tool restrictions and current permissions still apply.
+Recovery prompts identify interrupted, missing, or aborted tool results as unknown
+outcomes from the Gateway restart. A follow-up to an interrupted native child
+receives the same context so it can verify effects before retrying a tool call.
 Pending reply delivery, ambiguous reply-hook outcomes, and explicitly replay-safe
 Code Mode reconstruction retain their narrower recovery restrictions.
 
@@ -833,7 +854,11 @@ approval handles are not revived.
 
 Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot, interrupted child runs settle
-through their normal completion path. They are not automatically relaunched.
+through their normal completion path as soon as startup restores requester ownership,
+without waiting for the periodic registry sweep. The sweep remains a retry backstop.
+The crash-loop breaker pauses this settlement too; the same sweep retries when
+the breaker's recovery window ends.
+They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer

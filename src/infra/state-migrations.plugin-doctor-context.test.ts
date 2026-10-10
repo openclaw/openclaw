@@ -21,6 +21,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import {
   runPluginDoctorStateMigrationPlans,
@@ -54,17 +55,12 @@ describe("plugin doctor ingress authority", () => {
           throw new Error("Missing Doctor repair queue");
         }
         await queue.enqueue("pending", { text: "retained" });
-        const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
-        const observer = vi
-          .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "commit") {
-                active = false;
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const observer = probe.admission(mutationAdmission, (request, grant, admit) => {
+          if (request.stage === "commit") {
+            active = false;
+          }
+          admit(request, grant);
+        });
         try {
           const outcome = await queue.claim("pending").then(
             () => undefined,

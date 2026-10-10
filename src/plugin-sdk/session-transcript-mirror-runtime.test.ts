@@ -115,13 +115,17 @@ describe("private session transcript mirror runtime", () => {
     });
 
     const resolvedScope = resolveSqliteTranscriptScope(scope);
+    await waitForSessionTranscriptProjection(scope);
     await expect(
       readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 }),
-    ).resolves.toEqual({
-      kind: "unavailable",
-      reason: "projection_rebuilding",
+    ).resolves.toMatchObject({
+      kind: "page",
+      entries: [
+        { idempotencyKey: "mirror-user", seq: 1 },
+        { idempotencyKey: "mirror-active", seq: 2 },
+      ],
+      hasMore: false,
     });
-    await waitForSessionTranscriptProjection(scope);
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       const afterReconcile = await locked.appendMessageWithMessageSequence({
         message: {

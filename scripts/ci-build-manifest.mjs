@@ -590,14 +590,13 @@ let uiTestGroups =
   (!frozenTarget || releaseGate) &&
   typeof nodeTestPlan.createUiTestShardGroups === "function"
     ? nodeTestPlan.createUiTestShardGroups({
-        // Preserve the ordinary owner-family inventory. Protected or directly
-        // selected files opt into the existing release-only UI tier below.
+        // Only edited test files opt into the release-only UI tier on automatic CI.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
         ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
           ? { includeReleaseOnlyE2eTests: forceFullUiE2e }
           : {}),
         includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
-        changedPaths: selectedTestTargets ?? changedPaths ?? [],
+        changedPaths: changedPaths ?? [],
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
@@ -658,6 +657,10 @@ if (selectedTestTargets) {
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
 if (uiE2eSelection) {
+  const includedFiles = new Set(
+    uiTestGroups?.e2e.flatMap((group) => group.includePatterns ?? []) ?? uiE2eSelection.files,
+  );
+  uiE2eSelection.files = uiE2eSelection.files.filter((file) => includedFiles.has(file));
   // Selection also applies to UI-only plans without a Node target inventory.
   runControlUiE2e = uiE2eSelection.files.length > 0;
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
@@ -668,6 +671,22 @@ if (uiE2eSelection) {
       : uiE2eSelection.files.length;
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlUiRows) + 1;
 }
+// WebKit shares the first UI row; it never adds a runner or matrix slot.
+// Keep its browser-only contracts scoped to their interaction and style owners.
+const uiWebkitOwners = [
+  "ui/vitest.config.ts",
+  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*}.{ts,tsx}",
+  "ui/src/pages/chat/chat-composer*.{ts,tsx}",
+  "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
+  "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
+  "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
+  "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
+  "ui/src/styles/chat/{composer*,emoji-menu*,mention-menu*,model-picker*}.css",
+];
+const runUiWebkit =
+  runUiTests &&
+  !frozenTarget &&
+  Boolean(changedPaths?.some((file) => uiWebkitOwners.some((owner) => matchesGlob(file, owner))));
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");
 }
@@ -1095,6 +1114,12 @@ const knownToolingConfigs = new Set([
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling-docker.config.ts",
 ]);
+const compactReleaseMatrixRows =
+  eventName === "workflow_dispatch" &&
+  !mainValidation &&
+  !releaseGate &&
+  !ciQualification &&
+  nodeRunnerBackend === "github";
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const nodeTestShards = targetNodeTestShards
   .toSorted(
@@ -1118,7 +1143,7 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
-    return {
+    const row = {
       check_name: shard.checkName,
       test_runtime_policy: testRuntimeMode,
       requires_bun:
@@ -1183,6 +1208,28 @@ const nodeTestShards = targetNodeTestShards
         return plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false;
       }),
     };
+    if (compactReleaseMatrixRows) {
+      // The workflow treats absent feature flags as false and history as [].
+      // Encoded groups own their names; the outer name is only a legacy fallback.
+      for (const key of [
+        "requires_bun",
+        "requires_dist",
+        "requires_go",
+        "requires_ripgrep",
+        "requires_sandbox_image",
+      ]) {
+        if (row[key] === false) {
+          delete row[key];
+        }
+      }
+      if (row.git_commits.length === 0) {
+        delete row.git_commits;
+      }
+      if (packedGroups && groups.every((group) => group.shard_name)) {
+        delete row.shard_name;
+      }
+    }
+    return row;
   });
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
@@ -1460,6 +1507,7 @@ const manifest = {
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
   run_ui_tests: runUiTests,
+  run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
   ui_test_shard_count: uiTestShardCount,
   ui_test_matrix: createMatrix(

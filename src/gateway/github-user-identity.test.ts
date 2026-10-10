@@ -7,6 +7,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import {
   setDisplayName,
   setUserProfileRole,
@@ -15,7 +16,6 @@ import {
 import {
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
-  getUserProfileListItem,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";

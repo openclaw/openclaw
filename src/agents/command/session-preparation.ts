@@ -9,7 +9,6 @@ import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/t
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
@@ -24,7 +23,9 @@ import {
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
+import { prepareCommandConversationContext } from "./conversation-context.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -48,6 +49,19 @@ export function prepareCommandSessionRecoveryEntry(
       ...params,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
+  const directOperatorSource =
+    !sourceOptions.sourceRunId &&
+    entry.restartRecoveryDeliveryRunId !== runId &&
+    (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")
+      ? createRestartRecoveryOperatorSource({
+          authority: opts.operatorAuthority,
+          entry: { ...entry, sessionId },
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: runId,
+          inputProvenance: opts.inputProvenance,
+        })
+      : undefined;
   return {
     guardedHarnessCompletion,
     isCompletionCurrent,
@@ -76,6 +90,13 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
+        ...(directOperatorSource
+          ? {
+              operatorSource: directOperatorSource,
+              sourceRunId: runId,
+              sourceIngress: directOperatorSource.snapshot.sourceIngress,
+            }
+          : {}),
         suppressTextDelivery: opts.internalDeliverySuppressText,
       }),
     },
@@ -257,27 +278,13 @@ export async function prepareEmbeddedSessionState(params: {
   }
 
   const runContext = resolveAgentRunContext(params.opts);
-  // Announce and inter-session turns get the delivering channel's contract, like replies.
-  const deliveryFormat =
-    (params.opts.deliver === true || params.opts.sourceReplyDeliveryMode === "message_tool_only") &&
-    buildDeliveryFormatPrompt({
-      cfg: params.cfg,
-      // Delivery preflight records the actual outbound target as reply* options.
-      channel: params.opts.replyChannel ?? runContext.messageChannel,
-      accountId: params.opts.replyAccountId ?? runContext.accountId,
-      agentId: params.sessionAgentId,
-      allowBootstrap: true,
-    });
-  const extraSystemPrompt = [params.opts.extraSystemPrompt, deliveryFormat].filter(Boolean);
   return {
     sessionEntry,
     requestedThinkLevel,
     resolvedVerboseLevel,
     skillsSnapshot,
     runContext,
-    opts: deliveryFormat
-      ? { ...params.opts, extraSystemPrompt: extraSystemPrompt.join("\n\n") }
-      : params.opts,
+    opts: await prepareCommandConversationContext({ ...params, sessionEntry, runContext }),
   };
 }
 

@@ -153,13 +153,12 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   );
   const allowsUnscheduledTarget =
     isTargetedUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
-  if (!areHeartbeatsEnabled()) {
-    return { kind: "skipped", reason: "disabled" } as const;
-  }
-  if (!allowsUnscheduledTarget && !isHeartbeatEnabledForAgent(cfg, agentId)) {
-    return { kind: "skipped", reason: "disabled" } as const;
-  }
-  if (!allowsUnscheduledTarget && !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (
+    !areHeartbeatsEnabled() ||
+    (!allowsUnscheduledTarget &&
+      (!isHeartbeatEnabledForAgent(cfg, agentId) ||
+        !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)))
+  ) {
     return { kind: "skipped", reason: "disabled" } as const;
   }
 
@@ -263,7 +262,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
   // Plain `updatedAt` changes are normal for heartbeat sessions and should not
   // suppress heartbeat runs; only defer when final delivery recovery is active.
-  const { sessionKey: recentSessionKey, entry: recentSessionEntry } = resolveHeartbeatSession(
+  const { sessionKey: recentSessionKey, entry: recentSessionEntry } = await resolveHeartbeatSession(
     cfg,
     agentId,
     heartbeat,
@@ -511,14 +510,16 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const canRelayToUser =
     visibility.showAlerts &&
     ((delivery.channel !== "none" && Boolean(delivery.to)) || internalProjection !== undefined);
-  const useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
-    cfg,
-    agentId,
-    heartbeat,
-    entry,
-    sessionKey,
-    chatType: delivery.chatType,
-  });
+  const usesResponseTool = (sessionEntry: typeof entry, targetSessionKey: string) =>
+    shouldUseHeartbeatResponseToolPrompt({
+      cfg,
+      agentId,
+      heartbeat,
+      entry: sessionEntry,
+      sessionKey: targetSessionKey,
+      chatType: delivery.chatType,
+    });
+  const useHeartbeatResponseToolPrompt = usesResponseTool(entry, sessionKey);
   const resolveRunPrompt = (useHeartbeatResponseTool: boolean) =>
     resolveHeartbeatRunPrompt({
       cfg,
@@ -617,14 +618,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     }
     outboundPolicySessionKey = isolatedBaseSessionKey;
 
-    const actualUseHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
-      cfg,
-      agentId,
-      heartbeat,
-      entry: runSessionEntry,
-      sessionKey: runSessionKey,
-      chatType: delivery.chatType,
-    });
+    const actualUseHeartbeatResponseToolPrompt = usesResponseTool(runSessionEntry, runSessionKey);
     if (actualUseHeartbeatResponseToolPrompt !== useHeartbeatResponseToolPrompt) {
       heartbeatRunPrompt = resolveRunPrompt(actualUseHeartbeatResponseToolPrompt);
     }
@@ -643,6 +637,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         : entry,
     delivery,
     visibility,
+    canRelayToUser,
     sender,
     replyPrefix,
     runSessionKey,

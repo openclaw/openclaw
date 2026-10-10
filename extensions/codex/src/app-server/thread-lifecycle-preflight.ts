@@ -288,13 +288,13 @@ export async function prepareCodexThreadFinalConfigPatch(
   binding?: CodexAppServerThreadBinding,
 ): Promise<CodexThreadFinalConfigPatchResult> {
   return (
-    (await params.buildFinalConfigPatch?.({
-      ...(binding ? { action: "resume", binding } : { action: "start" }),
-      ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
-    })) ?? {
-      configPatch: params.finalConfigPatch,
-      nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-    }
+    (await params.buildFinalConfigPatch?.(
+      {
+        ...(binding ? { action: "resume", binding } : { action: "start" }),
+        ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
+      },
+      params.client,
+    )) ?? { configPatch: undefined, nativeHookRelayGeneration: undefined }
   );
 }
 
@@ -430,7 +430,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     );
   }
   params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
-  if (params.shellEnvironment) {
+  if (params.shellEnvironment || params.shellGitConfigParameters) {
     params.config = mergeCodexNativeShellEnvironment(
       params.config,
       effectiveConfig.config.shell_environment_policy,

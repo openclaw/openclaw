@@ -176,6 +176,7 @@ export {
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   markSessionAbortTarget,
+  matchesSessionAbortTargetOwner,
   recordInboundSessionMeta,
   resolveSessionAbortTarget,
   resolveSessionParentForkDecision,
@@ -265,6 +266,7 @@ export {
   resolveTranscriptSessionKeyBySessionId,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
+  withTranscriptWriteSequence,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
 export {

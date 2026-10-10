@@ -25,28 +25,43 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import {
   readVerifiedSessionColdArchive,
   resolveSessionColdArchivePath,
   sessionColdRecordSchema,
+  verifyPublishedSessionColdArchive,
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
-import type { SessionColdTurnGuard } from "./session-cold-storage-guard.types.js";
+import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import {
   readSessionAdmissionProtectionKeys,
   selectSessionColdBatch,
   type SessionColdBatchInput,
 } from "./session-cold-storage-selection.js";
-import type { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
+import {
+  readSessionColdLockedValidation,
+  type prepareSessionColdSourceGuard,
+  type SessionColdSourceMatches,
+} from "./session-cold-storage-source-guard.worker.js";
 import {
   readSessionColdTranscript,
   type SessionColdArchive,
 } from "./session-cold-storage-state.js";
-import type { SessionSourcePredicateFacts } from "./session-source-authority.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import type {
+  SessionColdExternalization,
+  SessionColdMutationResult,
+  SessionColdPlan,
+  SessionColdPrepared,
+} from "./session-cold-storage.types.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import {
+  publishUnchangedSessionTranscriptAuthority,
+  readStagedSessionTranscriptAuthority,
+} from "./session-transcript-authority.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -56,27 +71,11 @@ import {
   createSessionTranscriptTurnKernel,
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
-import type { SqliteExpectedSessionTranscriptTurnResult } from "./session-turn.types.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
-export type { SessionColdTurnGuard } from "./session-cold-storage-guard.types.js";
 
 const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
-type SessionColdPlan = {
-  databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
-  sessionId: string;
-  snapshot: SessionStateDeleteSnapshot;
-};
-type SessionColdPrepared = {
-  plan: SessionColdPlan;
-  archive: SessionColdArchive;
-  envelopeBytes: number;
-};
-type SessionColdExternalization = {
-  archive: Omit<SessionColdArchive, "archive_blob">;
-  envelopeBytes: number;
-};
 export type SessionColdPreparationWorkerData = {
   type: "sqlite-transcript-archive-v2";
   operation: "cold-prepare";
@@ -89,14 +88,6 @@ export type SessionColdBatchPrepared = {
   externalizations: SessionColdExternalization[];
   oversizedSessionIds: string[];
   envelopeBytes: number;
-};
-export type SessionColdMutationResult = {
-  archivedTranscripts: number;
-  externalizedTranscripts: number;
-  restored: boolean;
-  sessionKey?: string;
-  turnRebound?: SqliteExpectedSessionTranscriptTurnResult;
-  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
 };
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
@@ -112,13 +103,14 @@ export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databa
       kind: "cold-restore";
       sessionId: string;
       archive: Omit<SessionColdArchive, "archive_blob">;
-      turnGuard?: SessionColdTurnGuard;
+      guard?: SessionColdRestorationGuard;
     }
 );
 export type SessionColdWorkerData = {
   type: "sqlite-transcript-archive-v2";
   operation: "cold-mutate";
   commitGate: SharedArrayBuffer;
+  sourceMatches?: SessionColdSourceMatches;
   plan: SessionColdMutationPlan;
 };
 
@@ -479,23 +471,10 @@ export async function prepareSessionColdRestoreInWorker(
   );
 }
 
-function verifyPublishedArchive(
-  storePath: string,
-  archive: Omit<SessionColdArchive, "archive_blob">,
-): void {
-  const published = fs.readFileSync(resolveSessionColdArchivePath(storePath, archive.archive_name));
-  if (
-    published.length !== archive.archive_bytes ||
-    createHash("sha256").update(published).digest("hex") !== archive.archive_sha256
-  ) {
-    throw new Error("Cold archive changed before publication; its SQLite copy was retained");
-  }
-}
-
 export function mutateSessionColdTranscriptInWorker(
   plan: SessionColdMutationPlan,
   records: SessionColdRecord[] | undefined,
-  onCommit: (database: OpenClawAgentDatabase) => void,
+  onCommit: (database: OpenClawAgentDatabase, validation?: SessionSourceValidation) => void,
   sourceGuard?: ReturnType<typeof prepareSessionColdSourceGuard>,
 ): SessionColdMutationResult {
   return runOpenClawAgentWriteTransaction(
@@ -506,6 +485,7 @@ export function mutateSessionColdTranscriptInWorker(
         externalizedTranscripts: 0,
         restored: false,
       };
+      let sourceValidation: SessionSourceValidation | undefined;
       if (plan.kind === "cold-maintain") {
         onCommit(database);
         return result;
@@ -536,7 +516,7 @@ export function mutateSessionColdTranscriptInWorker(
           ) {
             continue;
           }
-          verifyPublishedArchive(plan.databaseOptions.path, prepared.archive);
+          verifyPublishedSessionColdArchive(plan.databaseOptions.path, prepared.archive);
           executeSqliteQuerySync(
             database.db,
             db.insertInto("session_transcript_cold_archives").values(prepared.archive),
@@ -550,6 +530,9 @@ export function mutateSessionColdTranscriptInWorker(
             database.db,
             db.deleteFrom("session_transcript_index_state").where("session_id", "=", sessionId),
           );
+          if (fresh.sessionKey) {
+            publishUnchangedSessionTranscriptAuthority(database, fresh.sessionKey);
+          }
           result.archivedTranscripts++;
         }
         if (archivedIds.length > 0) {
@@ -566,7 +549,7 @@ export function mutateSessionColdTranscriptInWorker(
           ) {
             continue;
           }
-          verifyPublishedArchive(plan.databaseOptions.path, archive);
+          verifyPublishedSessionColdArchive(plan.databaseOptions.path, archive);
           executeSqliteQuerySync(
             database.db,
             db
@@ -577,11 +560,11 @@ export function mutateSessionColdTranscriptInWorker(
           result.externalizedTranscripts++;
         }
       } else {
-        if (plan.turnGuard) {
-          const { sessionKey, options, goalOperation } = plan.turnGuard;
+        if (plan.guard?.kind === "turn") {
+          const { sessionKey, options, goalOperation } = plan.guard;
           const kernel = createSessionTranscriptTurnKernel(
             {
-              agentId: plan.turnGuard.agentId,
+              agentId: plan.guard.agentId,
               path: database.path,
               sessionId: plan.sessionId,
               sessionKey,
@@ -590,14 +573,15 @@ export function mutateSessionColdTranscriptInWorker(
           );
           const selected = kernel.readEntry(database);
           const entries = new Map([[sessionKey, selected?.entry]]);
-          const refusedSource = sourceGuard
+          sourceValidation = sourceGuard
             ? sourceGuard.read(database, entries)
-            : readRefusedSessionSource(database, plan.turnGuard.sources, undefined, entries);
+            : readSessionSourceValidation(database, plan.guard.sources, undefined, entries);
+          const { refusedSource } = sourceValidation;
           if (refusedSource) {
             return { ...result, refusedSource };
           }
           if (
-            (plan.turnGuard.requireActive &&
+            (plan.guard.requireActive &&
               resolveSessionWorkStartError(sessionKey, selected?.entry)) ||
             (!kernel.resolveExpectedEntry(selected) &&
               !(
@@ -611,6 +595,19 @@ export function mutateSessionColdTranscriptInWorker(
               ))
           ) {
             return { ...result, turnRebound: sqliteSessionTranscriptTurnRebound(selected, "") };
+          }
+        } else if (plan.guard?.kind === "locked") {
+          const validation = readSessionColdLockedValidation(
+            { database, sessionId: plan.sessionId, guard: plan.guard, sourceGuard },
+            resolveTranscriptAppendRefusal,
+          );
+          sourceValidation = validation.sourceValidation;
+          if (sourceValidation.refusedSource || validation.writerRefusal) {
+            return {
+              ...result,
+              refusedSource: sourceValidation.refusedSource,
+              writerRefusal: validation.writerRefusal,
+            };
           }
         }
         const current = readSessionColdTranscript(database.db, plan.sessionId);
@@ -686,7 +683,11 @@ export function mutateSessionColdTranscriptInWorker(
             .where("session_id", "=", session_id),
         )?.session_key;
       }
-      onCommit(database);
+      if (result.restored && result.sessionKey) {
+        publishUnchangedSessionTranscriptAuthority(database, result.sessionKey);
+      }
+      result.transcriptPublication = readStagedSessionTranscriptAuthority(database);
+      onCommit(database, sourceValidation);
       sourceGuard?.assertForeign();
       return result;
     },

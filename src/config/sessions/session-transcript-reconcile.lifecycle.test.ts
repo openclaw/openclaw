@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -83,23 +84,18 @@ function readAgentDatabaseLeaseIds(pathname: string, env?: NodeJS.ProcessEnv): s
 
 function observeCanonicalWriterLeases() {
   const leases = new Map<string, string>();
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        const facts = request.facts;
-        if (
-          request.stage === "open" &&
-          isRecord(facts) &&
-          typeof facts.databasePath === "string" &&
-          typeof facts.leaseId === "string"
-        ) {
-          leases.set(facts.databasePath, facts.leaseId);
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const spy = workerProbe.admission(admission, (request, grant, admit) => {
+    const facts = request.facts;
+    if (
+      request.stage === "open" &&
+      isRecord(facts) &&
+      typeof facts.databasePath === "string" &&
+      typeof facts.leaseId === "string"
+    ) {
+      leases.set(facts.databasePath, facts.leaseId);
+    }
+    admit(request, grant);
+  });
   return { leases, restore: () => spy.mockRestore() };
 }
 
@@ -254,6 +250,9 @@ describe("session transcript reconcile worker lifecycle", () => {
             touchSessionEntry: false,
           },
         );
+        await waitForSessionTranscriptIndexReconcile(options);
+        // Leave only the native fixture lease before queuing cold publication workers.
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         openOpenClawAgentDatabase(options)
           .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
           .run();
@@ -532,6 +531,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         });
       }
       await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(databaseOptions));
       const database = openOpenClawAgentDatabase(databaseOptions);
       // Each active pass additionally retains the canonical publication actor until idle retirement.
       const baselineLeaseCount = countAgentDatabaseLeases(database.path, env);
@@ -754,21 +754,16 @@ describe("session transcript reconcile worker lifecycle", () => {
               )
               .run(scope.sessionId);
           }
-          const createAdmission = admission.createSqliteWorkerOperationAdmission;
           const admissions: string[] = [];
-          const admissionSpy = vi
-            .spyOn(admission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((admit, attachment) =>
-              createAdmission((request, grant) => {
-                if (request.stage === "transaction" || request.stage === "commit") {
-                  admissions.push(request.stage);
-                  if (mode === `preflight-${request.stage}`) {
-                    throw new Error(mode);
-                  }
-                }
-                admit(request, grant);
-              }, attachment),
-            );
+          const admissionSpy = workerProbe.admission(admission, (request, grant, admit) => {
+            if (request.stage === "transaction" || request.stage === "commit") {
+              admissions.push(request.stage);
+              if (mode === `preflight-${request.stage}`) {
+                throw new Error(mode);
+              }
+            }
+            admit(request, grant);
+          });
           const createWorker = vi.fn().mockImplementationOnce(() => {
             throw new Error("worker-create");
           });
@@ -864,6 +859,9 @@ describe("session transcript reconcile worker lifecycle", () => {
             );
           }
           await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
+          await closeOpenClawAgentDatabaseByPathAsync(
+            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+          );
 
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           const databasePath = database.path;

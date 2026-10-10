@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
@@ -13,7 +14,7 @@ import {
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   appendTranscriptEventSync,
-  appendTranscriptMessage,
+  appendTranscriptMessageSync,
   assignSessionOwner,
   cleanupPluginHostSessionStore,
   listSessionEntriesCore,
@@ -54,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 function createSessionScope(label: string) {
@@ -244,6 +246,7 @@ describe("SQLite session entry cache", () => {
     "cleans selected plugin metadata without materializing siblings or saved prompts (%s)",
     async (mode) => {
       const scope = createSessionScope("plugin-cleanup");
+      vi.stubEnv("OPENCLAW_STATE_DIR", scope.env.OPENCLAW_STATE_DIR);
       const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
       const { skillsSnapshot, systemPromptReport } = savedPrompts(
         "unneeded cleanup prompt".repeat(4096),
@@ -438,10 +441,12 @@ describe("SQLite session entry cache", () => {
     openOpenClawAgentDatabase(scope);
     const first = listingEntries(scope);
 
-    await appendTranscriptMessage(
-      { ...scope, sessionId: "first" },
-      { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
-    );
+    expect(
+      appendTranscriptMessageSync(
+        { ...scope, sessionId: "first" },
+        { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
+      ),
+    ).toMatchObject({ ok: true, value: { appended: true } });
     parseSessionEntryCalls.mockClear();
 
     const second = listingEntries(scope);
@@ -451,35 +456,35 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
 
-  it("observes a same-timestamp commit during a listing on the next read", async () => {
-    const { scope, sibling } = await seedPair("external-race");
+  it("observes a same-timestamp sibling commit during a listing on the next read", async () => {
+    const { scope, sibling } = await seedPair("sibling-race");
     listSessionEntriesCore(scope);
 
     const database = openOpenClawAgentDatabase(scope);
     const localEntry = sessionEntry("first", "local-after", 2);
     writeRaw(database.db, scope.sessionKey, localEntry);
 
-    const external = new DatabaseSync(database.path);
-    const maintenance = configureSqliteConnectionPragmas(external, {
+    const writer = openNodeSqliteDatabase(database.path);
+    const maintenance = configureSqliteConnectionPragmas(writer, {
       checkpointIntervalMs: 0,
-      databaseLabel: "session-entry-external-race-writer",
+      databaseLabel: "session-entry-sibling-race-writer",
       databasePath: database.path,
       foreignKeys: true,
       synchronous: "NORMAL",
     });
     try {
-      const externalEntry = sessionEntry("second", "external-after");
+      const siblingEntry = sessionEntry("second", "sibling-after");
       parseSessionEntryCalls.mockImplementationOnce(() => {
-        writeRaw(external, sibling.sessionKey, externalEntry);
+        writeRaw(writer, sibling.sessionKey, siblingEntry);
       });
 
       const entries = listingEntries(scope, true);
       expect(entries.get(scope.sessionKey)?.label).toBe("local-after");
       expect(entries.get(sibling.sessionKey)?.label).toBe("sibling");
-      expect(listingEntries(scope, true).get(sibling.sessionKey)?.label).toBe("external-after");
+      expect(listingEntries(scope, true).get(sibling.sessionKey)?.label).toBe("sibling-after");
     } finally {
       maintenance.close();
-      external.close();
+      writer.close();
     }
   });
 

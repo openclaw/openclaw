@@ -18,7 +18,8 @@ import {
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
-import { retainUserProfileCatalog } from "./user-profile-list.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import { prepareUserProfileCatalog } from "./user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -39,7 +40,6 @@ import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
-  getUserProfileListItem,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -153,7 +153,10 @@ describe("user profiles", () => {
       const profile = ensureProfileForEmail("reader@example.test", options);
       setUserProfileRole(profile.id, "maintainer", options);
       expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
-      const reader = openNodeSqliteDatabase(options.path, { readOnly: true });
+      const reader =
+        mode === "unadmitted"
+          ? new (requireNodeSqlite().DatabaseSync)(options.path, { readOnly: true })
+          : openNodeSqliteDatabase(options.path, { readOnly: true });
       enableNodeSqliteKyselyStatementCache(reader);
       if (mode !== "unadmitted") {
         admitSqliteSchema(reader);
@@ -502,7 +505,7 @@ describe("avatar database lifetime", () => {
       const profile = ensureProfileForEmail("avatar-reader@example.test", { env });
       expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", { env }).ok).toBe(true);
       const { path } = openOpenClawStateDatabase({ env });
-      const release = resident ? retainUserProfileCatalog({ path }) : () => {};
+      const release = resident ? (await prepareUserProfileCatalog({ path })).release : () => {};
       const reader = createProfileAvatarReader(profile.id, resident ? { path } : { env });
       const prepared = await reader.inspect();
       const revision = readUserProfileVersion();

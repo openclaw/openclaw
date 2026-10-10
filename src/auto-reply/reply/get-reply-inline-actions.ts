@@ -1,8 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeNullableString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
@@ -38,6 +35,7 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
+import { resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
 import type { buildStatusReply } from "./commands.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
@@ -71,11 +69,6 @@ function getBuiltinSlashCommands(): Set<string> {
     "status",
     "queue",
   ]));
-}
-
-function resolveSlashCommandName(commandBodyNormalized: string): string | null {
-  const match = commandBodyNormalized.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
-  return normalizeOptionalLowercaseString(match?.[1]) ?? null;
 }
 
 function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
@@ -161,6 +154,7 @@ export async function handleInlineActions(
     provider: params.provider,
     model: params.model,
     contextTokens: params.contextTokens,
+    contextTokenProjection: params.contextTokenProjection,
     isGroup: params.isGroup,
     typing: params.typing,
   };
@@ -210,12 +204,11 @@ export async function handleInlineActions(
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
   const updateAgentBody = (body: string) => {
-    ctx.Body = body;
-    ctx.agentText = body;
-    ctx.BodyForAgent = body;
-    sessionCtx.Body = body;
-    sessionCtx.agentText = body;
-    sessionCtx.BodyForAgent = body;
+    for (const target of [ctx, sessionCtx]) {
+      target.Body = body;
+      target.agentText = body;
+      target.BodyForAgent = body;
+    }
     sessionCtx.BodyStripped = body;
     cleanedBody = body;
   };
@@ -512,7 +505,6 @@ export async function handleInlineActions(
       isGroup,
     }) &&
     inlineStatusRequested;
-  let didSendInlineStatus = false;
   let queueModeOverride: QueueMode | undefined;
   if (handleInlineStatus) {
     const { buildStatusReply } = await commandsRuntimeLoader.load();
@@ -526,13 +518,12 @@ export async function handleInlineActions(
       mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
     await sendInlineReply(inlineStatusReply);
-    didSendInlineStatus = true;
     directives = { ...directives, hasStatusDirective: false };
   }
 
   const runCommands = async (commandInput: typeof command) => {
     const { handleCommands } = await commandsRuntimeLoader.load();
-    return handleCommands({
+    const result = await handleCommands({
       ...commandParams,
       // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
@@ -553,6 +544,10 @@ export async function handleInlineActions(
         skillFilter,
       }),
     });
+    queueModeOverride = result.queueModeOverride ?? queueModeOverride;
+    skillSelections = mergeSelections(skillSelections, result.explicitSkillSelections);
+    notifyInlineCommandSessionMetadataChanges();
+    return result;
   };
 
   if (inlineCommand) {
@@ -562,9 +557,6 @@ export async function handleInlineActions(
       commandBodyNormalized: inlineCommand,
     };
     const inlineResult = await runCommands(inlineCommandContext);
-    queueModeOverride = inlineResult.queueModeOverride;
-    skillSelections = mergeSelections(skillSelections, inlineResult.explicitSkillSelections);
-    notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!cleanedBody) {
         return finishCommand(inlineResult.reply);
@@ -588,42 +580,32 @@ export async function handleInlineActions(
       directiveAck !== undefined ||
       inlineStatusRequested ||
       command.commandBodyNormalized.trim().startsWith("/"));
-  if (!shouldRunCommandHandlers) {
-    return {
-      kind: "continue",
-      directives,
-      abortedLastRun,
-      cleanedBody,
-      ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
-    };
-  }
-  const strippedBody = stripStructuralPrefixes(cleanedBody);
-  const remainingBodyAfterInlineStatus = (
-    isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
-  ).trim();
-  if (
-    didSendInlineStatus &&
-    (remainingBodyAfterInlineStatus.length === 0 ||
-      isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
-  ) {
-    return finishCommand();
-  }
+  if (shouldRunCommandHandlers) {
+    const strippedBody = stripStructuralPrefixes(cleanedBody);
+    const remainingBodyAfterInlineStatus = (
+      isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
+    ).trim();
+    if (
+      handleInlineStatus &&
+      (remainingBodyAfterInlineStatus.length === 0 ||
+        isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
+    ) {
+      return finishCommand();
+    }
 
-  const commandBodyBeforeRun = command.commandBodyNormalized;
-  const bodyBeforeRun = sessionCtx.agentText;
-  const commandResult = await runCommands(command);
-  queueModeOverride = commandResult.queueModeOverride ?? queueModeOverride;
-  skillSelections = mergeSelections(skillSelections, commandResult.explicitSkillSelections);
-  notifyInlineCommandSessionMetadataChanges();
-  if (!commandResult.shouldContinue) {
-    return finishCommand(commandResult.reply);
-  }
-  if (command.commandBodyNormalized !== commandBodyBeforeRun) {
-    cleanedBody = command.commandBodyNormalized;
-  } else {
-    const bodyAfterRun = sessionCtx.agentText;
-    if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
-      cleanedBody = bodyAfterRun;
+    const commandBodyBeforeRun = command.commandBodyNormalized;
+    const bodyBeforeRun = sessionCtx.agentText;
+    const commandResult = await runCommands(command);
+    if (!commandResult.shouldContinue) {
+      return finishCommand(commandResult.reply);
+    }
+    if (command.commandBodyNormalized !== commandBodyBeforeRun) {
+      cleanedBody = command.commandBodyNormalized;
+    } else {
+      const bodyAfterRun = sessionCtx.agentText;
+      if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
+        cleanedBody = bodyAfterRun;
+      }
     }
   }
 

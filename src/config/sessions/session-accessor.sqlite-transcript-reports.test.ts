@@ -55,7 +55,7 @@ const assistant = {
 } satisfies AssistantMessage;
 const selected = { customType: "status", content: body, details: { selected: true } };
 
-async function seedReports() {
+async function seedReports(stopReason: AssistantMessage["stopReason"] = assistant.stopReason) {
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
@@ -73,7 +73,7 @@ async function seedReports() {
       type: "message",
       id: "assistant",
       parentId: "selected",
-      message: { ...assistant, __openclaw: { runId: "run" } },
+      message: { ...assistant, stopReason, __openclaw: { runId: "run" } },
     },
     {
       type: "message",
@@ -459,14 +459,14 @@ describe("SQLite report payload selection", () => {
     "keeps %s reporting independent of unselected compressed bodies",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const db = await seedReports();
+        const db = await seedReports(kind === "run" ? "error" : "stop");
         // Unselected bodies are unavailable; their recorded navigation still supports report decisions.
         const changed = db
           .prepare(
-            "UPDATE transcript_events SET event_zstd = x'010203' WHERE session_id = ? AND event_zstd IS NOT NULL AND seq != 3",
+            "UPDATE transcript_events SET event_zstd = x'010203' WHERE session_id = ? AND event_zstd IS NOT NULL AND seq != 3 AND seq != ?",
           )
-          .run(scope.sessionId);
-        expect(changed.changes).toBe(4);
+          .run(scope.sessionId, kind === "run" ? 4 : -1);
+        expect(changed.changes).toBe(kind === "run" ? 3 : 4);
         const before = transcriptSnapshot(db);
         const selectReport = vi.fn(() => undefined);
         const report: Parameters<typeof appendSessionTranscriptReport>[1] =

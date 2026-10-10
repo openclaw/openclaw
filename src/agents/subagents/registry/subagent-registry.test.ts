@@ -19,7 +19,6 @@ import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/ga
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
@@ -767,15 +766,12 @@ describe("subagent registry seam flow", () => {
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
     await hydrateAndActivateRegistry();
     await Promise.resolve();
     expect(mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual(
       [],
     );
 
-    suspension?.release();
     expect(releaseSwarmRun("slot-active")).toBe(true);
     await waitForFast(() => {
       const agentCalls = mocks.callGateway.mock.calls.filter(

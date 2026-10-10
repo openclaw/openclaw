@@ -55,6 +55,12 @@ function isMatrixExecApprovalAccountEligible(params: {
   if (!account.enabled || !account.configured) {
     return false;
   }
+  return matchesMatrixApprovalConfig(params);
+}
+
+function matchesMatrixApprovalConfig(
+  params: Parameters<typeof shouldHandleMatrixApprovalRequest>[0],
+): boolean {
   const config = resolveMatrixExecApprovalConfig(params);
   return (
     isChannelExecApprovalClientEnabledFromConfig({
@@ -192,20 +198,7 @@ export function shouldHandleMatrixApprovalRequest(params: {
   if (!matchesMatrixRequestAccount(params)) {
     return false;
   }
-  const config = resolveMatrixExecApprovalConfig(params);
-  if (
-    !isChannelExecApprovalClientEnabledFromConfig({
-      enabled: config?.enabled,
-      approverCount: getMatrixApprovalApprovers(params).length,
-    })
-  ) {
-    return false;
-  }
-  return matchesApprovalRequestFilters({
-    request: params.request.request,
-    agentFilter: config?.agentFilter,
-    sessionFilter: config?.sessionFilter,
-  });
+  return matchesMatrixApprovalConfig(params);
 }
 
 function buildFilterCheckRequest(params: {

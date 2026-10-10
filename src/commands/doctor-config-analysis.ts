@@ -151,10 +151,7 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
   let current: unknown = root;
   for (const part of pathLocal) {
     if (typeof part === "number") {
-      if (!Array.isArray(current)) {
-        return null;
-      }
-      if (part < 0 || part >= current.length) {
+      if (!Array.isArray(current) || part < 0 || part >= current.length) {
         return null;
       }
       current = current[part];
@@ -226,16 +223,10 @@ export function noteOpencodeProviderOverrides(
     return;
   }
 
-  const overrides: string[] = [];
-  if (options.opencodePluginActive === true && providers.opencode) {
-    overrides.push("opencode");
-  }
-  if (options.opencodePluginActive === true && providers["opencode-zen"]) {
-    overrides.push("opencode-zen");
-  }
-  if (options.opencodeGoPluginActive === true && providers["opencode-go"]) {
-    overrides.push("opencode-go");
-  }
+  const overrides = [
+    ...(options.opencodePluginActive === true ? ["opencode", "opencode-zen"] : []),
+    ...(options.opencodeGoPluginActive === true ? ["opencode-go"] : []),
+  ].filter((id) => providers[id]);
   if (overrides.length === 0) {
     return;
   }

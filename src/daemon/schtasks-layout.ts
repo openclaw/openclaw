@@ -73,17 +73,12 @@ function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
   return path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
 }
 
-function sanitizeWindowsFilename(value: string): string {
-  return value.replace(/[<>:"/\\|?*]/g, "_").replace(/\p{Cc}/gu, "_");
-}
-
 export function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vbs"): string {
-  const taskName = resolveTaskName(env);
+  const taskName = resolveTaskName(env)
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .replace(/\p{Cc}/gu, "_");
   const entryExtension = extension ?? (shouldUseHiddenWindowsTaskLauncher(env) ? "vbs" : "cmd");
-  return path.join(
-    resolveWindowsStartupDir(env),
-    `${sanitizeWindowsFilename(taskName)}.${entryExtension}`,
-  );
+  return path.join(resolveWindowsStartupDir(env), `${taskName}.${entryExtension}`);
 }
 
 export function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
@@ -462,7 +457,6 @@ async function readWindowsTaskCommand(
           throw new Error("Invalid Scheduled Task environment assignment");
         }
         if (assignment) {
-          // Generated cmd launchers inline service env before the final command.
           environment[assignment.key] = assignment.value;
         }
         continue;
@@ -588,18 +582,27 @@ async function readWindowsTaskCommand(
   );
 }
 
+function createLauncherScriptLines(
+  description: string | undefined,
+  kind: "Task" | "Startup launcher" | "Hidden launcher",
+): string[] {
+  const hidden = kind === "Hidden launcher";
+  const lines = hidden ? [] : ["@echo off"];
+  const trimmedDescription = description?.trim();
+  if (trimmedDescription) {
+    assertNoCmdLineBreak(trimmedDescription, `${kind} description`);
+    lines.push(`${hidden ? "'" : "rem"} ${trimmedDescription}`);
+  }
+  return lines;
+}
+
 export function buildTaskScript({
   description,
   programArguments,
   workingDirectory,
   environment,
 }: GatewayServiceRenderArgs): string {
-  const lines: string[] = ["@echo off"];
-  const trimmedDescription = description?.trim();
-  if (trimmedDescription) {
-    assertNoCmdLineBreak(trimmedDescription, "Task description");
-    lines.push(`rem ${trimmedDescription}`);
-  }
+  const lines = createLauncherScriptLines(description, "Task");
   if (workingDirectory) {
     lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
   }
@@ -637,12 +640,7 @@ export function buildStartupLauncherScript(params: {
   description?: string;
   scriptPath: string;
 }): string {
-  const lines = ["@echo off"];
-  const trimmedDescription = params.description?.trim();
-  if (trimmedDescription) {
-    assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
-    lines.push(`rem ${trimmedDescription}`);
-  }
+  const lines = createLauncherScriptLines(params.description, "Startup launcher");
   lines.push(
     `start "" /min ${quoteCmdScriptArg(getWindowsCmdExePath())} /d /c ${quoteCmdScriptArg(params.scriptPath)}`,
   );
@@ -658,12 +656,7 @@ export function buildHiddenLauncherScript(params: {
   scriptPath: string;
   taskSupervisor?: boolean;
 }): string {
-  const lines = [];
-  const trimmedDescription = params.description?.trim();
-  if (trimmedDescription) {
-    assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
-    lines.push(`' ${trimmedDescription}`);
-  }
+  const lines = createLauncherScriptLines(params.description, "Hidden launcher");
   lines.push('Set shell = CreateObject("WScript.Shell")');
   if (params.taskSupervisor) {
     lines.push(

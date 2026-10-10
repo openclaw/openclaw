@@ -69,10 +69,6 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
-  beginAgentDeletionJournal,
-  removeAgentDeletionJournal,
-} from "../../state/agent-deletion-journal.js";
-import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -80,6 +76,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../../test-utils/agent-deletion-journal.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -4375,7 +4375,7 @@ describe("main-session-restart-recovery", () => {
         createAssistantToolCallMessage([
           { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
         ]),
-        makeToolResultMessage("native tool call had no matching result", {
+        makeToolResultMessage("aborted", {
           toolName: "bash",
           toolCallId: "call-bash-1",
           details: { reason: "missing_tool_result" },
@@ -4383,7 +4383,13 @@ describe("main-session-restart-recovery", () => {
         }),
       ],
       safeTools: "required",
-      promptIncludes: ["unknown outcome", "never claim completion or success"],
+      promptIncludes: [
+        "interrupted by a gateway restart",
+        "marked interrupted, missing, or aborted",
+        "unknown outcome",
+        "not proof of tool failure",
+        "never claim completion or success",
+      ],
     },
     {
       name: "keeps a dangling side-effecting call in an aborted tail restricted",

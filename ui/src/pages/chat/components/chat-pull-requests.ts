@@ -119,7 +119,6 @@ function renderChecks(
     gateway?: ApplicationGateway;
     sessionKey?: string;
     sessionId?: string;
-    basePath?: string;
     presented?: PresentationValue;
   },
 ) {
@@ -183,7 +182,6 @@ function renderChecks(
             .gateway=${props.gateway}
             .sessionKey=${props.sessionKey ?? ""}
             .sessionId=${props.sessionId ?? ""}
-            .basePath=${props.basePath ?? ""}
             .presented=${livePresentation(presented)}
           ></openclaw-chat-ci-automation>
           ${
@@ -324,7 +322,6 @@ export function renderChatPullRequests(props: {
   gateway?: ApplicationGateway;
   sessionKey?: string;
   sessionId?: string;
-  basePath?: string;
   presented?: PresentationValue;
   branch?: ControlUiSessionBranch;
   /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */
@@ -334,10 +331,16 @@ export function renderChatPullRequests(props: {
   onDismissBranch?: (branch: ControlUiSessionBranch) => void;
   onOpenSessionDiff?: () => void;
   publication?: GitHubPublicationView;
+  /** Compact row in the user-opened Details surface; actions keep their owners. */
+  compact?: boolean;
 }) {
   const { publication } = props;
   const published = publication?.result?.status === "published" ? publication.result : undefined;
-  const retainedPublication = publication?.result || publication?.locked || publication?.error;
+  // A failed account discovery has no outcome to retain; only the branch row offers its retry.
+  const retainedPublication =
+    publication?.result ||
+    publication?.locked ||
+    (publication?.error && !publication.optionsUnavailable);
   // Session-only publishers cannot read the broader PR subscription's branch facts.
   const sharedAction =
     !props.branchDismissed &&
@@ -371,10 +374,28 @@ export function renderChatPullRequests(props: {
     <div class="chat-prs" aria-live="polite">
       ${repeat(visible, chatPullRequestId, (pullRequest) => {
         const merged = pullRequest.state === "merged";
+        const compactDescription = props.compact
+          ? [
+              pullRequest.title,
+              `${pullRequest.owner}/${pullRequest.repo}`,
+              pullRequest.branch,
+              t(STATE_LABEL_KEYS[pullRequest.state]),
+              typeof pullRequest.additions === "number"
+                ? `+${pullRequest.additions.toLocaleString()}`
+                : null,
+              typeof pullRequest.deletions === "number"
+                ? `−${pullRequest.deletions.toLocaleString()}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : undefined;
         return html`
           <article class="chat-pr" data-state=${pullRequest.state}>
             <a
               class="chat-pr__link"
+              title=${compactDescription ?? nothing}
+              aria-description=${compactDescription ?? nothing}
               href=${pullRequest.url}
               target="_blank"
               rel="noopener noreferrer"
@@ -387,9 +408,11 @@ export function renderChatPullRequests(props: {
                 ${merged ? icons.gitMerge : icons.gitPullRequest}
               </span>
               <span class="chat-pr__number">#${pullRequest.number}</span>
-              <span class="chat-pr__identity">
-                <span class="chat-pr__repo">${pullRequest.repo}</span>
-                <span class="chat-pr__branch">${pullRequest.branch}</span>
+              <span class="chat-pr__identity" title=${compactDescription ?? nothing}>
+                <span class="chat-pr__repo"
+                  >${props.compact ? pullRequest.title : pullRequest.repo}</span
+                >
+                ${props.compact ? nothing : html`<span class="chat-pr__branch">${pullRequest.branch}</span>`}
               </span>
             </a>
             <span class="chat-pr__meta">

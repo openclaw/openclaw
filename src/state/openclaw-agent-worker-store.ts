@@ -17,7 +17,9 @@ import {
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
+  type SqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import {
   reserveSqliteWorkerInputPreparation,
   type SqliteWorkerOperations,
@@ -38,9 +40,9 @@ import {
 } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionScope,
-  AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -109,17 +111,51 @@ export function executeOpenClawAgentWorkerPublication<
   return result as Promise<Operations[Key]["output"]>;
 }
 
+// Published plugins provide the released execution shape, not private host capabilities.
+type AgentWorkerPublicationExecution = Pick<
+  OpenClawAgentDatabaseExecution,
+  | "agentId"
+  | "path"
+  | "fileIdentity"
+  | "assertCurrent"
+  | "captureGenerationClaim"
+  | "prepare"
+  | "runExisting"
+  | "release"
+>;
+
+type AgentWorkerPublicationOptions = {
+  moduleUrl: URL;
+  input: unknown;
+  assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
+  observeAdmission?: (
+    admission: SqliteWorkerOperationAdmission,
+    retained: RetainedWorkerTransactionAdmission,
+  ) => void;
+  onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
+};
+
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
+// Keep the latest released shape last for consumers deriving parameters from this function.
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource:
+    | DatabaseSync
+    | {
+        execution: AgentWorkerPublicationExecution &
+          Pick<OpenClawAgentDatabaseExecution, "capturePreparedGenerationClaim">;
+      },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
 /** Retains a native borrow or checks a caller-held executor; each operation borrows the canonical executor. */
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
-  publicationSource: DatabaseSync | { execution: OpenClawAgentDatabaseExecution },
-  worker: {
-    moduleUrl: URL;
-    input: unknown;
-    assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
-    /** Only for an accepted sequence whose owner closes this store at settlement. */
-    retainExecutionUntilClose?: true;
-  },
+  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  worker: AgentWorkerPublicationOptions,
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -161,7 +197,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   let revoked = false;
   let closing: Promise<void> | undefined;
   let drainExecution: OpenClawAgentDatabaseExecution | undefined;
-  let retainedExecution: OpenClawAgentDatabaseExecution | undefined;
   let releaseBorrow: (() => void) | undefined;
   let unregisterAgent: (() => void) | undefined;
   let unregisterState: (() => void) | undefined;
@@ -205,8 +240,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     closing ??= (async () => {
       await Promise.allSettled(pending);
       await releaseDrainExecution();
-      await retainedExecution?.release();
-      retainedExecution = undefined;
       releaseBorrow?.();
       releaseBorrow = undefined;
       unregisterAgent?.();
@@ -242,10 +275,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     });
     if (expectedDatabase) {
       releaseBorrow = retainAgentDatabase(expectedDatabase);
-    }
-    if (worker.retainExecutionUntilClose) {
-      // A lifetime borrow leaves native opening lazy and each command in its own FIFO turn.
-      retainedExecution = captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
     }
   } catch (error) {
     try {
@@ -283,28 +312,32 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     const source: AgentDatabaseRequestExecutionSource = {
       assertCurrent: assert,
       createAdmission(binding) {
-        return () => {
+        return (retained) => {
           let phase: "waiting" | "transaction" | "commit" = "waiting";
-          return {
-            nativeLocations: binding.nativeLocations,
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              binding.authorize(worker.assertAdmission?.(request) ?? request);
-              if (request.stage === "transaction" || request.stage === "commit") {
-                if (
-                  !(
-                    (phase === "waiting" && request.stage === "transaction") ||
-                    (phase === "transaction" && request.stage === "commit")
-                  )
-                ) {
-                  throw new Error("Agent publication authority requested out of order");
-                }
-                phase = request.stage;
+          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+            binding.authorize(worker.assertAdmission?.(request) ?? request);
+            if (request.stage === "transaction" || request.stage === "commit") {
+              if (
+                !(
+                  (phase === "waiting" && request.stage === "transaction") ||
+                  (phase === "transaction" && request.stage === "commit")
+                )
+              ) {
+                throw new Error("Agent publication authority requested out of order");
               }
-              if (!grant()) {
-                throw new Error("Agent publication authority expired");
-              }
-            }, binding.attachment),
-          };
+              phase = request.stage;
+            }
+            if (!grant(() => worker.onAdmitted?.(request))) {
+              throw new Error("Agent publication authority expired");
+            }
+          }, binding.attachment);
+          try {
+            worker.observeAdmission?.(admission, retained);
+          } catch (error) {
+            admission.finish();
+            throw error;
+          }
+          return { nativeLocations: binding.nativeLocations, admission };
         };
       },
     };
@@ -325,7 +358,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       if (
         completed.ok &&
         !revoked &&
-        !retainedExecution &&
         getGatewayRestartDrainSignal().aborted &&
         !cleanupSignal.aborted
       ) {

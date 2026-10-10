@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { operatorStandingGrantPublication } from "../../gateway/operator-approval-store.publication.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   executeSqliteQuerySync,
@@ -644,14 +645,16 @@ export function deleteCronJobRowInDatabase(
 
 function revokeCronJobStandingGrants(db: DatabaseSync, jobId: string): void {
   if (tableExists(db, "operator_approval_standing_grants")) {
-    executeSqliteQuerySync(
+    const revoked = executeSqliteQuerySync(
       db,
       getCronStoreKysely(db)
         .updateTable("operator_approval_standing_grants")
         .set({ revoked_at_ms: Date.now(), revoked_by: "cron-job-deleted" })
         .where("cron_job_id", "=", jobId)
-        .where("revoked_at_ms", "is", null),
+        .where("revoked_at_ms", "is", null)
+        .returningAll(),
     );
+    operatorStandingGrantPublication.stagePostimages(db, revoked.rows);
   }
 }
 

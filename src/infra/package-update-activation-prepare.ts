@@ -190,7 +190,7 @@ export async function preparePackageActivationJournal(
     throw new Error("Package publication recovery requires same-filesystem directories.");
   }
   // A completed receipt may be replaced only by this new, genuinely admitted
-  // operation in the same original store. Legacy/incomplete artifacts refuse.
+  // operation under its current fence. Legacy/incomplete artifacts refuse.
   assertPackageActivationLayout(anchor);
   const priorJournal = fs.lstatSync(resolvePackageActivationControl(anchor), {
     throwIfNoEntry: false,

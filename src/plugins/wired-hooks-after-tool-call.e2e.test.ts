@@ -1,10 +1,10 @@
 // Exercises wired plugin hooks after tool-call completion.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
- * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.ts)
+ * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.completion.ts)
  */
 import { createBaseToolHandlerState } from "../agents/agent-tool-handler-state.test-helpers.js";
-import { handleToolExecutionStart } from "../agents/embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionStart } from "../agents/embedded-agent-subscribe.handlers.tools.start.js";
 import { endTool } from "../agents/embedded-agent-subscribe.handlers.tools.test-support.js";
 
 const hookMocks = vi.hoisted(() => ({

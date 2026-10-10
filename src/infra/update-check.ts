@@ -548,27 +548,17 @@ async function checkDepsStatus(params: {
     "node_modules",
     ...(manager === "pnpm" ? [".modules.yaml"] : []),
   );
-  const paths = { manager, lockfilePath, markerPath };
   const lockExists = await exists(lockfilePath);
   const markerExists = await exists(markerPath);
-  if (!lockExists) {
-    return {
-      ...paths,
-      status: "unknown",
-      reason: "lockfile missing",
-    };
-  }
-  if (!markerExists) {
-    return {
-      ...paths,
-      status: "missing",
-      reason: "node_modules marker missing",
-    };
-  }
-
   return {
-    ...paths,
-    status: "ok",
+    manager,
+    lockfilePath,
+    markerPath,
+    ...(!lockExists
+      ? { status: "unknown" as const, reason: "lockfile missing" }
+      : !markerExists
+        ? { status: "missing" as const, reason: "node_modules marker missing" }
+        : { status: "ok" as const }),
   };
 }
 

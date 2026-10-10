@@ -165,6 +165,10 @@ and runtime details.
 
 ## Session lifecycle
 
+Independent sessions can initialize their first turns concurrently. Requests for
+the same session remain ordered; parent forks and resets retain their shared-state
+coordination.
+
 Sessions are reused until you reset them manually or opt into an automatic reset policy:
 
 - **No automatic reset** (default `mode: "none"`) - sessions keep the same
@@ -220,9 +224,14 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
-First turns that qualify for restart-safe admission through `sessions.create`
-use the same durable admission as idle `chat.send` turns, including direct RPC
-clients. A restart
+For a freshly created session's eligible local, idle, restart-safe initial turn,
+`sessions.create` commits the session first, then commits the input transcript and
+restart claim together before acknowledging a started run. Failure or a crash
+between those commits can leave the created session with no retained input bytes.
+After the input commits, restart recovery retains that turn even if the client
+never receives the acknowledgment. Queued input, hook-dependent input, worker
+placement, idle `chat.send`, and retries of existing durable input retain their
+existing admission and recovery behavior. A restart
 during managed worktree preparation resumes the accepted turn and prepares or
 reuses its local worktree before starting the agent. Recovery does not inherit
 the original caller's permission to run worktree setup scripts.
@@ -230,6 +239,15 @@ the original caller's permission to run worktree setup scripts.
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.
+
+For authenticated operator turns, recovery revalidates the original caller's
+recorded permissions against current profile, role, access-grant, and device
+policy. A Control UI administrator can therefore continue authorized automation
+work after a restart without losing `operator.admin`. Recovery cannot gain scopes
+the original caller lacked, and revocation still stops the recovered run.
+Older interrupted turns without a recorded authorization source remain restricted;
+send a fresh authenticated message to continue privileged work. Session ownership
+or a saved display name never grants recovery permissions.
 
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a

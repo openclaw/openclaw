@@ -236,21 +236,23 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         sessionKey,
         agentId,
       });
+    const resolveReclaimTarget = () =>
+      resolveWorkerPlacementSessionTarget({
+        sessionRuntime,
+        config: getRuntimeConfig(),
+        sessionId,
+        sessionKey,
+        agentId,
+        expectedTarget: target,
+        errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+      });
     let assertBindingCurrent: (() => void) | undefined;
     return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope: target.storePath,
       identities: lifecycleIdentities,
       prepare: async (lifecycle) => {
         beforeDrain?.();
-        const resolved = await resolveWorkerPlacementSessionTarget({
-          sessionRuntime,
-          config: getRuntimeConfig(),
-          sessionId,
-          sessionKey,
-          agentId,
-          expectedTarget: target,
-          errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
-        });
+        const resolved = await resolveReclaimTarget();
         const placement = await params.placements.getAsync(sessionId);
         authorize?.();
         resolved.assertBindingCurrent(getRuntimeConfig());
@@ -274,15 +276,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
         }
         assertBindingCurrent();
-        const resolved = await resolveWorkerPlacementSessionTarget({
-          sessionRuntime,
-          config: getRuntimeConfig(),
-          sessionId,
-          sessionKey,
-          agentId,
-          expectedTarget: target,
-          errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
-        });
+        const resolved = await resolveReclaimTarget();
         // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
         // immediately before drain so revoked callers cannot commit stale placement authority.
         assertBindingCurrent();
@@ -291,7 +285,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         resolved.assertCurrent(getRuntimeConfig());
         const assertDrainCurrent = () => {
           assertBindingCurrent?.();
-          resolved.assertCurrent(getRuntimeConfig());
+          resolved.assertBindingCurrent(getRuntimeConfig());
         };
         const placement = await begin(assertDrainCurrent);
         assertDrainCurrent();

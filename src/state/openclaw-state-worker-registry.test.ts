@@ -23,9 +23,6 @@ vi.mock("../infra/push-web-store.worker.js", () => {
 vi.mock("../agents/worktrees/dispatch.worker.js", () => {
   throw new Error("APNs preparation loaded worktrees");
 });
-vi.mock("../fleet/registry.worker.js", () => {
-  throw new Error("APNs preparation loaded fleet");
-});
 
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
@@ -35,6 +32,9 @@ it("loads only the requested domain and routes exact operation names after prepa
       throw new Error("The registry must leave database opening to its handler");
     },
     write: () => {
+      throw new Error("The registry must leave transactions to its handler");
+    },
+    writeAdmitted: () => {
       throw new Error("The registry must leave transactions to its handler");
     },
     stateOptions: () => ({ path: "synthetic-state.sqlite", env: {} }),

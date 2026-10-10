@@ -90,11 +90,7 @@ openclaw-plugin-settings-editor {
   background: transparent;
   border: 0;
 }
-.plugin-editor__control .settings-row > .settings-row__control:only-child {
-  width: 100%;
-  max-width: none;
-  min-width: 0;
-}
+.plugin-editor__control .settings-row > .settings-row__control:only-child,
 .plugin-editor__control .settings-input,
 .plugin-editor__control .settings-select {
   width: 100%;

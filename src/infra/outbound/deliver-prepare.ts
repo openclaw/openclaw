@@ -70,16 +70,13 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
     Object.fromEntries(
       Object.entries({
         ...rest,
-        ...(typeof payload.text === "string" ? { text: summary.text } : {}),
-        ...(summary.mediaUrls.length === 1
-          ? { mediaUrl: summary.mediaUrls[0] }
-          : summary.mediaUrls.length > 1
-            ? { mediaUrls: summary.mediaUrls }
-            : {}),
-        ...(replyToId !== undefined ? { replyToId } : {}),
-        ...(replyToTag === true ? { replyToTag: true } : {}),
-        ...(replyToCurrent === true ? { replyToCurrent: true } : {}),
-        ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+        text: typeof payload.text === "string" ? summary.text : undefined,
+        mediaUrl: summary.mediaUrls.length === 1 ? summary.mediaUrls[0] : undefined,
+        mediaUrls: summary.mediaUrls.length > 1 ? summary.mediaUrls : undefined,
+        replyToId,
+        replyToTag: replyToTag === true ? true : undefined,
+        replyToCurrent: replyToCurrent === true ? true : undefined,
+        audioAsVoice: audioAsVoice === true ? true : undefined,
       }).filter(([, value]) => value !== undefined),
     ) as ReplyPayload,
   );
@@ -162,10 +159,6 @@ async function prepareOutboundPlan(
   let plan =
     structuredPlan ??
     createOutboundPayloadPlan(params.payloads, {
-      cfg: params.cfg,
-      sessionKey: params.session?.policyKey ?? params.session?.key,
-      surface: params.channel,
-      conversationType: params.session?.conversationType,
       extractMarkdownImages: handler.extractMarkdownImages,
     });
   if (structuredPlan && handler.extractMarkdownImages) {

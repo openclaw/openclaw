@@ -13,11 +13,11 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../../media/configured-max-bytes.js";
-import type { LocalMediaAccessError } from "../../media/local-media-access.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
@@ -32,12 +32,18 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
-import { buildAssistantReplyContentFromInputs } from "./chat-assistant-content.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
+import { formatForLog } from "../ws-log.js";
+import {
+  buildAssistantReplyContentFromInputs,
+  hasAssistantDisplayMediaContent,
+} from "./chat-assistant-content.js";
 import {
   readChatSendReplyPayload,
   replaceChatSendReplyPayload,
 } from "./chat-send-command-replies.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
+import type { GatewayRequestContext } from "./types.js";
 
 export type WebchatReplyMediaRequesterContext = Pick<
   MsgContext,
@@ -55,6 +61,7 @@ type WebchatReplyMediaScope = {
   cfg: OpenClawConfig;
   agentId: string;
   sessionEntry: SessionEntry | undefined;
+  readSource?: CapturedSessionEntryReadSource;
   requesterContext?: WebchatReplyMediaRequesterContext;
   sessionKey?: string;
   accountId?: string;
@@ -73,6 +80,45 @@ function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterCon
   };
 }
 
+function webchatReplyMediaAuthority(
+  scope: WebchatReplyMediaScope,
+  placement: WorkerSessionPlacementRecord | undefined,
+) {
+  const entry = scope.sessionEntry;
+  const workspace = resolveWebchatReplyWorkspace(scope, placement);
+  return {
+    workspace,
+    key: JSON.stringify([
+      entry?.sessionId,
+      entry?.lifecycleRevision,
+      entry?.permissionMode,
+      entry?.execNode,
+      entry?.repositoryWorkspaceId,
+      workspace.remote,
+      workspace.workspaceDir,
+      resolveWebchatReplyWorkspaceOnly(scope),
+    ]),
+  };
+}
+
+/** Retain one policy snapshot for both prepared reads and their live custody checks. */
+export function captureWebchatReplyMediaAuthority(
+  scope: WebchatReplyMediaScope,
+  placement: WorkerSessionPlacementRecord | undefined,
+) {
+  const expected = webchatReplyMediaAuthority(scope, placement);
+  return {
+    workspace: expected.workspace,
+    matches: (
+      sessionEntry: SessionEntry | undefined,
+      currentPlacement: WorkerSessionPlacementRecord | undefined,
+      cfg = scope.cfg,
+    ) =>
+      webchatReplyMediaAuthority({ ...scope, sessionEntry, cfg }, currentPlacement).key ===
+      expected.key,
+  };
+}
+
 /** Bind reads to the source session; reread its owner after every awaited file operation. */
 export function captureWebchatReplyMediaScope(
   params: Omit<WebchatReplyMediaScope, "sessionEntry"> & {
@@ -85,33 +131,23 @@ export function captureWebchatReplyMediaScope(
   assertCurrent: () => void;
 } {
   const readEntry = () => loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
+  const readPlacement = (entry: SessionEntry | undefined) =>
+    entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
+      ? resolveSessionWorkerPlacementContext()
+          .workerSessionPlacementService?.getMany([entry.sessionId])
+          .get(entry.sessionId)
+      : undefined;
   const sessionEntry = readEntry();
   const scope = { ...params, sessionEntry: sessionEntry ? { ...sessionEntry } : undefined };
-  const authority = (entry: SessionEntry | undefined) => {
-    const currentScope = { ...scope, sessionEntry: entry };
-    const workspace = resolveWebchatReplyWorkspace(currentScope);
-    return {
-      workspace,
-      key: JSON.stringify([
-        entry?.sessionId,
-        entry?.lifecycleRevision,
-        entry?.permissionMode,
-        entry?.execNode,
-        entry?.repositoryWorkspaceId,
-        workspace.remote,
-        workspace.workspaceDir,
-        resolveWebchatReplyWorkspaceOnly(currentScope),
-      ]),
-    };
-  };
-  const expected = authority(scope.sessionEntry);
+  const authority = captureWebchatReplyMediaAuthority(scope, readPlacement(sessionEntry));
   return {
     ...scope,
     // The custody fence already read this workspace; preparation consumes that same snapshot.
-    workspace: expected.workspace,
+    workspace: authority.workspace,
     assertCurrent: () => {
       params.assertCurrent?.();
-      if (authority(readEntry()).key !== expected.key) {
+      const current = readEntry();
+      if (!authority.matches(current, readPlacement(current))) {
         throw new Error("Session media access changed before attachment delivery.");
       }
     },
@@ -126,13 +162,15 @@ type WebchatReplyMediaPreparationParams = {
   abortSignal?: AbortSignal;
   includeSensitiveMedia?: boolean;
   includeSensitiveDisplay?: boolean;
-  onLocalAudioAccessDenied?: (error: LocalMediaAccessError) => void;
-  onManagedMediaPrepareError?: (message: string) => void;
-  onSensitiveDisplayPrepareError?: (message: string) => void;
+  logGateway?: Pick<GatewayRequestContext["logGateway"], "warn">;
 };
 
 type WebchatReplyContent = Awaited<ReturnType<typeof buildAssistantReplyContentFromInputs>> & {
   mediaMessage: Awaited<ReturnType<typeof buildWebchatAssistantMessageFromReplyPayloads>>;
+  broadcastContent: Awaited<
+    ReturnType<typeof buildAssistantReplyContentFromInputs>
+  >["assistantContent"];
+  managedMediaPrepareFailed: boolean;
 };
 
 /** Keep normalization and grouped content preparation inside one media custody scope. */
@@ -167,12 +205,17 @@ export async function withPreparedWebchatReplyMedia<T>(
         payloads,
         inputsByIndex,
         buildContent: async (inputs) => {
+          let managedMediaPrepareFailed = false;
           const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
             inputs.map(readChatSendReplyPayload),
             {
               localRoots,
               assertCurrent: captureChannelReadAuthority(),
-              onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
+              onLocalAudioAccessDenied: (err) => {
+                params.logGateway?.warn(
+                  `webchat audio embedding denied local path: ${formatForLog(err)}`,
+                );
+              },
             },
           );
           const content = await buildAssistantReplyContentFromInputs({
@@ -185,10 +228,20 @@ export async function withPreparedWebchatReplyMedia<T>(
             abortSignal: params.abortSignal,
             includeSensitiveMedia: params.includeSensitiveMedia,
             includeSensitiveDisplay: params.includeSensitiveDisplay,
-            onManagedMediaPrepareError: params.onManagedMediaPrepareError,
-            onSensitiveDisplayPrepareError: params.onSensitiveDisplayPrepareError,
+            onManagedMediaPrepareError: (message) => {
+              managedMediaPrepareFailed = true;
+              params.logGateway?.warn(`webchat media embedding skipped attachment: ${message}`);
+            },
+            onSensitiveDisplayPrepareError: (message) => {
+              params.logGateway?.warn(`webchat sensitive display skipped attachment: ${message}`);
+            },
           });
-          return { ...content, mediaMessage };
+          const broadcastContent = hasAssistantDisplayMediaContent(content.assistantContent)
+            ? content.assistantContent
+            : hasAssistantDisplayMediaContent(mediaMessage?.content)
+              ? mediaMessage?.content
+              : content.assistantContent;
+          return { ...content, mediaMessage, broadcastContent, managedMediaPrepareFailed };
         },
       });
     },
@@ -208,14 +261,11 @@ export async function prepareWebchatReplyMediaForDisplay(
   );
 }
 
-function resolveWebchatReplyWorkspace(params: WebchatReplyMediaScope) {
+function resolveWebchatReplyWorkspace(
+  params: WebchatReplyMediaScope,
+  placement: WorkerSessionPlacementRecord | undefined,
+) {
   const entry = params.sessionEntry;
-  const placement =
-    entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
-      ? resolveSessionWorkerPlacementContext()
-          .workerSessionPlacementService?.getMany([entry.sessionId])
-          .get(entry.sessionId)
-      : undefined;
   // Placement can be remote before any workspace metadata has been published.
   const remote = Boolean(
     entry?.execNode ||
@@ -276,17 +326,12 @@ export function getWebchatReplyMediaLocalRoots(
 }
 
 function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string): boolean {
-  if (mediaUrl.trim().toLowerCase().startsWith("data:")) {
-    return true;
-  }
-  if (!isAudioFileName(mediaUrl)) {
-    return false;
-  }
-  if (isPassThroughRemoteMediaSource(mediaUrl)) {
-    return true;
-  }
   // Trusted audio keeps its playback path and size cap; the reader still enforces local roots.
-  return payload.trustedLocalMedia === true;
+  return (
+    mediaUrl.trim().toLowerCase().startsWith("data:") ||
+    (isAudioFileName(mediaUrl) &&
+      (isPassThroughRemoteMediaSource(mediaUrl) || payload.trustedLocalMedia === true))
+  );
 }
 
 /** Normalize reply media paths for webchat display without leaking sensitive media. */
@@ -316,18 +361,21 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       await import("../../auto-reply/reply/reply-media-paths.js");
     assertCurrent?.();
     const workspaceOnly = resolveWebchatReplyWorkspaceOnly(params);
-    const normalizeMediaPaths = createReplyMediaPathNormalizer({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      workspaceDir,
-      sessionWorkspaceDir: workspaceOnly && !remote ? workspaceDir : undefined,
-      workspaceOnly,
-      allowHostWorkspace: !remote,
-      accountId: params.accountId,
-      ...resolveRequesterPolicyContext(params.requesterContext),
-      localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
-    });
+    const normalizeMediaPaths = createReplyMediaPathNormalizer(
+      {
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        workspaceDir,
+        sessionWorkspaceDir: workspaceOnly && !remote ? workspaceDir : undefined,
+        workspaceOnly,
+        allowHostWorkspace: !remote,
+        accountId: params.accountId,
+        ...resolveRequesterPolicyContext(params.requesterContext),
+        localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
+      },
+      params.readSource,
+    );
     const normalized: ReplyPayload[] = [];
     for (const payload of params.payloads) {
       if (payload.sensitiveMedia === true) {

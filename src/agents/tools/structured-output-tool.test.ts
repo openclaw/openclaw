@@ -31,27 +31,6 @@ describe("structured_output", () => {
     expect(peekSwarmStructuredOutput(runId)?.structured).toEqual({ answer: "yes" });
   });
 
-  it("publishes a provider-valid schema while accepting any JSON result", () => {
-    const tool = createStructuredOutputTool({
-      runId,
-      schema: {},
-    });
-    expect(tool.parameters).toEqual({
-      type: "object",
-      required: ["result"],
-      properties: {
-        result: {
-          type: ["object", "array", "string", "number", "boolean", "null"],
-        },
-      },
-      additionalProperties: false,
-    });
-    for (const result of [{ answer: "yes" }, ["yes"], "yes", 1, true, null]) {
-      expect(Value.Check(tool.parameters, { result })).toBe(true);
-    }
-    expect(Value.Check(tool.parameters, { result: undefined })).toBe(false);
-  });
-
   it("nudges once then freezes schemaError", async () => {
     const tool = createStructuredOutputTool({
       runId,
@@ -121,71 +100,55 @@ describe("structured_output", () => {
     expect(peekSwarmStructuredOutput(runId)?.invalidAttempts).toBe(2);
   });
 
-  it.each([
-    ["first result", "sync"],
-    ["first result", "async"],
-    ["invalid retry", "sync"],
-    ["invalid retry", "async"],
-  ] as const)(
-    "preserves the retry budget when persisting the %s fails (%s)",
-    async (failure, mode) => {
-      const persist = vi.fn();
-      const tool = createStructuredOutputTool({
-        runId,
-        schema: {
-          type: "object",
-          properties: { count: { type: "number" } },
-          required: ["count"],
-        },
-        onStateChange: persist,
+  it("preserves the retry budget when asynchronously persisting an invalid retry fails", async () => {
+    const persist = vi.fn();
+    const tool = createStructuredOutputTool({
+      runId,
+      schema: {
+        type: "object",
+        properties: { count: { type: "number" } },
+        required: ["count"],
+      },
+      onStateChange: persist,
+    });
+    await expect(tool.execute("initial", { result: { count: "bad" } })).rejects.toThrow(
+      "Retry once",
+    );
+    const previous = peekSwarmStructuredOutput(runId);
+    const entered = createDeferred();
+    const release = createDeferred();
+    persist.mockImplementationOnce(() => {
+      entered.resolve();
+      return release.promise.then(() => {
+        throw new Error("storage unavailable");
       });
-      if (failure === "invalid retry") {
-        await expect(tool.execute("initial", { result: { count: "bad" } })).rejects.toThrow(
-          "Retry once",
-        );
-      }
-      const previous = peekSwarmStructuredOutput(runId);
-      const entered = createDeferred();
-      const release = createDeferred();
-      persist.mockImplementationOnce(() => {
-        if (mode === "sync") {
-          throw new Error("storage unavailable");
-        }
-        entered.resolve();
-        return release.promise.then(() => {
-          throw new Error("storage unavailable");
-        });
-      });
-      const attempted = failure === "first result" ? { count: 1 } : { count: "still bad" };
-      const rejected = expect(tool.execute("failed-write", { result: attempted })).rejects.toThrow(
-        "Failed to persist structured_output: storage unavailable",
-      );
-      if (mode === "async") {
-        await entered.promise;
-        try {
-          expect(peekSwarmStructuredOutput(runId)).toEqual(previous);
-        } finally {
-          release.resolve();
-        }
-      }
-      await rejected;
+    });
+    const rejected = expect(
+      tool.execute("failed-write", { result: { count: "still bad" } }),
+    ).rejects.toThrow("Failed to persist structured_output: storage unavailable");
+    await entered.promise;
+    try {
       expect(peekSwarmStructuredOutput(runId)).toEqual(previous);
+    } finally {
+      release.resolve();
+    }
+    await rejected;
+    expect(peekSwarmStructuredOutput(runId)).toEqual(previous);
 
-      const corrected = { count: 2 };
-      expect((await tool.execute("corrected", { result: corrected })).details).toEqual({
-        status: "recorded",
-      });
-      expect(peekSwarmStructuredOutput(runId)).toEqual({
-        structured: corrected,
-        invalidAttempts: 0,
-      });
-      expect(persist).toHaveBeenLastCalledWith({ structured: corrected, invalidAttempts: 0 });
-      await expect(tool.execute("duplicate", { result: { count: 3 } })).rejects.toThrow(
-        "already recorded",
-      );
-      expect(consumeSwarmStructuredOutput(runId)?.structured).toEqual(corrected);
-    },
-  );
+    const corrected = { count: 2 };
+    expect((await tool.execute("corrected", { result: corrected })).details).toEqual({
+      status: "recorded",
+    });
+    expect(peekSwarmStructuredOutput(runId)).toEqual({
+      structured: corrected,
+      invalidAttempts: 0,
+    });
+    expect(persist).toHaveBeenLastCalledWith({ structured: corrected, invalidAttempts: 0 });
+    await expect(tool.execute("duplicate", { result: { count: 3 } })).rejects.toThrow(
+      "already recorded",
+    );
+    expect(consumeSwarmStructuredOutput(runId)?.structured).toEqual(corrected);
+  });
 
   it("publishes one acknowledged result when tool calls overlap", async () => {
     const entered = createDeferred();

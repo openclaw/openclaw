@@ -2,10 +2,12 @@ import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/com
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { resolveDiscordChannelContext } from "./agent-components-context.js";
+import {
+  replyUnavailableComponentInteraction,
+  resolveDiscordChannelContext,
+} from "./agent-components-context.js";
 import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
 import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
-import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
@@ -77,10 +79,6 @@ async function ensureGuildComponentMemberAllowed(params: {
     return true;
   }
 
-  const replyUnauthorized = async () => {
-    await replySilently(interaction, { content: unauthorizedReply, ephemeral: true });
-  };
-
   if (
     channelConfig?.enabled === false ||
     !resolveDiscordChannelPolicyCommandAuthorizer({
@@ -90,7 +88,7 @@ async function ensureGuildComponentMemberAllowed(params: {
     }).allowed ||
     channelConfig?.allowed === false
   ) {
-    await replyUnauthorized();
+    await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
     return false;
   }
 
@@ -110,7 +108,7 @@ async function ensureGuildComponentMemberAllowed(params: {
   }
 
   logVerbose(`agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`);
-  await replyUnauthorized();
+  await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
   return false;
 }
 
@@ -142,10 +140,7 @@ async function ensureComponentUserAllowed(params: {
   logVerbose(
     `discord component ${params.componentLabel}: blocked user ${params.user.id} (not in allowedUsers)`,
   );
-  await replySilently(params.interaction, {
-    content: params.unauthorizedReply,
-    ephemeral: true,
-  });
+  await replyUnavailableComponentInteraction(params.interaction, params.unauthorizedReply);
   return false;
 }
 
@@ -173,10 +168,10 @@ export async function ensureAgentComponentInteractionAllowed(params: {
     return null;
   }
   if (ctx.isPolicyCurrent?.() === false) {
-    await replySilently(params.interaction, {
-      content: "Access policy changed. Try this interaction again.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "Access policy changed. Try this interaction again.",
+    );
     return null;
   }
   return { parentId: guildContext.channelCtx.parentId };
@@ -222,10 +217,10 @@ export async function resolveAuthorizedComponentInteraction(params: {
   });
 
   if (ctx.isPolicyCurrent?.() === false) {
-    await replySilently(params.interaction, {
-      content: "Access policy changed. Try this interaction again.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "Access policy changed. Try this interaction again.",
+    );
     return null;
   }
   if (
@@ -244,10 +239,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
     interactionCtx,
     channelCtx: guildContext.channelCtx,
     guildInfo: guildContext.guildInfo,
-    channelConfig: guildContext.channelConfig,
-    allowNameMatching: guildContext.allowNameMatching,
     commandAuthorized,
-    user: interactionCtx.user,
   };
 }
 

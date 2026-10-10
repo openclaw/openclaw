@@ -28,6 +28,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
@@ -258,6 +259,11 @@ export async function createCanonicalForkFixture(params: {
           },
           runtimeParams: attempt,
           effectiveRuntimeModelId: model.id,
+          nativeExecutionPolicy: await prepareCodexNativeExecutionPolicyForRun(attempt, {
+            agentId: "main",
+            runtimeSessionKey: key,
+            sandbox: null,
+          }),
           nativeToolSurfaceEnabled: true,
           nativeProviderWebSearchSupport: "supported",
           bundleMcpThreadConfig,
