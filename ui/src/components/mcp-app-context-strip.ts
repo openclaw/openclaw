@@ -60,8 +60,8 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
             publishMcpAppContext(client, { ...entry, state: null });
             return;
           }
-          const publish = (state: McpAppContextState) =>
-            publishMcpAppContext(client, { ...entry, state });
+          const publish = (contextState: McpAppContextState) =>
+            publishMcpAppContext(client, { ...entry, state: contextState });
           void client
             .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
               sessionKey: entry.sessionKey,

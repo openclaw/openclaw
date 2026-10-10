@@ -51,7 +51,7 @@ async function mount(
 ) {
   let result = options.result ?? ready;
   const requested: Promise<unknown>[] = [];
-  const statusRequested = createDeferred<void>();
+  const statusRequested = createDeferred();
   let testResponse: Promise<unknown> = Promise.resolve({
     provider: "searxng",
     status: "ok",

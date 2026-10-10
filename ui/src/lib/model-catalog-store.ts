@@ -164,7 +164,7 @@ export function settleModelCatalogRequests(
 ): Promise<void> | undefined {
   const key = modelCatalogKey(modelCatalogParams(scope));
   const pending = Array.from(modelCatalogCache.get(client)?.requests.get(key)?.values() ?? []).map(
-    (pending) => pending.transportSettled,
+    (request) => request.transportSettled,
   );
   return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
 }
@@ -215,10 +215,12 @@ export async function loadModelCatalog(
   const request = async () => {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await client.request<ModelCatalogResult>("models.list", params, {
-          timeoutMs,
-          signal: controller.signal,
-        });
+        return await (timeoutMs === undefined
+          ? client.request<ModelCatalogResult>("models.list", params)
+          : client.request<ModelCatalogResult>("models.list", params, {
+              timeoutMs,
+              signal: controller.signal,
+            }));
       } catch (error) {
         if (!isAgentDatabaseInspectionPendingError(error)) {
           throw error;
