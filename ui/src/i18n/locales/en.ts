@@ -32,18 +32,7 @@ export const en: TranslationMap & {
         | "errorSender",
         string
       >;
-    pullRequests: TranslationMap &
-      Record<
-        | "createPr"
-        | "createPrLabel"
-        | "open"
-        | "draft"
-        | "merged"
-        | "closed"
-        | "rateLimited"
-        | "unavailable",
-        string
-      >;
+    pullRequests: TranslationMap & Record<"open" | "draft" | "merged" | "closed", string>;
     processesPanel: TranslationMap;
   };
   configForm: TranslationMap & { sections: TranslationMap };
@@ -89,6 +78,7 @@ export const en: TranslationMap & {
   devices: TranslationMap & { pairing: TranslationMap };
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect" | "connecting", string>;
+  sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap };
   filePreview: TranslationMap;
   updates: TranslationMap;
   login: TranslationMap;
@@ -298,19 +288,8 @@ export const en: TranslationMap & {
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
-    pullRequestLabel: "Pull request #{number}, {state}",
-    pullRequestAuthorLabel: "Opened by {login}",
-    states: {
-      open: "Open",
-      draft: "Draft",
-      merged: "Merged",
-      closed: "Closed",
-    },
-    checks: {
-      passing: "CI checks passing",
-      failing: "CI checks failing",
-      pending: "CI checks running",
-    },
+    states: {},
+    checks: {},
   },
   sessionProgressCard: {
     title: "Progress",
@@ -3149,16 +3128,10 @@ export const en: TranslationMap & {
       adminRequired: "Administrator access is required to start suggested tasks.",
     },
     pullRequests: {
-      createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
       open: "Open",
       draft: "Draft",
       merged: "Merged",
       closed: "Closed",
-      rateLimited:
-        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
-      unavailable:
-        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
     },
     usageRemaining: "Usage Remaining",
     view: {

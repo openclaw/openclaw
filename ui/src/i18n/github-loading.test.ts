@@ -21,19 +21,30 @@ it.each([
     load: () => import("../pages/chat/components/chat-ci-details.ts"),
   },
   {
+    surface: "session hovercard",
+    load: () => import("../components/session-hovercard.ts"),
+  },
+  {
     surface: "identity",
     load: () => import("../features/github-connections/github-identity-view.ts"),
   },
 ])("loads GitHub fallback copy at the cold $surface boundary", async ({ load }) => {
   const { en, manager } = await loadI18n({
     githubConnections: { manage: "Verbindungen verwalten" },
+    sessionHovercard: { checks: { passing: "CI-Prüfungen erfolgreich" } },
   });
   const connections = en.githubConnections;
   const publication = en.githubPublication;
   const pullRequests = en.chat.pullRequests;
+  const hovercard = en.sessionHovercard;
+  const states = hovercard.states;
+  const checks = hovercard.checks;
+  expect(hovercard.pullRequestLabel).toBeUndefined();
+  expect(states.open).toBeUndefined();
   expect(pullRequests.publishPr).toBeUndefined();
   expect(manager.t("chat.pullRequests.open")).toBe("Open");
-  expect(manager.t("chat.pullRequests.createPr")).toBe("Create PR");
+  expect(pullRequests.createPr).toBeUndefined();
+  expect(pullRequests.rateLimited).toBeUndefined();
   expect(pullRequests.checksPassed).toBeUndefined();
   expect(connections.manage).toBeUndefined();
   expect(publication.failedAttempt).toBeUndefined();
@@ -51,7 +62,14 @@ it.each([
   expect(manager.t("githubConnections.manage")).toBe("Verbindungen verwalten");
   expect(manager.t("githubPublication.failedAttempt")).toBe("Publication attempt failed");
   expect(en.chat.pullRequests).toBe(pullRequests);
+  expect(en.sessionHovercard).toBe(hovercard);
+  expect(hovercard.states).toBe(states);
+  expect(hovercard.checks).toBe(checks);
+  expect(manager.t("sessionHovercard.states.open")).toBe("Open");
+  expect(manager.t("sessionHovercard.checks.passing")).toBe("CI-Prüfungen erfolgreich");
   expect(manager.t("chat.pullRequests.publishPr")).toBe("Publish PR");
+  expect(manager.t("chat.pullRequests.createPr")).toBe("Create PR");
+  expect(manager.t("chat.pullRequests.rateLimited")).toContain("GitHub API rate limit reached");
   expect(manager.t("chat.pullRequests.checksPassing")).toBe("CI checks passing");
   expect(manager.t("chat.pullRequests.checksPassed")).toBe("Passed");
   expect(manager.t("githubPublication.sharedUnavailable.changed")).toBe(
@@ -59,6 +77,9 @@ it.each([
   );
   const { registerGitHubEnglish } = await import("./locales/en-github.ts");
   registerGitHubEnglish();
+  expect(hovercard.states).toBe(states);
+  expect(hovercard.checks).toBe(checks);
+  expect(manager.t("sessionHovercard.checks.passing")).toBe("CI-Prüfungen erfolgreich");
   expect(en.chat.pullRequests).toBe(pullRequests);
   expect(manager.t("chat.pullRequests.open")).toBe("Open");
   expect(en.githubConnections).toBe(connections);

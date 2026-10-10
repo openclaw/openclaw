@@ -146,6 +146,14 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
   }
+  const sessionHovercard: TranslationMap = {};
+  for (const [key, value] of Object.entries(en.sessionHovercard)) {
+    if (key === "states") {
+      Object.assign(sessionHovercard, registerGitHubEnglish.catalog.sessionHovercard);
+    } else if (key !== "checks") {
+      sessionHovercard[key] = value;
+    }
+  }
   const boardWidget: TranslationMap = {};
   for (const [key, value] of Object.entries(en.board.widget)) {
     boardWidget[key] = value;
@@ -168,6 +176,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
         pullRequests: registerGitHubEnglish.catalog.chat.pullRequests,
       },
+      sessionHovercard,
       githubPublication: registerGitHubEnglish.catalog.githubPublication,
       githubConnections: registerGitHubEnglish.catalog.githubConnections,
       agentTools: {

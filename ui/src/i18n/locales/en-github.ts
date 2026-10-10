@@ -2,11 +2,26 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enGitHub = {
+  sessionHovercard: {
+    pullRequestLabel: "Pull request #{number}, {state}",
+    pullRequestAuthorLabel: "Opened by {login}",
+    states: {
+      open: "Open",
+      draft: "Draft",
+      merged: "Merged",
+      closed: "Closed",
+    },
+    checks: {
+      passing: "CI checks passing",
+      failing: "CI checks failing",
+      pending: "CI checks running",
+    },
+  },
   chat: {
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
-      createPr: en.chat.pullRequests.createPr,
-      createPrLabel: en.chat.pullRequests.createPrLabel,
+      createPr: "Create PR",
+      createPrLabel: "Create a pull request for {branch}",
       publishPr: "Publish PR",
       publishing: "Publishing…",
       publicationRequested: "Requested",
@@ -30,8 +45,10 @@ const enGitHub = {
       checksFailed: "Failed",
       checksRunning: "Running",
       checksSkipped: "Skipped",
-      rateLimited: en.chat.pullRequests.rateLimited,
-      unavailable: en.chat.pullRequests.unavailable,
+      rateLimited:
+        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
+      unavailable:
+        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
     },
   },
   githubPublication: {
@@ -207,6 +224,10 @@ const enGitHub = {
 
 export const registerGitHubEnglish = Object.assign(
   () => {
+    en.sessionHovercard.pullRequestLabel = enGitHub.sessionHovercard.pullRequestLabel;
+    en.sessionHovercard.pullRequestAuthorLabel = enGitHub.sessionHovercard.pullRequestAuthorLabel;
+    Object.assign(en.sessionHovercard.states, enGitHub.sessionHovercard.states);
+    Object.assign(en.sessionHovercard.checks, enGitHub.sessionHovercard.checks);
     Object.assign(en.chat.pullRequests, enGitHub.chat.pullRequests);
     Object.assign(en.agentTools, enGitHub.agentTools);
     Object.assign(en.githubPublication, enGitHub.githubPublication);
