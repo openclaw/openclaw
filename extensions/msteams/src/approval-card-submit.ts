@@ -69,7 +69,7 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
 
   const cfg = deps.readConfig?.() ?? deps.cfg;
   const account = resolveMSTeamsAccountConfig(cfg, binding.accountId);
-  if (account.enabled === false || (account.appId && account.appId !== deps.appId)) {
+  if (account.appId && account.appId !== deps.appId) {
     ignored("issuing account is no longer active");
     return true;
   }

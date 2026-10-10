@@ -30,4 +30,21 @@ const msTeamsApproval = createChannelApprovalAuth({
 });
 
 export const getMSTeamsApprovalApprovers = msTeamsApproval.resolveApprovers;
-export const msTeamsApprovalAuth = msTeamsApproval.approvalAuth;
+export const msTeamsApprovalAuth: typeof msTeamsApproval.approvalAuth = {
+  authorizeActorAction(params) {
+    const channel = params.cfg.channels?.msteams;
+    if (
+      !channel ||
+      channel.enabled === false ||
+      resolveMSTeamsAccountConfig(params.cfg, params.accountId).enabled === false
+    ) {
+      return {
+        authorized: false,
+        reason: "Microsoft Teams approval account is disabled or unavailable.",
+      };
+    }
+    // Gateway settlement calls this owner again with current config. Return the
+    // shared result intact so empty-approver same-chat authorization keeps its marker.
+    return msTeamsApproval.approvalAuth.authorizeActorAction(params);
+  },
+};
