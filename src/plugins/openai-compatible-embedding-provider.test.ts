@@ -469,10 +469,15 @@ describe("openai-compatible generic embedding provider", () => {
     expect(client.baseUrl).toBe(server.baseUrl);
     expect(server.requests).toHaveLength(0);
 
-    await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 1]);
-    await expect(provider.embedBatch(["a", "abcd"])).resolves.toEqual([
+    const onUsage = vi.fn();
+    await expect(provider.embed("hello", { onUsage })).resolves.toEqual([5, 0.25, 1]);
+    await expect(provider.embedBatch(["a", "abcd"], { onUsage })).resolves.toEqual([
       [1, 0.25, 1],
       [4, 1.25, 1],
+    ]);
+    expect(onUsage.mock.calls).toEqual([
+      [{ promptTokens: 1, totalTokens: 1 }],
+      [{ promptTokens: 2, totalTokens: 2 }],
     ]);
 
     expect(server.requests).toHaveLength(2);

@@ -106,7 +106,11 @@ describe("Anthropic server context management parity", () => {
             exclude_tools: ["exec", "retired_tool", "search", "write"],
             clear_tool_inputs: false,
           },
-          { type: "compact_20260112", trigger: { type: "input_tokens", value: 650_000 } },
+          {
+            type: "compact_20260112",
+            trigger: { type: "input_tokens", value: 650_000 },
+            instructions: expect.stringContaining("Do not call any tools"),
+          },
         ],
       });
       expect(headers.get("anthropic-beta")).toContain("synthetic-beta");

@@ -222,7 +222,10 @@ export async function prepareManagedHandoffRepair(
   if (!previous) {
     return null;
   }
-  const legacyUpdate = (lease: ManagedHandoffLease) =>
+  // Current root owners also omit protocol fields; only child lineage identifies
+  // legacy update custody here. Ordinary root reclamation belongs to admission.
+  const legacyUpdateChild = (lease: ManagedHandoffLease) =>
+    lease.key.startsWith(`${root}/.openclaw-update-child-`) &&
     lease.version === 2 &&
     !lease.mutationOriginal &&
     lease.action.kind === "update" &&
@@ -231,7 +234,7 @@ export async function prepareManagedHandoffRepair(
   if (
     previous.version !== 2 ||
     previous.mutationOriginal ||
-    (!legacyUpdate(previous) &&
+    (!legacyUpdateChild(previous) &&
       (previous.action.kind !== "triage" ||
         previous.action.lifetime.kind !== "foreground" ||
         !["running", "uncertain"].includes(previous.action.phase)))
@@ -253,7 +256,7 @@ export async function prepareManagedHandoffRepair(
   const assertChildrenSettled = (db: DatabaseSync) => {
     if (
       store.hasUnsettledChildren(root, db) ||
-      children.some((child) => !legacyUpdate(child) || !reclaimable(child, db))
+      children.some((child) => !legacyUpdateChild(child) || !reclaimable(child, db))
     ) {
       throw new Error(
         "Handoff descendants remain live or unverified. Wait for their updater and verify process-inspection permissions, then run openclaw update repair.",
@@ -346,7 +349,7 @@ export async function prepareManagedHandoffRepair(
         { step: "finalize:handoff-settlement", status: "completed", endedAtMs, detail },
         { env },
       );
-      const receipt = result.steps.find((step) => step.step === "finalize:handoff-settlement");
+      const receipt = result?.steps.find((step) => step.step === "finalize:handoff-settlement");
       if (receipt?.status !== "completed" || receipt.endedAtMs !== endedAtMs) {
         throw new Error("Handoff settlement was not recorded; retry openclaw update repair.");
       }

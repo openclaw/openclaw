@@ -14,10 +14,6 @@ runs:
         node-version: ${{ inputs.node-version }}
         package-manager-file: .release-harness/package.json
 
-    - name: Narrow harness lockfile to the sparse checkout
-      shell: bash
-      run: node "$GITHUB_ACTION_PATH/narrow-lockfile.mjs" .release-harness
-
     - name: Install trusted release harness dependencies
       shell: bash
       working-directory: .release-harness

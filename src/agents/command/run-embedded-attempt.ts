@@ -47,7 +47,6 @@ import {
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import { measureAgentStartup } from "../startup-timing.js";
 import {
-  needsThinkHydration,
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
@@ -413,13 +412,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             : thinkingCatalog;
           if (
             pluginsEnabled &&
-            (candidateConfiguredThinkLevel !== "off" || candidateRuntime !== "openclaw") &&
-            needsThinkHydration(
-              candidateThinkingCatalog,
-              providerOverride,
-              modelOverride,
-              candidateRuntime,
-            )
+            (candidateConfiguredThinkLevel !== "off" || candidateRuntime !== "openclaw")
           ) {
             const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");

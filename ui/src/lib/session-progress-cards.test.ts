@@ -33,6 +33,43 @@ function watchCards(gateway: ApplicationGateway, targets: ProgressCardGetParams[
 }
 
 describe("session progress card lifetimes", () => {
+  it.each(["updated", "absent"] as const)(
+    "shows cached progress before hello and accepts live %s state",
+    async (outcome) => {
+      const { gateway, request, snapshotChanged } = createGateway();
+      gateway.snapshot.phase = "connecting";
+      const { store } = watchCards(gateway);
+      const cached = createProgressCard(10);
+      store.hydrate(target, cached);
+      expect(store.get(target)).toEqual(cached);
+      expect(request).not.toHaveBeenCalled();
+      const lifetime = store.getLifetime(target);
+      const live = outcome === "updated" ? { ...cached, revision: 2, markdown: "Finished" } : null;
+      const response = createDeferred<{ card: typeof live }>();
+      request.mockReturnValue(response.promise);
+      gateway.snapshot.phase = "connected";
+      snapshotChanged();
+      expect(store.get(target)).toEqual(cached);
+      response.resolve({ card: live });
+      await store.load(target);
+      expect(store.get(target)).toEqual(live);
+      expect(store.getLifetime(target)).toBe(live ? lifetime : undefined);
+      store.hydrate(target, cached);
+      expect(store.get(target)).toEqual(live);
+    },
+  );
+
+  it("retires cached progress when the authenticated presentation scope changes", () => {
+    const { gateway, snapshotChanged } = createGateway();
+    gateway.snapshot.phase = "connecting";
+    const { store } = watchCards(gateway);
+    store.hydrate(target, createProgressCard(10));
+    expect(store.get(target)).not.toBeNull();
+    Object.defineProperty(gateway, "connectionRevision", { value: 1 });
+    snapshotChanged();
+    expect(store.get(target)).toBeUndefined();
+    expect(store.getLifetime(target)).toBeUndefined();
+  });
   it("ends a lifetime only after an accepted clear, not revisions, errors, or idle detach", async () => {
     const { gateway, request, emitChange, emit } = createGateway();
     const owner = {};

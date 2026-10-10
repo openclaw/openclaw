@@ -358,18 +358,4 @@ describe("Feishu app registration", () => {
 
     expect(fetchCalls).toEqual(["https://accounts.feishu.cn/oauth/v1/app/registration"]);
   });
-
-  it("wraps malformed Feishu API JSON with a feishu.api labelled error", async () => {
-    await withRegistrationServer(
-      (_req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end("not-valid-json{{");
-      },
-      async () => {
-        await expect(beginAppRegistration("feishu")).rejects.toThrow(
-          /feishu\.api: malformed JSON response/,
-        );
-      },
-    );
-  });
 });

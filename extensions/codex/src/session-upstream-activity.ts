@@ -187,8 +187,12 @@ export function createChecker(params: {
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
   const resolveThreadId = async (probe: SessionUpstreamProbe) => {
     const config = params.getRuntimeConfig();
-    const entry = params.api.runtime.agent.session.getSessionEntry({
+    const storePath = params.api.runtime.agent.session.resolveStorePath(config?.session?.store, {
       agentId: probe.agentId,
+    });
+    const entry = await params.api.runtime.agent.session.getSessionEntryAsync({
+      agentId: probe.agentId,
+      storePath,
       sessionKey: probe.sessionKey,
       readConsistency: "latest",
     });

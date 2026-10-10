@@ -68,6 +68,17 @@ export function createGateway(
     if (args[0] === "environments.list") {
       return { environments: [], profiles: [] };
     }
+    // Required placement bootstraps independently of palette search. Keep these
+    // fixtures focused on search traffic and provide the canonical empty policy.
+    if (
+      args[0] === "agents.list" &&
+      args[1] &&
+      typeof args[1] === "object" &&
+      "includeSessionPlacement" in args[1] &&
+      args[1].includeSessionPlacement === true
+    ) {
+      return { agents: [], sessionPlacement: {} };
+    }
     return request(...args);
   });
   let snapshot: ApplicationGatewaySnapshot = {

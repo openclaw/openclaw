@@ -45,6 +45,8 @@ export function registerTimedOutGatewayStopTests({
           expect(runtime.exit).not.toHaveBeenCalled();
           const options = close.mock.calls[0]?.[0];
           expect(options).toMatchObject({ reason: "gateway stopping", restartExpectedMs: null });
+          // Only a process-owning stop may leave native watcher release to exit.
+          expect(options?.exitAfterClose).toBe(ownsProcessLifecycle ? true : undefined);
           if (!drained && ownsProcessLifecycle) {
             expect(options?.onProcessExitReady).toEqual(expect.any(Function));
             await options?.onProcessExitReady?.();

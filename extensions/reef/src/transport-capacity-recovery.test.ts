@@ -84,8 +84,8 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     const page = entries.filter((entry) => entry.seq > after);
     return Response.json({ entries: page, cursor: page.at(-1)?.seq ?? after });
   });
-  function connect(runtime = stores.runtime) {
-    const { replay, reviews, delivered } = openStores(runtime, keys, { deliveredMaxEntries });
+  async function connect(runtime = stores.runtime) {
+    const { replay, reviews, delivered } = await openStores(runtime, keys, { deliveredMaxEntries });
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trust(
@@ -126,7 +126,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     );
     await stores.delivered.confirm("occupied-1");
     await stores.delivered.confirm("occupied-2");
-    const inbox = connect();
+    const inbox = await connect();
 
     // Both entries reach ingress, but capacity blocks confirmation and cursor progress.
     await inbox.drain();
@@ -155,14 +155,14 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
       1,
     );
     await stores.delivered.confirm("occupied");
-    await connect().drain();
+    await (await connect()).drain();
     expect(onIngress).toHaveBeenCalledTimes(1);
     expect(relay.acknowledge).not.toHaveBeenCalled();
     expect(persisted).toEqual([]);
 
     // The persisted replay survives a restart; absent confirmation allows one redispatch.
     raw.delete("occupied");
-    await connect(reopenRuntime(stores.stateDir)).drain();
+    await (await connect(reopenRuntime(stores.stateDir))).drain();
     expect(onIngress).toHaveBeenCalledTimes(2);
     await expect(stores.delivered.status(entries[0]!.id)).resolves.toBe("delivered");
     expect(relay.acknowledge).toHaveBeenCalledTimes(1);
@@ -173,7 +173,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const { stores, raw, relay, onIngress, persisted, entries, connect } = await fixture();
     const id = entries[0]!.id;
     raw.registerIfAbsent(id, { id });
-    await connect().drain();
+    await (await connect()).drain();
     expect(onIngress).not.toHaveBeenCalled();
     expect(relay.acknowledge).toHaveBeenCalledTimes(1);
     await expect(stores.delivered.status(id)).resolves.toBe("delivered");
