@@ -93,7 +93,8 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/bwrap-probe-helper.js", 1],
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/bwrap-probe-worker.js", 1],
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/diagnostic.js", 1],
-  ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/platform.js", 3],
+  // 4 covers mxc-sdk 0.8.0 on the supported stable line; 0.9.0 has 3.
+  ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/platform.js", 4],
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/policy.js", 1],
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/sandbox.js", 2],
   ["dangerous-exec:node_modules/@openclaw/fs-safe/dist/windows-security-command.js", 2],
