@@ -53,9 +53,10 @@ function classifyCapture(
     !fs.existsSync(path.join(directory, "manifest.json.partial"));
   const capture = run.origin.updateRecoveryCapture;
   // A sealed baseline from a failed update is its manual recovery source until resolved.
+  // Succeeded and skipped (already-current) runs completed without needing it.
   if (
     sealed &&
-    run.status !== "succeeded" &&
+    (run.status === "failed" || run.status === "rolled-back") &&
     !capture?.restored &&
     !capture?.forwardResolution &&
     !capture?.retirement

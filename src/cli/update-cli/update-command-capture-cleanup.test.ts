@@ -61,6 +61,7 @@ async function withCaptureHistory(
       for (const [label, status, sealed] of [
         ["superseded", "succeeded", true],
         ["unsealed", "failed", false],
+        ["alreadyCurrent", "skipped", true],
         ["failedBaseline", "failed", true],
         ["latest", "succeeded", false],
         ["unfinished", undefined, true],
@@ -117,6 +118,11 @@ const expectedPreview = (captures: Record<string, string>) => ({
     bytes: 1038,
   },
   [captures.unsealed!]: { outcome: "candidate", reason: "unsealed-update-capture", bytes: 1035 },
+  [captures.alreadyCurrent!]: {
+    outcome: "candidate",
+    reason: "superseded-update-capture",
+    bytes: 1038,
+  },
   [captures.failedBaseline!]: {
     outcome: "protected",
     reason: "unresolved-failed-update",
