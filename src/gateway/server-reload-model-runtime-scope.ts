@@ -1,3 +1,6 @@
+import { listAgentIds } from "../agents/agent-roster.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { pruneRemovedProviderPluginModelCatalogs } from "../agents/plugin-model-catalog.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -22,6 +25,29 @@ export function resolveReloadAgentIds(
     agentIds.add(normalizeAgentId(match[1]));
   }
   return agentIds.size > 0 ? agentIds : undefined;
+}
+
+/** Apply known endpoint removals before publishing the replacement model inventory. */
+export async function pruneRemovedProviderModelCatalogs(
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): Promise<void> {
+  const removedProviderBaseUrls = Object.fromEntries(
+    Object.entries(previousConfig.models?.providers ?? {}).flatMap(([id, provider]) =>
+      provider.baseUrl && !Object.hasOwn(nextConfig.models?.providers ?? {}, id)
+        ? [[id, provider.baseUrl]]
+        : [],
+    ),
+  );
+  if (Object.keys(removedProviderBaseUrls).length === 0) {
+    return;
+  }
+  const agentDirs = new Set(
+    listAgentIds(previousConfig).map((id) => resolveAgentDir(previousConfig, id)),
+  );
+  for (const agentDir of agentDirs) {
+    await pruneRemovedProviderPluginModelCatalogs({ agentDir, removedProviderBaseUrls });
+  }
 }
 
 export function refreshModelRuntimeAfterHotReload(params: {

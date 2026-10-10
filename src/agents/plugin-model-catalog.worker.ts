@@ -19,11 +19,16 @@ import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repai
 import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
+  pruneRemovedProviderCatalogEntriesInDatabase,
   replacePluginModelCatalogEntriesInDatabase,
 } from "./plugin-model-catalog.kernel.js";
 
 export type PluginModelCatalogCredentialOperations = {
   "catalog.removeCredentials": { input: { credentials: string[] }; output: void };
+  "catalog.pruneRemovedProviders": {
+    input: { removedProviderBaseUrls: Record<string, string> };
+    output: boolean;
+  };
   "catalog.replace": {
     input: {
       planned: Array<[string, string]>;
@@ -81,6 +86,13 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       return runSqliteWorkerTransactionSync(context, () => {
+        if (command.type === "catalog.pruneRemovedProviders") {
+          return pruneRemovedProviderCatalogEntriesInDatabase({
+            database: context.database,
+            removedProviderBaseUrls: command.input.removedProviderBaseUrls,
+            updatedAt: Date.now(),
+          });
+        }
         if (command.type === "catalog.replace") {
           const { planned, authSnapshot, env } = command.input;
           const removedCredentials =

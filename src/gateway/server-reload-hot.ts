@@ -642,6 +642,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     try {
       if (refreshModelRuntime) {
+        await mrReload.pruneRemovedProviderModelCatalogs(committedConfig, nextConfig);
         await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {
