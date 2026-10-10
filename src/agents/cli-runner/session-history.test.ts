@@ -669,7 +669,7 @@ describe("resumed Claude session gaps", () => {
         };
         const context = await loadCliSessionPromptContext(options);
         expect(context.sessionGapContext).toBe(
-          '[OpenClaw: 2 messages occurred outside this Claude session from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:04.000Z, using "mock/test-model". Their contents are not included here. Read them with mcp__openclaw__sessions_history({"sessionKey":"agent:main:history","limit":100}); page older messages with offset if needed.]',
+          '[OpenClaw: 2 messages occurred outside this Claude session from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:04.000Z, using "mock/test-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:history","limit":100}) to read them; page older messages with offset if needed.]',
         );
         expect(context.sessionGapContext).not.toContain("PRIVATE-TOKEN");
         expect(
