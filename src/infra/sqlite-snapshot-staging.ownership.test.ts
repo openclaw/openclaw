@@ -484,23 +484,16 @@ it.skipIf(process.platform === "win32")(
           `${childPrelude}
       import { spawn } from 'node:child_process';
       import { once } from 'node:events';
-      import koffi from 'koffi';
+      import { createPipe } from '@openclaw/fs-safe/pipe';
       const launch = (script, resultFd) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
         stdio: ['ignore', 'ignore', 'inherit', 'ipc', resultFd ?? 'ignore'],
       });
       const parent = launch(${JSON.stringify(parentScript)});
       const [directory] = await once(parent, 'message');
       // A real blocking pipe keeps the synchronous reclaimer observer on its original turn.
-      const libc = koffi.load(null);
-      const pipe = libc.func('int pipe(_Out_ int *fds)');
-      const close = libc.func('int close(int fd)');
-      const fcntl = libc.func('int fcntl(int fd, int cmd, ...)');
-      const resultPipe = [-1, -1];
-      if (pipe(resultPipe) !== 0) throw new Error('worker result pipe failed');
-      // POSIX F_SETFD=2/FD_CLOEXEC=1 prevents unrelated descendants retaining the writer.
-      if (resultPipe.some(fd => fcntl(fd, 2, 'int', 1) !== 0)) throw new Error('worker result pipe close-on-exec failed');
-      const worker = launch(${JSON.stringify(workerScript)}, resultPipe[1]);
-      close(resultPipe[1]);
+      const resultPipe = createPipe();
+      const worker = launch(${JSON.stringify(workerScript)}, resultPipe.writer.fd);
+      resultPipe.writer.close();
       const workerClosed = once(worker, 'close');
       const parentClosed = once(parent, 'close');
       let inspected = false;
@@ -518,7 +511,7 @@ it.skipIf(process.platform === "win32")(
           if (String(pathname) === directory && !inspected) {
             inspected = true;
             worker.send(${JSON.stringify(cacheContainer)} ? path.join(directory, 'openclaw') : directory);
-            const result = fs.readFileSync(resultPipe[0], 'utf8');
+            const result = fs.readFileSync(resultPipe.reader.fd, 'utf8');
             if (!result) throw new Error('worker did not reach allocation barrier');
             outcome = JSON.parse(result);
           }
@@ -546,7 +539,7 @@ it.skipIf(process.platform === "win32")(
         if (worker.connected && outcome) worker.send('finish');
         else worker.kill('SIGKILL');
         await Promise.all([parentClosed, workerClosed]);
-        close(resultPipe[0]);
+        resultPipe.reader.close();
       }
     `,
           signal,
