@@ -307,7 +307,6 @@ export function createRepositoryGitHubPublicationRecovery(params: {
             { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
             async (assertCurrent) => {
               row = await requireRepositoryGitHubPublicationInWorker(row.request_id);
-              assertCurrent();
               if (terminalRepositoryGitHubPublication(row)) {
                 return;
               }
@@ -315,7 +314,6 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               // observation is recorded. Only then may recovery retire its authority.
               const workspaceId = row.workspace_id;
               const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-              assertCurrent();
               row = await requireRepositoryGitHubPublicationInWorker(row.request_id);
               assertCurrent();
               if (terminalRepositoryGitHubPublication(row)) {
@@ -328,11 +326,8 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               }
               const owner = resolveReceiptOwner(row, preparedOwner);
               if (!owner) {
-                const assertRecovery = () => {
-                  params.assertCurrent();
-                  assertCurrent();
-                };
-                await failStaleRepositoryGitHubPublicationAsync(row, assertRecovery);
+                // Keep the reservation through settlement; retirement needs only owner custody.
+                await failStaleRepositoryGitHubPublicationAsync(row, params.assertCurrent);
                 return;
               }
               await params.execute(row, assertCurrent);
