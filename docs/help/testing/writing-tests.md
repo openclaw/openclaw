@@ -25,12 +25,13 @@ Keep independent unit contracts and the [cost budget](#cost-budget).
   model parameters, cache identity, endpoint, and auth mode. Warm-prefix reuse
   shares one preparation owner; document permitted differences. Standalone
   summaries need an intentional separate contract, not accidental cache reuse.
-- **Paid work:** preflight predictable failures; distinguish not sent, uncertain
-  outcome, provider completed, and locally persisted. Inject relevant failures;
-  assert physical requests and observed usage, including rejected results.
-  Local processing errors must not silently buy another call. Reconcile uncertain
-  outcomes; preserve valid results without bypassing redaction, cancellation, or
-  authority. Exactly-once claims require external idempotency/reconciliation proof.
+- **Paid work:** a paid provider result is kept or never requested.
+  - Preflight predictable failures, such as redaction or budget checks, before the call.
+  - Distinguish not sent, uncertain outcome, provider completed, and locally persisted.
+    Reconcile uncertain outcomes; exactly-once claims need external idempotency proof.
+  - Inject relevant failures and assert physical requests and observed usage,
+    including rejected results. A local processing error never silently buys another call.
+  - Preserve valid results without bypassing redaction, cancellation, or authority.
 - **Recovery:** assert a sanitized reason and outcome through the actual diagnostic
   consumer. Warn on unexpected degradation; expected recovery may use a documented
   structured outcome. Persist decisions that change future replay, then reconstruct
