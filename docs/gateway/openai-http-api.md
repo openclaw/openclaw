@@ -242,7 +242,7 @@ Set `stream: true` to receive Server-Sent Events:
 
 Failed agent runs, including whole-agent timeouts, return an error instead of a successful completion. A streaming failure emits an `error` object followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
 
-Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests. If the Gateway itself cancels the agent run while the client is still connected, the request fails with `500 api_error` and the message `agent run was cancelled`, not as a provider timeout.
 
 ## Open WebUI quick setup
 

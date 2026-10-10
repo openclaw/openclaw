@@ -153,11 +153,8 @@ export async function createBackupResourcePlan(params: {
   };
 
   if (!params.onlyConfig) {
-    for (const oauthDir of params.oauthDirs) {
-      protectedPathSet.add(path.resolve(oauthDir));
-    }
-    for (const workspaceDir of params.workspaceDirs) {
-      protectedPathSet.add(path.resolve(workspaceDir));
+    for (const directory of [...params.oauthDirs, ...params.workspaceDirs]) {
+      protectedPathSet.add(path.resolve(directory));
     }
     for (const root of agentRoots) {
       protectedPathSet.add(root.sourcePath);

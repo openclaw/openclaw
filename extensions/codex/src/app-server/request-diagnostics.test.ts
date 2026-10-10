@@ -308,7 +308,10 @@ describe("scoped Codex timeout diagnostics", () => {
     const current = shared.acquire.mock.calls[1]?.[0] as CodexAppServerClientOptions;
     current.onAcquireObservation?.({ boundary: "context" });
     stale.onAcquireObservation?.({ boundary: "auth-handoff", startup: "created-shared" });
-    stale.onStartedClient?.(client() as never);
+    stale.onStartedClient?.({
+      ...client(),
+      getRegisteredTransportIdentity: () => ({ pid: 500002, startedAt: "fixture-boot:12345" }),
+    } as never);
     await vi.advanceTimersByTimeAsync(50);
     await result;
     const logged = await record();
@@ -322,6 +325,7 @@ describe("scoped Codex timeout diagnostics", () => {
     });
     expect(logged.attributes).not.toHaveProperty("clientInstanceId");
     expect(logged.attributes).not.toHaveProperty("lastStartedClientInstanceId");
+    expect(logged.attributes).not.toHaveProperty("lastStartedTransportIdentity");
     expect(logged.attributes).not.toHaveProperty("acquireStartup");
     expect(shared.acquire).toHaveBeenCalledTimes(2);
     expect(shared.retire).toHaveBeenCalledOnce();
@@ -329,6 +333,54 @@ describe("scoped Codex timeout diagnostics", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(shared.release).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["available", "unavailable", "throwing"] as const)(
+    "preserves initialize evidence when registered transport identity is %s",
+    async (mode) => {
+      const entered = createDeferred<void>();
+      const acquired = createDeferred<ReturnType<typeof client>>();
+      const identity = { pid: 500002, startedAt: "fixture-boot:12345" };
+      const started = {
+        ...client(),
+        getInitializeDiagnostic: () => ({ boundary: "request", outcome: "pending" }),
+        getRegisteredTransportIdentity: () => {
+          if (mode === "throwing") {
+            throw new Error("private diagnostic failure");
+          }
+          return mode === "available" ? identity : undefined;
+        },
+      };
+      shared.acquire.mockImplementation((options: CodexAppServerClientOptions) => {
+        options.onStartedClient?.({
+          ...started,
+          getRegisteredTransportIdentity: () => ({ pid: 500001, startedAt: "previous-child" }),
+        } as never);
+        options.onStartedClient?.(started as never);
+        identity.pid = 500003;
+        entered.resolve();
+        return acquired.promise;
+      });
+      const result = start(async () => undefined);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+      const logged = await record();
+      expect(logged.attributes).toMatchObject({
+        lastStartedClientInstanceId: clientInstanceId,
+        lastStartedTransportIdentity:
+          mode === "available"
+            ? JSON.stringify({ pid: 500002, startedAt: "fixture-boot:12345" })
+            : "unavailable",
+      });
+      expect(JSON.parse(String(logged.attributes?.initializeSnapshot))).toEqual({
+        boundary: "request",
+        outcome: "pending",
+      });
+      expect(JSON.stringify(logged)).not.toContain("private diagnostic failure");
+      acquired.resolve(client());
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
 
   it("keeps the default 60 second whole-scope deadline", async () => {
     const entered = createDeferred<void>();

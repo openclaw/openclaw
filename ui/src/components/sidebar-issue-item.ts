@@ -21,6 +21,7 @@ import {
   renderSidebarDismissButton,
   renderSidebarNotificationCard,
 } from "./sidebar-notification-card.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 import "./sidebar-update-card.ts";
 import "./viewer-facepile.ts";
 
@@ -196,15 +197,12 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
 }
 
 export function renderSidebarScopeUpgradeItem(params: {
-  state: ScopeUpgradeState;
+  state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
   onCancel: () => void;
   onDismiss?: () => void;
   onRequest: () => void;
   onRetry: () => void;
 }) {
-  if (params.state.phase === "hidden") {
-    return nothing;
-  }
   const text = scopeUpgradeText(params.state);
   const summary = t("connection.scopeUpgrade.inboxState");
   const retryable =
@@ -369,7 +367,7 @@ export function renderSidebarIssueItem(
           }"
           @click=${() => handlers.onOpen(item)}
         >
-          ${t("nav.askOpenClaw")}
+          ${askBrandLabel()}
         </button>
       </div>
     </div>

@@ -7,6 +7,7 @@ import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { bindCronRunReceiptExecution } from "../cron/store/run-receipt-execution-binding.js";
 import { observeDeviceAuthHostSql } from "../infra/device-auth-store.sql.test-support.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -186,17 +187,12 @@ describe("owner-native execution lifecycle receipts", () => {
       const options = createUnboundCronDatabase();
       const current = openOpenClawStateDatabase(options).db;
       let revoked = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              revoked = true;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          revoked = true;
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           bindCronRunReceiptExecution({

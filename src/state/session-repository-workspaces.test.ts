@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -21,6 +22,7 @@ import { createSessionRepositoryWorkspaceStore } from "./session-repository-work
 import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 
 const roots: string[] = [];
+const subscriptions: (() => void)[] = [];
 const assertCurrent = () => {};
 const source = {
   agentId: "main",
@@ -33,29 +35,14 @@ const baseCommit = "a".repeat(40);
 const baseManifestHash = `sha256:${"b".repeat(64)}`;
 
 afterEach(async () => {
+  for (const unsubscribe of subscriptions.splice(0)) {
+    unsubscribe();
+  }
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
     await closeOpenClawStateDatabaseByPathAsync(path.join(root, "openclaw.sqlite"));
     await fs.rm(root, { recursive: true, force: true });
   }
-});
-
-it("keeps prepared repository guards current through commits and retires them with their database", async () => {
-  const { database, store } = await fixture();
-  const initial = await store.create(source);
-  const prepared = await store.prepare(initial.workspaceId);
-  expect(prepared.current()).toEqual(initial);
-  const bound = await store.bindBase({
-    workspaceId: initial.workspaceId,
-    expectedRevision: initial.revision,
-    baseCommit,
-    baseManifestHash,
-    assertCurrent: () => expect(prepared.current()).toEqual(initial),
-  });
-  expect(prepared.current()).toEqual(bound);
-  await closeOpenClawStateDatabaseByPathAsync(database.path);
-  expect(() => prepared.current()).toThrow();
-  expect(await store.get(initial.workspaceId)).toEqual(bound);
 });
 
 it("rolls back a revoked native commit without publishing changed repository facts", async () => {
@@ -66,17 +53,13 @@ it("rolls back a revoked native commit without publishing changed repository fac
   let commitRequested = false;
   const changed = vi.fn();
   const unsubscribe = sessionChanges.subscribe(changed);
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          commitRequested = true;
-          current = false;
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      commitRequested = true;
+      current = false;
+    }
+    admit(request, grant);
+  });
   try {
     await expect(
       store.bindBase({
@@ -130,6 +113,12 @@ async function fixture() {
   roots.push(root);
   const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
   return { database, store: createSessionRepositoryWorkspaceStore({ path: database.path }) };
+}
+
+function observeChanges() {
+  const changed = vi.fn();
+  subscriptions.push(sessionChanges.subscribe(changed));
+  return changed;
 }
 
 it("captures a lazy store location and retains it across environment changes and reopen", async () => {
@@ -198,17 +187,20 @@ it("retries rolled-back first-use pending owner DDL and preserves the committed 
 
 it("creates one stable logical-session owner without widening replayed setup intent", async () => {
   const { database, store } = await fixture();
+  const changed = observeChanges();
   expect(await store.find(source)).toBeUndefined();
   expect(tableExists(database.db, "session_repository_workspaces")).toBe(false);
   expect(() =>
     runOpenClawStateWriteTransaction(
       () => {
         createSessionRepositoryWorkspaceInDatabase(database.db, source, Date.now());
+        expect(changed).not.toHaveBeenCalled();
         throw new Error("session creation rolled back");
       },
       { database },
     ),
   ).toThrow("session creation rolled back");
+  expect(changed).not.toHaveBeenCalled();
   expect(tableExists(database.db, "session_repository_workspaces")).toBe(false);
   const initial = await store.create(source);
   expect(await store.create({ ...source, runSetupScript: true })).toEqual(initial);
@@ -222,16 +214,24 @@ it("creates one stable logical-session owner without widening replayed setup int
   );
 });
 
-it("pins the source base and rejects stale or closed checkpoint mutations", async () => {
-  const { store } = await fixture();
+it("publishes committed workspace revisions, rejects stale checkpoints, and retires prepared guards on close", async () => {
+  const { database, store } = await fixture();
+  const changed = observeChanges();
   const initial = await store.create(source);
+  expect(changed).toHaveBeenCalledExactlyOnceWith({
+    agentId: source.agentId,
+    sessionKey: source.sessionKey,
+  });
+  const prepared = await store.prepare(initial.workspaceId);
+  expect(prepared.current()).toEqual(initial);
   const bound = await store.bindBase({
     workspaceId: initial.workspaceId,
     expectedRevision: initial.revision,
     baseCommit,
     baseManifestHash,
-    assertCurrent,
+    assertCurrent: () => expect(prepared.current()).toEqual(initial),
   });
+  expect(prepared.current()).toEqual(bound);
   const checkpoint = {
     workspaceId: bound.workspaceId,
     expectedRevision: bound.revision,
@@ -265,31 +265,27 @@ it("pins the source base and rejects stale or closed checkpoint mutations", asyn
     manifestHash: checkpoint.manifestHash,
     revision: bound.revision + 1,
   });
-});
-
-it("reopens the accepted owner and deletes only its own artifacts", async () => {
-  const { database, store } = await fixture();
-  const initial = await store.create(source);
-  const sibling = await store.create({ ...source, sessionKey: "agent:main:sibling" });
-  await fs.mkdir(store.artifactPath(initial.workspaceId), { recursive: true });
-  await fs.mkdir(store.artifactPath(sibling.workspaceId), { recursive: true });
   await closeOpenClawStateDatabaseByPathAsync(database.path);
-  const reopened = createSessionRepositoryWorkspaceStore({
-    path: database.path,
-  });
-  expect(await reopened.find(source)).toEqual(initial);
-  await reopened.delete({ workspaceId: initial.workspaceId, assertCurrent });
-  expect(await reopened.find(source)).toBeUndefined();
-  await expect(fs.stat(reopened.artifactPath(initial.workspaceId))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect(await reopened.get(sibling.workspaceId)).toEqual(sibling);
-  expect((await fs.stat(reopened.artifactPath(sibling.workspaceId))).isDirectory()).toBe(true);
+  expect(() => prepared.current()).toThrow();
+  expect(await store.get(initial.workspaceId)).toEqual(accepted);
+  await store.delete({ workspaceId: initial.workspaceId, assertCurrent });
+  expect(changed).toHaveBeenCalledTimes(4);
+  expect(
+    changed.mock.calls.every(
+      ([change]) => change.agentId === source.agentId && change.sessionKey === source.sessionKey,
+    ),
+  ).toBe(true);
 });
 
-it("finishes artifact cleanup under its accepted operation while database close waits", async () => {
-  const { database, store } = await fixture();
-  const workspace = await store.create(source);
+it("reopens an owner and finishes only its artifact cleanup while database close waits", async () => {
+  const { database, store: original } = await fixture();
+  const workspace = await original.create(source);
+  const sibling = await original.create({ ...source, sessionKey: "agent:main:sibling" });
+  await fs.mkdir(original.artifactPath(sibling.workspaceId), { recursive: true });
+  await closeOpenClawStateDatabaseByPathAsync(database.path);
+  const store = createSessionRepositoryWorkspaceStore({ path: database.path });
+  expect(await store.find(source)).toEqual(workspace);
+  const reopened = openOpenClawStateDatabase({ path: database.path });
   const artifact = store.artifactPath(workspace.workspaceId);
   await fs.mkdir(artifact, { recursive: true });
   const removing = createDeferredCore();
@@ -322,13 +318,16 @@ it("finishes artifact cleanup under its accepted operation while database close 
     ).toBe("removing");
     expect(closing).toBeDefined();
     expect(closed).toBe(false);
-    expect(database.db.isOpen).toBe(true);
+    expect(reopened.db.isOpen).toBe(true);
     releaseRemoval.resolve();
     expect(await outcome).toEqual({ ok: true });
     await closing;
     expect(closed).toBe(true);
     await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await store.get(workspace.workspaceId)).toBeUndefined();
+    expect(await store.find(source)).toBeUndefined();
+    expect(await store.get(sibling.workspaceId)).toEqual(sibling);
+    expect((await fs.stat(store.artifactPath(sibling.workspaceId))).isDirectory()).toBe(true);
   } finally {
     releaseRemoval.resolve();
     await outcome;
@@ -394,50 +393,3 @@ it.runIf(process.platform !== "win32")(
     expect(await replacement.store.get(successor.workspaceId)).toEqual(successor);
   },
 );
-
-it("publishes repository row changes only after committed creation, revisions, and deletion", async () => {
-  const { database, store } = await fixture();
-  const changed = vi.fn();
-  const unsubscribe = sessionChanges.subscribe(changed);
-  try {
-    expect(() =>
-      runOpenClawStateWriteTransaction(
-        () => {
-          createSessionRepositoryWorkspaceInDatabase(database.db, source, Date.now());
-          expect(changed).not.toHaveBeenCalled();
-          throw new Error("rollback repository");
-        },
-        { database },
-      ),
-    ).toThrow("rollback repository");
-    expect(changed).not.toHaveBeenCalled();
-    const initial = await store.create(source);
-    expect(changed).toHaveBeenCalledExactlyOnceWith({
-      agentId: source.agentId,
-      sessionKey: source.sessionKey,
-    });
-    const bound = await store.bindBase({
-      workspaceId: initial.workspaceId,
-      expectedRevision: initial.revision,
-      baseCommit,
-      baseManifestHash,
-      assertCurrent,
-    });
-    await store.acceptCheckpoint({
-      workspaceId: bound.workspaceId,
-      expectedRevision: bound.revision,
-      checkpointRef: "refs/openclaw/worker-results/row-signal",
-      manifestHash: baseManifestHash,
-      assertCurrent,
-    });
-    await store.delete({ workspaceId: initial.workspaceId, assertCurrent });
-    expect(changed).toHaveBeenCalledTimes(4);
-    expect(
-      changed.mock.calls.every(
-        ([change]) => change.agentId === source.agentId && change.sessionKey === source.sessionKey,
-      ),
-    ).toBe(true);
-  } finally {
-    unsubscribe();
-  }
-});

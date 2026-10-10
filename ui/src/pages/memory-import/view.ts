@@ -24,12 +24,10 @@ import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/memory-import.css";
-import { renderBackfillConfirmation } from "./backfill-confirmation.ts";
 
 registerMemoryImportEnglish();
 
 type MemoryCollection = {
-  id: string;
   label: string;
   items: MemoryMigrationItem[];
 };
@@ -107,7 +105,7 @@ function groupMemoryItems(items: readonly MemoryMigrationItem[]): MemoryCollecti
       detailString(item, "collectionLabel") ??
       detailString(item, "sourceLabel") ??
       t("memoryImport.unknownCollection");
-    const group = groups.get(id) ?? { id, label, items: [] };
+    const group = groups.get(id) ?? { label, items: [] };
     group.items.push(item);
     groups.set(id, group);
   }
@@ -116,16 +114,6 @@ function groupMemoryItems(items: readonly MemoryMigrationItem[]): MemoryCollecti
 
 function providerLabel(provider: MemoryMigrationProviderPlan): string {
   return provider.providerId === "claude" ? t("memoryImport.claudeCode") : provider.label;
-}
-
-function providerDescription(provider: MemoryMigrationProviderPlan): string {
-  if (provider.providerId === "codex") {
-    return t("memoryImport.codexDescription");
-  }
-  if (provider.providerId === "claude") {
-    return t("memoryImport.claudeDescription");
-  }
-  return t("memoryImport.providerFallback");
 }
 
 function fileCount(count: number): string {
@@ -268,22 +256,17 @@ function renderResult(result: MigrationsMemoryApplyResult | undefined) {
           resultDetailItems.length > 0
             ? html`<ul class="memory-import__result-issues">
                 ${resultDetailItems.map((item) => {
-                  const recoveryArtifacts = [
-                    {
-                      label: t("memoryImport.recoveryFile"),
-                      path: detailString(item, "recoveryPath"),
-                    },
-                    {
-                      label: t("memoryImport.recoveryJournal"),
-                      path: detailString(item, "recoveryRecordPath"),
-                    },
-                    {
-                      label: t("memoryImport.itemBackup"),
-                      path: detailString(item, "backupPath"),
-                    },
-                  ].filter((artifact): artifact is { label: string; path: string } =>
-                    Boolean(artifact.path),
-                  );
+                  const recoveryArtifacts = (
+                    [
+                      ["memoryImport.recoveryFile", "recoveryPath"],
+                      ["memoryImport.recoveryJournal", "recoveryRecordPath"],
+                      ["memoryImport.itemBackup", "backupPath"],
+                    ] as const
+                  )
+                    .map(([label, key]) => ({ label: t(label), path: detailString(item, key) }))
+                    .filter((artifact): artifact is { label: string; path: string } =>
+                      Boolean(artifact.path),
+                    );
                   return html`<li>
                     <strong>${artifactLabel(item)}</strong>
                     <span>${formatUiExternalText(item.reason ?? item.message, item.status)}</span>
@@ -307,7 +290,10 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
   const selectedIds = new Set(props.selectedByProvider[provider.providerId] ?? []);
   const groups = groupMemoryItems(provider.items);
   const applying = props.applyingProviderId === provider.providerId;
-  const backfillMutating =
+  const disabled =
+    props.loading ||
+    props.applyingProviderId !== null ||
+    props.error !== null ||
     props.backfillBusy === "apply" ||
     props.backfillBusy === "rollback" ||
     props.backfillRollbackPending;
@@ -316,35 +302,21 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
     : !provider.found
       ? renderSettingsEmpty(provider.message ?? t("memoryImport.noMemoryFound"))
       : html`
-          ${
-            provider.source
+          ${(
+            [
+              ["memoryImport.source", provider.source],
+              ["memoryImport.destination", provider.target && `${provider.target}/memory/imports/`],
+            ] as const
+          ).map(([title, path]) =>
+            path
               ? renderSettingsRow({
-                  title: t("memoryImport.source"),
-                  control: renderSettingsValue(provider.source, { mono: true }),
+                  title: t(title),
+                  control: renderSettingsValue(path, { mono: true }),
                 })
-              : nothing
-          }
-          ${
-            provider.target
-              ? renderSettingsRow({
-                  title: t("memoryImport.destination"),
-                  control: renderSettingsValue(`${provider.target}/memory/imports/`, {
-                    mono: true,
-                  }),
-                })
-              : nothing
-          }
+              : nothing,
+          )}
           ${groups.map((group) =>
-            renderCollection(
-              provider,
-              group,
-              selectedIds,
-              props.onToggleCollection,
-              props.loading ||
-                props.applyingProviderId !== null ||
-                props.error !== null ||
-                backfillMutating,
-            ),
+            renderCollection(provider, group, selectedIds, props.onToggleCollection, disabled),
           )}
           ${renderSettingsRow({
             title:
@@ -355,13 +327,7 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
               <button
                 class="btn primary"
                 data-test-id="memory-import-provider-button"
-                ?disabled=${
-                  selectedIds.size === 0 ||
-                  props.applyingProviderId !== null ||
-                  backfillMutating ||
-                  props.loading ||
-                  props.error !== null
-                }
+                ?disabled=${selectedIds.size === 0 || disabled}
                 @click=${() => props.onRequestImport(provider.providerId)}
               >
                 ${applying ? t("common.importing") : t("memoryImport.importSelected")}
@@ -379,7 +345,13 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
             })}
             ${providerLabel(provider)}
           </span>`,
-          description: providerDescription(provider),
+          description: t(
+            provider.providerId === "codex"
+              ? "memoryImport.codexDescription"
+              : provider.providerId === "claude"
+                ? "memoryImport.claudeDescription"
+                : "memoryImport.providerFallback",
+          ),
           actions: renderSettingsStatus({
             kind: provider.found ? "ok" : "muted",
             label: provider.found ? fileCount(provider.items.length) : t("memoryImport.notFound"),
@@ -393,25 +365,36 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
 
 // The confirmation modal reuses the shared exec-approval dialog anatomy, not
 // the settings design language.
-function renderConfirmation(props: MemoryImportViewProps) {
-  const provider = props.plan?.providers.find(
-    (candidate) => candidate.providerId === props.pendingProviderId,
-  );
-  if (!provider) {
+function renderConfirmation(props: MemoryImportViewProps, backfill = false) {
+  const provider = backfill
+    ? undefined
+    : props.plan?.providers.find((candidate) => candidate.providerId === props.pendingProviderId);
+  if (backfill ? !props.backfillRollbackPending : !provider) {
     return nothing;
   }
-  const count = props.selectedByProvider[provider.providerId]?.length ?? 0;
-  const title = t("memoryImport.confirmTitle", { provider: providerLabel(provider) });
-  const description = t("memoryImport.confirmDescription", { count: String(count) });
+  const title = provider
+    ? t("memoryImport.confirmTitle", { provider: providerLabel(provider) })
+    : t("memoryImport.backfill.rollbackConfirmTitle");
+  const description = provider
+    ? t("memoryImport.confirmDescription", {
+        count: String(props.selectedByProvider[provider.providerId]?.length ?? 0),
+      })
+    : t("memoryImport.backfill.rollbackConfirmDescription");
+  const busy = props.applyingProviderId !== null || (backfill && props.backfillBusy !== null);
+  const onCancel = backfill ? props.onBackfillRollbackCancel : props.onCancelImport;
   return html`
     <openclaw-modal-dialog
       label=${title}
       description=${description}
-      @modal-cancel=${() => {
-        if (props.applyingProviderId === null) {
-          props.onCancelImport();
-        }
-      }}
+      @modal-cancel=${
+        backfill
+          ? onCancel
+          : () => {
+              if (props.applyingProviderId === null) {
+                onCancel();
+              }
+            }
+      }
     >
       <div class="exec-approval-card memory-import__confirm">
         <div class="exec-approval-header">
@@ -420,29 +403,19 @@ function renderConfirmation(props: MemoryImportViewProps) {
             <div class="exec-approval-sub">${description}</div>
           </div>
         </div>
-        <div class="callout ${props.replaceExisting ? "warn" : ""}">
-          ${
-            props.replaceExisting
-              ? t("memoryImport.confirmReplace")
-              : t("memoryImport.confirmBackup")
-          }
+        <div class="callout ${backfill || props.replaceExisting ? "warn" : ""}">
+          ${t(backfill ? "memoryImport.backfill.rollbackWarning" : props.replaceExisting ? "memoryImport.confirmReplace" : "memoryImport.confirmBackup")}
         </div>
         <div class="exec-approval-actions">
           <button
-            class="btn primary"
-            data-test-id="memory-import-confirm"
-            ?disabled=${props.applyingProviderId !== null}
-            @click=${props.onConfirmImport}
+            class="btn ${backfill ? "danger" : "primary"}"
+            data-test-id=${backfill ? "memory-backfill-rollback-confirm" : "memory-import-confirm"}
+            ?disabled=${busy}
+            @click=${backfill ? props.onBackfillRollbackConfirm : props.onConfirmImport}
           >
-            ${t("memoryImport.confirmImport")}
+            ${t(backfill ? "memoryImport.backfill.rollback" : "memoryImport.confirmImport")}
           </button>
-          <button
-            class="btn"
-            ?disabled=${props.applyingProviderId !== null}
-            @click=${props.onCancelImport}
-          >
-            ${t("common.cancel")}
-          </button>
+          <button class="btn" ?disabled=${busy} @click=${onCancel}>${t("common.cancel")}</button>
         </div>
       </div>
     </openclaw-modal-dialog>
@@ -644,7 +617,7 @@ function renderBackfillSection(props: MemoryImportViewProps) {
           }
         `,
       )}
-      ${renderBackfillConfirmation(props)}
+      ${renderConfirmation(props, true)}
     </div>
   `;
 }

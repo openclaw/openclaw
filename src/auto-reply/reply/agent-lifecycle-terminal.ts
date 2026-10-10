@@ -147,9 +147,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
         data.stopReason = terminationFields.stopReason;
       }
     }
-    if (extraData) {
-      Object.assign(data, extraData);
-    }
+    Object.assign(data, extraData);
     return {
       runId: params.runId,
       lifecycleGeneration: params.getLifecycleGeneration(),

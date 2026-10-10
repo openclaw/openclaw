@@ -1,4 +1,3 @@
-// Render bounded, sanitized doctor findings into a fixing-agent handoff prompt.
 import { HEALTH_FINDING_SEVERITY_RANK, type HealthFinding } from "../flows/health-checks.js";
 import {
   redactSupportString,
@@ -109,7 +108,6 @@ function renderTriageTail(bundle: TriageBundle, redaction: SupportRedactionConte
   ];
 }
 
-/** Render a bounded fixing-agent prompt from already-sanitized doctor findings. */
 export function renderTriagePrompt(params: {
   findings: readonly HealthFinding[];
   bundle: TriageBundle;

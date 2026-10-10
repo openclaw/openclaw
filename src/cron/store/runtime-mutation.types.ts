@@ -22,7 +22,6 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       nowMs: number;
       defaultAgentId?: string;
-      legacyDefaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       cronConfig?: CronRunRecoveryPreparation["cronConfig"];
       ownership: CronScheduleOwnershipFacts[];
@@ -42,7 +41,6 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       nowMs: number;
       skipMissedJobs: boolean;
-      legacyDefaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       ownership: CronScheduleOwnershipFacts[];
     };
@@ -75,7 +73,12 @@ export type CronRuntimeMutationContracts = {
     input: CronRuntimeMutationInputs["cron.mutateJobs"];
     facts: { deletionBlocked: boolean };
     preparation: { nowMs: number };
-    outcome: { store: CronStoreFile; jobsFingerprint: string; runtimeFingerprint: string };
+    outcome: {
+      store: CronStoreFile;
+      names: Map<string, string | undefined>;
+      jobsFingerprint: string;
+      runtimeFingerprint: string;
+    };
   };
   "cron.reserveRuns": {
     input: CronRuntimeMutationInputs["cron.reserveRuns"];

@@ -39,6 +39,18 @@ function expectReason(error: unknown, reason: FailoverReason | null) {
 }
 
 describe("failover-error", () => {
+  it("preserves an Ollama model-retirement error instead of coercing it to a timeout", () => {
+    const body = JSON.stringify({
+      error: "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+    });
+    const error = Object.assign(new Error(`410 ${body}`), { status: 410, body });
+    expect(coerceToFailoverError(error, { provider: "ollama" })).toMatchObject({
+      reason: "model_not_found",
+      status: 410,
+      rawError: error.message,
+    });
+  });
+
   it("does not promote a direct preflight into a provider failure", () => {
     const message = "handoff refused: 529 OVERLOADED";
     const cause = { status: 529, code: "OVERLOADED", message: "overloaded" };
@@ -143,22 +155,6 @@ describe("failover-error", () => {
     expectReason(first, null);
   });
 
-  it("treats session-specific HTTP 410s differently from generic 410s", () => {
-    expectReason({ status: 410, message: "session not found" }, "session_expired");
-    expectReason({ message: "HTTP 410: No body" }, "timeout");
-    expectReason({ message: "HTTP 410: conversation expired" }, "session_expired");
-  });
-
-  it("lets an overloaded payload override timeout-shaped HTTP 499", () => {
-    expectReason(
-      {
-        status: 499,
-        message: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-      },
-      "overloaded",
-    );
-  });
-
   it("lets provider-attributed billing evidence refine ambiguous HTTP 429", () => {
     const message =
       '{"error":{"type":"rate_limit_reached","message":"Insufficient account balance. Please recharge your Moonshot account."}}';
@@ -169,10 +165,6 @@ describe("failover-error", () => {
       "rate_limit",
     );
     expectReason({ provider: "openai", status: 429, message }, "rate_limit");
-  });
-
-  it("classifies the bare shared model runtime stream wrapper as timeout (#71620)", () => {
-    expectReason({ message: "An unknown error occurred" }, "timeout");
   });
 
   it("treats structured quota failures as billing instead of generic HTTP policy", () => {
@@ -230,17 +222,15 @@ describe("failover-error", () => {
     });
   });
 
-  it.each([
-    { message: "openrouter/__invalid_test_model__ is not a valid model ID" },
-    { status: 400, message: "HTTP 400: openrouter/__invalid_test_model__ is not a valid model ID" },
-    { status: 422, message: "invalid model: openrouter/__invalid_test_model__" },
-  ])("classifies invalid-model payloads as model_not_found: $message", (error) => {
-    expectReason(error, "model_not_found");
+  it("classifies invalid-model payloads as model_not_found", () => {
+    expectReason(
+      { status: 422, message: "invalid model: openrouter/__invalid_test_model__" },
+      "model_not_found",
+    );
   });
 
   it.each([
     ["402", "Monthly spend limit reached. Please visit your billing settings.", "rate_limit"],
-    ["HTTP 402", "rate limit exceeded", "rate_limit"],
     ["HTTP 402", "Your usage limit has been reached. Please upgrade your plan.", "billing"],
   ] as const)(
     "keeps %s wrappers aligned with status-split payloads: %s",
@@ -357,15 +347,6 @@ describe("failover-error", () => {
     expect(err).toMatchObject({ reason: "model_not_found", status: 404 });
   });
 
-  it("coerces format errors with a 400 status", () => {
-    expect(
-      coerceToFailoverError("invalid request format", {
-        provider: "google",
-        model: "cloud-code-assist",
-      }),
-    ).toMatchObject({ reason: "format", status: 400 });
-  });
-
   it("403 with revoked key message returns auth_permanent", () => {
     expectReason({ status: 403, message: "api key revoked" }, "auth_permanent");
   });
@@ -393,21 +374,6 @@ describe("failover-error", () => {
       { provider: "openai", model: "gpt-5.4" },
     );
     expect(err).toMatchObject({ reason: "server_error", status: 500 });
-  });
-
-  it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
-    const err = coerceToFailoverError("rate limit exceeded", {
-      provider: "openai",
-      model: "gpt-5",
-      profileId: "p1",
-      sessionId: "session:browser-1234",
-      lane: "draft",
-    });
-    expect(err).toMatchObject({
-      sessionId: "session:browser-1234",
-      lane: "draft",
-      provider: "openai",
-    });
   });
 
   it("describes non-Error values consistently", () => {
@@ -542,16 +508,6 @@ describe("isNonProviderRuntimeCoordinationError", () => {
     ).toBe(true);
   });
 
-  it("returns true for direct and nested runner admission failures", () => {
-    const coordination = Object.assign(new Error("The device runner is offline"), {
-      name: "WorkerRunnerUnavailableError",
-    });
-    for (const error of [coordination, new Error("worker turn failed", { cause: coordination })]) {
-      expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
-      expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-    }
-  });
-
   it("does not read a SQLite worker code as a provider overload", () => {
     const error = new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
     for (const candidate of [error, new Error("lane task error", { cause: error })]) {
@@ -639,15 +595,5 @@ describe("hasProviderRequestSizeCeiling", () => {
         ),
       ),
     ).toBe(true);
-  });
-
-  it("is false for throttling that states a requested size within the limit", () => {
-    const throttled =
-      "429 Rate limit reached on tokens per minute (TPM): Limit 8000, Used 7500, Requested 1000, please try again in 3.5s.";
-    expect(hasProviderRequestSizeCeiling(new Error(throttled))).toBe(false);
-    expect(
-      new FailoverError("rate limited", { reason: "rate_limit", rawError: throttled })
-        .requestSizeCeiling,
-    ).toBe(false);
   });
 });

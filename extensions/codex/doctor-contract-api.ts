@@ -1,6 +1,3 @@
-/**
- * Doctor contract hooks for Codex plugin config and state migrations.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -61,7 +58,6 @@ function hasRetiredTurnIdleTimeout(value: unknown): boolean {
   );
 }
 
-/** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config"],
@@ -106,44 +102,30 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const rawPluginConfig = asNullableRecord(rawEntry?.config);
   const rawCodexPlugins = asNullableRecord(rawPluginConfig?.codexPlugins);
   const rawAppServer = asNullableRecord(rawPluginConfig?.appServer);
-  const shouldRemoveDynamicToolsProfile =
-    rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
-  const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
-  const shouldRewriteApprovalPolicy = hasRetiredApprovalPolicy(rawAppServer);
-  const shouldRemoveTurnIdleTimeouts = hasRetiredTurnIdleTimeout(rawAppServer);
-  const shouldRemoveBlankNetworkProxyFields = hasBlankNetworkProxyOptionalFields(rawAppServer);
   if (
     !rawPluginConfig ||
-    (!shouldRemoveDynamicToolsProfile &&
-      !shouldRewriteDestructivePolicy &&
-      !shouldRewriteApprovalPolicy &&
-      !shouldRemoveTurnIdleTimeouts &&
-      !shouldRemoveBlankNetworkProxyFields)
+    (!hasRetiredDynamicToolsProfile(rawPluginConfig) &&
+      !hasLegacyPluginDestructivePolicy(rawCodexPlugins) &&
+      !hasRetiredApprovalPolicy(rawAppServer) &&
+      !hasRetiredTurnIdleTimeout(rawAppServer) &&
+      !hasBlankNetworkProxyOptionalFields(rawAppServer))
   ) {
     return { config: cfg, changes: [] };
   }
 
-  const nextConfig = structuredClone(cfg) as OpenClawConfig & {
-    plugins?: Record<string, unknown>;
-  };
-  const nextPlugins = asNullableRecord(nextConfig.plugins);
-  const nextEntries = asNullableRecord(nextPlugins?.entries);
-  const nextEntry = asNullableRecord(nextEntries?.codex);
-  const nextPluginConfig = asNullableRecord(nextEntry?.config);
-  if (!nextPluginConfig) {
-    return { config: cfg, changes: [] };
-  }
+  const nextConfig = structuredClone(cfg);
+  const nextPluginConfig = nextConfig.plugins!.entries!.codex!.config!;
 
   const changes: string[] = [];
-  if (shouldRemoveDynamicToolsProfile) {
+  if (hasRetiredDynamicToolsProfile(nextPluginConfig)) {
     delete nextPluginConfig.codexDynamicToolsProfile;
     changes.push(
       "Removed retired plugins.entries.codex.config.codexDynamicToolsProfile; Codex app-server always keeps Codex-native workspace tools native.",
     );
   }
 
-  if (shouldRewriteDestructivePolicy) {
-    const nextCodexPlugins = asNullableRecord(nextPluginConfig.codexPlugins);
+  const nextCodexPlugins = asNullableRecord(nextPluginConfig.codexPlugins);
+  if (hasLegacyPluginDestructivePolicy(nextCodexPlugins)) {
     if (nextCodexPlugins?.allow_destructive_actions === "on-request") {
       nextCodexPlugins.allow_destructive_actions = "auto";
     }
@@ -160,7 +142,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
-  if (nextAppServer && shouldRemoveTurnIdleTimeouts) {
+  if (nextAppServer && hasRetiredTurnIdleTimeout(nextAppServer)) {
     for (const key of RETIRED_TURN_IDLE_TIMEOUT_KEYS) {
       if (Object.hasOwn(nextAppServer, key)) {
         delete nextAppServer[key];
@@ -171,7 +153,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     }
   }
 
-  if (nextAppServer && shouldRemoveBlankNetworkProxyFields) {
+  if (nextAppServer && hasBlankNetworkProxyOptionalFields(nextAppServer)) {
     const nextNetworkProxy = asNullableRecord(nextAppServer.networkProxy);
     for (const [target, key, configPath] of [
       [nextNetworkProxy, "profileName", "networkProxy.profileName"],
@@ -186,13 +168,8 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     }
   }
 
-  if (shouldRewriteApprovalPolicy) {
-    if (
-      nextAppServer?.approvalPolicy === "on-failure" ||
-      nextAppServer?.approvalPolicy === "untrusted"
-    ) {
-      nextAppServer.approvalPolicy = "on-request";
-    }
+  if (nextAppServer && hasRetiredApprovalPolicy(nextAppServer)) {
+    nextAppServer.approvalPolicy = "on-request";
     changes.push(
       'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
     );

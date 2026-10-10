@@ -19,6 +19,7 @@ import {
   type SqliteWorkerAdmissionFactory,
   type SqliteWorkerAdmissionRequest,
 } from "./sqlite-worker-operation-admission.js";
+import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 function withCallerErrors<T>(result: Promise<T>): Promise<T> {
@@ -78,6 +79,16 @@ function resolveSqliteWorkerBroker() {
   );
 }
 
+/** Preload code for one post-drain shared-state opening without admitting native storage. */
+export function prepareSharedStateSqliteWorkerRuntime(
+  source: Pick<SqliteWorkerStoreOptions, "moduleUrl" | "runtimeGeneration">,
+): SqliteWorkerRuntimePreparation | undefined {
+  if (!isMainThread) {
+    return undefined;
+  }
+  return resolveSqliteWorkerBroker().prepareRuntime(source);
+}
+
 export type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
 
 /** Charge captured input before actor preparation can yield, then hand it to normal dispatch. */
@@ -111,6 +122,7 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
 export function createSqliteWorkerWriteAdmission(
   assertCurrent: (request: SqliteWorkerAdmissionRequest) => void,
   nativeLocations: readonly string[],
+  attachment?: unknown,
 ): SqliteWorkerAdmissionFactory {
   return () => {
     let phase: "waiting" | "transaction" | "commit" = "waiting";
@@ -130,7 +142,7 @@ export function createSqliteWorkerWriteAdmission(
           throw new Error("SQLite worker write authority expired");
         }
         phase = phase === "waiting" ? "transaction" : "commit";
-      }),
+      }, attachment),
     };
   };
 }
@@ -198,6 +210,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
   custody: {
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
+    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     signal?: AbortSignal;
     assertCurrent(): void;
@@ -218,6 +231,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
       {
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
+        onNativeLost: custody.onNativeLost,
         onNativeStopped: custody.onNativeStopped,
         signal: custody.signal,
       },

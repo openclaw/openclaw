@@ -39,6 +39,11 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"
 installer_node() { "$(node_bin)" "$@"; }
 installer_npm() { "$(npm_bin)" "$@"; }
 installer_step() { shift; "$@"; }
+installer_error() {
+  local msg="$1"
+  emit_json error message "$msg"
+  log "ERROR: $msg"
+}
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
 }
@@ -176,47 +181,6 @@ log() {
 }
 
 DOWNLOADER=""
-detect_downloader() {
-  if command -v curl >/dev/null 2>&1; then
-    DOWNLOADER="curl"
-    return 0
-  fi
-  if command -v wget >/dev/null 2>&1; then
-    DOWNLOADER="wget"
-    return 0
-  fi
-  fail "Missing downloader (curl or wget required)"
-}
-
-download_file() {
-  local url="$1"
-  local output="$2"
-  if [[ -z "$DOWNLOADER" ]]; then
-    detect_downloader
-  fi
-  if [[ "$DOWNLOADER" == "curl" ]]; then
-    # Bound connection and transfer stalls without a total download duration.
-    curl -fsSL --proto '=https' --tlsv1.2 \
-      --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-      --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-      --retry 3 --retry-delay 1 --retry-connrefused \
-      -o "$output" "$url"
-    return
-  fi
-  wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
-}
-
-cleanup_legacy_submodules() {
-  local repo_dir="${1:-${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}}"
-  local legacy_dir="${repo_dir}/Peekaboo"
-  if [[ -d "$legacy_dir" ]]; then
-    emit_json step name legacy-submodule status start path "$legacy_dir"
-    log "Removing legacy submodule checkout: ${legacy_dir}"
-    rm -rf "$legacy_dir"
-    emit_json step name legacy-submodule status ok path "$legacy_dir"
-  fi
-}
-
 sha256_file() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -290,9 +254,7 @@ emit_json() {
 }
 
 fail() {
-  local msg="$1"
-  emit_json error message "$msg"
-  log "ERROR: $msg"
+  installer_error "$@"
   exit 1
 }
 
@@ -627,62 +589,7 @@ linked_node_is_usable() {
     return 1
   fi
 
-  "$candidate_node" -e '
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(":memory:");
-    try {
-      const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
-      const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
-      const major = Number(match?.[1]);
-      const minor = Number(match?.[2]);
-      const patch = Number(match?.[3]);
-      const safe =
-        major > 3 ||
-        (major === 3 &&
-          (minor > 51 ||
-            (minor === 51 && patch >= 3) ||
-            (minor === 50 && patch >= 7) ||
-            (minor === 44 && patch >= 6)));
-      const text = "a\u0000b\u0000";
-      const bytes = Buffer.from(text, "utf8");
-      const json = JSON.stringify({ value: text });
-      db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
-      db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
-      const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
-      const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
-      const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
-      const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
-      if (!textSafe) {
-        console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
-      } else if (!blobSafe || !jsonSafe) {
-        console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
-      } else if (!safe) {
-        console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
-      }
-      if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
-    } finally {
-      db.close();
-    }
-  ' --no-warnings >/dev/null
-}
-
-linked_node_sqlite_version() {
-  local candidate_node="${1-$(node_bin)}"
-  if [[ ! -x "$candidate_node" ]]; then
-    printf 'unavailable\n'
-    return
-  fi
-  local version
-  version="$("$candidate_node" -e '
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(":memory:");
-    try {
-      process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
-    } finally {
-      db.close();
-    }
-  ' 2>/dev/null || true)"
-  printf '%s\n' "${version:-unavailable}"
+  node_binary_has_safe_sqlite "$candidate_node"
 }
 
 semver_at_least() {
@@ -825,7 +732,7 @@ install_alpine_node() {
     if ! linked_node_is_usable "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"; then
       installed_version="$("${APK_NODE_BIN_DIR}/node" -v 2>/dev/null || echo unknown)"
       required_version="$(required_node_version)"
-      sqlite_version="$(linked_node_sqlite_version "${APK_NODE_BIN_DIR}/node")"
+      sqlite_version="$(node_binary_sqlite_version "${APK_NODE_BIN_DIR}/node")"
       fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
     fi
     link_node_runtime_paths "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"
@@ -954,86 +861,6 @@ resolve_git_checkout_openclaw_version() {
   ' "$repo_dir"
 }
 
-checkout_git_openclaw_ref() {
-  local repo_dir="$1"
-  local ref="$2"
-  local original_head=""
-  local original_status=""
-  local namespaces=(heads tags)
-
-  GIT_REF_KIND=""
-
-  if [[ -z "$ref" ]]; then
-    return 0
-  fi
-
-  # Full commit IDs pin source bytes, even when a remote ref has the same name.
-  # Bundled/existing checkouts already have the object and need no remote lookup.
-  if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
-    if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
-      git -C "$repo_dir" fetch --no-tags origin "$ref" ||
-        fail "Could not fetch requested git commit: ${ref}"
-    fi
-    git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null ||
-      fail "Requested git version is not a commit: ${ref}"
-    git -C "$repo_dir" checkout --detach "$ref"
-    GIT_REF_KIND="immutable"
-    return 0
-  fi
-
-  if [[ "$ref" == "main" ]]; then
-    git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
-    git -C "$repo_dir" checkout main
-    if [[ "$GIT_UPDATE" == "1" ]]; then
-      if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
-        fail "Could not record repository state before updating from origin/main"
-      fi
-      if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
-        fail "Could not record repository state before updating from origin/main"
-      fi
-      if ! git -C "$repo_dir" rebase origin/main; then
-        if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
-          fail "Could not update repository from origin/main; the checkout was restored to its pre-update state"
-        fi
-        fail "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
-      fi
-    fi
-    GIT_REF_KIND="moving"
-    return 0
-  fi
-
-  # Normalized release selectors prefer immutable tags. A same-name branch
-  # remains a fallback for operator-supplied v-prefixed branch names.
-  if [[ "$ref" == v[0-9]* ]]; then
-    namespaces=(tags heads)
-  fi
-
-  local namespace=""
-  local probe_status=0
-  for namespace in "${namespaces[@]}"; do
-    if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
-      if [[ "$namespace" == "heads" ]]; then
-        git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-        git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-        GIT_REF_KIND="moving"
-      else
-        git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
-        git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null ||
-          fail "Requested git version is not a commit: ${ref}"
-        git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
-        GIT_REF_KIND="immutable"
-      fi
-      return 0
-    else
-      probe_status=$?
-    fi
-    (( probe_status == 2 )) || fail "Could not resolve requested git ref: ${ref}"
-  done
-
-  fail "Requested git version not found: ${ref}"
-}
-
-
 install_node() {
   # Packaging provisions each requested architecture in a fresh private prefix.
   # It must execute that Node (Rosetta for x64 on ARM), never link the host runtime.
@@ -1122,7 +949,7 @@ install_node() {
     local sqlite_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    sqlite_version="$(linked_node_sqlite_version)"
+    sqlite_version="$(node_binary_sqlite_version "$(node_bin)")"
     fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
@@ -1134,7 +961,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.7.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1234,18 +1061,8 @@ install_openclaw() {
     fi
     fail "npm installs do not support OpenClaw GitHub source targets like '${requested}'. Use --install-method git --version main, latest, beta, an exact version, or a built .tgz package."
   fi
-  local freshness_flag="--min-release-age=0"
-  local min_release_age=""
-  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age --global 2>/dev/null || true)"
-  if npm_config_has_raw_key "$(npm_bin)" "min-release-age"; then
-    freshness_flag="--min-release-age=0"
-  elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
-    local before_value=""
-    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before --global 2>/dev/null || true)"
-    if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
-      freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
-    fi
-  fi
+  local freshness_flag
+  freshness_flag="$(npm_freshness_flag "$(npm_bin)")"
   local npm_args=(
     --loglevel "$NPM_LOGLEVEL"
     --no-fund
@@ -1299,38 +1116,6 @@ set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
 EOF
   emit_json step name openclaw status ok version "$requested"
-}
-
-ensure_pnpm_git_prepare_allowlist() {
-  local repo_dir="$1"
-  local workspace_file="${repo_dir}/pnpm-workspace.yaml"
-  local dep="@tloncorp/api"
-  local tmp
-
-  if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
-    tmp="$(mktemp "${TMPDIR:-/tmp}/openclaw-workspace.XXXXXX")"
-    TMPFILES+=("$tmp")
-    if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
-      awk -v dep="$dep" '
-        BEGIN { inserted = 0 }
-        {
-          print
-          if (!inserted && $0 ~ /^allowBuilds:[[:space:]]*$/) {
-            print "  \"" dep "\": true"
-            inserted = 1
-          }
-        }
-      ' "$workspace_file" >"$tmp"
-    else
-      cat "$workspace_file" >"$tmp"
-      printf '\nallowBuilds:\n  "%s": true\n' "$dep" >>"$tmp"
-    fi
-    mv "$tmp" "$workspace_file"
-  elif [[ ! -f "$workspace_file" ]]; then
-    printf 'allowBuilds:\n  "%s": true\n' "$dep" >"$workspace_file"
-  fi
-
-  log "Updated pnpm allowlist for git-hosted build dependency: ${dep}"
 }
 
 install_openclaw_from_git() {
@@ -1404,8 +1189,6 @@ install_openclaw_from_git() {
     require_openclaw_version_compatible "$resolved_version"
   fi
 
-  cleanup_legacy_submodules "$repo_dir"
-  ensure_pnpm_git_prepare_allowlist "$repo_dir"
   ensure_pnpm "$repo_dir"
 
   local install_lockfile_flag

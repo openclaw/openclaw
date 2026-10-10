@@ -20,6 +20,7 @@ import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 import { dispatchInboundMessageMock, testState, writeSessionStore } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
@@ -27,9 +28,31 @@ import { createWorkerSessionPlacementStore } from "../worker-environments/placem
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
+export function setClientProfile(
+  client: GatewayClient,
+  profile: { id: string; updatedAt: number },
+) {
+  client.authenticatedUserProfile = {
+    profileId: profile.id,
+    displayName: null,
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+export function setNativeIosClient(client: GatewayClient) {
+  client.connect.client = {
+    id: "openclaw-ios",
+    version: "test",
+    platform: "ios",
+    mode: "ui",
+  };
+}
+
 export function useBrowserFollowupFixture() {
   const temporaryDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(async () => {
+      await disposeSessionReadContexts();
       // Agent leases retain the per-case Gateway home; release them before its cleanup.
       for (const dir of temporaryDirs.dirs) {
         await releaseGatewaySessionStoreFixture(dir);
@@ -61,7 +84,7 @@ export function useBrowserFollowupFixture() {
         main: {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
-          status: active ? "running" : "done",
+          status: active ? undefined : "done",
           ...(options.createdActor ? { createdActor: options.createdActor } : {}),
           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
         },

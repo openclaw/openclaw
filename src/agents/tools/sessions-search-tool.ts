@@ -33,6 +33,7 @@ import {
   createSessionVisibilityRowChecker,
   resolveSessionToolChannelScope,
   formatSessionToolAccessDenial,
+  isSessionToolMainAlias,
   resolveDisplaySessionKey,
   resolveSessionReference,
   resolveSessionToolAccess,
@@ -52,7 +53,11 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
 
 const SessionsSearchToolSchema = Type.Object({
   user: requesterProfileSchema(),
-  query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
+  query: Type.String({
+    minLength: 1,
+    maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS,
+    description: "Required non-empty keywords to match in past user and assistant text.",
+  }),
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({
     maximum: SESSIONS_SEARCH_MAX_LIMIT,
@@ -313,7 +318,9 @@ export function createSessionsSearchTool(opts?: {
       const params = args as Record<string, unknown>;
       const query = readToolStringParam(params, "query") ?? "";
       if (!query) {
-        throw new ToolInputError("query must not be empty");
+        throw new ToolInputError(
+          "query must not be empty; retry with non-empty keywords to match in past session text",
+        );
       }
       if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
         throw new ToolInputError(
@@ -357,10 +364,7 @@ export function createSessionsSearchTool(opts?: {
         const semanticTargetAgentId =
           normalizedRequestedKey === "current"
             ? requesterAgentId
-            : normalizedRequestedKey === "main" ||
-                normalizedRequestedKey === "global" ||
-                normalizedRequestedKey === mainKey ||
-                normalizedRequestedKey === alias ||
+            : isSessionToolMainAlias(normalizedRequestedKey, { mainKey, alias }) ||
                 Boolean(parseAgentSessionKey(normalizedRequestedKey))
               ? resolveSessionToolTargetAgentId({
                   cfg,
@@ -499,12 +503,9 @@ export function createSessionsSearchTool(opts?: {
       for (const [agentId, candidates] of [...sessionsByAgent].toSorted(([left], [right]) =>
         left.localeCompare(right),
       )) {
-        for (
-          let offset = 0;
-          offset < candidates.length;
-          offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
-        ) {
-          const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
+        const chunkSize = visibility === "channel" ? 1 : SESSIONS_SEARCH_MAX_SESSION_KEYS;
+        for (let offset = 0; offset < candidates.length; offset += chunkSize) {
+          const chunk = candidates.slice(offset, offset + chunkSize);
           const runSearch = () =>
             gatewayCall<{
               results?: GatewaySearchHit[];
@@ -521,15 +522,37 @@ export function createSessionsSearchTool(opts?: {
               },
             });
           const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
-          const result = scopedCandidate?.expectedSessionId
-            ? await runWithScopedSessionAccess({
-                cfg,
-                agentId,
-                expectedSessionId: scopedCandidate.expectedSessionId,
-                targetSessionKey: scopedCandidate.key,
-                run: runSearch,
-              })
-            : await runSearch();
+          let expectedSessionId = scopedCandidate?.expectedSessionId;
+          if (visibility === "channel" && scopedCandidate) {
+            const freshAccess = await resolveSessionToolAccess({
+              action: "history",
+              displayAction: "search",
+              requesterAgentId,
+              requesterSessionKey: effectiveRequesterKey,
+              sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+              mainSessionKey,
+              targetAgentId: agentId,
+              targetSessionKey: scopedCandidate.key,
+              requesterOwned: false,
+              visibility,
+              a2aPolicy,
+              callGateway: gatewayCall,
+            });
+            if (!freshAccess.allowed) {
+              continue;
+            }
+            expectedSessionId = freshAccess.expectedSessionId;
+          }
+          const result =
+            scopedCandidate && expectedSessionId
+              ? await runWithScopedSessionAccess({
+                  cfg,
+                  agentId,
+                  expectedSessionId,
+                  targetSessionKey: scopedCandidate.key,
+                  run: runSearch,
+                })
+              : await runSearch();
           indexing ||= result.indexing === true;
           archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
           backendTruncated ||= result.truncated === true;
@@ -560,6 +583,12 @@ export function createSessionsSearchTool(opts?: {
       visibleHits.sort(compareSearchHits);
       const limited = visibleHits.slice(0, limit);
       const capped = capSearchHits(limited);
+      const warnings = [
+        indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
+        archivedTranscriptsExcluded > 0
+          ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
+          : undefined,
+      ].filter(Boolean);
       return jsonResult({
         results: capped.items,
         ...(opts?.sessionLinkBase
@@ -567,18 +596,7 @@ export function createSessionsSearchTool(opts?: {
           : {}),
         ...(indexing ? { indexing: true } : {}),
         ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
-        ...(indexing || archivedTranscriptsExcluded > 0
-          ? {
-              warning: [
-                ...(indexing ? [SESSIONS_SEARCH_INDEXING_WARNING] : []),
-                ...(archivedTranscriptsExcluded > 0
-                  ? [
-                      `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`,
-                    ]
-                  : []),
-              ].join(" "),
-            }
-          : {}),
+        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
         ...(backendTruncated || visibleHits.length > limit || capped.truncated
           ? { truncated: true }
           : {}),

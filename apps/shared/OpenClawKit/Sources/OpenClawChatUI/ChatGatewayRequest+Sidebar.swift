@@ -1,7 +1,7 @@
 import Foundation
 import OpenClawProtocol
 
-public enum OpenClawChatSidebarStatus: String, Sendable { case active, archived, all }
+public enum OpenClawChatSidebarStatus: String, Sendable { case active, snoozed, archived, all }
 public enum OpenClawChatSidebarAgentScope: Equatable, Sendable { case selected, all }
 
 public struct OpenClawChatSidebarQuery: Equatable, Sendable {
@@ -33,6 +33,7 @@ public struct OpenClawChatSidebarQuery: Equatable, Sendable {
 
     var wire: Self {
         var query = self
+        if query.status == .snoozed { query.status = .active }
         if query.search.isEmpty {
             query.excludeCron = false
             query.excludeSystem = false
@@ -48,6 +49,7 @@ public struct OpenClawChatSidebarQuery: Equatable, Sendable {
 
 public protocol OpenClawChatSidebarTransport: OpenClawChatTransport {
     func acquireSidebarRequest() async throws -> @Sendable (OpenClawChatGatewayRequest) async throws -> Data
+    func loadSidebarAgentAvatar(_ source: String) async -> Data?
 }
 
 extension OpenClawChatGatewayRequests {

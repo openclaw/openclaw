@@ -190,12 +190,8 @@ extension OpenClawChatViewModel {
         case let .sessionsChanged(change):
             self.applySessionChangeProjection(change, ownedSwarmActivityNote: false)
             if change.reason == "groups" { self.sessionGroupsRevision += 1 }
-        case let .questionRequested(question):
-            self.upsertQuestion(question)
-            self.reconcileQuestionsAfterEvent()
-        case let .questionResolved(resolved):
-            self.resolveQuestionEvent(resolved)
-            self.reconcileQuestionsAfterEvent()
+        case .questionRequested, .questionResolved:
+            _ = self.handleQuestionEvent(evt)
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,

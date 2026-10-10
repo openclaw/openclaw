@@ -54,7 +54,7 @@ function requestOptions(params: {
     respond: vi.fn(),
     context: {
       broadcast: vi.fn(),
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
       logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       hasExecApprovalClients: () => true,
       validateAgentRuntimeApprovalAuthority: params.validateAuthority ?? (() => true),

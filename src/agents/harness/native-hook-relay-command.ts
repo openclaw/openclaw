@@ -45,6 +45,7 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   provider: NativeHookRelayProvider;
   relayId: string;
   stateDbPath?: string;
+  remoteCredentialPath?: string;
   generation?: string;
   event: NativeHookRelayEvent;
   preToolUseUnavailable?: "noop";
@@ -69,7 +70,11 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
     params.provider,
     "--relay-id",
     params.relayId,
-    ...(params.stateDbPath ? ["--state-db", params.stateDbPath] : []),
+    ...(params.remoteCredentialPath
+      ? ["--remote-credential", params.remoteCredentialPath]
+      : params.stateDbPath
+        ? ["--state-db", params.stateDbPath]
+        : []),
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,

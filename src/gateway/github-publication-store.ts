@@ -203,11 +203,11 @@ export function claimGitHubPublicationExecution(
 export function matchesGitHubPublicationIdentityRow(
   row: Pick<
     GitHubPublicationExecutionRow,
-    | "agent_id"
     | "identity_source"
     | "identity_profile_id"
     | "identity_account_id"
     | "identity_login"
+    | "agent_id"
   >,
   identity: Pick<PreparedGitHubPublicationIdentity, "source" | "profileId" | "account">,
 ): boolean {
@@ -276,15 +276,7 @@ export function insertGitHubPublicationRequest(
         workspace_tree: snapshot?.workspaceTree ?? null,
         created_at_ms: input.now,
         status: "requested",
-        gateway_instance_id: null,
-        repository: null,
-        base_branch: null,
-        head_commit: null,
-        pull_request_url: null,
-        error_code: null,
-        next_action: null,
         updated_at_ms: input.now,
-        reported_at_ms: null,
       })
       .onConflict((conflict) => conflict.columns(["session_id", "idempotency_key"]).doNothing()),
   );
@@ -485,6 +477,33 @@ export function isGitHubPublicationExecutionOwner(
       .where("request_id", "=", requestId),
   ).rows[0];
   return row?.status === "publishing" && row.gateway_instance_id === gatewayInstanceId;
+}
+
+export function markGitHubPublicationReported(
+  kind: "personal" | "repository",
+  requestId: string,
+): void {
+  const table =
+    kind === "personal"
+      ? "github_personal_publication_requests"
+      : "github_repository_publication_requests";
+  if (!tableExists(openOpenClawStateDatabase().db, table)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<StateDatabase, typeof table>>(db)
+          .updateTable(table)
+          .set({ reported_at_ms: Date.now() })
+          .where("request_id", "=", requestId)
+          .where("status", "in", ["published", "failed"]),
+      );
+    },
+    undefined,
+    { operationLabel: `github-${kind}-publication.report` },
+  );
 }
 
 export function digestGitHubPublicationRequest(params: {

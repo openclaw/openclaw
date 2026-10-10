@@ -114,7 +114,6 @@ function registerHandler(
       resolveCachedMessageThreadSpec,
     },
     authorization: createTelegramHandlerAuthorization(params),
-    registerMessages: () => {},
   }).registerReaction();
   const handler = handlers.get("message_reaction");
   if (!handler) {
@@ -282,7 +281,8 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   it("keeps a reaction on the runtime-bound global owner's queue", async () => {
     const cfg = {
       ...buildTelegramConfig(),
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+      agents: { entries: { main: {}, research: {} } },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
     };
     setRuntimeConfigSnapshot(cfg);
     const binding = {

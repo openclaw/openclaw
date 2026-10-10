@@ -132,7 +132,7 @@ describe("typed in-process agent continuation authorization", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const context = createContext();
         context.getRuntimeConfig = () => ({
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           gateway: {
             roles: {
               default: "limited",

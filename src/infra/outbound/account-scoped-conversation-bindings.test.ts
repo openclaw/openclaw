@@ -149,6 +149,16 @@ describe("account-scoped conversation binding expiry", () => {
           targetKind: bound.targetKind,
         }),
       ).resolves.toMatchObject({ metadata });
+      if (ownerKind === "plugin") {
+        await expect(
+          getSessionBindingService().bind({
+            targetSessionKey: "unscoped-core-target",
+            targetKind: "session",
+            conversation: { ...conversation, conversationId: "chat:requires-owner" },
+          }),
+        ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+        expect(manager.getByConversationId("chat:requires-owner")).toBeUndefined();
+      }
 
       manager.stop();
       closeOpenClawStateDatabaseForTest();
@@ -362,7 +372,7 @@ describe("account-scoped conversation binding expiry", () => {
   it("derives the binding owner from an agent-scoped target before consulting defaults", () => {
     const manager = createManager({
       cfg: {
-        agents: { list: [{ id: "main" }, { id: "molty" }] },
+        agents: { entries: { main: {}, molty: {} } },
         session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
       },
     });

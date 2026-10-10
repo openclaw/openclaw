@@ -5,6 +5,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import { hasErrnoCode } from "../infra/errno.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   resolveSqliteInspectionBudget,
   runSqliteReadOnlyWorker,
@@ -148,6 +149,7 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
       const result = await runCommandWithTimeout(
         [
           process.execPath,
+          ...resolveRuntimeArgs(),
           path.join(params.packageRoot, "openclaw.mjs"),
           "database",
           agentId === undefined ? "preflight" : "preflight-agent",

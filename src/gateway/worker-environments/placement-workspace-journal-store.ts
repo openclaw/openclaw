@@ -1,18 +1,14 @@
 import { serialize } from "node:v8";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import {
   reserveSqliteWorkerInputPreparation,
   type SqliteWorkerInputPreparation,
 } from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { stagePlacementWorkspaceResultWorkerPublication } from "./placement-turn-authority.js";
+import { stagePlacementWorkspaceJournalWorkerPublication } from "./placement-turn-authority.js";
+import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import {
   isWorkspaceJournalReceipt,
   type WorkerWorkspaceJournalOwner,
@@ -56,81 +52,56 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
     assertCurrent?: () => void,
     preparation?: SqliteWorkerInputPreparation,
   ): Promise<WorkspaceJournalReceipt> {
-    let admission: SqliteWorkerOperationAdmission | undefined;
-    const publications: ReturnType<typeof stagePlacementWorkspaceResultWorkerPublication>[] = [];
-    let granted = false;
     let published = false;
-    const check = () => {
-      context.admission.assertCurrent();
-      assertCurrent?.();
-      preparation?.assertCurrent();
-    };
-    const publish = (receipt: WorkspaceJournalReceipt) => {
-      if (!published) {
-        published = true;
-        for (const publication of publications) {
-          publication.commit();
+    const readReceipt = (facts: unknown) =>
+      isWorkspaceJournalReceipt(facts) && facts.type === command.type ? facts : undefined;
+    const mutation = createPlacementWorkerMutation({
+      context,
+      label: "Worker workspace journal",
+      nativeLocation: runtime.path,
+      assertCurrent() {
+        assertCurrent?.();
+        preparation?.assertCurrent();
+      },
+      readReceipt,
+      stageCommit(facts) {
+        const receipt = readReceipt(facts);
+        if (!receipt) {
+          throw new Error("Worker workspace journal commit has an invalid receipt");
         }
-        sessionChanges.emitBatch(receipt.changes);
-      }
-      return receipt;
-    };
+        const publications: ReturnType<typeof stagePlacementWorkspaceJournalWorkerPublication>[] =
+          [];
+        const rollback = () => publications.forEach((publication) => publication.rollback());
+        try {
+          for (const owner of receipt.owners) {
+            publications.push(
+              stagePlacementWorkspaceJournalWorkerPublication(
+                context.admission.identity,
+                owner.sessionId,
+              ),
+            );
+          }
+        } catch (error) {
+          rollback();
+          throw error;
+        }
+        return {
+          commit: () => publications.forEach((publication) => publication.commit()),
+          rollback,
+          invalidate: () => publications.forEach((publication) => publication.invalidate()),
+        };
+      },
+      publish(receipt) {
+        if (!published) {
+          published = true;
+          sessionChanges.emitBatch(receipt.changes);
+        }
+      },
+    });
     try {
-      return await runOpenClawStateWorkerOperation(
-        context,
-        async (scope) =>
-          publish(
-            await (preparation
-              ? preparation.handoff(() => scope.execute(command))
-              : scope.execute(command)),
-          ),
-        {
-          assertCurrent: check,
-          createAdmission: () => {
-            admission = createSqliteWorkerOperationAdmission((request, grant) => {
-              check();
-              if (request.stage === "commit") {
-                if (
-                  !isWorkspaceJournalReceipt(request.facts) ||
-                  request.facts.type !== command.type
-                ) {
-                  throw new Error("Worker workspace journal commit has an invalid receipt");
-                }
-                for (const owner of request.facts.owners) {
-                  publications.push(
-                    stagePlacementWorkspaceResultWorkerPublication(
-                      context.admission.identity,
-                      owner.sessionId,
-                    ),
-                  );
-                }
-              }
-              if (!grant()) {
-                throw new Error("Worker workspace journal admission expired");
-              }
-              granted ||= request.stage === "commit";
-            });
-            return { nativeLocations: [runtime.path], admission };
-          },
-        },
+      return await mutation.run((scope) =>
+        preparation ? preparation.handoff(() => scope.execute(command)) : scope.execute(command),
       );
-    } catch (error) {
-      const committed = admission?.committed ?? admission?.settlement?.committed;
-      if (
-        committed &&
-        isWorkspaceJournalReceipt(committed.facts) &&
-        committed.facts.type === command.type
-      ) {
-        return publish(committed.facts);
-      }
-      for (const publication of publications) {
-        if (!granted || admission?.settlement?.kind === "completed") {
-          publication.rollback();
-        } else {
-          publication.invalidate();
-        }
-      }
-      throw error;
     } finally {
       preparation?.release();
     }

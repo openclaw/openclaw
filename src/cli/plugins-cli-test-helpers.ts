@@ -1081,10 +1081,9 @@ export function resetPluginsCliTestState() {
     current: defaultRegistryIndex,
   });
   refreshPluginRegistryMock.mockResolvedValue(defaultRegistryIndex);
-  applyExclusiveSlotSelectionMock.mockImplementation((({ config }: { config: OpenClawConfig }) => ({
-    config,
-    warnings: [],
-  })) as (...args: unknown[]) => unknown);
+  applyExclusiveSlotSelectionMock.mockImplementation(
+    (({ config }: { config: OpenClawConfig }) => config) as (...args: unknown[]) => unknown,
+  );
   planPluginUninstallMock.mockImplementation(({ config, pluginId }) => ({
     ok: true,
     config,

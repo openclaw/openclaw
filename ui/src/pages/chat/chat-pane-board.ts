@@ -189,11 +189,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const initialized = this.initializeBrowserSidebarLayout(layout);
-    const fitted =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(initialized, this.paneWidth) ?? initialized)
-        : initialized;
-    state.updateSidebarLayout(fitted, options);
+    state.updateSidebarLayout(this.fitPaneSidebarLayout(initialized), options);
+  }
+
+  private fitPaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    return this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+      ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
+      : layout;
   }
 
   protected initializeBrowserSidebarLayout(layout: SidebarLayout): SidebarLayout {
@@ -224,10 +226,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
-    const fittedProjection =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
-        : resizedProjection;
+    const fittedProjection = this.fitPaneSidebarLayout(resizedProjection);
     const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
     const fittedSize =
       sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;
@@ -482,10 +481,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           retry = true;
           return;
         }
-        const enabled =
-          state.connected &&
-          isSwarmEnabledInConfig(context.runtimeConfig?.state.configSnapshot?.config, agentId);
-        if (!enabled) {
+        const swarmEnabled = isSwarmEnabledInConfig(
+          context.runtimeConfig?.state.configSnapshot?.config,
+          agentId,
+        );
+        if (this.swarmEnabled !== swarmEnabled) {
+          this.swarmEnabled = swarmEnabled;
+          requestChatPageUpdate(state, "animation-frame");
+        }
+        // The child roster also owns ordinary subagent waits, launch rows, and
+        // attention. Disabling swarm must not hide those recorded outcomes.
+        if (!state.connected) {
           if (this.swarmHydrator) {
             this.swarmHydrator.dispose();
             this.swarmHydrator = null;

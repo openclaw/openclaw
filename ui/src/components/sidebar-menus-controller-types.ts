@@ -50,6 +50,7 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
     >;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
+  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;
@@ -84,6 +85,7 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   agentUnreadCount(agentId: string): number;
   askAgentCapabilities(agentId: string): void;
   getRouteSessionKey(): string;
+  findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];
   switchChipAgent(agentId: string): void;

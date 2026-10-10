@@ -8,6 +8,7 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates, type ControlUiAuthSource } from "./control-ui-auth.ts";
@@ -32,14 +33,7 @@ type ApplicationConfig = {
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
-export type ApplicationConfigCapability = {
-  readonly current: ApplicationConfig;
-  refresh: (options?: {
-    skipWithoutAuthCandidate?: boolean;
-    signal?: AbortSignal;
-  }) => Promise<ApplicationConfig | null>;
-  subscribe: (listener: (config: ApplicationConfig) => void) => () => void;
-};
+export type ApplicationConfigCapability = ReturnType<typeof createApplicationConfigCapability>;
 
 function readDocumentTerminalEnabled(): boolean | null {
   if (typeof document === "undefined") {
@@ -169,7 +163,7 @@ async function loadApplicationConfig(params: {
 export function createApplicationConfigCapability(params: {
   resourceBasePath: string;
   getAuth?: () => ControlUiAuthSource;
-}): ApplicationConfigCapability {
+}) {
   let current = DEFAULT_APPLICATION_CONFIG;
   let authVersion = 0;
   let refreshVersion = 0;
@@ -196,7 +190,7 @@ export function createApplicationConfigCapability(params: {
     get current() {
       return current;
     },
-    async refresh(options) {
+    async refresh(options?: { skipWithoutAuthCandidate?: boolean; signal?: AbortSignal }) {
       // Queued bootstrap work cannot own credentials: plugin activation may
       // request its asset grant before that queue reaches the config refresh.
       const candidates = resolveAuth();
@@ -272,9 +266,7 @@ export function createApplicationConfigCapability(params: {
         }
       }
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: (config: ApplicationConfig) => void) =>
+      registerListener(listeners, listener),
   };
 }

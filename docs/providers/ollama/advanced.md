@@ -263,13 +263,32 @@ sidebarTitle: "Advanced"
     Ollama uses the **native API** (`/api/chat`) by default, which supports
     streaming and tool calling together — no special config needed.
 
-    For native requests, thinking control is forwarded directly: `/think off`
-    and `openclaw agent --thinking off` send top-level `think: false` unless
-    an explicit `params.think`/`params.thinking` is configured; `/think
-    low|medium|high` send the matching effort string. Verified full-effort
-    Ollama Cloud families such as GLM 5.2 and DeepSeek V4 also send native
+    Like Chat Completions, native Ollama withholds durable reply blocks until
+    the text phase is known at message completion, even with
+    `blockStreamingBreak: "text_end"`. Tool narration stays out of replies;
+    ordinary finals and length-limited answers remain deliverable. Independent
+    live previews can still update when enabled.
+    See [Pending text phases](/concepts/streaming#pending-text-phases).
+
+    For native requests, `/think off`, `openclaw agent --thinking off`, and
+    plugin `api.runtime.llm.complete({ reasoning: "off" })` calls send top-level
+    `think: false` unless an explicit `params.think`/`params.thinking` is
+    configured. Direct completions that omit `reasoning` keep the model default.
+    `/think low|medium|high` send the matching effort string. Verified full-effort
+    Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3,
+    DeepSeek V4, and DeepSeek V4.1 Flash also send native
     `think: "max"` for `/think max`; other models and local servers keep the
     compatible `think: "high"` mapping.
+    Native `max` applies to the `ollama-cloud` provider and to any `ollama`
+    provider whose base URL is `https://ollama.com`. A `:cloud` model reached
+    through a local Ollama server keeps `high`, because Ollama 0.21.2 and
+    earlier reject `max`.
+
+    GLM 5.3 and GLM 5.3 Flash on Ollama Cloud cannot turn thinking off: their
+    `/api/show` thinking values have no `false`, and `think: false` makes them
+    answer with their reasoning inline. For these models, `/think off` and a
+    configured `false` send their lowest level, `think: "low"`, instead, in
+    agent turns and in one-shot completions such as `openclaw infer model run`.
 
     <Tip>
     For the OpenAI-compatible endpoint instead, see "Legacy OpenAI-compatible mode" above — streaming and tool calling may not work together there.

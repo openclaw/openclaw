@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -9,13 +10,11 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createSubagentRegistryContextCleanup } from "../registry/subagent-registry-context-cleanup.js";
 import * as registryDeps from "../registry/subagent-registry-deps.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { mutateRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 import {
-  persistSubagentRunsToDiskAsyncOrThrow,
-  persistSubagentRunsToDiskOrThrow,
-} from "../registry/subagent-registry-state.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
-import { mutateRequesterSettleWakeBatch } from "./subagent-completion-admission.store.js";
-import {
+  currentCompletionRun,
   admitCompletionFixtureDatabase,
   armRequesterWake,
   records,
@@ -44,35 +43,21 @@ it.each(["transition", "complete"] as const)(
       });
       const warn = vi.fn();
       const cleanup = createSubagentRegistryContextCleanup({
-        persist: (...ids) => persistSubagentRunsToDiskOrThrow(subagentRuns, ids),
-        persistAsyncOrThrow: (context, callbacks, ...ids) =>
-          persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, { context, ...callbacks }),
-        isEndedHookOwnerCurrent: (id, entry) => subagentRuns.get(id) === entry,
+        isEndedHookOwnerCurrent: (entry) =>
+          isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
         warn,
       });
       const acknowledged = createDeferred();
       const releaseAcknowledgement = createDeferred();
-      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-      const worker = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, run, options) =>
-          runWorker(
-            context,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const receipt = await scope.execute(command, executeOptions);
-                  if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                    acknowledged.resolve();
-                    await releaseAcknowledgement.promise;
-                  }
-                  return receipt;
-                },
-              }),
-            options,
-          ),
-        );
-      const publication = mutateRequesterSettleWakeBatch({
+      const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const receipt = await scope.execute(command, executeOptions);
+        if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+          acknowledged.resolve();
+          await releaseAcknowledgement.promise;
+        }
+        return receipt;
+      });
+      const publication = mutateRequesterCompletionBatch({
         entries: [input.subagent],
         operation:
           operation === "complete"
@@ -89,7 +74,6 @@ it.each(["transition", "complete"] as const)(
         },
         onCommitted: () => {},
         onPublished: () => {},
-        retiredPreimages: new Set(),
       });
       let hook: Promise<void> | undefined;
       try {
@@ -110,19 +94,21 @@ it.each(["transition", "complete"] as const)(
         releaseAcknowledgement.resolve();
         await expect(publication).resolves.toEqual({ applied: true, publication: "published" });
         await hook;
-        expect(input.subagent.endedHookEmittedAt).toEqual(expect.any(Number));
+        expect(currentCompletionRun(input).endedHookEmittedAt).toEqual(expect.any(Number));
         const stored = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
-        expect(stored?.endedHookEmittedAt).toBe(input.subagent.endedHookEmittedAt);
+        expect(stored?.endedHookEmittedAt).toBe(currentCompletionRun(input).endedHookEmittedAt);
         if (operation === "complete") {
-          expect(input.subagent.requesterSettleWake).toBeUndefined();
+          expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
           expect(stored?.requesterSettleWake).toBeUndefined();
         } else {
-          expect(input.subagent.requesterSettleWake).toMatchObject({
+          expect(currentCompletionRun(input).requesterSettleWake).toMatchObject({
             status: "dispatching",
             attemptCount: 1,
             rearmGeneration: 1,
           });
-          expect(stored?.requesterSettleWake).toEqual(input.subagent.requesterSettleWake);
+          expect(stored?.requesterSettleWake).toEqual(
+            currentCompletionRun(input).requesterSettleWake,
+          );
         }
         expect(warn).not.toHaveBeenCalled();
       } finally {

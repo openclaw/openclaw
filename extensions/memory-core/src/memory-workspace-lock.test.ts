@@ -281,65 +281,45 @@ describe("memory workspace lock orphan recovery", () => {
     expect(await store.lookup(key)).toBeUndefined();
   });
 
-  it("reclaims a stale legacy lock after its process id is reused", async () => {
-    vi.useFakeTimers();
-    const now = Date.now();
-    vi.setSystemTime(now);
-    const workspaceDir = await makeWorkspace();
-    await testing.writeShortTermLock(workspaceDir, {
-      owner: `${process.pid}:${now - 120_000}`,
-      acquiredAt: now - 120_000,
-    });
-
-    const result = withMemoryWorkspaceLock(workspaceDir, async () => "recovered").then(
-      (value) => ({ status: "resolved" as const, value }),
-      (error: unknown) => ({ status: "rejected" as const, error: String(error) }),
-    );
-    await vi.advanceTimersByTimeAsync(10_040);
-
-    expect(await result).toEqual({ status: "resolved", value: "recovered" });
-  });
-
-  it("reclaims a stale lock when a live process id has a different start identity", async () => {
-    vi.useFakeTimers();
-    const now = Date.now();
-    vi.setSystemTime(now);
-    const ownerStartTime = getFileLockProcessStartTime(process.ppid);
-    expect(ownerStartTime).not.toBeNull();
-    if (ownerStartTime === null) {
-      throw new Error("Expected the test runner process start identity");
-    }
-    const workspaceDir = await makeWorkspace();
-    await testing.writeShortTermLock(workspaceDir, {
-      owner: `${process.ppid}:${now - 120_000}`,
-      ownerStartTime: ownerStartTime + 1,
-      acquiredAt: now - 120_000,
-    });
-
-    const result = withMemoryWorkspaceLock(workspaceDir, async () => "recovered").then(
-      (value) => ({ status: "resolved" as const, value }),
-      (error: unknown) => ({ status: "rejected" as const, error: String(error) }),
-    );
-    await vi.advanceTimersByTimeAsync(10_040);
-
-    expect(await result).toEqual({ status: "resolved", value: "recovered" });
-  });
+  it.each(["legacy same-PID", "foreign start identity"] as const)(
+    "reclaims a stale lock after reuse of its %s",
+    async (identity) => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+      const workspaceDir = await makeWorkspace();
+      const lock: ShortTermLockEntry = {
+        owner: `${process.pid}:${now - 120_000}`,
+        acquiredAt: now - 120_000,
+      };
+      if (identity === "foreign start identity") {
+        const ownerStartTime = getFileLockProcessStartTime(process.ppid);
+        expect(ownerStartTime).not.toBeNull();
+        if (ownerStartTime === null) {
+          throw new Error("Expected the test runner process start identity");
+        }
+        lock.owner = `${process.ppid}:${now - 120_000}`;
+        lock.ownerStartTime = ownerStartTime + 1;
+      }
+      await testing.writeShortTermLock(workspaceDir, lock);
+      const result = withMemoryWorkspaceLock(workspaceDir, async () => "recovered").then(
+        (value) => ({ status: "resolved" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error: String(error) }),
+      );
+      await vi.advanceTimersByTimeAsync(10_040);
+      expect(await result).toEqual({ status: "resolved", value: "recovered" });
+    },
+  );
 
   it("keeps a stale-looking lock while its owner task is active", async () => {
     const workspaceDir = await makeWorkspace();
-    let enteredResolve: (() => void) | undefined;
-    let releaseResolve: (() => void) | undefined;
-    const entered = new Promise<void>((resolve) => {
-      enteredResolve = resolve;
-    });
-    const release = new Promise<void>((resolve) => {
-      releaseResolve = resolve;
-    });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
     const owner = withMemoryWorkspaceLock(workspaceDir, async () => {
-      enteredResolve?.();
-      await release;
+      entered.resolve();
+      await release.promise;
     });
-    await entered;
+    await entered.promise;
 
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
@@ -348,7 +328,7 @@ describe("memory workspace lock orphan recovery", () => {
       expect(audit.issues.map((issue) => issue.code)).not.toContain("recall-lock-stale");
     } finally {
       vi.restoreAllMocks();
-      releaseResolve?.();
+      release.resolve();
       await owner;
     }
   });

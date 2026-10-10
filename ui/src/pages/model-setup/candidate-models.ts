@@ -40,15 +40,11 @@ export function renderCandidateRows(
   // Saved credentials can replace the current connection for the same model.
   const candidates = result.candidates.filter(
     (candidate) =>
-      !(
-        candidate.modelTarget === "utility" &&
-        !candidate.kind.startsWith("saved-auth:") &&
-        candidate.modelRef === (result.utilityModel ?? result.setupModel)
-      ) &&
-      (!result.configuredModel ||
-        (candidate.kind !== "existing-model" &&
-          (candidate.kind.startsWith("saved-auth:") ||
-            candidate.modelRef !== result.configuredModel))),
+      candidate.kind.startsWith("saved-auth:") ||
+      ((candidate.modelTarget !== "utility" ||
+        candidate.modelRef !== (result.utilityModel ?? result.setupModel)) &&
+        (!result.configuredModel ||
+          (candidate.kind !== "existing-model" && candidate.modelRef !== result.configuredModel))),
   );
   if (candidates.length === 0) {
     return nothing;
@@ -62,14 +58,11 @@ export function renderCandidateRows(
         ${candidates
           .toSorted((a, b) => a.label.localeCompare(b.label))
           .map((candidate) => {
-            const testing =
-              props.activation.phase === "testing" &&
+            const active =
+              (props.activation.phase === "testing" || props.activation.phase === "failure") &&
               props.activation.targetId === activationTargetId(candidate.kind, candidate.modelRef);
-            const failure =
-              props.activation.phase === "failure" &&
-              props.activation.targetId === activationTargetId(candidate.kind, candidate.modelRef)
-                ? props.activation
-                : null;
+            const testing = active && props.activation.phase === "testing";
+            const failure = active && props.activation.phase === "failure";
             return html`
               <div class="model-setup__row" data-candidate-kind=${candidate.kind}>
                 <div class="model-setup__row-main">
@@ -95,23 +88,19 @@ export function renderCandidateRows(
                     @click=${() => props.onActivateCandidate(candidate)}
                   >
                     <span>
-                      ${
+                      ${t(
                         testing
-                          ? t("modelSetup.candidates.testingButton")
+                          ? "modelSetup.candidates.testingButton"
                           : failure
-                            ? t("modelSetup.candidates.retry")
+                            ? "modelSetup.candidates.retry"
                             : candidate.modelTarget === "utility"
-                              ? t(
-                                  result.configuredModel
-                                    ? "modelSetup.utility.useUtility"
-                                    : "modelSetup.utility.useSetup",
-                                )
-                              : t(
-                                  props.embedded
-                                    ? "modelSetup.discovery.useForAgent"
-                                    : "modelSetup.candidates.testAndUse",
-                                )
-                      }
+                              ? result.configuredModel
+                                ? "modelSetup.utility.useUtility"
+                                : "modelSetup.utility.useSetup"
+                              : props.embedded
+                                ? "modelSetup.discovery.useForAgent"
+                                : "modelSetup.candidates.testAndUse",
+                      )}
                     </span>
                   </button>
                 </div>

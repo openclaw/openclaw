@@ -29,7 +29,11 @@ import {
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
-import { resolveManagedLlamaServerPaths, type LlamaServerAsset } from "./llama-server-assets.js";
+import {
+  findManagedLlamaServerAsset,
+  resolveManagedLlamaServerPaths,
+  type LlamaServerAsset,
+} from "./llama-server-assets.js";
 import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
@@ -400,7 +404,6 @@ export async function prepareManagedLlamaServer(params: {
   // Runtime embedding refreshes preserve chat. Explicit embedding-only setup removes it.
   chatModel: ManagedLlamaChatModel;
   configuredChatModelIds?: readonly string[];
-  embeddingModelIsDefault?: boolean;
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
   port?: number;
@@ -412,15 +415,25 @@ export async function prepareManagedLlamaServer(params: {
   onProgress?: LlamaDownloadProgress;
 }): Promise<ManagedLlamaServer> {
   params.signal?.throwIfAborted();
-  const command =
-    params.localService?.command ??
-    (
-      await ensureLlamaServerInstalled({
-        asset: params.asset,
-        signal: params.signal,
-        onProgress: params.onProgress,
-      })
-    ).command;
+  let command = params.localService?.command;
+  const asset = command === undefined ? params.asset : findManagedLlamaServerAsset(command);
+  if (command !== undefined && asset) {
+    try {
+      await fsp.stat(command);
+    } catch (error) {
+      if (asOptionalRecord(error)?.code !== "ENOENT") {
+        throw error;
+      }
+      command = undefined;
+    }
+  }
+  command ??= (
+    await ensureLlamaServerInstalled({
+      asset,
+      signal: params.signal,
+      onProgress: params.onProgress,
+    })
+  ).command;
   const port = params.port ?? (await findAvailableLlamaServerPort(params.isolated ? 0 : undefined));
   const rootUrl = `http://127.0.0.1:${port}`;
   const reconcileOrigin = params.reconcileBaseUrl
@@ -454,9 +467,13 @@ export async function prepareManagedLlamaServer(params: {
   await updatePreset(presetPath, {
     chatModel: params.chatModel,
     configuredChatModelIds: params.configuredChatModelIds,
-    embeddingModelIsDefault: params.embeddingModelIsDefault,
     embeddingModelPath: params.embeddingModelPath,
     defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
+    // Every launch inherits process.env. An isolated candidate is accepted with generated args
+    // and no service env, so only the configured service contributes its own args and env.
+    serviceSettings: params.isolated
+      ? { env: process.env }
+      : { args: params.localService?.args, env: { ...process.env, ...params.localService?.env } },
     reconcileOrigin: params.isolated ? undefined : reconcileOrigin,
   });
   params.signal?.throwIfAborted();

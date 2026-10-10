@@ -1,4 +1,3 @@
-// Matrix plugin module implements the live SDK's SQLite sync store.
 import {
   MemoryStore,
   SyncAccumulator,
@@ -135,12 +134,6 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
       return this.flush();
     }
     return Promise.resolve();
-  }
-
-  override wantsSave(): boolean {
-    // We persist directly from setSyncData/storeClientOptions so the SDK's
-    // periodic save hook stays disabled. Shutdown uses flush() for a final sync.
-    return false;
   }
 
   override async deleteAllData(): Promise<void> {

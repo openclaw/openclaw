@@ -23,7 +23,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
@@ -58,124 +58,55 @@ type ResolveTelegramApproval = (
   params: ResolveTelegramApprovalParams,
 ) => Promise<ApprovalResolveResult | void>;
 
-export type TelegramBotDeps = {
-  getRuntimeConfig: typeof getRuntimeConfig;
-  resolveStorePath: typeof resolveStorePath;
-  getSessionEntry?: typeof getSessionEntry;
-  readSessionUpdatedAt?: typeof readSessionUpdatedAt;
-  readAmbientTranscriptWatermark?: typeof readAmbientTranscriptWatermark;
-  resolveAmbientTranscriptWatermarkKey?: typeof resolveAmbientTranscriptWatermarkKey;
-  recordInboundSession?: typeof recordInboundSession;
-  recordChannelActivity?: typeof recordChannelActivity;
-  resolveInboundLastRouteSessionKey?: typeof resolveInboundLastRouteSessionKey;
-  resolvePinnedMainDmOwnerFromAllowlist?: typeof resolvePinnedMainDmOwnerFromAllowlist;
-  buildChannelInboundEventContext?: typeof buildChannelInboundEventContext;
-  readChannelAllowFromStore: typeof readChannelAllowFromStore;
-  upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
-  enqueueRoutedSystemEvent: typeof enqueueRoutedSystemEvent;
-  dispatchReplyWithBufferedBlockDispatcher: typeof dispatchReplyWithBufferedBlockDispatcher;
-  loadWebMedia?: typeof loadWebMedia;
-  buildModelsProviderData: typeof buildPreparedModelsProviderData;
-  listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
-  syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
-  wasSentByBot: (...args: Parameters<typeof wasSentByBot>) => boolean | Promise<boolean>;
-  resolveApproval?: ResolveTelegramApproval;
-  createTelegramDraftStream?: typeof createTelegramDraftStream;
-  deliverReplies?: typeof deliverReplies;
-  deliverStructuredReplies?: typeof deliverStructuredReplies;
-  deliverStructuredInboundReplyWithMessageSendContext?: typeof deliverStructuredInboundReplyWithMessageSendContext;
-  emitTelegramMessageSentHooks?: typeof emitTelegramMessageSentHooks;
-  editMessageTelegram?: typeof editMessageTelegram;
-  recordOutboundMessageForPromptContext?: typeof recordOutboundMessageForPromptContext;
-  createChannelMessageReplyPipeline?: typeof createChannelMessageReplyPipeline;
+type RequiredTelegramBotDeps = Pick<
+  typeof telegramBotImplementations,
+  | "getRuntimeConfig"
+  | "resolveStorePath"
+  | "readChannelAllowFromStore"
+  | "upsertChannelPairingRequest"
+  | "enqueueRoutedSystemEvent"
+  | "dispatchReplyWithBufferedBlockDispatcher"
+  | "buildModelsProviderData"
+  | "listSkillCommandsForAgents"
+>;
+
+export type TelegramBotDeps = RequiredTelegramBotDeps &
+  Partial<
+    Omit<typeof telegramBotImplementations, keyof RequiredTelegramBotDeps | "wasSentByBot">
+  > & {
+    wasSentByBot: (...args: Parameters<typeof wasSentByBot>) => boolean | Promise<boolean>;
+  };
+
+const telegramBotImplementations = {
+  getRuntimeConfig,
+  resolveStorePath,
+  getSessionEntry,
+  readChannelAllowFromStore,
+  readSessionUpdatedAtAsync,
+  readAmbientTranscriptWatermark,
+  resolveAmbientTranscriptWatermarkKey,
+  recordInboundSession,
+  recordChannelActivity,
+  resolveInboundLastRouteSessionKey,
+  resolvePinnedMainDmOwnerFromAllowlist,
+  buildChannelInboundEventContext,
+  upsertChannelPairingRequest,
+  enqueueRoutedSystemEvent,
+  dispatchReplyWithBufferedBlockDispatcher,
+  loadWebMedia,
+  buildModelsProviderData: buildPreparedModelsProviderData,
+  listSkillCommandsForAgents,
+  syncTelegramMenuCommands,
+  wasSentByBot,
+  resolveApproval: resolveApprovalOverGateway as ResolveTelegramApproval,
+  createTelegramDraftStream,
+  deliverReplies,
+  deliverStructuredReplies,
+  deliverStructuredInboundReplyWithMessageSendContext,
+  emitTelegramMessageSentHooks,
+  editMessageTelegram,
+  recordOutboundMessageForPromptContext,
+  createChannelMessageReplyPipeline,
 };
 
-export const defaultTelegramBotDeps: TelegramBotDeps = {
-  get getRuntimeConfig() {
-    return getRuntimeConfig;
-  },
-  get resolveStorePath() {
-    return resolveStorePath;
-  },
-  get getSessionEntry() {
-    return getSessionEntry;
-  },
-  get readChannelAllowFromStore() {
-    return readChannelAllowFromStore;
-  },
-  get readSessionUpdatedAt() {
-    return readSessionUpdatedAt;
-  },
-  get readAmbientTranscriptWatermark() {
-    return readAmbientTranscriptWatermark;
-  },
-  get resolveAmbientTranscriptWatermarkKey() {
-    return resolveAmbientTranscriptWatermarkKey;
-  },
-  get recordInboundSession() {
-    return recordInboundSession;
-  },
-  get recordChannelActivity() {
-    return recordChannelActivity;
-  },
-  get resolveInboundLastRouteSessionKey() {
-    return resolveInboundLastRouteSessionKey;
-  },
-  get resolvePinnedMainDmOwnerFromAllowlist() {
-    return resolvePinnedMainDmOwnerFromAllowlist;
-  },
-  get buildChannelInboundEventContext() {
-    return buildChannelInboundEventContext;
-  },
-  get upsertChannelPairingRequest() {
-    return upsertChannelPairingRequest;
-  },
-  get enqueueRoutedSystemEvent() {
-    return enqueueRoutedSystemEvent;
-  },
-  get dispatchReplyWithBufferedBlockDispatcher() {
-    return dispatchReplyWithBufferedBlockDispatcher;
-  },
-  get loadWebMedia() {
-    return loadWebMedia;
-  },
-  get buildModelsProviderData() {
-    return buildPreparedModelsProviderData;
-  },
-  get listSkillCommandsForAgents() {
-    return listSkillCommandsForAgents;
-  },
-  get syncTelegramMenuCommands() {
-    return syncTelegramMenuCommands;
-  },
-  get wasSentByBot() {
-    return wasSentByBot;
-  },
-  get resolveApproval() {
-    return resolveApprovalOverGateway as ResolveTelegramApproval;
-  },
-  get createTelegramDraftStream() {
-    return createTelegramDraftStream;
-  },
-  get deliverReplies() {
-    return deliverReplies;
-  },
-  get deliverStructuredReplies() {
-    return deliverStructuredReplies;
-  },
-  get deliverStructuredInboundReplyWithMessageSendContext() {
-    return deliverStructuredInboundReplyWithMessageSendContext;
-  },
-  get emitTelegramMessageSentHooks() {
-    return emitTelegramMessageSentHooks;
-  },
-  get editMessageTelegram() {
-    return editMessageTelegram;
-  },
-  get recordOutboundMessageForPromptContext() {
-    return recordOutboundMessageForPromptContext;
-  },
-  get createChannelMessageReplyPipeline() {
-    return createChannelMessageReplyPipeline;
-  },
-};
+export const defaultTelegramBotDeps: TelegramBotDeps = telegramBotImplementations;

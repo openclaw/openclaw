@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -13,6 +12,7 @@ import { restorePrepackArtifacts } from "./openclaw-postpack.mjs";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { preparePackageDocsMap } from "./package-docs-map.mjs";
 import { preparePackageManifest } from "./package-manifest.mjs";
+import { preparePackagedWorkerBundle } from "./package-worker-bundle.mts";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -117,7 +117,7 @@ export function collectPreparedPrepackErrors(
     errors.push(`missing required prepared artifact: ${group.join(" or ")}`);
   }
 
-  if (!normalizedAssets.values().next().done) {
+  if (normalizedAssets.size > 0) {
     for (const suffix of requiredControlUiCompressionSuffixes) {
       if (!Array.from(normalizedAssets).some((assetPath) => assetPath.endsWith(suffix))) {
         errors.push(
@@ -132,10 +132,9 @@ export function collectPreparedPrepackErrors(
   return errors;
 }
 
-function collectPreparedFilePaths(reader: PreparedFileReader = { existsSync, readdirSync }): {
-  files: Set<string>;
-  assets: string[];
-} {
+export function collectPreparedPrepackErrorsFromDisk(
+  reader: PreparedFileReader = { existsSync, readdirSync },
+): string[] {
   const assets = reader
     .readdirSync("dist/control-ui/assets", { withFileTypes: true })
     .flatMap((entry) =>
@@ -151,17 +150,7 @@ function collectPreparedFilePaths(reader: PreparedFileReader = { existsSync, rea
     }
   }
 
-  return {
-    files,
-    assets,
-  };
-}
-
-export function collectPreparedPrepackErrorsFromDisk(
-  reader: PreparedFileReader = { existsSync, readdirSync },
-): string[] {
-  const preparedFiles = collectPreparedFilePaths(reader);
-  return collectPreparedPrepackErrors(preparedFiles.files, preparedFiles.assets);
+  return collectPreparedPrepackErrors(files, assets);
 }
 
 function ensurePreparedArtifacts(): void {
@@ -273,6 +262,7 @@ export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.e
   // changelog is touched, so concurrent packs cannot restore each other's files.
   await preparePackageDocsMap(process.cwd());
   try {
+    await preparePackagedWorkerBundle(process.cwd());
     await writePackageDistInventoryForPublish(process.cwd());
     await preparePackageManifest(process.cwd());
     await preparePackageChangelog(process.cwd(), {

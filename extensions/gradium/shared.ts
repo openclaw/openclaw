@@ -14,10 +14,8 @@ export const GRADIUM_VOICES = [
 
 export function normalizeGradiumBaseUrl(baseUrl?: string): string {
   const raw = baseUrl?.trim() || DEFAULT_GRADIUM_BASE_URL;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
+  const url = URL.parse(raw);
+  if (!url) {
     throw new Error("Gradium baseUrl must be a valid https URL");
   }
 

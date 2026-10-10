@@ -450,14 +450,6 @@ describe("CI changed Node test plan", () => {
     },
   );
 
-  it("retains the paired tooling group for direct Docker helper selection", () => {
-    const shards = createSelectedNodeTestShardBundles(["test/scripts/docker-build-helper.test.ts"]);
-    expect(shards).not.toBeNull();
-    expect(shards?.flatMap((shard) => shard.groups).map((group) => group.shard_name)).toEqual([
-      "core-tooling-isolated",
-    ]);
-  });
-
   it.each(["blacksmith", "github", "hybrid"])(
     "retains exact plugin selections in their canonical process owner without enabling the unrelated sweep (%s)",
     (runnerBackend) => {
@@ -525,6 +517,31 @@ describe("CI changed Node test plan", () => {
     } finally {
       routing.mockRestore();
     }
+  });
+
+  it.each([
+    "src/agents/model-fallback.reply-entry.e2e.test.ts",
+    "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts",
+    "src/agents/bash-tools.process.e2e.test.ts",
+  ])("prepares the runtime for the executed E2E route of %s", (target) => {
+    const shards = expectDefined(
+      createChangedNodeTestShardsWithSmoke([target], { selectedTestTargets: [target] }),
+      "changed E2E plan",
+    );
+    expect(selectedFiles(shards)).toEqual([target]);
+    const row = expectDefined(
+      shards.find((shard) => shard.targets?.includes(target)),
+      "target row",
+    );
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(row.targets),
+    });
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ kind: "target", target });
+    expect(buildVitestRunPlans([target]).map((plan) => plan.config)).toContain(
+      "test/vitest/vitest.e2e.config.ts",
+    );
+    expect(row.pretestBuildMode).toBe("private-qa");
   });
 
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
@@ -1000,7 +1017,7 @@ describe("CI changed Node test plan", () => {
         );
         expect(shard.predictedSeconds).toBeGreaterThan(0);
         if (runnerBackend === "blacksmith" && !shard.requiresDist) {
-          expect(shard.runner).toBe("blacksmith-32vcpu-ubuntu-2404");
+          expect(shard.runner).toBe("blacksmith-16vcpu-ubuntu-2404");
         }
       }
       expect(new Set((shards ?? []).flatMap(resolveTestGitCommits))).toEqual(

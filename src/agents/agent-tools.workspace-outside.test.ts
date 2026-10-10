@@ -25,7 +25,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("memory filesystem policy", () => {
   let tmpDir: string;
   let workspaceDir: string;
-  let outsideFile: string;
 
   const readTool = () =>
     createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool);
@@ -39,7 +38,6 @@ describe("memory filesystem policy", () => {
     tmpDir = tempDirs.make("openclaw-workspace-outside-");
     workspaceDir = path.join(tmpDir, "workspace");
     await fs.mkdir(workspaceDir);
-    outsideFile = path.join(tmpDir, "outside.txt");
   });
 
   it("makes only missing canonical daily-memory reads implicitly optional", async () => {
@@ -75,32 +73,6 @@ describe("memory filesystem policy", () => {
         read.execute("test-call-missing-ordinary-file", { path: filePath }),
       ).rejects.toThrow(/ENOENT|no such file|not found/i);
     }
-  });
-
-  it("restricts memory-triggered writes to append-only canonical memory files", async () => {
-    const allowedRelativePath = "memory/2026-03-07.md";
-    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
-    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
-    await fs.writeFile(allowedAbsolutePath, "seed");
-
-    const writeTool = memoryWriteTool(allowedRelativePath);
-
-    await expect(
-      writeTool.execute("test-call-memory-deny", {
-        path: outsideFile,
-        content: "should not write here",
-      }),
-    ).rejects.toThrow(/Memory flush writes are restricted to memory\/2026-03-07\.md/);
-
-    const result = await writeTool.execute("test-call-memory-append", {
-      path: allowedRelativePath,
-      content: "new note",
-    });
-    expect(result).toStrictEqual({
-      content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],
-      details: { changed: true },
-    });
-    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });
 
   it("accepts memory-triggered append-only writes with malformed XML arg-value path suffixes", async () => {

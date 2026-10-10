@@ -469,3 +469,12 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
   return hasSessionKeyPrefix(sessionKey, "acp:");
 }
+
+/**
+ * Dashboard sessions (`agent:<id>:dashboard:<uuid>`) are opened in their own
+ * right. A child with such a key was launched with `visible`; every other child
+ * of a session runs hidden, as its subagent.
+ */
+export function isDashboardSessionKey(sessionKey: string | undefined | null): boolean {
+  return hasSessionKeyPrefix(sessionKey, "dashboard:");
+}

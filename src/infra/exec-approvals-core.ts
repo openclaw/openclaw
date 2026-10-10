@@ -1,6 +1,8 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
@@ -15,20 +17,17 @@ export type ExecApprovalUnavailableDecision = "allow-always";
 
 const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
-function normalizeExecHost(value?: string | null): ExecHost | null {
+export function normalizeExecTarget(value?: string | null): ExecTarget | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "auto" ||
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node"
+  ) {
     return normalized;
   }
   return null;
-}
-
-export function normalizeExecTarget(value?: string | null): ExecTarget | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "auto") {
-    return normalized;
-  }
-  return normalizeExecHost(normalized);
 }
 
 export function requireValidExecTarget(value?: unknown): ExecTarget | null {
@@ -158,35 +157,24 @@ export function resolveExecModePolicy(params: {
   };
 }
 
-export type SystemRunApprovalBinding = {
-  argv: string[];
-  cwd: string | null;
-  agentId: string | null;
-  sessionKey: string | null;
+export type SystemRunApprovalBinding = Pick<
+  SystemRunApprovalPlan,
+  "argv" | "cwd" | "agentId" | "sessionKey"
+> & {
   envHash: string | null;
 };
 
-export type SystemRunApprovalFileOperand = {
-  argvIndex: number;
-  path: string;
-  sha256: string;
-};
+export type SystemRunApprovalFileOperand = NonNullable<SystemRunApprovalPlan["mutableFileOperand"]>;
 
-export type SystemRunApprovalPlan = {
-  argv: string[];
-  cwd: string | null;
-  commandText: string;
-  commandPreview?: string | null;
-  agentId: string | null;
-  sessionKey: string | null;
+export type SystemRunApprovalPlan = SchemaContract<
+  Omit<NonNullable<ExecApprovalRequestParams["systemRunPlan"]>, "policySnapshot">
+> & {
   policySnapshot?: ExecApprovalPolicySnapshot;
-  mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
-export type ExecApprovalCommandSpan = {
-  startIndex: number;
-  endIndex: number;
-};
+export type ExecApprovalCommandSpan = NonNullable<
+  ExecApprovalRequestParams["commandSpans"]
+>[number];
 
 /** Cron job identity recorded at approval creation for a cron isolated run. */
 type ExecApprovalCronExecutionSource = {
@@ -247,12 +235,7 @@ export type ExecApprovalResolved = {
   request?: ExecApprovalRequest["request"];
 };
 
-export type ExecApprovalsDefaults = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-};
+export type ExecApprovalsDefaults = Partial<Omit<ExecApprovalPolicySnapshot, "allowlistRules">>;
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];

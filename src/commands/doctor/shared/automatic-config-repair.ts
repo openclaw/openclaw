@@ -13,6 +13,7 @@ import {
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
 import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
+import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { findLegacyConfigIssues, findLegacyConfigRuleIssues } from "../../../config/legacy.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
@@ -70,7 +71,6 @@ function prepareAutomaticConfigRepairWrite(snapshot: ConfigFileSnapshot, config:
       unsetPaths,
     ),
     undefined,
-    undefined,
     snapshot.parsed,
   );
 }
@@ -97,11 +97,14 @@ function planConfigRepair(
       pluginContracts,
     }),
   );
-  const config = preserveDeferredPluginMigrationConfig({
-    sourceConfig: snapshot.sourceConfig,
-    nextConfig: migration.next ?? snapshot.sourceConfig,
-    pending: deferredPluginMigrations ?? [],
-  });
+  const config = inheritLegacyDefaultAgentId(
+    migration.next ?? snapshot.sourceConfig,
+    preserveDeferredPluginMigrationConfig({
+      sourceConfig: snapshot.sourceConfig,
+      nextConfig: migration.next ?? snapshot.sourceConfig,
+      pending: deferredPluginMigrations ?? [],
+    }),
+  );
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     return null;
   }
@@ -113,28 +116,23 @@ function planConfigRepair(
   const writeConfig = pluginContracts
     ? restoreDoctorConfigEnvRefs(config, prepareDoctorConfigReferenceSource(snapshot))
     : config;
-  let warnings = snapshot.warnings;
-  const runtimeConfig = withPluginContracts(() => {
+  const validation = withPluginContracts(() => {
     const validationConfig = omitDeferredPluginMigrationConfig(config, deferredPluginMigrations);
     const validated = pluginContracts
       ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, writeConfig), {
           deferredPluginMigrations,
         })
-      : { ...validateConfigObjectRaw(validationConfig), warnings };
-    warnings = validated.warnings;
+      : { ...validateConfigObjectRaw(validationConfig), warnings: snapshot.warnings };
     const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
       validationConfig,
       validationConfig,
     );
-    return validated.ok && issues.length === 0
-      ? deferredPluginMigrations?.length
-        ? validated.config
-        : config
-      : null;
+    return validated.ok && issues.length === 0 ? validated : null;
   });
-  if (!runtimeConfig) {
+  if (!validation) {
     return null;
   }
+  const runtimeConfig = deferredPluginMigrations?.length ? validation.config : config;
   copyConfigResolutionFactsThroughRewrite(snapshot.sourceConfig, runtimeConfig);
   setDeferredPluginMigrationConfigFacts(config, deferredPluginMigrations);
   return {
@@ -147,7 +145,7 @@ function planConfigRepair(
       resolved: config,
       runtimeConfig,
       config: runtimeConfig,
-      warnings,
+      warnings: validation.warnings,
       valid: true,
       issues: [],
       legacyIssues: [],
@@ -167,10 +165,7 @@ export function planAutomaticConfigRepair(
  * Full plugin-contract validation belongs to Doctor's repair plan.
  */
 export function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
-  if (snapshot.valid) {
-    return snapshot;
-  }
-  return planConfigRepair(snapshot, false)?.snapshot;
+  return snapshot.valid ? snapshot : planConfigRepair(snapshot, false)?.snapshot;
 }
 
 /** Commits a planned repair against the exact snapshot admitted by its caller. */
@@ -202,7 +197,7 @@ export async function commitAutomaticConfigRepair(
       auditOrigin: "doctor",
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
-      // The reader retired legacy markers; persist their canonical owners in this write.
+      // Doctor retired legacy markers; persist their canonical owners in this write.
       // Planning above validates the same writer topology preparation.
       persistCanonicalAgentRoster: true,
     },

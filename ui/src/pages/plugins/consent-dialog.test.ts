@@ -175,7 +175,9 @@ describe("renderPluginConsentDialog", () => {
   });
 
   it("highlights newly declared capability groups since the previous acceptance", () => {
+    const reviewToken = "a".repeat(64);
     const inspection = createInspectResult({
+      reviewToken,
       declared: {
         ...createInspectResult().declared,
         tools: ["workboard_review"],
@@ -191,7 +193,7 @@ describe("renderPluginConsentDialog", () => {
         fallback: { name: "Workboard" },
         details: buildCapabilityConsentErrorDetails({
           pluginId: "workboard",
-          reviewToken: inspection.reviewToken,
+          reviewToken,
           widened: {
             tools: ["workboard_review"],
             contracts: ["gatewayMethodDispatch: workboard.dispatch"],
@@ -225,7 +227,7 @@ describe("renderPluginConsentDialog", () => {
           pluginId: "community-calendar",
           rowKey: "plugin:community-calendar",
         },
-        pluginId: null,
+        pluginId: "community-calendar",
         fallback: {
           name: "Community Calendar",
           version: "1.2.0",

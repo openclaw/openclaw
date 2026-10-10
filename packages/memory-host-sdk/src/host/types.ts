@@ -17,7 +17,6 @@ export type MemoryEntryProvenance = {
   supersedesKey?: string;
 };
 
-/** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
   path: string;
   startLine: number;
@@ -50,7 +49,6 @@ export function isAutomaticMemoryEntryEligible(
   return isMemoryOriginEligibleForAutomaticInjection(entry.provenance?.originClass);
 }
 
-/** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
@@ -60,7 +58,6 @@ export type MemoryEmbeddingProbeResult = {
   cacheExpiresAtMs?: number;
 };
 
-/** Progress event emitted during memory sync. */
 export type MemorySyncProgressUpdate = {
   completed: number;
   total: number;
@@ -99,7 +96,6 @@ export type MemorySearchRuntimeDebug = {
   };
 };
 
-/** Successful memory-file excerpt, optionally paginated/truncated. */
 type MemoryReadSuccessResult = {
   status: "ok";
   text: string;
@@ -124,17 +120,10 @@ type MemoryReadNotFoundResult = {
 export type MemoryReadResult = MemoryReadSuccessResult | MemoryReadNotFoundResult;
 
 /** Pre-status result accepted only from registered memory managers during migration. */
-export type LegacyMemoryReadResult = {
+export type LegacyMemoryReadResult = Omit<MemoryReadSuccessResult, "status"> & {
   status?: never;
-  text: string;
-  path: string;
-  truncated?: boolean;
-  from?: number;
-  lines?: number;
-  nextFrom?: number;
 };
 
-/** Aggregated memory backend status for CLI/UI diagnostics. */
 export type MemoryVectorIndexState =
   | { state: "empty" }
   | { state: "complete" }
@@ -379,7 +368,6 @@ export function resolveMemorySearchStaleness(
   };
 }
 
-/** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
   search(
     query: string,

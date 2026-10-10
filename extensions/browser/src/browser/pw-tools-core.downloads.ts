@@ -1,7 +1,3 @@
-/**
- * File chooser, dialog, and download helpers for Playwright-backed browser
- * tools.
- */
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {

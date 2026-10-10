@@ -22,7 +22,7 @@ openclaw security audit --json
 
 ## Audit modes
 
-Plain `security audit` stays on the cold config/filesystem/read-only path: it does not discover plugin runtime security collectors, so routine audits do not load every installed plugin runtime. `--deep` adds best-effort live Gateway probes and plugin-owned security audit collectors (explicit internal callers may also opt into those collectors when they already have an appropriate runtime scope).
+Plain `security audit` stays on the cold config/filesystem/read-only path: it does not discover plugin runtime security collectors, so routine audits do not load every installed plugin runtime. `--deep` adds best-effort live Gateway checks and plugin-owned security audit collectors (explicit internal callers may also opt into those collectors when they already have an appropriate runtime scope).
 
 If Gateway password auth is supplied only at startup, pass the same value with `--auth password --password <password>` so the audit can check it against `hooks.token`.
 
@@ -87,7 +87,7 @@ Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operat
 
 ## SecretRef behavior
 
-`security audit` resolves supported SecretRefs in read-only mode for its targeted paths. If a SecretRef is unavailable in the current command path, audit continues and reports `secretDiagnostics` instead of crashing. `--token` and `--password` only override deep-probe auth for that command invocation; they do not rewrite config or SecretRef mappings.
+`security audit` resolves supported SecretRefs in read-only mode for its targeted paths. If a SecretRef is unavailable in the current command path, audit continues and reports `secretDiagnostics` instead of crashing. `--token` and `--password` only override deep-check auth for that command invocation; they do not rewrite config or SecretRef mappings.
 
 ## Suppressions
 
@@ -125,6 +125,8 @@ With `--fix --json`, output includes both fix actions and the final report:
 ```bash
 openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summary}'
 ```
+
+If remediation fails unexpectedly, the command exits with status 1 before running the audit. With `--json`, it emits the standard [CLI JSON failure envelope](/cli#json-failures). Run `openclaw security audit` separately to inspect the current state.
 
 ## What `--fix` changes
 

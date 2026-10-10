@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -32,7 +31,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -56,7 +54,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -143,7 +140,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -175,20 +171,13 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     "tools.github.authorize.poll",
     validateToolsGitHubAuthorizePollParams,
     async ({ params, respond, context }) => {
-      try {
-        const service = context.githubOAuthService;
-        if (!service) {
-          throw new Error("GitHub authorization lifecycle is unavailable.");
-        }
-        respond(true, await service.pollAuthorization(params.requestId));
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization polling failed"),
-        );
+      const service = context.githubOAuthService;
+      if (!service) {
+        throw new Error("GitHub authorization lifecycle is unavailable.");
       }
+      respond(true, await service.pollAuthorization(params.requestId));
     },
+    () => errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization polling failed"),
   ),
   "tools.github.authorize.cancel": defineValidatedGatewayHandler(
     "tools.github.authorize.cancel",

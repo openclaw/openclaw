@@ -72,11 +72,16 @@ await fs.writeFile(
 );
 const config: OpenClawConfig = {
   agents: {
-    defaults: { workspace: path.join(root, "workspace"), model: `${provider}/model` },
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+      workspace: path.join(root, "workspace"),
+      model: `${provider}/model`,
+    },
     entries: Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [
         index === 0 ? "main" : `agent-${index}`,
-        { default: index === 0, workspace: path.join(root, `workspace-${index}`) },
+        { workspace: path.join(root, `workspace-${index}`) },
       ]),
     ),
   },

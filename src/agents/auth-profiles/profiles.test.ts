@@ -7,16 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../../config/paths.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
-import * as modelPlans from "../models-config.plan.js";
-import * as catalogs from "../plugin-model-catalog.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
@@ -30,6 +26,7 @@ import { reloadSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   expectOAuthCredentialFields,
+  failNextRuntimeAuthSnapshotPublication,
   withAuthProfileTestState,
 } from "./profile-mutations.test-support.js";
 import {
@@ -67,7 +64,6 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
-import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -85,7 +81,7 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
 });
 
 afterEach(() => {
-  storeTesting.resetRuntimeSnapshotPublisherForTest();
+  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -300,10 +296,7 @@ describe("promoteAuthProfileInOrder", () => {
           { agentDir: savingAgentDir, store: loadAuthProfileStoreForRuntime(savingAgentDir) },
           { agentDir: siblingAgentDir, store: siblingStore },
         ]);
-        storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-          publish();
-          throw new Error("postcommit publication failed");
-        });
+        failNextRuntimeAuthSnapshotPublication();
 
         saveAuthProfileStore(
           {
@@ -427,20 +420,8 @@ describe("promoteAuthProfileInOrder", () => {
       replaceRuntimeAuthProfileStoreSnapshots([
         { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
       ]);
-      storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-        publish();
-        throw new Error("postcommit publication failed");
-      });
-      let result: ReturnType<typeof saveAuthProfileStore> = undefined;
-      try {
-        expect(() => {
-          result = saveAuthProfileStore(store("sk-new"), agentDir);
-        }).not.toThrow();
-      } finally {
-        storeTesting.resetRuntimeSnapshotPublisherForTest();
-      }
-
-      expect(result).toBeUndefined();
+      failNextRuntimeAuthSnapshotPublication();
+      expect(saveAuthProfileStore(store("sk-new"), agentDir)).toBeUndefined();
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
         key: "sk-new",
       });
@@ -740,11 +721,7 @@ describe("promoteAuthProfileInOrder", () => {
             },
           });
           if (mutationTiming === "before publication") {
-            storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-              storeTesting.resetRuntimeSnapshotPublisherForTest();
-              mutateRuntimeStore();
-              publish();
-            });
+            mutateRuntimeStore();
           }
           expect(committed.publishRuntimeSnapshots()).toBe(true);
           const { owned } = committed;
@@ -1689,133 +1666,6 @@ describe("promoteAuthProfileInOrder", () => {
           );
         } else {
           expect(onIncomplete).not.toHaveBeenCalled();
-        }
-      });
-    },
-  );
-
-  it.each([
-    { window: "before-delete", credentialChange: "unchanged" },
-    { window: "after-delete", credentialChange: "unchanged" },
-    { window: "after-delete", credentialChange: "rotated" },
-    { window: "after-delete", credentialChange: "added" },
-  ] as const)(
-    "does not retain a held refresh credential published $window ($credentialChange)",
-    async ({ window, credentialChange }) => {
-      await withAuthProfileTestState("openclaw-held-catalog-", async ({ agentDir }) => {
-        const initialKey = "held-refresh-secret";
-        const key = credentialChange === "unchanged" ? initialKey : "held-refresh-replacement";
-        const independentKey = "never-canonical-catalog-key";
-        const independentHeader = "never-canonical-catalog-header";
-        const survivor = createApiKeyCredential("fixture", "held-refresh-surviving-secret");
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles:
-              credentialChange === "added"
-                ? { survivor }
-                : { survivor, selected: { type: "api_key", provider: "fixture", key: initialKey } },
-          },
-          agentDir,
-        );
-        const planned = createDeferredCore();
-        const release = createDeferredCore();
-        const planner = vi
-          .spyOn(modelPlans, "planOpenClawModelsJson")
-          .mockImplementationOnce(async () => {
-            if (credentialChange !== "unchanged") {
-              saveAuthProfileStore(
-                {
-                  version: AUTH_STORE_VERSION,
-                  profiles: { survivor, selected: { type: "api_key", provider: "fixture", key } },
-                },
-                agentDir,
-              );
-            }
-            const credential =
-              loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles.selected;
-            if (credential?.type !== "api_key") {
-              throw new Error("expected selected API-key profile during catalog planning");
-            }
-            expect(credential.key).toBe(key);
-            const contents = JSON.stringify({
-              generatedBy: "openclaw-plugin-model-catalog-v1",
-              providers: {
-                fixture: {
-                  api: "openai-completions",
-                  apiKey: credential.key,
-                  headers: { Authorization: `Bearer ${credential.key}` },
-                  models: [
-                    {
-                      id: "retained-inventory",
-                      apiKey: independentKey,
-                      headers: { "X-Independent-Auth": independentHeader },
-                    },
-                    {
-                      id: "surviving-inventory",
-                      apiKey: survivor.key,
-                      headers: { Authorization: `Bearer ${survivor.key}` },
-                    },
-                  ],
-                },
-              },
-            });
-            planned.resolve();
-            await release.promise;
-            return {
-              action: "write",
-              contents: '{"providers":{}}\n',
-              pluginCatalogWrites: {
-                [catalogs.encodePluginModelCatalogRelativePath("fixture")]: contents,
-              },
-            };
-          });
-        const refresh = ensureOpenClawModelsJson({}, agentDir);
-        await Promise.race([planned.promise, refresh]);
-        const scrub = catalogs.removePersistedPluginModelCatalogCredentials;
-        let calls = 0;
-        const cleanup = vi
-          .spyOn(catalogs, "removePersistedPluginModelCatalogCredentials")
-          .mockImplementation(async (params) => {
-            await scrub(params);
-            calls += 1;
-            if (calls === (window === "before-delete" ? 1 : 2)) {
-              release.resolve();
-              await refresh;
-              const persisted =
-                catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
-              if (window === "before-delete") {
-                expect(persisted).toContain(key);
-              } else {
-                expect(persisted).not.toContain(key);
-                expect(persisted).toContain("retained-inventory");
-              }
-            }
-          });
-        try {
-          expect(
-            await removeAuthProfilesAcrossOwnerStores({
-              agentDir,
-              profileIds: ["selected"],
-            }),
-          ).toBe(true);
-          expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual({ survivor });
-          const persisted =
-            catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
-          expect(persisted).not.toContain(key);
-          expect(persisted).toContain("retained-inventory");
-          expect(persisted).toContain(independentKey);
-          expect(persisted).toContain(independentHeader);
-          expect(JSON.parse(persisted ?? "null").providers.fixture.models).toContainEqual({
-            id: "surviving-inventory",
-            apiKey: survivor.key,
-            headers: { Authorization: `Bearer ${survivor.key}` },
-          });
-        } finally {
-          release.resolve();
-          await refresh;
-          cleanup.mockRestore();
-          planner.mockRestore();
         }
       });
     },

@@ -21,15 +21,9 @@ const SKIP_DELAY = 300;
 const RICH_CONTENT_CLOSE_DELAY = 100;
 
 let nextTooltipId = 0;
-
-function createTooltipId() {
-  return `openclaw-tooltip-${++nextTooltipId}`;
-}
+const createTooltipId = () => `openclaw-tooltip-${++nextTooltipId}`;
 
 class TooltipProvider extends OpenClawLitElement {
-  @property({ type: Number }) delay = HOVER_DELAY;
-  @property({ type: Number }) skipDelay = SKIP_DELAY;
-
   delayed = true;
   #focusInput: "keyboard" | "pointer" = "keyboard";
   #skipDelayTimer: number | null = null;
@@ -64,14 +58,10 @@ class TooltipProvider extends OpenClawLitElement {
 
   closeTooltip() {
     this.#clearSkipDelayTimer();
-    if (this.skipDelay <= 0) {
-      this.delayed = true;
-      return;
-    }
     this.#skipDelayTimer = window.setTimeout(() => {
       this.#skipDelayTimer = null;
       this.delayed = true;
-    }, this.skipDelay);
+    }, SKIP_DELAY);
   }
 
   #clearSkipDelayTimer() {
@@ -473,7 +463,7 @@ class Tooltip extends OpenClawLitElement {
     const delay =
       this.delay === undefined && provider?.delayed === false
         ? 0
-        : Math.max(0, this.delay ?? provider?.delay ?? HOVER_DELAY);
+        : Math.max(0, this.delay ?? HOVER_DELAY);
     this.#openTimer = window.setTimeout(() => {
       this.#openTimer = null;
       this.#show();
@@ -522,6 +512,7 @@ class Tooltip extends OpenClawLitElement {
     this.#syncDescription();
     // Light-DOM owners can retain a revealed trigger without another popup lifecycle.
     this.setAttribute("open", "");
+    this.renderRoot.querySelector(".tooltip-rich-content")?.removeAttribute("inert");
     this.ownerDocument.addEventListener("pointerdown", this.#handleDocumentDismiss, true);
     this.ownerDocument.addEventListener("focusin", this.#handleDocumentDismiss, true);
     if (this.hoverDismissDelay !== undefined) {
@@ -564,6 +555,8 @@ class Tooltip extends OpenClawLitElement {
   #close() {
     this.#pinned = false;
     this.removeAttribute("open");
+    // Hide transitions may keep the popup painted, but its actions must leave Tab order now.
+    this.renderRoot.querySelector(".tooltip-rich-content")?.setAttribute("inert", "");
     this.ownerDocument.removeEventListener("pointerdown", this.#handleDocumentDismiss, true);
     this.ownerDocument.removeEventListener("focusin", this.#handleDocumentDismiss, true);
     this.ownerDocument.removeEventListener("pointermove", this.#handleDocumentPointerMove, true);
@@ -761,6 +754,7 @@ class Tooltip extends OpenClawLitElement {
               <span class="tooltip-content">${this.contentTemplate ?? this.content}</span>
               <span
                 class="tooltip-rich-content"
+                ?inert=${!this.hasAttribute("open")}
                 @pointerenter=${this.#handleContentPointerEnter}
                 @pointerleave=${this.#handleContentPointerLeave}
                 @focusin=${this.#handleFocusIn}

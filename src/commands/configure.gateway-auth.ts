@@ -1,6 +1,7 @@
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -79,18 +80,6 @@ function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | und
   );
 }
 
-function hasStaticManifestCatalogRows(cfg: OpenClawConfig, provider: string | undefined): boolean {
-  if (!provider) {
-    return false;
-  }
-  return (
-    loadStaticManifestCatalogRowsForList({
-      cfg,
-      providerFilter: provider,
-    }).length > 0
-  );
-}
-
 function listConfiguredModelProviders(cfg: OpenClawConfig): string[] {
   return Object.entries(cfg.models?.providers ?? {})
     .filter(([, provider]) => (provider.models?.length ?? 0) > 0)
@@ -113,14 +102,9 @@ function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
   target: OnboardingAgentTarget,
   selectedModels: readonly string[],
 ): string | undefined {
-  const currentModel =
-    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model;
-  const primary =
-    typeof currentModel === "string"
-      ? currentModel.trim()
-      : currentModel && typeof currentModel === "object" && typeof currentModel.primary === "string"
-        ? currentModel.primary.trim()
-        : undefined;
+  const primary = resolveAgentModelPrimaryValue(
+    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model,
+  );
   const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
   if (!modelId) {
     return undefined;
@@ -198,7 +182,6 @@ export async function promptAuthConfig(
         config: next,
         prompter,
         allowKeep: true,
-        ignoreAllowlist: true,
         includeProviderPluginSetups: false,
         loadCatalog: true,
         browseCatalogOnDemand: true,
@@ -262,7 +245,11 @@ export async function promptAuthConfig(
     const promptProvider =
       modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
     const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
-    const hasPromptProviderStaticManifestRows = hasStaticManifestCatalogRows(next, promptProvider);
+    const hasPromptProviderStaticManifestRows = Boolean(
+      promptProvider &&
+      loadStaticManifestCatalogRowsForList({ cfg: next, providerFilter: promptProvider }).length >
+        0,
+    );
     const shouldLoadModelCatalog =
       modelPrompt?.loadCatalog ??
       (hasPromptProviderConfiguredModels || hasPromptProviderStaticManifestRows);

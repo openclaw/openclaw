@@ -4,15 +4,18 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   persistSessionTranscriptTurn,
+  preflightSessionTranscriptForManualCompact,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
@@ -21,8 +24,7 @@ import {
   readSessionMessagesAsync,
   readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
-  visitSessionMessagesAsync,
-  type SessionTranscriptReadScope,
+  readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
@@ -44,10 +46,7 @@ describe("session transcript reader facade", () => {
     await state.cleanup();
   });
 
-  async function writeTranscript(
-    sessionId: string,
-    events: unknown[],
-  ): Promise<SessionTranscriptReadScope> {
+  async function writeTranscript(sessionId: string, events: unknown[]) {
     const scope = {
       agentId: "main",
       sessionId,
@@ -108,6 +107,43 @@ describe("session transcript reader facade", () => {
     });
   });
 
+  test("preflights manual compaction without caller-thread SQL and sees later appends", async () => {
+    const scope = await writeTranscript("compact-stats", [
+      { type: "session", version: 3, id: "compact-stats" },
+      { type: "message", id: "first", message: { role: "user", content: "hello" } },
+    ]);
+    await readTranscriptStatsAsync(scope);
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "second",
+          parentId: "first",
+          message: { role: "assistant", content: "world", timestamp: 2 },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const hostSql = observeHostDataSql();
+    try {
+      expect(await readTranscriptStatsAsync(scope)).toMatchObject({ eventCount: 3, maxSeq: 2 });
+      expect(await preflightSessionTranscriptForManualCompact(scope, { maxLines: 2 })).toEqual({
+        compacted: true,
+      });
+      expect(await preflightSessionTranscriptForManualCompact(scope, { maxLines: 3 })).toEqual({
+        compacted: false,
+        kept: 3,
+      });
+      expect(await readTranscriptStatsAsync({ ...scope, sessionId: "empty" })).toEqual({
+        eventCount: 0,
+        maxSeq: 0,
+        sizeBytes: 0,
+      });
+    } finally {
+      hostSql.restore();
+    }
+    expect(hostSql.queries).toEqual([]);
+  });
+
   test("reads active-branch messages and message ids through a scope", async () => {
     const scope = await writeTranscript("reader-active-branch", [
       { type: "session", version: 3, id: "reader-active-branch" },
@@ -163,6 +199,110 @@ describe("session transcript reader facade", () => {
       offset: 0,
       totalMessages: 2,
     });
+  });
+
+  test("bounds source pages and freezes their sequence across appends", async () => {
+    const sessionId = "reader-source-pages";
+    const scope = await writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      ...Array.from({ length: 260 }, (_, index) => ({
+        type: "message",
+        id: `message-${index}`,
+        parentId: index === 0 ? null : `message-${index - 1}`,
+        message: { role: "user", content: `prompt ${index}` },
+      })),
+    ]);
+    let page = await readSessionMessagesWithSourceAsync(scope, { mode: "page" });
+    expect(page.messages).toHaveLength(128);
+    expect(page.nextCursor).toBeDefined();
+    expect(page.snapshot).toMatchObject({ totalMessages: 260 });
+    const firstCursor = page.nextCursor;
+    const snapshot = page.snapshot;
+    const messages = [...page.messages];
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "appended",
+          parentId: "message-259",
+          message: { role: "assistant", content: "appended after the first page" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    expect(await readSessionMessageCountAsync(scope)).toBe(261);
+    while (page.nextCursor) {
+      page = await readSessionMessagesWithSourceAsync(scope, {
+        mode: "page",
+        cursor: page.nextCursor,
+      });
+      expect(page.messages.length).toBeLessThanOrEqual(128);
+      expect(page.snapshot).toEqual(snapshot);
+      messages.push(...page.messages);
+    }
+    expect(
+      messages.map((message) => (message as { __openclaw: { id: string } })["__openclaw"].id),
+    ).toEqual(Array.from({ length: 260 }, (_, index) => `message-${index}`));
+
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "replacement",
+        parentId: null,
+        message: { role: "user", content: "new transcript" },
+      },
+    ]);
+    await expect(
+      readSessionMessagesWithSourceAsync(scope, { mode: "page", cursor: firstCursor }),
+    ).rejects.toMatchObject({
+      name: "SessionTranscriptProjectionUnavailableError",
+      reason: "window-changed",
+    });
+  });
+
+  test("bounds source pages by bytes and rejects a message larger than one page", async () => {
+    const sessionId = "reader-source-page-bytes";
+    const content = "a".repeat(3 * 1024 * 1024);
+    const scope = await writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      ...Array.from({ length: 3 }, (_, index) => ({
+        type: "message",
+        id: `large-${index}`,
+        parentId: index === 0 ? null : `large-${index - 1}`,
+        message: { role: "user", content },
+      })),
+    ]);
+    expect(await readSessionMessageCountAsync(scope)).toBe(3);
+    const first = await readSessionMessagesWithSourceAsync(scope, { mode: "page" });
+    expect(first.messages).toHaveLength(2);
+    expect(first.nextCursor).toBeDefined();
+    const last = await readSessionMessagesWithSourceAsync(scope, {
+      mode: "page",
+      cursor: first.nextCursor,
+    });
+    expect(last.messages).toHaveLength(1);
+    expect(last.nextCursor).toBeUndefined();
+    for (const page of [first, last]) {
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(8 * 1024 * 1024);
+      for (const message of page.messages) {
+        expect((message as { content: string }).content).toBe(content);
+      }
+    }
+
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "oversized",
+        parentId: null,
+        message: { role: "user", content: "b".repeat(8 * 1024 * 1024) },
+      },
+    ]);
+    expect(await readSessionMessageCountAsync(scope)).toBe(1);
+    await expect(readSessionMessagesWithSourceAsync(scope, { mode: "page" })).rejects.toThrow(
+      "Transcript source message exceeds the 8388608-byte page limit",
+    );
   });
 
   test.each(["visitor", "parse"] as const)(

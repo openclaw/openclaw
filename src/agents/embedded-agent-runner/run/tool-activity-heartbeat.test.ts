@@ -81,6 +81,27 @@ describe("tool-activity-heartbeat", () => {
     notifyToolActivity(RUN);
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["unsubscribe", "clear"])(
+    "stale unsubscribe preserves replacement run listeners after %s",
+    (retirement) => {
+      const oldListener = vi.fn();
+      const replacementListener = vi.fn();
+      const unsubscribe = onToolActivity(RUN, oldListener);
+      if (retirement === "clear") {
+        clearToolActivityRun(RUN);
+      } else {
+        unsubscribe();
+      }
+      onToolActivity(RUN, replacementListener);
+
+      unsubscribe();
+      notifyToolActivity(RUN);
+
+      expect(replacementListener).toHaveBeenCalledOnce();
+      expect(oldListener).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("heartbeat wrapper metadata preservation", () => {

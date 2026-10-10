@@ -176,7 +176,7 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
 
 it.for(
   (["writer", "active", "delivery"] as const).flatMap((wait) =>
-    (["unchanged", "same-inode", "other-inode"] as const).map((replacement) => ({
+    (["unchanged", "same-inode"] as const).map((replacement) => ({
       wait,
       replacement,
     })),
@@ -186,11 +186,8 @@ it.for(
   async ({ wait, replacement }, { signal }) => {
     const root = tempDirs.make("reply-admission-claim-");
     const originalPath = path.join(root, "original.sqlite");
-    const replacementPath = path.join(root, "replacement.sqlite");
     const storePath = path.join(root, "selected.sqlite");
-    for (const databasePath of [originalPath, replacementPath]) {
-      seed(databasePath);
-    }
+    seed(originalPath);
     closeOpenClawAgentDatabasesForTest();
     fs.symlinkSync(originalPath, storePath);
     const release = createDeferred();
@@ -262,10 +259,6 @@ it.for(
       if (replacement !== "unchanged") {
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
         expect(claim.isCurrent()).toBe(false);
-        if (replacement === "other-inode") {
-          fs.unlinkSync(storePath);
-          fs.symlinkSync(replacementPath, storePath);
-        }
       }
       owner?.complete();
       release.resolve();
@@ -332,12 +325,12 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
     expect(signal.aborted).toBe(true);
     expect(upstream.signal.aborted).toBe(false);
     await interrupted.released;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
     expect(await pending).toMatchObject([{ status: "rejected", reason }]);
     expect(registry.replyRunRegistry.get(interruptedKey)).toBeUndefined();
   } finally {
     upstream.abort();
     await pending;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
   }
 });

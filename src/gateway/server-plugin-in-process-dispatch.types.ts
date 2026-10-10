@@ -3,7 +3,6 @@ import type { SubagentCompletionToolHandoffRegistration } from "../agents/subage
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { RequesterSettleWakeReplay } from "./agent-turn/internal-facade.types.js";
-import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   GatewayAgentRunTaskOwner,
@@ -13,6 +12,7 @@ import type {
   GatewayRequestOptions,
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 export type PrepareInProcessAgentExecutionOptions = {
   agentId: string;
@@ -24,15 +24,12 @@ export type DispatchGatewayMethodInProcessOptions = {
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
   allowSyntheticModelOverride?: boolean;
-  allowSyntheticCronRunContinuation?: boolean;
   agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   cancelOnDeadline?: boolean;
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
-  internalDeliveryMediaUrls?: string[];
-  internalDeliverySuppressText?: boolean;
   nodeInvokeStream?: GatewayNodeInvokeStream;
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;

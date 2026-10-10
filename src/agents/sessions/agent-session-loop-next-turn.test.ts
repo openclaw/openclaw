@@ -78,9 +78,13 @@ function mockAbortableQueuedRun() {
 }
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
-  it.each(["apply", "dispose", "replace"] as const)(
-    "guards first-model preparation after a delayed SDK prompt override: %s",
-    async (closure) => {
+  it.each(
+    (["apply", "dispose", "replace"] as const).flatMap((closure) =>
+      (["preparation", "admission"] as const).map((phase) => ({ closure, phase })),
+    ),
+  )(
+    "guards first-model $phase after a delayed SDK prompt override: $closure",
+    async ({ closure, phase }) => {
       const hookEntered = createDeferredCore();
       const hookRelease = createDeferredCore();
       const preparationEntered = createDeferredCore();
@@ -122,10 +126,24 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       const settled = Promise.allSettled([prompt]);
       await hookEntered.promise;
       session[agentSessionSetPromptPreparation](async () => {
-        preparationEntered.resolve();
-        await preparationRelease.promise;
-        session.setActiveToolsByName(["read_policy"]);
-        session.agent.state.systemPrompt += "\nPermission change: read-only";
+        const waitForUpdate = async () => {
+          preparationEntered.resolve();
+          await preparationRelease.promise;
+        };
+        const update = () => {
+          session.setActiveToolsByName(["read_policy"]);
+          session.agent.state.systemPrompt += "\nPermission change: read-only";
+        };
+        if (phase === "preparation") {
+          await waitForUpdate();
+          update();
+          return undefined;
+        }
+        return async (onAdmitted) => {
+          await waitForUpdate();
+          onAdmitted(update);
+          expect(session.agent.state.isStreaming).toBe(true);
+        };
       });
       hookRelease.resolve();
       // A missing preparation boundary completes the request instead of entering the barrier.
@@ -153,6 +171,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
           reason: { message: "Session prompt preparation is stale after replacement or disposal." },
         });
         expect(requests).toEqual([]);
+        if (phase === "admission") {
+          expect(session.agent.state.systemPrompt).not.toContain("Permission change: read-only");
+        }
       }
     },
   );
@@ -473,7 +494,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         },
         target: createTestUserTurnTranscriptTarget(),
       });
-      const queued = vi.spyOn(session.agent, "steer");
+      const queued = vi.spyOn(session.agent, "admitSteeringMessage");
       const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
       try {
         await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);

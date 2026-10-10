@@ -40,10 +40,8 @@ export function createReplyRunSettleTimer(params: {
   let timer: NodeJS.Timeout | undefined;
   const settleTimer: ReplyRunSettleTimer = {
     clear() {
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      clearTimeout(timer);
+      timer = undefined;
       activeSettleTimers.delete(settleTimer);
     },
     renew(timeoutMs) {

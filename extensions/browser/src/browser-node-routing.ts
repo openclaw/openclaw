@@ -13,7 +13,6 @@ export type BrowserNodeTarget = {
   pendingDeclaredCommands?: string[];
 };
 
-/** Select the same authorized browser-capable node on every request surface. */
 export async function resolveBrowserNodeTarget<T extends BrowserNodeTarget>(params: {
   nodes: () => T[] | Promise<T[]>;
   config: OpenClawConfig;

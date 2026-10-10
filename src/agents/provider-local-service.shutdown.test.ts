@@ -20,6 +20,34 @@ import {
 import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";
 import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
 
+function serviceTarget(
+  port: number,
+  providerId: string,
+  script = `require("node:http").createServer((request,response)=>response.end("ready")).listen(${port},"127.0.0.1");`,
+  idleStopMs = 0,
+) {
+  const baseUrl = `http://127.0.0.1:${port}/v1`;
+  return {
+    providerId,
+    baseUrl,
+    service: {
+      command: process.execPath,
+      args: ["-e", script],
+      healthUrl: `${baseUrl}/models`,
+      readyTimeoutMs: 5_000,
+      idleStopMs,
+    },
+  };
+}
+
+async function acquireService(target: ReturnType<typeof serviceTarget>) {
+  const lease = await ensureProviderLocalService(target);
+  if (!lease) {
+    throw new Error("Expected provider local service lease");
+  }
+  return lease;
+}
+
 function captureServicePid(healthUrl: string, pids: Set<number>): number {
   const pid = getManagedProviderLocalServiceDiagnosticsForTest().find(
     (service) => service.healthUrl === healthUrl,
@@ -79,29 +107,18 @@ describe("provider local service shutdown", () => {
 
   it("waits for a stubborn descendant after its parent exits", async () => {
     const port = await fixture.claimPort();
-    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const descendantPidPath = path.join(tempDirs.make("local-service-tree-"), "descendant.pid");
     let pid: number | undefined;
     let descendantPid: number | undefined;
 
     try {
-      const lease = await ensureProviderLocalService({
-        providerId: "local-stubborn-stop",
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-        service: {
-          command: process.execPath,
-          args: [
-            "-e",
-            `const {spawn}=require("node:child_process");const fs=require("node:fs");const http=require("node:http");const child=spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000);'],{stdio:"ignore"});fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(child.pid));http.createServer((req,res)=>res.end("ok")).listen(${port},"127.0.0.1");`,
-          ],
-          healthUrl,
-          readyTimeoutMs: 5_000,
-          idleStopMs: 0,
-        },
-      });
-      if (!lease) {
-        throw new Error("Expected provider local service lease");
-      }
+      const lease = await acquireService(
+        serviceTarget(
+          port,
+          "local-stubborn-stop",
+          `const {spawn}=require("node:child_process");const fs=require("node:fs");const http=require("node:http");const child=spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000);'],{stdio:"ignore"});fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(child.pid));http.createServer((req,res)=>res.end("ok")).listen(${port},"127.0.0.1");`,
+        ),
+      );
       pid = getManagedProviderLocalServiceDiagnosticsForTest()[0]?.pid;
       if (!pid) {
         throw new Error("Expected managed provider local service pid");
@@ -154,47 +171,36 @@ describe("provider local service shutdown", () => {
         throw new Error("Expected local service control listener");
       }
       const controlUrl = `http://127.0.0.1:${address.port}/stopping`;
-      const target = {
-        providerId: "local-idle-stop-join",
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-        service: {
-          command: process.execPath,
-          args: [
-            "-e",
-            [
-              'const http = require("node:http");',
-              "let stopping = false;",
-              "const server = http.createServer((request, response) => {",
-              "  response.writeHead(stopping ? 503 : 200);",
-              '  response.end("ready");',
-              "});",
-              'process.once("SIGTERM", () => {',
-              "  stopping = true;",
-              `  http.get(${JSON.stringify(controlUrl)}, { agent: false }, (response) => {`,
-              "    response.resume();",
-              '    response.once("end", () => {',
-              "      server.close(() => process.exit(0));",
-              "      server.closeAllConnections();",
-              "    });",
-              '  }).once("error", () => process.exit(1));',
-              "});",
-              `server.listen(${port}, "127.0.0.1");`,
-            ].join("\n"),
-          ],
-          healthUrl,
-          readyTimeoutMs: 5_000,
-          idleStopMs: 1,
-        },
-      };
+      const target = serviceTarget(
+        port,
+        "local-idle-stop-join",
+        [
+          'const http = require("node:http");',
+          "let stopping = false;",
+          "const server = http.createServer((request, response) => {",
+          "  response.writeHead(stopping ? 503 : 200);",
+          '  response.end("ready");',
+          "});",
+          'process.once("SIGTERM", () => {',
+          "  stopping = true;",
+          `  http.get(${JSON.stringify(controlUrl)}, { agent: false }, (response) => {`,
+          "    response.resume();",
+          '    response.once("end", () => {',
+          "      server.close(() => process.exit(0));",
+          "      server.closeAllConnections();",
+          "    });",
+          '  }).once("error", () => process.exit(1));',
+          "});",
+          `server.listen(${port}, "127.0.0.1");`,
+        ].join("\n"),
+        1,
+      );
       const pids = new Set<number>();
       const pending: Promise<unknown>[] = [];
 
       await runQaGatewayFixture(
         async () => {
-          const lease = await ensureProviderLocalService(target);
-          if (!lease) {
-            throw new Error("Expected initial provider local service lease");
-          }
+          const lease = await acquireService(target);
           const originalPid = captureServicePid(healthUrl, pids);
           lease.release();
           await withTestTimeout(stopping.promise, 5_000, "Provider did not enter SIGTERM handler");
@@ -207,11 +213,9 @@ describe("provider local service shutdown", () => {
           pending.push(stopped);
           void stopped.catch(() => {});
           let acquisitionSettled = false;
-          const replacement = ensureProviderLocalService(target)
+          const replacement = acquireService(target)
             .then((nextLease) => {
-              if (nextLease) {
-                captureServicePid(healthUrl, pids);
-              }
+              captureServicePid(healthUrl, pids);
               return nextLease;
             })
             .finally(() => {
@@ -228,9 +232,6 @@ describe("provider local service shutdown", () => {
           releaseGate();
           await stopped;
           const nextLease = await replacement;
-          if (!nextLease) {
-            throw new Error("Expected replacement provider local service lease");
-          }
           expect(captureServicePid(healthUrl, pids)).not.toBe(originalPid);
           expect(isPidAlive(originalPid)).toBe(false);
           expect((await fetch(healthUrl)).ok).toBe(true);
@@ -257,35 +258,16 @@ describe("provider local service shutdown", () => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const pids = new Set<number>();
-    const target = {
-      providerId: "local-late-lease-release",
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-      service: {
-        command: process.execPath,
-        args: [
-          "-e",
-          `require("node:http").createServer((request,response)=>response.end("ready")).listen(${port},"127.0.0.1");`,
-        ],
-        healthUrl,
-        readyTimeoutMs: 5_000,
-        idleStopMs: 0,
-      },
-    };
+    const target = serviceTarget(port, "local-late-lease-release");
 
     await runQaGatewayFixture(
       async () => {
-        const retiredLease = await ensureProviderLocalService(target);
-        if (!retiredLease) {
-          throw new Error("Expected initial provider local service lease");
-        }
+        const retiredLease = await acquireService(target);
         const retiredPid = captureServicePid(healthUrl, pids);
         await stopManagedProviderLocalServices();
         expect(isPidAlive(retiredPid)).toBe(false);
 
-        const replacementLease = await ensureProviderLocalService(target);
-        if (!replacementLease) {
-          throw new Error("Expected replacement provider local service lease");
-        }
+        const replacementLease = await acquireService(target);
         const replacementPid = captureServicePid(healthUrl, pids);
         expect(replacementPid).not.toBe(retiredPid);
         retiredLease.release();
@@ -308,41 +290,13 @@ describe("provider local service shutdown", () => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const pids = new Set<number>();
-    const children = new Set<ChildProcess>();
-    const observeSpawn = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        "process" in message &&
-        message.process instanceof ChildProcess
-      ) {
-        children.add(message.process);
-      }
-    };
-    subscribe("child_process", observeSpawn);
-    const target = {
-      providerId: "local-stop-observation-recovery",
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-      service: {
-        command: process.execPath,
-        args: [
-          "-e",
-          `require("node:http").createServer((request,response)=>response.end("ready")).listen(${port},"127.0.0.1");`,
-        ],
-        healthUrl,
-        readyTimeoutMs: 5_000,
-        idleStopMs: 0,
-      },
-    };
+    const target = serviceTarget(port, "local-stop-observation-recovery");
 
     await runQaGatewayFixture(
       async () => {
-        const lease = await ensureProviderLocalService(target);
-        if (!lease) {
-          throw new Error("Expected initial provider local service lease");
-        }
+        const lease = await acquireService(target);
         const originalPid = captureServicePid(healthUrl, pids);
-        const child = [...children].find((spawned) => spawned.pid === originalPid);
+        const child = [...serviceClosures.keys()].find((spawned) => spawned.pid === originalPid);
         if (!child) {
           throw new Error("Expected the owned child process");
         }
@@ -405,10 +359,7 @@ describe("provider local service shutdown", () => {
         }
 
         expect(isPidAlive(originalPid)).toBe(false);
-        const replacementLease = await ensureProviderLocalService(target);
-        if (!replacementLease) {
-          throw new Error("Expected recovered provider local service lease");
-        }
+        const replacementLease = await acquireService(target);
         const replacementPid = captureServicePid(healthUrl, pids);
         expect(replacementPid).not.toBe(originalPid);
         expect((await fetch(healthUrl)).ok).toBe(true);
@@ -420,7 +371,6 @@ describe("provider local service shutdown", () => {
       },
       stopManagedProviderLocalServices,
       () => killOwnedServices(pids, signal),
-      () => unsubscribe("child_process", observeSpawn),
     );
   });
 });

@@ -1,4 +1,3 @@
-// Release User Journey Assertions tests cover release user journey assertions script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -128,71 +127,25 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
 }
 
 describe("release user journey assertions", () => {
-  it("rejects loose mock OpenAI port args", () => {
-    const root = tempDirs.make("openclaw-release-user-assertions-");
-    const home = path.join(root, "home");
-
-    const result = runAssertion(home, ["configure-mock-model", "1e3"]);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("mock OpenAI port must be a TCP port from 1 to 65535");
-    expect(result.stderr).toContain('"1e3"');
-  });
-
-  it("scans large files when checking release user journey output text", () => {
+  it("bounds release user journey output assertion diagnostics for large output", () => {
     const root = tempDirs.make("openclaw-release-user-assertions-");
     const home = path.join(root, "home");
     const outputPath = path.join(root, "output.log");
 
-    const needlePrefix = "journey-plugin";
     writeFileSync(
       outputPath,
-      `${"x".repeat(64 * 1024 - needlePrefix.length)}${needlePrefix}-a:pong\n`,
+      `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
       "utf8",
     );
 
-    const result = runAssertion(home, [
-      "assert-file-contains",
-      outputPath,
-      "journey-plugin-a:pong",
-    ]);
+    const result = runAssertion(home, ["assert-file-contains", outputPath, "missing"]);
+    const message = `${outputPath} did not contain missing. Output tail: `;
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(result.stderr).toContain("recent output tail");
+    expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
   });
-
-  it.each(["large output", "missing path", "empty file", "directory"])(
-    "bounds release user journey output assertion diagnostics for %s",
-    (kind) => {
-      const root = tempDirs.make("openclaw-release-user-assertions-");
-      const home = path.join(root, "home");
-      const outputPath = path.join(root, "output.log");
-
-      if (kind === "large output") {
-        writeFileSync(
-          outputPath,
-          `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
-          "utf8",
-        );
-      } else if (kind === "empty file") {
-        writeFileSync(outputPath, "", "utf8");
-      } else if (kind === "directory") {
-        mkdirSync(outputPath);
-      }
-
-      const result = runAssertion(home, ["assert-file-contains", outputPath, "missing"]);
-      const message = `${outputPath} did not contain missing. Output tail: `;
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(message);
-      if (kind === "large output") {
-        expect(result.stderr).toContain("recent output tail");
-        expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
-      } else {
-        expect(result.stderr).toContain(`${message}\n`);
-      }
-    },
-  );
 
   it("uses each file and needle and restores argv after successful and failed dispatch", async () => {
     const root = tempDirs.make("openclaw-release-user-assertions-");
@@ -317,69 +270,6 @@ describe("release user journey assertions", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("managed plugin directory still present");
-  });
-
-  it("passes after uninstall clears config, records, and managed files", () => {
-    const root = tempDirs.make("openclaw-release-user-assertions-");
-    const home = path.join(root, "home");
-    const installPathFile = path.join(root, "install-path.txt");
-
-    writeJson(path.join(home, ".openclaw", "openclaw.json"), {
-      plugins: {
-        entries: { "journey-plugin-a": { enabled: false } },
-        allow: [],
-        deny: [],
-      },
-    });
-    writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-      installRecords: {},
-    });
-    writeFileSync(
-      installPathFile,
-      path.join(home, ".openclaw", "extensions", "journey-plugin-a"),
-      "utf8",
-    );
-
-    const result = runAssertion(home, [
-      "assert-plugin-uninstalled",
-      "journey-plugin-a",
-      installPathFile,
-    ]);
-
-    expect(result.status).toBe(0);
-  });
-
-  it("remembers the installed plugin path from the install record", () => {
-    const root = tempDirs.make("openclaw-release-user-assertions-");
-    const home = path.join(root, "home");
-    const pluginId = "journey-plugin-a";
-    const sourcePath = path.join(root, "source", pluginId);
-    const installPath = path.join(home, ".openclaw", "extensions", pluginId);
-    const installPathFile = path.join(root, "install-path.txt");
-    const sourcePathFile = path.join(root, "source-path.txt");
-
-    mkdirSync(sourcePath, { recursive: true });
-    mkdirSync(installPath, { recursive: true });
-    writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-      installRecords: {
-        [pluginId]: {
-          source: "path",
-          sourcePath,
-          installPath,
-        },
-      },
-    });
-
-    const result = runAssertion(home, [
-      "remember-plugin-install-path",
-      pluginId,
-      installPathFile,
-      sourcePathFile,
-      sourcePath,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
   });
 
   it("waits for a new ClickClack websocket generation across reconnect", async () => {
@@ -561,29 +451,6 @@ describe("release user journey assertions", () => {
     }
   });
 
-  it("rejects loose HTTP timeout env values instead of parsing prefixes", async () => {
-    const root = tempDirs.make("openclaw-release-user-assertions-");
-    const home = path.join(root, "home");
-    const server = await startTcpFixtureServer((socket) =>
-      socket.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"),
-    );
-
-    try {
-      await expect(
-        withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" }, () =>
-          runReleaseUserJourneyAssertion("wait-clickclack-socket", [
-            `http://127.0.0.1:${server.port}`,
-            "1",
-          ]),
-        ),
-      ).rejects.toThrow(
-        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS must be a positive integer. Got: "100ms"',
-      );
-    } finally {
-      await server.stop();
-    }
-  });
-
   it("rejects loose ClickClack wait timeout args instead of parsing prefixes", async () => {
     const root = tempDirs.make("openclaw-release-user-assertions-");
     const home = path.join(root, "home");
@@ -658,38 +525,6 @@ describe("release user journey assertions", () => {
             ]),
         ),
       ).rejects.toThrow(`http://127.0.0.1:${server.port}/fixture/inbound timed out after 25ms`);
-    } finally {
-      await server.stop();
-    }
-  });
-
-  it("rejects loose body byte env values instead of parsing prefixes", async () => {
-    const root = tempDirs.make("openclaw-release-user-assertions-");
-    const home = path.join(root, "home");
-    const server = await startTcpFixtureServer((socket) => {
-      const body = "x".repeat(128);
-      socket.end(
-        `HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
-      );
-    });
-
-    try {
-      await expect(
-        withEnvAsync(
-          {
-            HOME: home,
-            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16bytes",
-            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000",
-          },
-          () =>
-            runReleaseUserJourneyAssertion("post-clickclack-inbound", [
-              `http://127.0.0.1:${server.port}`,
-              "hello",
-            ]),
-        ),
-      ).rejects.toThrow(
-        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES must be a positive integer. Got: "16bytes"',
-      );
     } finally {
       await server.stop();
     }

@@ -57,6 +57,7 @@ const liveText = (group: AbortSignal) => ({
 
 describe("broadcast transport retirement", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -84,12 +85,58 @@ describe("broadcast transport retirement", () => {
     expect(Buffer.isBuffer(first)).toBe(true);
     expect(admin.socket.send.mock.calls[0]![0]).toBe(first);
 
+    const encode = vi.spyOn(Buffer, "from");
     broadcastPluginEvent("plugin.fixture.changed", payload, "operator.read");
+    const payloadEncodings = encode.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.includes(payload.text),
+    );
+    encode.mockRestore();
+    expect(payloadEncodings.length).toBeLessThanOrEqual(1);
     expect(read.frames.at(-1)?.seq).toBe(1);
     expect(write.frames.at(-1)?.seq).toBe(2);
     expect(admin.frames.at(-1)?.seq).toBe(2);
     expect(write.socket.send.mock.calls[1]![0]).not.toBe(first);
     expect(admin.socket.send.mock.calls[1]![0]).toBe(write.socket.send.mock.calls[1]![0]);
+  });
+
+  it("shares encoded presence only after current recipient projection", () => {
+    const peers = ["first", "same", "same-again", "ahead", "other", "revoked"].map(controlledPeer);
+    for (const peer of peers) {
+      peer.client.preparedRecipientProfileId = peer.client.connId === "other" ? "other" : "reader";
+    }
+    const visible = [{ text: "synthetic 🦞 update", ts: 1 }];
+    const hidden: typeof visible = [];
+    let revoked = false;
+    const project = vi.fn((client: GatewayWsClient) =>
+      client.connId === "revoked" && revoked ? hidden : visible,
+    );
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      preparePresenceProjection: () => project,
+    });
+    broadcastToConnIds("tick", {}, new Set(["ahead"]));
+    peers[0]!.socket.send.mockImplementationOnce(() => {
+      revoked = true;
+    });
+    broadcast("presence", { presence: visible });
+
+    const frames = peers.map((peer) => peer.socket.send.mock.lastCall![0]);
+    expect(Buffer.isBuffer(frames[0])).toBe(true);
+    expect(frames[1]).toBe(frames[0]);
+    expect(frames[2]).toBe(frames[1]);
+    expect(project).toHaveBeenCalledTimes(6);
+    for (const [index, frame] of frames.entries()) {
+      expect(JSON.parse(String(frame))).toEqual({
+        type: "event",
+        event: "presence",
+        payload: { presence: index === 5 ? hidden : visible },
+        seq: index === 3 ? 2 : 1,
+        recipientProfileId: index === 4 ? "other" : "reader",
+      });
+    }
+    visible[0]!.ts = 2;
+    broadcast("presence", { presence: visible });
+    expect(String(peers[1]!.socket.send.mock.lastCall![0])).toContain('"ts":2');
   });
 
   it("terminates only the slow socket captured before replacement", () => {

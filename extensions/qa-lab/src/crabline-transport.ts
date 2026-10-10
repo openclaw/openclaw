@@ -9,6 +9,10 @@ import {
   type StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  QaBusInboundMessageInput,
+  QaBusMessage,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -38,7 +42,6 @@ import {
   waitForQaTransportAccountReady,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
-import type { QaBusInboundMessageInput, QaBusMessage } from "./runtime-api.js";
 
 type QaCrablineTransportState = QaTransportState & {
   slackIngress?: ReturnType<typeof createCrablineSlackIngress>;
@@ -254,19 +257,13 @@ async function createCrablineState(params: {
           outboundEvents.push(lifecycle);
         }
       }
-      const normalizedEvent =
-        params.adapter.channel === "telegram" &&
-        isRecord(event) &&
-        isRecord(event.body) &&
-        normalizeStringifiedOptionalString(event.body.chat_id)
-          ? {
-              ...event,
-              body: {
-                ...event.body,
-                chat_id: normalizeStringifiedOptionalString(event.body.chat_id),
-              },
-            }
-          : event;
+      let normalizedEvent = event;
+      if (params.adapter.channel === "telegram" && isRecord(event) && isRecord(event.body)) {
+        const chatId = normalizeStringifiedOptionalString(event.body.chat_id);
+        if (chatId) {
+          normalizedEvent = { ...event, body: { ...event.body, chat_id: chatId } };
+        }
+      }
       const observation = params.adapter.createOutboundObservation({ event: normalizedEvent });
       if (!observation) {
         return;
@@ -622,7 +619,7 @@ function createQaCrablineTransport(params: {
         ],
         reportNotes: [
           ...createOpenClawCrablineChannelReportNotes(selection),
-          "Provider readiness records the strict startup probe before Gateway traffic; the same provider instance passed its final health probe.",
+          "Provider readiness records the strict startup check before Gateway traffic; the same provider instance passed its final health check.",
           `Full unmodified runtime transcript: ${path.relative(outputDir, adapter.manifest.recorderPath)}.`,
         ],
       };

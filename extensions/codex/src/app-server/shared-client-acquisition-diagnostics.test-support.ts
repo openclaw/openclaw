@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import * as catalogEvents from "../session-catalog-events.js";
 import * as authBridge from "./auth-bridge.js";
+import type { CodexAppServerAuthHandoff } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import * as sharedClient from "./shared-client.js";
@@ -16,7 +17,7 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 export function deferNextAuthProfileApplication(): () => void {
   let release: () => void = () => {};
-  const gate = new Promise<authBridge.CodexAppServerAuthHandoff | undefined>((resolve) => {
+  const gate = new Promise<CodexAppServerAuthHandoff | undefined>((resolve) => {
     release = () => resolve(undefined);
   });
   vi.mocked(authBridge.applyCodexAppServerAuthProfile).mockReturnValueOnce(gate);
@@ -152,6 +153,10 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
     vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(true);
     vi.mocked(embeddedAgentLog.warn).mockClear();
     const harness = createClientHarness();
+    vi.spyOn(harness.client, "getRegisteredTransportIdentity").mockReturnValue({
+      pid: 500002,
+      startedAt: "fixture-boot:12345",
+    });
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
     vi.spyOn(sharedClient, "getLeasedSharedCodexAppServerClient").mockImplementation((options) =>
       getLeasedSharedCodexAppServerClient({ ...options, timeoutMs: 5 }),
@@ -184,6 +189,10 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
     const attributes = vi
       .mocked(embeddedAgentLog.warn)
       .mock.calls.find(([message]) => message === "codex app-server scope timed out")?.[1];
+    expect(JSON.parse(String(attributes?.lastStartedTransportIdentity))).toEqual({
+      pid: 500002,
+      startedAt: "fixture-boot:12345",
+    });
     expect(JSON.parse(String(attributes?.initializeBeforeCleanup))).toMatchObject({
       outcome: "pending",
       wireOutcome: "retained-pending",

@@ -1,16 +1,22 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { formatTimeAgo } from "../../lib/format.ts";
 import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { showToast } from "../../lib/toast.ts";
-import { createOfflineDeviceNode, deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
+import {
+  createDevicesViewProps,
+  createOfflineDeviceNode,
+  deviceSystemInfo,
+} from "../../test-helpers/devices-fixtures.ts";
 import {
   renderDevicesContainer,
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
 } from "../../test-helpers/devices-view.ts";
+import { renderDevices } from "./view.ts";
 
 vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
   openDesktopFocus: vi.fn(),
@@ -469,6 +475,33 @@ describe("devices inventory rendering", () => {
     const row = getSettingsRow(container, "Bare node");
     expect(row.querySelector('wa-dropdown-item[value="copy"]')).toBeInstanceOf(Element);
     expect(row.querySelector('wa-dropdown-item[value="editAlias"]')).toBeNull();
+  });
+
+  it("keeps focus on Copy when an inventory refresh adds preceding approval actions", async () => {
+    const node = { nodeId: "node-one", displayName: "Node One", paired: true, connected: true };
+    const props = createDevicesViewProps({ nodes: [node] });
+    const container = renderDevicesContainer(props);
+    const copy = expectDefined(
+      container.querySelector<HTMLElementTagNameMap["wa-dropdown-item"]>(
+        'wa-dropdown-item[value="copy"]',
+      ),
+      "Copy device ID menu item",
+    );
+    await copy.updateComplete;
+    copy.focus();
+    expect(document.activeElement).toBe(copy);
+
+    render(
+      renderDevices({
+        ...props,
+        nodes: [{ ...node, approvalState: "pending-reapproval", pendingRequestId: "request-new" }],
+      }),
+      container,
+    );
+
+    expect(container.querySelector('wa-dropdown-item[value="approve"]')).not.toBeNull();
+    expect(container.querySelector('wa-dropdown-item[value="copy"]')).toBe(copy);
+    expect(document.activeElement).toBe(copy);
   });
 
   it.each([true, false])(
@@ -982,7 +1015,7 @@ describe("devices access gating", () => {
           },
         ],
       },
-      configForm: { agents: { entries: [{ id: "main", default: true }] } },
+      configForm: { agents: { entries: { main: {} } } },
       configDirty: true,
     });
 

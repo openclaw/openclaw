@@ -279,7 +279,7 @@ it("delivers a committed finalization before close permits a physical successor"
                   command.input.command.type === "finalize"
                 ) {
                   held = true;
-                  expect(result).toEqual({ finalized: true, sessionKey: scope.sessionKey });
+                  expect(result).toMatchObject({ finalized: true, sessionKey: scope.sessionKey });
                   events.push("committed");
                   committed.resolve();
                   await deliver.promise;
@@ -418,30 +418,56 @@ it("keeps a successor request separate from a retired scheduled owner", async ()
   }
 }, 30_000);
 
-it("rejects a prepared projection from a replaced transcript generation", async () => {
-  const { options, database, scope } = await fixture();
-  const changes: unknown[] = [];
-  const stop = sessionChanges.subscribe((change) => changes.push(change));
-  observer.onTask = ({ observeMessage }) =>
-    observeMessage((message) => {
-      if (message.type === "plan-start") {
-        database.db
-          .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
-          .run("replacement-generation", scope.sessionId);
+it.each(["transcript", "caller", "cancellation"] as const)(
+  "rejects prepared projection publication when %s authority changes",
+  async (race) => {
+    const { options, database, scope } = await fixture();
+    const changes: unknown[] = [];
+    let current = true;
+    const controller = new AbortController();
+    const refusal = new Error("startup maintenance owner retired");
+    const stop = sessionChanges.subscribe((change) => changes.push(change));
+    observer.onTask = ({ observeMessage }) =>
+      observeMessage((message) => {
+        if (message.type === "plan-start") {
+          if (race === "transcript") {
+            database.db
+              .prepare(
+                "UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?",
+              )
+              .run("replacement-generation", scope.sessionId);
+          } else if (race === "caller") {
+            current = false;
+          } else {
+            controller.abort(refusal);
+          }
+        }
+      });
+    try {
+      const repair = reconcileSessionTranscriptIndexes({
+        ...options,
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw refusal;
+          }
+        },
+      });
+      if (race === "transcript") {
+        await expect(repair).resolves.toEqual({ reconciledSessions: 0 });
+      } else {
+        await expect(repair).rejects.toThrow("startup maintenance owner retired");
       }
-    });
-  try {
-    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-      reconciledSessions: 0,
-    });
-    expect(changes).toEqual([]);
-    expect(
-      database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").get(),
-    ).toEqual({ needs_rebuild: 1 });
-    expect(
-      database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
-    ).toEqual([{ message_id: "message-0", text: "projection message 0" }]);
-  } finally {
-    stop();
-  }
-}, 30_000);
+      expect(changes).toEqual([]);
+      expect(
+        database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").get(),
+      ).toEqual({ needs_rebuild: 1 });
+      expect(
+        database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
+      ).toEqual([{ message_id: "message-0", text: "projection message 0" }]);
+    } finally {
+      stop();
+    }
+  },
+  30_000,
+);

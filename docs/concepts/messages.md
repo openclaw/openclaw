@@ -106,6 +106,7 @@ Tool result `content` is the model-visible result; `details` is runtime metadata
 
 - `toolResult.details` is stripped before provider replay and before compaction input.
 - Persisted session transcripts keep only bounded `details`; oversized metadata is replaced with a compact summary marked `persistedDetailsTruncated: true`.
+- Display history retains tool status flags and session keys, plus command exit codes, durations, and bounded working directories when the tool provides them.
 - Plugins and tools should put text the model must read in `content`, not only in `details`.
 
 When a tool-error warning is the agent's only reply, WebChat displays and retains it. The warning does not by itself change a completed agent run into a runtime failure; the failed tool result remains recorded separately.
@@ -120,6 +121,8 @@ When a run is already active, inbound messages steer into it by default. `messag
 | `followup`        | Run the message after the active run finishes.      |
 | `collect`         | Batch compatible messages into one later turn.      |
 | `interrupt`       | Abort the active run, then start the newest prompt. |
+
+Messages with separate durable ingress admission, including Discord and Telegram messages, stay in separate followup turns even in `collect` mode. Compatible Gateway `chat.send` inputs can still combine.
 
 The queue uses a built-in 500ms debounce for steer, followup, and collect batching. `messages.queue.cap` defaults to 20 queued messages, and `messages.queue.drop` defaults to `summarize` (`old` and `new` are also available). Configure per-channel overrides via `messages.queue.byChannel` and `messages.queue.debounceMsByChannel`.
 

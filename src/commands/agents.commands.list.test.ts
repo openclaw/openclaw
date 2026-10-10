@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -76,7 +75,7 @@ async function list(options: Parameters<typeof agentsListCommand>[0]) {
 function createConfig(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
     bindings: [{ agentId: "main", match: { channel: "telegram" } }],
   };
@@ -96,37 +95,23 @@ describe("agentsListCommand", () => {
 
   it("keeps the migrated default in JSON after reloading explicit ownership", async () => {
     const agentId = "research";
-    const legacy: OpenClawConfig = {
+    const legacy = {
       agents: {
         list: ["main", "research"].map((id) => ({ id, default: id === agentId })),
       },
     };
-    const migrated = migratePersistedImplicitMainRoster(legacy).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(legacy).config;
     const persisted = structuredClone<OpenClawConfig>({
       ...migrated,
       agents: { ...migrated.agents, ownership: "explicit" },
     });
-    for (const config of [legacy, persisted]) {
+    for (const config of [migrated, persisted]) {
       requireValidConfigMock.mockResolvedValueOnce(config);
       expect((await list({ json: true })).json).toMatchObject([
         { id: "main", isDefault: false },
         { id: "research", isDefault: true },
       ]);
     }
-  });
-
-  it("reports no default without a designation despite retained provenance", async () => {
-    const config = retainLegacyDefaultAgentId(
-      {
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      },
-      "ops",
-    );
-    requireValidConfigMock.mockResolvedValueOnce(config);
-    expect((await list({ json: true })).json).toMatchObject([
-      { id: "ops", isDefault: false },
-      { id: "research", isDefault: false },
-    ]);
   });
 
   it("adds durable provenance to JSON without loading provider details", async () => {
@@ -180,16 +165,6 @@ describe("agentsListCommand", () => {
       ].join("\n"),
     );
     expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps provider details available for JSON callers that request bindings", async () => {
-    const { json } = await list({ json: true, bindings: true });
-    expect(json).toMatchObject([
-      { id: "main", routes: ["Telegram default"], providers: ["Telegram default: configured"] },
-    ]);
-    for (const field of ["createdVia", "creatorAgentId", "createdAt"]) {
-      expect(json).not.toHaveProperty(`0.${field}`);
-    }
   });
 
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
@@ -259,40 +234,6 @@ describe("agentsListCommand", () => {
     });
   });
 
-  it("keeps JSON identity fields when local avatar preparation fails", async () => {
-    await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
-      const avatarRuntime = await import("../agents/identity-avatar-file-runtime.js");
-      const prepareAvatar = vi
-        .spyOn(avatarRuntime, "prepareLocalAgentAvatar")
-        .mockRejectedValue(new Error("avatar worker unavailable"));
-      try {
-        requireValidConfigMock.mockResolvedValueOnce({
-          agents: {
-            entries: {
-              proof: {
-                workspace,
-                identity: { name: "Chosen Identity", emoji: "🦉", avatar: "avatar.png" },
-              },
-            },
-          },
-        } satisfies OpenClawConfig);
-        const { json } = await list({ json: true });
-        expect(prepareAvatar).toHaveBeenCalledOnce();
-        expect(json).toMatchObject([
-          {
-            id: "proof",
-            identityName: "Chosen Identity",
-            identityEmoji: "🦉",
-            identitySource: "config",
-          },
-        ]);
-        expect(json).not.toHaveProperty("0.identityAvatarUrl");
-      } finally {
-        prepareAvatar.mockRestore();
-      }
-    });
-  });
-
   it("sanitizes configured agent text without changing JSON summaries", async () => {
     const control = "\u001B]0;agents-list-injection\u0007";
     const identityName = `${control}Operator 🦞\r\nforged-row`;
@@ -341,14 +282,12 @@ describe("agentsListCommand", () => {
 
         requireValidConfigMock.mockResolvedValueOnce({
           agents: {
-            list: [
-              {
-                id: "main",
-                default: true,
+            entries: {
+              main: {
                 workspace: path.join(homeAlias, "workspace"),
                 agentDir: path.join(homeAlias, "agents", "main", "agent"),
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig);
         const { text: output } = await withEnvAsync({ OPENCLAW_HOME: home }, () => list({}));

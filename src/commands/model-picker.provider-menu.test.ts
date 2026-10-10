@@ -55,7 +55,7 @@ describe("default model provider menu", () => {
           const choice =
             params.message === "Filter models by provider"
               ? params.options.find((option) => option.value === selection)
-              : params.options[0];
+              : params.options.find((option) => String(option.value).includes("/"));
           if (!choice) {
             throw new Error("Missing picker choice");
           }
@@ -70,8 +70,6 @@ describe("default model provider menu", () => {
         },
         prompter,
         allowKeep: false,
-        includeManual: false,
-        ignoreAllowlist: true,
       });
       const modelPrompt = count > 30 && !singleProvider ? 1 : 0;
       expect(prompts).toHaveLength(modelPrompt + 1);
@@ -88,7 +86,10 @@ describe("default model provider menu", () => {
       if (selection === "alpha") {
         expectedValues.push("zeta/model-0");
       }
-      expect(prompts[modelPrompt]?.options.map((option) => option.value)).toEqual(expectedValues);
+      expect(prompts[modelPrompt]?.options.map((option) => option.value)).toEqual([
+        "__manual__",
+        ...expectedValues,
+      ]);
       if (!singleProvider) {
         expect(
           prompts[modelPrompt]?.options.find((option) => option.value === "alpha/model-15")?.hint,
@@ -113,8 +114,6 @@ describe("default model provider menu", () => {
         config: { agents: { defaults: { model: "zeta/model-0" } } },
         prompter: makePrompter({ select }),
         allowKeep: false,
-        includeManual: false,
-        ignoreAllowlist: true,
       }),
     ).rejects.toBe(cancellation);
     expect(select).toHaveBeenCalledTimes(1);

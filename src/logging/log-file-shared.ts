@@ -2,16 +2,8 @@ export const LOG_PREFIX = "openclaw";
 export const LOG_SUFFIX = ".log";
 
 export function canUseNodeFs(): boolean {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return false;
-  }
   try {
-    return getBuiltinModule("fs") !== undefined;
+    return process.getBuiltinModule?.("fs") !== undefined;
   } catch {
     return false;
   }

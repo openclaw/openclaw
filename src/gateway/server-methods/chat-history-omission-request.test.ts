@@ -21,7 +21,8 @@ describe("chat.history request truncation diagnostic", () => {
   test("a real request reports older history omitted by the production budget", async () => {
     const sessionId = "sess-omission-proof";
     const sessionKey = "agent:main:main";
-    const messageCount = 70;
+    // Count actual budget omissions within one source window, not unread older history.
+    const messageCount = 10;
     const textBytes = 100_000;
     const budgetBytes = getMaxChatHistoryMessagesBytes();
     const dir = tempDirs.make();

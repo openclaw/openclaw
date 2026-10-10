@@ -13,14 +13,20 @@ import {
 
 export type GatewayComputerStatus =
   | { configured: false; available: false }
-  | { configured: true; available: false; error?: string }
+  | {
+      configured: true;
+      available: false;
+      computerUse?: ComputerUseCapabilityDescriptor;
+      error?: string;
+    }
   | { configured: true; available: true; computerUse: ComputerUseCapabilityDescriptor };
 
 export async function loadGatewayComputerStatus(
   options: GatewayCallOptions,
   signal?: AbortSignal,
+  probe = false,
 ): Promise<GatewayComputerStatus> {
-  const result = await callGatewayTool<unknown>("computer.status", options, {}, { signal });
+  const result = await callGatewayTool<unknown>("computer.status", options, { probe }, { signal });
   if (!isRecord(result) || typeof result.configured !== "boolean") {
     throw new Error("COMPUTER_CONTRACT_MISMATCH: invalid Gateway computer status");
   }
@@ -31,6 +37,9 @@ export async function loadGatewayComputerStatus(
     return {
       configured: true,
       available: false,
+      ...(result.computerUse
+        ? { computerUse: parseComputerUseCapabilityDescriptor(result.computerUse) }
+        : {}),
       ...(typeof result.error === "string" ? { error: result.error } : {}),
     };
   }

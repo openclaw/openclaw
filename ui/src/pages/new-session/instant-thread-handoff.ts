@@ -108,7 +108,7 @@ export class InstantThreadHandoff {
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),
     });
-    this.transition.signal.addEventListener("abort", this.onLeave, { once: true });
+    this.transition.signal.addEventListener("abort", () => this.dispose(), { once: true });
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;
       if (
@@ -165,10 +165,6 @@ export class InstantThreadHandoff {
       this.context.agentSelection.state.selectedId === agentId
     );
   }
-
-  private readonly onLeave = () => {
-    this.dispose();
-  };
 
   async waitForReady() {
     // A preview load failure is not a newer navigation. The create can still

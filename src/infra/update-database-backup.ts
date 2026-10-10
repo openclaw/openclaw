@@ -254,13 +254,15 @@ export async function createUpdateDatabaseBackupInProcess(
   // Compare the same admitted dialect; absent metadata must not become an inventory change.
   const inspectionPlan = input.inspectionPlan;
   const includeOwners = inspectionPlan.files.some(([, database]) => database.owners !== undefined);
-  const inventory = await canonicalDatabaseInventory(
-    inspectionPlan,
-    includeOwners,
-    input.additionalPaths,
-    input.additionalFiles,
-    input.excludedDatabasePaths,
-  );
+  const inventoryFor = (plan: InspectionPlan) =>
+    canonicalDatabaseInventory(
+      plan,
+      includeOwners,
+      input.additionalPaths,
+      input.additionalFiles,
+      input.excludedDatabasePaths,
+    );
+  const inventory = await inventoryFor(inspectionPlan);
   const identities = await inspectRestorableDatabaseFiles(inventory.present);
   const warnings = await checkDatabaseBackupSpace(directory, inventory.present);
   const { buildBackupArchivePath } = await import("../commands/backup-shared.js");
@@ -316,13 +318,7 @@ export async function createUpdateDatabaseBackupInProcess(
       sizeBytes: snapshot.sizeBytes,
     });
   }
-  const current = await canonicalDatabaseInventory(
-    await discoverUpdateStateSchemaInspectionInProcess(input),
-    includeOwners,
-    input.additionalPaths,
-    input.additionalFiles,
-    input.excludedDatabasePaths,
-  );
+  const current = await inventoryFor(await discoverUpdateStateSchemaInspectionInProcess(input));
   if (JSON.stringify(current) !== JSON.stringify(inventory)) {
     throw new Error("Update database inventory changed during backup; retry after writers stop.");
   }
