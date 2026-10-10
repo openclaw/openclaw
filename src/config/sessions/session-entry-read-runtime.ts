@@ -13,11 +13,13 @@ import { resolveStateDir } from "../state-dir.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
+import { loadSessionEntryByIdReadOnly } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteAgentId, resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionAccessScope,
   SessionEntryReadScope,
   SessionEntryReadOnlyWorkerScope,
+  SessionEntrySummary,
 } from "./session-accessor.types.js";
 import {
   captureCanonicalSessionReaderContinuation,
@@ -199,6 +201,72 @@ export function readSessionEntryReadOnlyInWorker(
     },
     undefined,
     lane,
+  );
+}
+
+/** Resolve a current transcript identity in the selected store without loading its siblings. */
+export async function readSessionEntryByIdReadOnlyInWorker(
+  input: Omit<SessionEntryReadScope, "sessionKey"> & {
+    sessionId: string;
+    orderBy?: "updatedAt";
+  },
+): Promise<SessionEntrySummary | undefined> {
+  const sessionId = input.sessionId;
+  const ambient = input.storePath ? undefined : captureIncognitoSessionSource();
+  const source = captureIncognitoSessionSource(
+    ambient
+      ? { ...input, storePath: "kind" in ambient ? ambient.path : ambient.actor.path }
+      : input,
+  );
+  if (source && "kind" in source) {
+    return withIncognitoSessionEntry(
+      source,
+      "",
+      () => {},
+      async () => undefined,
+    );
+  }
+  if (source) {
+    const assertCurrent = () => {
+      source.admissionSignal?.throwIfAborted();
+      source.actor.assertReadable();
+    };
+    let assertSnapshot = assertCurrent;
+    const selected = await source.actor.sessions.withSharedState(async () => {
+      const read = await source.actor.sessions.readById(
+        { assertCurrent },
+        { sessionId, orderBy: input.orderBy },
+        source.admissionSignal,
+      );
+      assertSnapshot = read.snapshot.assertCurrent;
+      assertSnapshot();
+      return read.selected;
+    });
+    assertSnapshot();
+    return selected;
+  }
+  const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
+  if (isNativeSessionEntryRead(scope, agentId)) {
+    return loadSessionEntryByIdReadOnly({ ...scope, sessionId, orderBy: input.orderBy });
+  }
+  const storePath =
+    scope.storePath || (agentId && resolveOpenClawAgentSqlitePath({ agentId, env: scope.env }));
+  if (!storePath) {
+    throw new Error("Cannot resolve SQLite session scope without an agent id");
+  }
+  return withSessionStoreReaderInWorker(
+    { ...scope, agentId, storePath },
+    async ({ reader, database, continuation, assertCurrent }) => {
+      const read = await reader.readExactEntries({
+        selection: { kind: "session-id", sessionId, orderBy: input.orderBy },
+        projection: "full",
+        env: database.env,
+        continuation,
+      });
+      assertCurrent();
+      return read.entries[0];
+    },
+    { backing: true, dataOnly: true },
   );
 }
 

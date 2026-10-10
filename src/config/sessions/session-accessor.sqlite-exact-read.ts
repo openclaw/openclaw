@@ -351,7 +351,10 @@ export function loadExactSessionEntryCandidates(
 
 /** Loads a visible current ID, falling back to legacy trimmed IDs only on an exact miss. */
 export function loadSessionEntryByIdReadOnly(
-  scope: Omit<SessionEntryReadScope, "sessionKey"> & { sessionId: string },
+  scope: Omit<SessionEntryReadScope, "sessionKey"> & {
+    sessionId: string;
+    orderBy?: "updatedAt";
+  },
 ): ExactSessionEntry | undefined {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(

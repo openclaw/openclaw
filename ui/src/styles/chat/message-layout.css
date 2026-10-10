@@ -28,6 +28,14 @@
   top: calc(var(--chat-position-rail-top) - var(--chat-thread-padding-top));
   width: 0;
   height: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 240ms ease-out;
+}
+
+.chat-position-rail[data-overflow] {
+  opacity: 1;
+  visibility: visible;
 }
 
 .chat-position-rail__track {
@@ -1084,6 +1092,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-position-rail,
   .chat-position-rail__tick {
     transition: none;
   }
