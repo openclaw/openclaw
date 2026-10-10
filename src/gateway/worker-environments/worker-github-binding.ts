@@ -55,6 +55,43 @@ export async function revokeWorkerGitHubBindingGrant(
   }
 }
 
+/** Project the same selected account for checkout and renewable execution. */
+function workerGitHubLaunchBinding(params: {
+  agentId: string;
+  identity: Awaited<ReturnType<typeof prepareCurrentGitHubPublicationIdentity>>;
+  originUrl?: string;
+  branch?: string;
+}): WorkerGitHubLaunchBinding | undefined {
+  const { identity, agentId, originUrl, branch } = params;
+  const host = identity.host ?? GITHUB_PUBLIC_HOST;
+  const remote = originUrl ? parseGitHubRemoteUrl(originUrl, host) : undefined;
+  const remoteUrl =
+    remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
+      ? `https://${host}/${remote.owner}/${remote.repo}.git`
+      : undefined;
+  const scope =
+    identity.source === "agent-override"
+      ? "agent"
+      : identity.source === "system-configured"
+        ? "system"
+        : undefined;
+  const gitAuthor = scope
+    ? resolveConfiguredGitHubToolIdentity({
+        config: currentGitHubPublicationConfig(),
+        agentId,
+        scope,
+      })?.gitAuthor
+    : undefined;
+  return parseWorkerGitHubLaunchBinding({
+    token: identity.env.GH_TOKEN,
+    login: identity.account.login,
+    ...(host !== GITHUB_PUBLIC_HOST ? { host } : {}),
+    ...(branch !== undefined ? { branch } : {}),
+    ...(remoteUrl ? { remoteUrl } : {}),
+    ...(gitAuthor ? { gitAuthor } : {}),
+  });
+}
+
 export async function prepareWorkerGitHubBindingGrant(params: {
   sessionId: string;
   sessionKey: string;
@@ -176,34 +213,16 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   };
   assertCurrent();
   const githubHost = identity.host ?? GITHUB_PUBLIC_HOST;
-  const remote = originUrl ? parseGitHubRemoteUrl(originUrl, githubHost) : undefined;
-  const scope =
-    identity.source === "agent-override"
-      ? "agent"
-      : identity.source === "system-configured"
-        ? "system"
-        : undefined;
-  const gitAuthor = scope
-    ? resolveConfiguredGitHubToolIdentity({
-        config: currentGitHubPublicationConfig(),
-        agentId: params.agentId,
-        scope,
-      })?.gitAuthor
-    : undefined;
-  const binding = parseWorkerGitHubLaunchBinding({
-    token: identity.env.GH_TOKEN,
-    login: identity.account.login,
-    ...(githubHost !== GITHUB_PUBLIC_HOST ? { host: githubHost } : {}),
-    ...(workspace.kind === "none"
-      ? {}
-      : {
-          branch:
-            workspace.kind === "repository"
-              ? workspace.workspace.branch
-              : workspace.worktree.branch,
-        }),
-    ...(remote ? { remoteUrl: `https://${githubHost}/${remote.owner}/${remote.repo}.git` } : {}),
-    ...(gitAuthor ? { gitAuthor } : {}),
+  const binding = workerGitHubLaunchBinding({
+    agentId: params.agentId,
+    identity,
+    originUrl,
+    branch:
+      workspace.kind === "none"
+        ? undefined
+        : workspace.kind === "repository"
+          ? workspace.workspace.branch
+          : workspace.worktree.branch,
   });
   if (!binding) {
     throw new Error("Selected GitHub identity does not meet the worker launch contract");
@@ -309,37 +328,12 @@ export async function prepareWorkerGitHubBinding(params: {
     ) {
       return undefined;
     }
-    const token = identity.env.GH_TOKEN;
-    if (!token) {
-      return undefined;
-    }
-    const githubHost = identity.host ?? GITHUB_PUBLIC_HOST;
-    const remote = parseGitHubRemoteUrl(originUrl, githubHost);
-    const remoteUrl =
-      remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
-        ? `https://${githubHost}/${remote.owner}/${remote.repo}.git`
-        : undefined;
-    const scope =
-      identity.source === "agent-override"
-        ? "agent"
-        : identity.source === "system-configured"
-          ? "system"
-          : undefined;
-    const gitAuthor = scope
-      ? resolveConfiguredGitHubToolIdentity({
-          config: currentGitHubPublicationConfig(),
-          agentId: params.agentId,
-          scope,
-        })?.gitAuthor
-      : undefined;
-    const binding = parseWorkerGitHubLaunchBinding({
-      token,
-      login: identity.account.login,
-      ...(githubHost !== GITHUB_PUBLIC_HOST ? { host: githubHost } : {}),
+    const binding = workerGitHubLaunchBinding({
+      agentId: params.agentId,
+      identity,
+      originUrl,
       branch:
         workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
-      ...(remoteUrl ? { remoteUrl } : {}),
-      ...(gitAuthor ? { gitAuthor } : {}),
     });
     if (!binding) {
       log.debug("Worker GitHub binding does not meet the worker launch contract.");

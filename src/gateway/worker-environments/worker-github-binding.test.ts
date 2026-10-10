@@ -3,11 +3,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
 import { clearRuntimeConfigSnapshot, writeConfigFile } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
@@ -779,11 +785,14 @@ describe("worker GitHub launch binding", () => {
   );
 
   it.each([
-    ["fixture.ghe.com", "https://api.fixture.ghe.com"],
-    ["ghe.example.test", "https://ghe.example.test/api/v3"],
+    ["github.com", "https://api.github.com", "host"],
+    ["fixture.ghe.com", "https://api.fixture.ghe.com", "host"],
+    ["ghe.example.test", "https://ghe.example.test/api/v3", "host"],
+    ["github.com", "https://api.github.com", "user"],
+    ["ghe.example.test", "https://ghe.example.test/api/v3", "user"],
   ])(
-    "preserves the selected native host %s through launch and renewal",
-    async (host, apiBaseUrl) => {
+    "carries the %s bot through %s separately from the signed-in person until %s changes",
+    async (host, apiBaseUrl, changed) => {
       config = { gateway: { github: { host, apiBaseUrl } } };
       setRuntimeConfigSnapshot(config);
       vi.stubEnv("GH_HOST", host);
@@ -801,23 +810,62 @@ describe("worker GitHub launch binding", () => {
         stdout: Buffer.from(token),
         stderr: Buffer.alloc(0),
       }));
+      let userCurrent = true;
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "signed-in-person",
+        scopes: ["operator.read", "operator.write"],
+        gatewayAccessGrant: null,
+        modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
+        readCurrentGithubLogin: () => "signed-in-human",
+        assertCurrent: () => {
+          if (!userCurrent) {
+            throw new Error("signed-in user authority closed");
+          }
+        },
+      });
       let grant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>> = undefined;
       try {
-        grant = await prepareWorkerGitHubBindingGrant(session);
+        grant = await withGatewayToolCallerIdentity(
+          {
+            agentId: session.agentId,
+            sessionKey: session.sessionKey,
+            personalToolUser: "signed-in-person",
+            operatorAuthority,
+          },
+          async () => {
+            const prepared = await prepareWorkerGitHubBindingGrant(session);
+            expect(
+              getGatewayToolCallerIdentity()?.operatorAuthority?.readCurrentGithubLogin?.(),
+            ).toBe("signed-in-human");
+            expect(getGatewayToolCallerIdentity()?.personalToolUser).toBe("signed-in-person");
+            return prepared;
+          },
+        );
         expect(grant?.binding).toMatchObject({
-          host,
+          ...(host === "github.com" ? {} : { host }),
           token,
+          login: verified.account.login,
           remoteUrl: "https://" + host + "/owner/repo.git",
         });
         expect(mocks.verify).toHaveBeenCalledWith(token, { apiBaseUrl });
-        expect(await prepareWorkerGitHubBinding(session)).toMatchObject({ host, token });
-        config = {
-          gateway: {
-            github: { host: "other.example.test", apiBaseUrl: "https://other.example.test/api/v3" },
-          },
-        };
-        setRuntimeConfigSnapshot(config);
-        await expect(grant?.refresh?.()).rejects.toThrow(/identity changed/i);
+        expect(await prepareWorkerGitHubBinding(session)).toEqual(grant?.binding);
+        expect(JSON.stringify(grant?.binding)).not.toContain("signed-in-human");
+        if (changed === "user") {
+          userCurrent = false;
+        } else {
+          config = {
+            gateway: {
+              github: {
+                host: "other.example.test",
+                apiBaseUrl: "https://other.example.test/api/v3",
+              },
+            },
+          };
+          setRuntimeConfigSnapshot(config);
+        }
+        await expect(grant?.refresh?.()).rejects.toThrow(
+          changed === "user" ? /signed-in user authority closed/ : /identity changed/i,
+        );
       } finally {
         await grant?.revoke();
         clearRuntimeConfigSnapshot();
