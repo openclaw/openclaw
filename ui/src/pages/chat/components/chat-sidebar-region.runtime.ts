@@ -188,7 +188,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.focusedSurface = header;
     const restoreFocus = () => {
       if (this.layout.open && this.focusedSurface === header && header?.isConnected) {
-        header.querySelector<HTMLElement>("wa-tab[active]")?.focus();
+        header.querySelector<HTMLElement>(".tabstrip-tab[active]")?.focus();
       }
     };
     const hosted = this.hostedTabsElement(active);
@@ -625,7 +625,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           const now = document.activeElement;
           const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
           if (this.sideFocusLocked && !moved) {
-            side?.querySelector<HTMLElement>('[data-region-header="side"] wa-tab[active]')?.focus();
+            side
+              ?.querySelector<HTMLElement>('[data-region-header="side"] .tabstrip-tab[active]')
+              ?.focus();
           }
         });
       }

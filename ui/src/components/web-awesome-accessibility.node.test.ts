@@ -178,7 +178,7 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
           }),
           root,
         );
-        await root.querySelector("wa-tab-group").updateComplete;
+        await Promise.resolve();
       `,
       async (_page, accessibility) => {
         const { nodes } = await accessibility.send("Accessibility.getFullAXTree");

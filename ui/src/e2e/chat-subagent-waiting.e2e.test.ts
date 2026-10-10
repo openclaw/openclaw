@@ -182,7 +182,7 @@ suite.define(() => {
         };
         const panelTabHasFocus = () =>
           activePane
-            .locator('[data-region-header="side"] wa-tab[active]')
+            .locator('[data-region-header="side"] .tabstrip-tab[active]')
             .first()
             .evaluate((element) => element.matches(":focus"));
         const countHasFocus = () => runningCount.evaluate((element) => element.matches(":focus"));

@@ -21,6 +21,11 @@ const METRICS = [
   "todoSolid2",
 ] as const satisfies readonly (keyof MigrationMetrics)[];
 
+const LIT_INTEROP_EXCEPTIONS: Readonly<Record<string, string>> = {
+  "ui/src/lit/solid-bridge.test.tsx":
+    "Proves Lit callers keep working through the Solid bridge; deleted with the bridge at cutover.",
+};
+
 function flatten(counts: ReadonlyMap<string, MigrationMetrics>) {
   return new Map(
     [...counts].flatMap(([file, row]) =>
@@ -61,6 +66,23 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       new Map([...sources].filter(([file]) => changed.has(file)));
     const currentCounts = countMigrationSources(root, changedSources(currentSources));
     const baseCounts = countMigrationSources(root, changedSources(previous));
+    for (const [file, reason] of Object.entries(LIT_INTEROP_EXCEPTIONS)) {
+      if (!reason.trim()) {
+        throw new Error(`Lit interop exception ${file} requires a reason.`);
+      }
+      const current = currentCounts.get(file);
+      if (current) {
+        console.log(
+          `Lit interop exception ${file}: litImports=${current.litImports}, htmlTemplates=${current.htmlTemplates}. ${reason}`,
+        );
+      }
+      for (const counts of [currentCounts, baseCounts]) {
+        const row = counts.get(file);
+        if (row) {
+          counts.set(file, { ...row, litImports: 0, htmlTemplates: 0 });
+        }
+      }
+    }
     const increasedTotals = compareRatchetCounts(
       totals(currentCounts),
       totals(baseCounts),

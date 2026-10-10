@@ -1,0 +1,20 @@
+.oc-tabs {
+  min-width: 0;
+}
+
+.oc-tab {
+  appearance: none;
+  flex: none;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: var(--cursor-action);
+}
+
+.oc-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

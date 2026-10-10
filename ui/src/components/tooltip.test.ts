@@ -13,8 +13,9 @@ import {
   dispatchMousePointer,
   dispatchTouchPointer,
   hoverTrigger,
-  webAwesomeTooltip as currentTooltipSurface,
+  tooltipSurface as currentTooltipSurface,
   expectOpenCount,
+  expectSharedTooltipSkin,
   settleTooltip,
   type TooltipElement,
 } from "./tooltip.test-support.ts";
@@ -25,23 +26,23 @@ function commitTooltip(tooltip: TooltipElement) {
 }
 
 function commitTooltipSurface(tooltip: TooltipElement) {
-  return currentTooltipSurface(tooltip)?.updateComplete;
+  return settleTooltip(tooltip);
 }
 
 function tooltipIsRendered(tooltip: TooltipElement) {
-  return currentTooltipSurface(tooltip) !== null;
+  return currentTooltipSurface(tooltip)?.querySelector(".tooltip-content") != null;
 }
 
 function tooltipIsOpen(tooltip: TooltipElement) {
-  return currentTooltipSurface(tooltip)?.open;
+  return currentTooltipSurface(tooltip)?.matches(":popover-open");
 }
 
 function tooltipPlacement(tooltip: TooltipElement) {
   return currentTooltipSurface(tooltip)?.getAttribute("placement");
 }
 
-function tooltipAnchor(tooltip: TooltipElement) {
-  return currentTooltipSurface(tooltip)?.anchor;
+function tooltipHasAnchor(tooltip: TooltipElement) {
+  return Boolean(currentTooltipSurface(tooltip)?.style.getPropertyValue("position-anchor"));
 }
 
 function tooltipContent(tooltip: TooltipElement) {
@@ -56,39 +57,6 @@ function projectedTooltipContent(tooltip: TooltipElement) {
 
 function interactiveTooltipContent(tooltip: TooltipElement) {
   return tooltip.shadowRoot?.querySelector(".tooltip-rich-content");
-}
-
-function expectSharedTooltipSkin(tooltip: TooltipElement) {
-  const root = tooltip.shadowRoot!;
-  const styles = [
-    ...[...root.querySelectorAll("style")].map((style) => style.textContent),
-    ...[...(root.adoptedStyleSheets ?? [])].flatMap((sheet) =>
-      [...sheet.cssRules].map((rule) => rule.cssText),
-    ),
-  ].join("\n");
-  expect(styles).toContain("--wa-tooltip-background-color:");
-  expect(styles).toContain("--wa-tooltip-border-color:");
-  expect(styles).toContain("--wa-tooltip-border-width: 1px");
-  expect(styles).toContain("--wa-tooltip-border-style: solid");
-  expect(styles).toContain("--wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px)");
-  expect(styles).toContain("var(--overlay-border, var(--border-strong))");
-  expect(styles).toContain("var(--overlay-shadow, var(--shadow-md))");
-  expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
-  if (root.adoptedStyleSheets?.length) {
-    const animationNames = root.adoptedStyleSheets
-      .flatMap((sheet) => Array.from(sheet.cssRules))
-      .filter(
-        (rule): rule is CSSMediaRule =>
-          rule instanceof CSSMediaRule && rule.conditionText === "(prefers-reduced-motion: reduce)",
-      )
-      .flatMap((rule) => Array.from(rule.cssRules))
-      .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
-      .map((rule) => rule.style.animationName);
-    // WebKit serializes the `animation: none` shorthand as `animation: auto`.
-    expect(animationNames).toContain("none");
-  } else {
-    expect(styles).toContain("animation: none");
-  }
 }
 
 describe("openclaw-tooltip", () => {
@@ -220,7 +188,7 @@ describe("openclaw-tooltip", () => {
     focusTrigger(trigger);
     await settleTooltip(tooltip);
 
-    expect(tooltipAnchor(tooltip)).toBe(trigger);
+    expect(tooltipHasAnchor(tooltip)).toBe(true);
   });
 
   it("recognizes an HTML trigger created by another document realm", async () => {
@@ -983,6 +951,27 @@ describe("title tooltips", () => {
     await expectOpenCount(1);
   });
 
+  it("preserves a new rich content range after replacing a dismissed title hint", async () => {
+    const ordinary = document.createElement("button");
+    ordinary.title = "Ordinary hint";
+    const file = document.createElement("a");
+    file.href = "/workspace/example.ts";
+    file.dataset.filePath = "/workspace/example.ts";
+    file.textContent = "Source";
+    document.body.append(ordinary, file);
+    focusTrigger(ordinary);
+    await settleTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
+    dispatchMousePointer(ordinary, "pointerleave");
+    ordinary.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    focusTrigger(file);
+    const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+    await settleTooltip(tooltip);
+    const content = tooltip.querySelector('[slot="content"]');
+    expect(content).not.toBeNull();
+    expect(projectedTooltipContent(tooltip)).toEqual([content]);
+    expect(content?.textContent).toContain("/workspace/example.ts");
+  });
+
   it("tracks dynamic titles and restores the latest title and accessible name", async () => {
     const trigger = document.createElement("button");
     trigger.title = "Pin widget";
@@ -1076,7 +1065,7 @@ describe("title tooltips", () => {
     vi.advanceTimersByTime(150);
     await settleTooltip(tooltip);
     expect(tooltipIsOpen(tooltip)).toBe(true);
-    expect(tooltipAnchor(tooltip)).toBe(rect);
+    expect(tooltipHasAnchor(tooltip)).toBe(true);
     expect(rect.getAttribute("aria-label")).toBe("12 requests");
   });
 

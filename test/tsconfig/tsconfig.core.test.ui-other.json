@@ -7,6 +7,7 @@
   },
   "include": [
     "../../ui/src/main.ts",
+    "../../ui/src/main.tsx",
     "../../ui/**/*.test.ts",
     "../../ui/**/*.test.tsx"
   ],
@@ -19,6 +20,7 @@
     "../../ui/src/pages/**",
     "../../ui/src/api/**",
     "../../ui/src/e2e/**",
-    "../../ui/src/test-helpers/control-ui-e2e*.test.ts"
+    "../../ui/src/test-helpers/control-ui-e2e*.test.ts",
+    "../../ui/src/test-helpers/control-ui-e2e*.test.tsx"
   ]
 }

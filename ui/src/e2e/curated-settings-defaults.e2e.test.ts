@@ -80,7 +80,7 @@ async function expectDefaultInfo(row: Locator, explanation: string) {
   await expect.poll(() => info.locator("svg").count()).toBe(1);
   const tooltip = info.locator("..");
   const tooltipIsOpen = () =>
-    tooltip.locator("wa-tooltip").evaluate((node) => Boolean(Reflect.get(node, "open")));
+    tooltip.locator(".tooltip-surface[popover]").evaluate((node) => node.matches(":popover-open"));
   await info.click();
   await expect.poll(tooltipIsOpen).toBe(true);
   await expect.poll(() => tooltip.textContent()).toContain(explanation);

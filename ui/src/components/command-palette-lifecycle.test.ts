@@ -69,13 +69,11 @@ describe("CommandPalette lifecycle", () => {
     palette.remove();
     provider.append(palette);
     const modal = palette.querySelector("openclaw-modal-dialog");
-    const dialog = modal?.shadowRoot
-      ?.querySelector("wa-dialog")
-      ?.shadowRoot?.querySelector("dialog");
+    const dialog = modal?.querySelector("dialog");
     expect(dialog?.open).toBe(false);
     await palette.updateComplete;
 
-    expect(palette.querySelector("dialog")).toBeNull();
+    expect(palette.querySelector("dialog[open]")).toBeNull();
     palette.openPalette();
     await palette.updateComplete;
     expect(palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")?.value).toBe("");

@@ -1,4 +1,3 @@
-import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { expect, vi } from "vitest";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 
@@ -20,6 +19,13 @@ function restoreDescriptor(name: DialogMethodName, descriptor: PropertyDescripto
 }
 
 export function installDialogPolyfill(): () => void {
+  const animations = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
+  if (!animations) {
+    Object.defineProperty(Element.prototype, "getAnimations", {
+      configurable: true,
+      value: () => [],
+    });
+  }
   const snapshot: DialogDescriptorSnapshot = {
     close: Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close"),
     showModal: Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal"),
@@ -39,6 +45,9 @@ export function installDialogPolyfill(): () => void {
   return () => {
     restoreDescriptor("showModal", snapshot.showModal);
     restoreDescriptor("close", snapshot.close);
+    if (!animations) {
+      delete (Element.prototype as Partial<Element>).getAnimations;
+    }
   };
 }
 
@@ -181,18 +190,11 @@ export async function getRenderedModalDialog(container: ParentNode) {
   }
   await modal.updateComplete;
   await nextFrame();
-  const webAwesomeDialog = modal.shadowRoot?.querySelector<WaDialog>("wa-dialog");
-  expect(webAwesomeDialog).toBeInstanceOf(HTMLElement);
-  if (!webAwesomeDialog) {
-    throw new Error("Expected rendered Web Awesome dialog");
-  }
-  await webAwesomeDialog.updateComplete;
-  await nextFrame();
-  const dialog = webAwesomeDialog.shadowRoot?.querySelector("dialog");
+  const dialog = modal.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
   expect(dialog).toBeInstanceOf(HTMLDialogElement);
   if (!(dialog instanceof HTMLDialogElement)) {
     throw new Error("Expected rendered dialog");
   }
   await nextFrame();
-  return { modal, webAwesomeDialog, dialog };
+  return { modal, dialog };
 }

@@ -5,7 +5,7 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
-import "./web-awesome-tabs.ts";
+import { nativeTabs } from "./tabs.ts";
 
 export type PanelTabStripTab = {
   id: string;
@@ -31,19 +31,19 @@ const keyboardCloseActivations = new WeakSet<Element>();
 const PANEL_TAB_DRAG_TYPE = "application/x-openclaw-panel-tab";
 
 function clearPanelTabDropTargets(element: Element): void {
-  const group = element.closest<HTMLElement>("wa-tab-group");
+  const group = element.closest<HTMLElement>(".tabstrip");
   group
     ?.querySelectorAll(".is-drop-before, .is-drop-after")
     .forEach((target) => target.classList.remove("is-drop-before", "is-drop-after"));
 }
 
 function draggedPanelTabId(element: Element): string {
-  return element.closest<HTMLElement>("wa-tab-group")?.dataset.draggedPanelTab ?? "";
+  return element.closest<HTMLElement>(".tabstrip")?.dataset.draggedPanelTab ?? "";
 }
 
 function finishPanelTabDrag(element: Element): void {
   clearPanelTabDropTargets(element);
-  element.closest<HTMLElement>("wa-tab-group")?.removeAttribute("data-dragged-panel-tab");
+  element.closest<HTMLElement>(".tabstrip")?.removeAttribute("data-dragged-panel-tab");
 }
 
 function activeElementFor(element: Element): Element | null {
@@ -112,13 +112,11 @@ class PanelTabMeasurementsDirective extends AsyncDirective {
       characterData: true,
       subtree: true,
     });
-    void (async () => {
-      await (element as Element & { updateComplete?: Promise<unknown> }).updateComplete;
+    queueMicrotask(() => {
       if (generation !== this.#generation || !this.isConnected || !element.isConnected) {
         return;
       }
-      this.#scroller =
-        element.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]') ?? undefined;
+      this.#scroller = element instanceof HTMLElement ? element : undefined;
       this.#scroller?.addEventListener("scroll", this.#schedule, { passive: true });
       if (typeof ResizeObserver === "function") {
         this.#resizeObserver = new ResizeObserver(this.#schedule);
@@ -128,7 +126,7 @@ class PanelTabMeasurementsDirective extends AsyncDirective {
         }
       }
       this.#schedule();
-    })();
+    });
   }
 
   readonly #schedule = () => {
@@ -227,20 +225,11 @@ function reconcileSelectedTabElement(
     if (!element.isConnected) {
       return;
     }
-    const currentGroup = element.closest("wa-tab-group");
-    const updateComplete =
-      (currentGroup as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)
-        ?.updateComplete ?? Promise.resolve();
-    void updateComplete.then(() => {
-      if (!element.isConnected) {
-        return;
-      }
-      element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-      const current = activeElementFor(element);
-      if (restoreFocus && focusNeedsRecovery(element, current)) {
-        element.focus({ preventScroll: true });
-      }
-    });
+    element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    const current = activeElementFor(element);
+    if (restoreFocus && focusNeedsRecovery(element, current)) {
+      element.focus({ preventScroll: true });
+    }
   });
 }
 
@@ -287,8 +276,7 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
             </button>
           `;
   if (params.tabs.length === 0) {
-    // Web Awesome 3.10 dereferences its first tab when an empty group becomes
-    // visible. Keep the new-session control outside the group until one exists.
+    // With no tabs the new-session action is the only keyboard stop.
     return newButton(false);
   }
   // Event callbacks retain this render scope; keep focus identity without retaining its DOM tree.
@@ -304,19 +292,11 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
   // A new class binding replaces overflow markers even when dimensions stay equal.
   const measurementKey = JSON.stringify([layoutKey, params.tabs.map((tab) => tab.className)]);
   return html`
-    <wa-tab-group
-      class="tabstrip"
+    <div
+      class="oc-tabs tabstrip"
+      role="tablist"
       ${panelTabMeasurements(measurementKey)}
-      .active=${params.activeId ?? ""}
-      activation="auto"
-      without-scroll-controls
-      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
-        // Web Awesome also emits for controlled selection updates. Echoing those
-        // as user actions can reopen a panel that its owner just focused away.
-        if (event.detail.name !== params.activeId) {
-          params.onSelect(event.detail.name);
-        }
-      }}
+      ${nativeTabs({ active: params.activeId, onSelect: (id) => params.onSelect(id) })}
     >
       ${repeat(
         params.tabs,
@@ -369,10 +349,12 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
             }
           `;
           return html`
-            <wa-tab
+            <button
+              type="button"
+              role="tab"
               id=${tab.domId}
-              class=${`tabstrip-tab ${tab.className ?? ""}`}
-              panel=${tab.id}
+              class=${`oc-tab tabstrip-tab ${tab.className ?? ""}`}
+              data-tab-value=${tab.id}
               aria-controls=${controlsFor(tab)}
               aria-selected=${selected ? "true" : "false"}
               title=${tab.title || nothing}
@@ -418,7 +400,7 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData(PANEL_TAB_DRAG_TYPE, reorderId);
                 if (event.currentTarget instanceof Element) {
-                  const group = event.currentTarget.closest<HTMLElement>("wa-tab-group");
+                  const group = event.currentTarget.closest<HTMLElement>(".tabstrip");
                   if (group) {
                     group.dataset.draggedPanelTab = reorderId;
                   }
@@ -453,7 +435,7 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
                     </openclaw-tooltip>`
                   : tabContent
               }
-            </wa-tab>
+            </button>
             <button
               id=${`${tab.domId}-close`}
               slot="nav"
@@ -488,9 +470,9 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
                 const settledGroup = [
                   ...(renderRoot?.querySelectorAll<
                     HTMLElement & { updateComplete?: Promise<unknown> }
-                  >("wa-tab-group") ?? []),
+                  >(".tabstrip") ?? []),
                 ].find((candidate) =>
-                  [...candidate.querySelectorAll<HTMLElement>("wa-tab")].some((renderedTab) =>
+                  [...candidate.querySelectorAll<HTMLElement>('[role="tab"]')].some((renderedTab) =>
                     params.tabs.some(
                       (entry) => renderedTab.getAttribute("aria-controls") === controlsFor(entry),
                     ),
@@ -498,9 +480,9 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
                 );
                 await settledGroup?.updateComplete;
                 const closingTab = [
-                  ...(settledGroup?.querySelectorAll<HTMLElement>("wa-tab") ?? []),
-                ].find((candidate) => candidate.getAttribute("panel") === tab.id);
-                const fallback = settledGroup?.querySelector<HTMLElement>("wa-tab[active]");
+                  ...(settledGroup?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []),
+                ].find((candidate) => candidate.dataset.tabValue === tab.id);
+                const fallback = settledGroup?.querySelector<HTMLElement>('[role="tab"][active]');
                 const current = fallback ? activeElementFor(fallback) : null;
                 if (!closingTab && fallback && focusNeedsRecovery(fallback, current)) {
                   fallback.focus({ preventScroll: true });
@@ -518,8 +500,8 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
         },
       )}
       ${newButton(true)}
-    </wa-tab-group>
-    <!-- WA's nav slot owns visual layout; action buttons belong beside the tablist in the accessibility tree. -->
+    </div>
+    <!-- Actions remain beside the tablist in the accessibility tree. -->
     <span
       role="group"
       style="display: contents"
@@ -542,24 +524,18 @@ export const panelTabStripStyles = css`
   }
   .tabstrip {
     --track-width: 0;
-    display: block;
+    display: flex;
+    align-items: center;
     /* Allow the strip to shrink inside a flex header so wide tab rows scroll
        here instead of squeezing out sibling header controls. */
     min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .tabstrip::part(nav) {
-    display: flex;
-    align-items: center;
-  }
-  .tabstrip::part(body) {
-    display: none;
-  }
   .tabstrip::-webkit-scrollbar {
     display: none;
   }
-  .tabstrip-tab::part(base) {
+  .tabstrip-tab {
     display: flex;
     align-items: center;
     gap: 7px;
@@ -575,16 +551,16 @@ export const panelTabStripStyles = css`
       background 0.12s ease,
       box-shadow 0.12s ease;
   }
-  .tabstrip-tab:hover::part(base) {
+  .tabstrip-tab:hover {
     color: var(--text, #d7dae0);
     background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
   }
-  .tabstrip-tab[active]::part(base) {
+  .tabstrip-tab[active] {
     color: var(--text, #d7dae0);
     background: var(--bg-hover, #1f2330);
     box-shadow: inset 0 0 0 1px var(--border-strong, #2e3040);
   }
-  .tabstrip-tab.is-exited:not([active])::part(base) {
+  .tabstrip-tab.is-exited:not([active]) {
     opacity: 0.55;
   }
   .tabstrip-tab.is-connecting .tabstrip-tab__icon {
@@ -629,8 +605,7 @@ export const panelTabStripStyles = css`
     padding: 0 5px;
     text-transform: uppercase;
   }
-  /* Keep the close action inside the tab surface without nesting it in wa-tab;
-     wa-tab-group still owns the direct tab children for keyboard navigation. */
+  /* Keep close actions visually inside each tab without nesting buttons. */
   .tabstrip-tab__close {
     flex: 0 0 auto;
     align-self: center;

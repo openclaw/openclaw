@@ -148,10 +148,10 @@ describe("chat pane sidebar layout", () => {
       const primary = container.querySelector("[data-primary]")!;
       for (const next of [layout, promoteSidebarPanel(layout, "detail"), layout]) {
         await renderLayout(container, next, false, presentationId);
-        const tab = container.querySelector("wa-tab[active]")!;
+        const tab = container.querySelector(".tabstrip-tab[active]")!;
         const targetId = tab.getAttribute("aria-controls")!;
         const target = document.getElementById(targetId);
-        const chatSelected = tab.getAttribute("panel") === "conversation";
+        const chatSelected = tab.getAttribute("data-tab-value") === "conversation";
         expect(target).toBe((chatSelected ? primary : detail).closest("[data-region]"));
         expect(target?.getAttribute("role")).toBe("region");
         expect(target?.getAttribute("aria-label")).toBe(chatSelected ? "Chat" : "Review");
@@ -184,7 +184,7 @@ describe("chat pane sidebar layout", () => {
     await region.updateComplete;
 
     expect(sidebarActivePanel(parent.layout)?.slot).toBe("workspace");
-    const nextTab = parent.querySelector<HTMLElement>('wa-tab[panel="workspace"]')!;
+    const nextTab = parent.querySelector<HTMLElement>('.tabstrip-tab[data-tab-value="workspace"]')!;
     expect(nextTab).not.toBeNull();
     expect(document.activeElement).toBe(nextTab);
   });

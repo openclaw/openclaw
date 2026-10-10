@@ -482,11 +482,11 @@ describe("Plugin link reader panel", () => {
     const firstContent = panel.renderRoot.querySelector(".lr-content");
     open(panel, itemUrl(2), undefined, true);
     await expectTitle(panel, "Item 2");
-    expect(panel.renderRoot.querySelectorAll("wa-tab")).toHaveLength(2);
+    expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.renderRoot.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(2);
     open(panel, itemUrl(1), undefined, true);
     await expectTitle(panel, "Item 1");
-    expect(panel.renderRoot.querySelectorAll("wa-tab")).toHaveLength(2);
+    expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.renderRoot.querySelector(".lr-content:not([hidden])")).toBe(firstContent);
     expect(request).toHaveBeenCalledTimes(2);
     expect(panel.renderRoot.querySelector<HTMLAnchorElement>(".lr-external")?.href).toBe(
@@ -495,7 +495,7 @@ describe("Plugin link reader panel", () => {
     panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")[1]?.click();
     await panel.updateComplete;
     await expectTitle(panel, "Item 1");
-    expect(panel.renderRoot.querySelectorAll("wa-tab")).toHaveLength(1);
+    expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(1);
     panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
     await panel.updateComplete;
     expect(panel.renderRoot.querySelector(".link-reader-panel")).toBeNull();
@@ -525,7 +525,7 @@ describe("Plugin link reader panel", () => {
     const calls = request.mock.calls.length;
     open(panel, itemUrl(11), undefined, true);
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelectorAll("wa-tab")).toHaveLength(10);
+    expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(10);
     await expectTitle(panel, "Item 10");
     expect(request).toHaveBeenCalledTimes(calls);
     expect(

@@ -61,7 +61,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (tooltip) {
       tooltip.anchor = null;
       tooltip.remove();
-      tooltip.replaceChildren();
+      tooltip = null;
     }
   };
 

@@ -504,6 +504,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             storePath: targetSession.readSource?.path ?? targetSession.storePath,
             entry: targetSessionEntry,
           });
+          // Main aliases bypass the explicit-key missing-session probe.
+          const canCreateTarget =
+            visibleSession.missing ||
+            (allowMissingKey && (sessionKey === "main" || sessionKey === mainKey));
           let communication: Awaited<ReturnType<typeof prepareSessionsSendCommunication>>;
           try {
             communication = await prepareSessionsSendCommunication({
@@ -524,7 +528,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               assertAccessCurrent: access.assertCurrent,
               signal: opts?.signal,
               callGateway: sendGatewayCall,
-              ensureTarget: visibleSession.missing
+              ensureTarget: canCreateTarget
                 ? async (assertCurrent) => {
                     const created = await createConfiguredAgentMainSession({
                       mode,

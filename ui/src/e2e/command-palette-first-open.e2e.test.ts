@@ -10,9 +10,7 @@ const suite = createControlUiE2eSuite({ name: "command palette first open" });
 
 async function readPaletteBackdrop(page: import("playwright").Page) {
   return await page.locator("openclaw-modal-dialog.cmd-palette-overlay").evaluate((modal) => {
-    const dialog = modal.shadowRoot
-      ?.querySelector("wa-dialog")
-      ?.shadowRoot?.querySelector("dialog");
+    const dialog = modal.querySelector("dialog");
     if (!(dialog instanceof HTMLDialogElement)) {
       throw new Error("Expected the command palette dialog");
     }

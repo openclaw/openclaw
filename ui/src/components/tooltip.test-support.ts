@@ -1,5 +1,5 @@
-import { expect } from "vitest";
-import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
+import { flush } from "solid-js";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import "./tooltip.ts";
 
 export type TooltipElement = HTMLElementTagNameMap["openclaw-tooltip"];
@@ -51,29 +51,101 @@ export function hoverTrigger(trigger: HTMLElement) {
   dispatchMousePointer(trigger, "pointerenter");
 }
 
-export function webAwesomeTooltip(tooltip: TooltipElement) {
-  return tooltip.shadowRoot?.querySelector<HTMLElementTagNameMap["wa-tooltip"]>("wa-tooltip");
+export function tooltipSurface(tooltip: TooltipElement) {
+  return tooltip.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface") ?? null;
 }
 
 export async function expectOpenCount(count: number) {
   await Promise.all(
     [...document.querySelectorAll<TooltipElement>("openclaw-tooltip")].map(settleTooltip),
   );
-  const open = [...document.querySelectorAll<TooltipElement>("openclaw-tooltip")].filter(
-    (tooltip) => webAwesomeTooltip(tooltip)?.open,
-  );
-  expect(open).toHaveLength(count);
+  expect(
+    [...document.querySelectorAll<TooltipElement>("openclaw-tooltip")].filter((tooltip) =>
+      tooltipSurface(tooltip)?.matches(":popover-open"),
+    ),
+  ).toHaveLength(count);
 }
 
 export async function settleTooltip(tooltip: TooltipElement) {
   await tooltip.updateComplete;
-  if (!webAwesomeTooltip(tooltip)) {
+  await Promise.resolve();
+  flush();
+}
+
+let restorePlatform: (() => void) | undefined;
+beforeEach(() => {
+  if (typeof HTMLElement.prototype.showPopover === "function") {
     return;
   }
-  await ensureCustomElementDefined(
-    "wa-tooltip",
-    () => import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
-  );
-  await tooltip.updateComplete;
-  await webAwesomeTooltip(tooltip)?.updateComplete;
+  const shown = new WeakSet<Element>();
+  const matches = Element.prototype.matches;
+  const spy = vi.spyOn(Element.prototype, "matches").mockImplementation(function (selector) {
+    return selector === ":popover-open" ? shown.has(this) : matches.call(this, selector);
+  });
+  Object.defineProperties(HTMLElement.prototype, {
+    showPopover: {
+      configurable: true,
+      value(this: HTMLElement) {
+        shown.add(this);
+      },
+    },
+    hidePopover: {
+      configurable: true,
+      value(this: HTMLElement) {
+        shown.delete(this);
+      },
+    },
+  });
+  const animations = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
+  if (!animations) {
+    Object.defineProperty(Element.prototype, "getAnimations", {
+      configurable: true,
+      value: () => [],
+    });
+  }
+  restorePlatform = () => {
+    spy.mockRestore();
+    delete (HTMLElement.prototype as Partial<HTMLElement>).showPopover;
+    delete (HTMLElement.prototype as Partial<HTMLElement>).hidePopover;
+    if (!animations) {
+      delete (Element.prototype as Partial<Element>).getAnimations;
+    }
+  };
+});
+afterEach(() => {
+  restorePlatform?.();
+  restorePlatform = undefined;
+});
+
+export function expectSharedTooltipSkin(tooltip: TooltipElement) {
+  const root = tooltip.shadowRoot!;
+  const styles = [
+    ...[...root.querySelectorAll("style")].map((style) => style.textContent),
+    ...[...(root.adoptedStyleSheets ?? [])].flatMap((sheet) =>
+      [...sheet.cssRules].map((rule) => rule.cssText),
+    ),
+  ].join("\n");
+  expect(styles).toContain("--openclaw-tooltip-background-color");
+  expect(styles).toContain("--openclaw-tooltip-border-color");
+  expect(styles).toContain("border: 1px solid");
+  expect(styles).toContain(".tooltip-surface");
+  expect(styles).not.toContain("::part(");
+  expect(styles).toContain("var(--overlay-border, var(--border-strong))");
+  expect(styles).toContain("var(--overlay-shadow, var(--shadow-md))");
+  expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+  if (root.adoptedStyleSheets?.length) {
+    const animationNames = root.adoptedStyleSheets
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .filter(
+        (rule): rule is CSSMediaRule =>
+          rule instanceof CSSMediaRule && rule.conditionText === "(prefers-reduced-motion: reduce)",
+      )
+      .flatMap((rule) => Array.from(rule.cssRules))
+      .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
+      .map((rule) => rule.style.animationName);
+    // WebKit serializes the `animation: none` shorthand as `animation: auto`.
+    expect(animationNames).toContain("none");
+  } else {
+    expect(styles).toContain("animation: none");
+  }
 }

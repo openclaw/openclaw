@@ -30,10 +30,12 @@ import {
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  resolveUiTypeScriptPath,
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { overlayEmulateMedia } from "./test/overlay-browser-commands.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 import { controlUiSolidPlugin } from "./vite.config.ts";
 
@@ -112,9 +114,12 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
 
 let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
 
-// Re-add modal-dialog.browser (CDP media emulation) and web-awesome-accessibility.node
-// (CDP accessibility tree) after their browser-neutral replacements land.
+// The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/components/overlay-anchor.browser.test.ts",
+  "src/components/overlay-lifecycle.browser.test.ts",
+  "src/components/overlay-shadow.browser.test.ts",
+  "src/components/solid/*.browser.test.tsx",
   "src/components/web-awesome-dropdown.browser.test.ts",
   "src/components/web-awesome-dropdown-owner.browser.test.ts",
   "src/components/web-awesome-select-controls.browser.test.ts",
@@ -123,17 +128,19 @@ const webkitTestFiles = [
   "src/components/web-awesome-theme.browser.test.ts",
   "src/components/menu-surface.browser.test.ts",
   "src/components/modal-dialog.test.ts",
+  "src/components/modal-dialog.browser.test.ts",
   "src/components/tooltip.test.ts",
   "src/components/tooltip.browser.test.ts",
   "src/components/panel-tab-strip.test.ts",
   "src/components/panel-tab-strip.browser.test.ts",
+  "src/components/sessions-hub-header.browser.test.ts",
   "src/components/tooltip-title.browser.test.ts",
   "src/pages/chat/chat-composer-context.browser.test.ts",
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.ts",
   "src/pages/chat/components/chat-effort-picker.browser.test.ts",
   "src/pages/chat/components/chat-model-picker.browser.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file, here));
 
 export function createUiBrowserVitestConfig(
   env = process.env,
@@ -142,11 +149,7 @@ export function createUiBrowserVitestConfig(
   const include = includeUiTests(
     browser === "webkit"
       ? webkitTestFiles
-      : [
-          "src/**/*.browser.test.ts",
-          "src/**/*.browser.test.tsx",
-          "../extensions/*/browser/**/*.browser.test.ts",
-        ],
+      : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -270,6 +273,7 @@ export function createUiBrowserVitestConfig(
       browser: {
         enabled: true,
         provider,
+        commands: { overlayEmulateMedia },
         instances: [{ browser, name: browser }],
         headless: true,
         ui: false,
@@ -354,18 +358,16 @@ export default defineConfig({
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
           include: includeUiTests([
-            "src/**/*.test.ts",
-            "src/**/*.test.tsx",
-            "../extensions/*/browser/**/*.test.ts",
+            "src/**/*.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.test.{ts,tsx}",
           ]),
           exclude: [
             "src/**/*.browser.test.{ts,tsx}",
             "src/**/*.e2e.test.{ts,tsx}",
-            "src/**/*.node.test.ts",
-            "src/**/*.node.test.tsx",
-            "../extensions/*/browser/**/*.browser.test.ts",
-            "../extensions/*/browser/**/*.e2e.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.browser.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.e2e.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...mockRegistryUnitTests,
           ],
           environment: "jsdom",
@@ -413,9 +415,8 @@ export default defineConfig({
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
           include: includeUiTests([
-            "src/**/*.node.test.ts",
-            "src/**/*.node.test.tsx",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...nodeDrivenBrowserLayoutTests,
           ]),
           environment: "jsdom",

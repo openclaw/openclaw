@@ -2,7 +2,6 @@
 
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import {
   panelTabStripStyles,
@@ -46,7 +45,7 @@ function renderStrip(options: {
 }
 
 function tabStrip(container: ParentNode) {
-  return container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(".tabstrip");
+  return container.querySelector<HTMLElement>(".tabstrip");
 }
 
 function renderedTabs(container: ParentNode) {
@@ -56,11 +55,11 @@ function renderedTabs(container: ParentNode) {
 async function settleTabStrip(container: ParentNode) {
   const strip = tabStrip(container);
   expect(strip).not.toBeNull();
-  await strip!.updateComplete;
+  await Promise.resolve();
 }
 
 function tabViewport(container: ParentNode) {
-  const viewport = tabStrip(container)?.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
+  const viewport = tabStrip(container);
   if (!viewport) {
     throw new Error("expected rendered tab strip viewport");
   }
@@ -68,32 +67,9 @@ function tabViewport(container: ParentNode) {
 }
 
 function requestTabSelection(container: ParentNode, id: string) {
-  tabStrip(container)!.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: id } }));
-}
-
-function deferTabLayout() {
-  const gate = createDeferred<boolean>();
-  const prototype = customElements.get("wa-tab-group")?.prototype;
-  expect(prototype).toBeDefined();
-  Object.defineProperty(prototype!, "updateComplete", {
-    configurable: true,
-    get: () => gate.promise,
-  });
-  return gate;
-}
-
-function resetTabLayout() {
-  Reflect.deleteProperty(customElements.get("wa-tab-group")?.prototype ?? {}, "updateComplete");
-}
-
-async function renderTabViewportBeforeLayout(container: ParentNode) {
-  const strip = container.querySelector<
-    HTMLElement & { getUpdateComplete: () => Promise<unknown> }
-  >(".tabstrip");
-  expect(strip).not.toBeNull();
-  // Set up the renderer's viewport without releasing the held layout completion.
-  await strip!.getUpdateComplete();
-  return tabViewport(container);
+  renderedTabs(container)
+    .find((tab) => tab.dataset.tabValue === id)
+    ?.click();
 }
 
 function tabMeasurementClock() {
@@ -143,7 +119,6 @@ function tabMeasurementClock() {
 afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.removeAttribute("dir");
-  resetTabLayout();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -164,7 +139,7 @@ describe("renderPanelTabStrip", () => {
     expect(onNew).toHaveBeenCalledOnce();
   });
 
-  it("slots the new button into a nonempty tab group", () => {
+  it("keeps the new button beside the tabs in a nonempty group", () => {
     const container = renderStrip({ tabs: [TAB] });
 
     expect(tabStrip(container)).not.toBeNull();
@@ -395,11 +370,8 @@ describe("renderPanelTabStrip", () => {
     },
   );
 
-  // Installation waits for the group's shadow scroller. Renders during that
-  // wait must not accumulate subscriptions that cleanup can no longer reach.
+  // Multiple renders before the initial commit must share one measurement owner.
   it("keeps one live scroll-edge listener no matter how many renders race", async () => {
-    const gate = deferTabLayout();
-
     const observers: { target: Element | null; live: boolean }[] = [];
     class CountingResizeObserver {
       private readonly record = { target: null as Element | null, live: true };
@@ -424,12 +396,10 @@ describe("renderPanelTabStrip", () => {
       renderStrip({ tabs, container });
     }
 
-    const scroller = await renderTabViewportBeforeLayout(container);
+    const scroller = tabViewport(container);
     const added = vi.spyOn(scroller, "addEventListener");
     const removed = vi.spyOn(scroller, "removeEventListener");
 
-    gate.resolve(true);
-    await gate.promise;
     await Promise.resolve();
 
     const scrollListeners = (spy: typeof added) =>

@@ -18,7 +18,10 @@ class AgentFilePreviewDirective extends AsyncDirective {
 
   override update(part: ChildPart, [scope, content]: [PreviewScope, () => TemplateResult]) {
     if (!this.modal) {
-      const modal = part.parentNode;
+      const modal =
+        part.parentNode instanceof Element
+          ? part.parentNode.closest("openclaw-modal-dialog")
+          : null;
       if (!(modal instanceof OpenClawModalDialog)) {
         throw new Error("Agent file preview must be a modal child");
       }

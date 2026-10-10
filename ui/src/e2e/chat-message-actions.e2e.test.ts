@@ -88,13 +88,14 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
   await expect
     .poll(() =>
       button.evaluate((element) => {
-        const tooltip = element
-          .closest("openclaw-tooltip")
-          ?.shadowRoot?.querySelector<
-            HTMLElement & { anchor?: Element | null; popup?: { active?: boolean } }
-          >("wa-tooltip");
-        const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
-        const bounds = body?.getBoundingClientRect();
+        const host = element.closest<HTMLElement & { anchor?: Element | null }>("openclaw-tooltip");
+        const tooltip = host?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface[popover]");
+        const anchor =
+          host?.anchor ??
+          host?.shadowRoot
+            ?.querySelector<HTMLSlotElement>("slot:not([name])")
+            ?.assignedElements({ flatten: true })[0];
+        const bounds = tooltip?.getBoundingClientRect();
         // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
         // markup whitespace is in textContent but never rendered or announced.
         const readableText = (node: Node): string =>
@@ -102,13 +103,15 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
             ? ""
             : node instanceof Text
               ? node.data
-              : Array.from(node.childNodes, readableText).join("");
+              : node instanceof HTMLSlotElement
+                ? Array.from(node.assignedNodes({ flatten: true }), readableText).join("")
+                : Array.from(node.childNodes, readableText).join("");
         return {
-          anchorMatches: tooltip?.anchor === element,
+          anchorMatches: anchor === element,
           height: bounds?.height ?? 0,
-          hidden: body?.hidden ?? true,
-          open: tooltip?.hasAttribute("open") ?? false,
-          popupActive: tooltip?.popup?.active ?? false,
+          hidden: tooltip ? getComputedStyle(tooltip).display === "none" : true,
+          open: host?.hasAttribute("open") ?? false,
+          popupActive: tooltip?.matches(":popover-open") ?? false,
           text: tooltip ? readableText(tooltip).trim() : "",
           width: bounds?.width ?? 0,
         };
@@ -124,10 +127,11 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
   const bounds = await button.evaluate((element) => {
     const body = element
       .closest("openclaw-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>("wa-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
-    const slot = body?.querySelector<HTMLSlotElement>("slot");
-    const textNode = slot?.assignedNodes().find((node) => node.textContent?.trim());
+      ?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface[popover]");
+    const slot = body?.querySelector<HTMLSlotElement>('slot[name="content"]');
+    const textNode =
+      slot?.assignedNodes({ flatten: true }).find((node) => node.textContent?.trim()) ??
+      body?.querySelector(".tooltip-content");
     const range = textNode ? document.createRange() : null;
     if (range && textNode) {
       range.selectNodeContents(textNode);
@@ -589,9 +593,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         },
       ],
     });
-    const openTooltip = page.locator("wa-tooltip[open]");
+    const openTooltip = page.locator(".tooltip-surface[popover]:popover-open");
     const popupStyle = () =>
-      openTooltip.locator('[part="body"]').evaluate((element) => {
+      openTooltip.evaluate((element) => {
         const style = getComputedStyle(element);
         return {
           background: style.backgroundColor,
@@ -642,7 +646,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await timestamp.tap();
       await expect.poll(() => openTooltip.count()).toBe(1);
       await group.locator(".msg-meta__details").waitFor({ state: "visible" });
-      const bounds = await openTooltip.locator('[part="body"]').boundingBox();
+      const bounds = await openTooltip.boundingBox();
       expect(bounds).not.toBeNull();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);

@@ -202,7 +202,7 @@ suite.define(() => {
         .toBeLessThanOrEqual(12);
       await configureModels.hover();
       await page.waitForTimeout(800);
-      const configureModelsTooltip = page.locator("wa-tooltip[open]").filter({
+      const configureModelsTooltip = page.locator(".tooltip-surface[popover]:popover-open").filter({
         hasText: "Configure models",
       });
       await expect.poll(() => configureModelsTooltip.count()).toBe(0);

@@ -29,7 +29,7 @@
   padding-block: var(--space-2);
 }
 
-.plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
+.plugins-hub-header .hub-tabs--sub .hub-tab {
   padding-block: var(--space-2);
 }
 

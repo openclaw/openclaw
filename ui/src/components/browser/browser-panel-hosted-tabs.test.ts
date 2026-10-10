@@ -68,7 +68,7 @@ describe("Browser panel hosted tabs", () => {
     async ({ embedded, tabsInHeader, ownsStrip }) => {
       const { panel } = await mount(embedded, tabsInHeader);
       expect(Boolean(panel.shadowRoot?.querySelector(".bp-header"))).toBe(ownsStrip);
-      expect(Boolean(panel.shadowRoot?.querySelector("wa-tab-group"))).toBe(ownsStrip);
+      expect(Boolean(panel.shadowRoot?.querySelector(".tabstrip"))).toBe(ownsStrip);
       expect(panel.shadowRoot?.querySelector(".bp-toolbar")).not.toBeNull();
       expect(panel.shadowRoot?.querySelector(".bp-viewport")?.getAttribute("aria-labelledby")).toBe(
         ownsStrip ? "browser-tab-remote:a" : null,

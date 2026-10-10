@@ -279,7 +279,7 @@ suite.define(() => {
               );
               expect(await panel.locator(".cm-editor").count()).toBe(0);
               const tab = page
-                .locator(".side-panel__header wa-tab")
+                .locator(".side-panel__header .tabstrip-tab")
                 .filter({ hasText: "page.html" });
               expect(await tab.count()).toBe(1);
               const originalFrame = await outer.elementHandle();

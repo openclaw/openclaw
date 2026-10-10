@@ -7,10 +7,7 @@ import {
   type PanelTabStripTab,
 } from "./panel-tab-strip.ts";
 
-type RenderedTab = HTMLElement & {
-  active: boolean;
-  panel: string;
-};
+type RenderedTab = HTMLButtonElement;
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -50,20 +47,17 @@ function renderedTabs(container: ParentNode): RenderedTab[] {
 }
 
 function tabWithId(container: ParentNode, id: string): RenderedTab | undefined {
-  return renderedTabs(container).find((candidate) => candidate.panel === id);
+  return renderedTabs(container).find((candidate) => candidate.dataset.tabValue === id);
 }
 
-async function settleTabLayout(container: ParentNode) {
-  await container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(".tabstrip")
-    ?.updateComplete;
+async function settleTabLayout() {
+  await Promise.resolve();
   await new Promise(requestAnimationFrame);
 }
 
 async function expectOverflowTabVisible(container: ParentNode, selectedTab: HTMLElement) {
-  await settleTabLayout(container);
-  const viewport = container
-    .querySelector(".tabstrip")
-    ?.shadowRoot?.querySelector<HTMLElement>(".nav");
+  await settleTabLayout();
+  const viewport = container.querySelector<HTMLElement>(".tabstrip");
   if (!viewport) {
     throw new Error("expected rendered tab strip viewport");
   }
@@ -83,9 +77,7 @@ async function expectControlledSelection(
     const tabs = renderedTabs(container);
     const selected = tabs.filter(
       (candidate) =>
-        candidate.active ||
-        candidate.hasAttribute("active") ||
-        candidate.getAttribute("aria-selected") === "true",
+        candidate.hasAttribute("active") || candidate.getAttribute("aria-selected") === "true",
     );
     active = tabWithId(container, activeId);
     expect(selected).toEqual([active]);
@@ -149,7 +141,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       onSelect: vi.fn(),
     });
     expect(await expectControlledSelection(container, "b")).toBe(initialActive);
-    await settleTabLayout(container);
+    await settleTabLayout();
     expect(document.activeElement).toBe(unrelated);
   });
 
@@ -244,7 +236,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       await Promise.resolve();
 
       const fallback = await expectControlledSelection(container, activeId);
-      await settleTabLayout(container);
+      await settleTabLayout();
       expect(document.activeElement).toBe(fallback);
     },
   );

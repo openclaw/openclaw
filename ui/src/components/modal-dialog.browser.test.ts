@@ -1,6 +1,6 @@
-import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
+import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
 import "./modal-dialog.ts";
 import "./tooltip.ts";
 
@@ -17,15 +17,16 @@ const modalEvents = {
 } as const;
 
 function useAnimatedModal(modal: Modal) {
-  modal.style.setProperty("--wa-transition-normal", "150ms");
+  modal.style.setProperty("--openclaw-modal-show-duration", "150ms");
+  modal.style.setProperty("--openclaw-modal-hide-duration", "150ms");
 }
 
 function modalSurface(modal: Modal) {
-  return modal.shadowRoot!.querySelector("wa-dialog")!;
+  return modal;
 }
 
 function modalDialog(modal: Modal) {
-  return modalSurface(modal).shadowRoot!.querySelector("dialog")!;
+  return modal.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!;
 }
 
 function afterModalPhase(modal: Modal, phase: ModalPhase) {
@@ -53,7 +54,9 @@ function commitTooltip(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
 }
 
 function tooltipIsOpen(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
-  return tooltip.shadowRoot!.querySelector("wa-tooltip")!.open;
+  return tooltip
+    .shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!
+    .matches(":popover-open");
 }
 
 beforeEach(() => {
@@ -92,11 +95,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   it.each(["standard", "drawer"])(
     "honors reduced motion when opening and closing (%s)",
     async (variant) => {
-      const { cdp } = await import("vitest/browser");
-      const session: CDPSession = cdp();
-      await session.send("Emulation.setEmulatedMedia", {
-        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
-      });
+      await emulateOverlayMedia({ reducedMotion: "reduce" });
       try {
         expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
         const modal = document.createElement("openclaw-modal-dialog");
@@ -122,7 +121,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         await hidden;
         expect(dialog.open).toBe(false);
       } finally {
-        await session.send("Emulation.setEmulatedMedia", { features: [] });
+        await emulateOverlayMedia({ reducedMotion: null });
       }
     },
   );
@@ -146,7 +145,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       });
       scroller.append(longContent, action);
       content.append(scroller);
-      modal.replaceChildren(content);
+      modal.querySelector(".oc-modal-dialog__body")!.replaceChildren(content);
 
       await expect.poll(() => scroller.clientHeight).toBeGreaterThan(0);
       expect(scroller.clientHeight).toBeLessThanOrEqual(window.innerHeight);
@@ -164,7 +163,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     const tooltip = document.createElement("openclaw-tooltip");
     tooltip.content = "Draft editing help";
     tooltip.anchor = notes;
-    modal.append(tooltip);
+    modal.getOverlayContainer()!.append(tooltip);
     await commitTooltip(tooltip);
     notes.focus();
     await commitTooltip(tooltip);
@@ -225,7 +224,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     const outer = await mountModal();
     outer.notes.focus();
     const nestedHost = document.createElement("div");
-    outer.modal.append(nestedHost);
+    outer.modal.getOverlayContainer()!.append(nestedHost);
     const inner = await mountModal(nestedHost);
     expect(document.activeElement).toBe(inner.name);
 
@@ -263,9 +262,9 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   });
 
   it("leaves native chrome focused when there is no autofocus target or displaced field", async () => {
-    const { modal, dialog } = await mountModal(container, "", false);
+    const { dialog } = await mountModal(container, "", false);
     expect(dialog.matches(":focus")).toBe(true);
-    expect(document.activeElement).toBe(modal);
+    expect(document.activeElement).toBe(dialog);
     expect(dialog.getAttribute("aria-label")).toBe("Edit details");
     expect(dialog.getAttribute("aria-modal")).toBe("true");
   });

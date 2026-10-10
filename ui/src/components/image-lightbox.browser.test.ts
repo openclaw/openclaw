@@ -34,9 +34,7 @@ async function mountImage(item: ImageLightboxItem) {
   await viewer.updateComplete;
   const modal = viewer.shadowRoot!.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;
-  const waDialog = modal.shadowRoot!.querySelector("wa-dialog")!;
-  await waDialog.updateComplete;
-  const dialog = waDialog.shadowRoot!.querySelector("dialog")!;
+  const dialog = modal.querySelector("dialog")!;
   await expect.poll(() => dialog.open).toBe(true);
   await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
   const image = viewer.shadowRoot!.querySelector<HTMLImageElement>("img")!;

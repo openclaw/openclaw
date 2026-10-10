@@ -9,13 +9,13 @@ import {
   installDialogPolyfill,
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
-import { OpenClawModalDialog } from "./modal-dialog.ts";
+import "./modal-dialog.ts";
+import modalStyles from "./solid/modal-dialog.css?inline";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
 
 type Modal = HTMLElementTagNameMap["openclaw-modal-dialog"];
-type ModalTransition = "opening" | "opened" | "closing" | "closed";
 const modalTransitionEvents = {
   opening: "wa-show",
   opened: "wa-after-show",
@@ -27,18 +27,6 @@ function commitRender(element: { updateComplete: Promise<unknown> }) {
   return element.updateComplete;
 }
 
-function modalSurface(modal: Modal) {
-  return modal.shadowRoot!.querySelector("wa-dialog")!;
-}
-
-function notifyModalTransition(modal: Modal, phase: ModalTransition) {
-  modalSurface(modal).dispatchEvent(new Event(modalTransitionEvents[phase]));
-}
-
-function notifyModalClosedToConsumers(modal: Modal) {
-  modal.dispatchEvent(new Event(modalTransitionEvents.closed));
-}
-
 function notifyNestedTransitions(target: Element) {
   for (const type of Object.values(modalTransitionEvents)) {
     target.dispatchEvent(new Event(type, { bubbles: true, composed: true }));
@@ -47,24 +35,19 @@ function notifyNestedTransitions(target: Element) {
 
 async function atOpeningCommit(modal: Modal, assert: (dialog: HTMLDialogElement) => void) {
   await commitRender(modal);
-  const surface = modalSurface(modal);
-  await surface.updateComplete;
-  await surface.updateComplete;
-  await Promise.resolve();
-  // Keep the race assertions in this continuation, before returning adds a microtask.
-  assert(surface.shadowRoot!.querySelector("dialog")!);
+  assert(modal.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!);
 }
 
 function expectModalMotionPolicy() {
-  const styles = OpenClawModalDialog.styles.cssText;
+  const styles = modalStyles;
   expect(styles).toMatch(
-    /:host\(\.palette\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*0ms;[^}]*--hide-duration:\s*0ms;/u,
+    /openclaw-modal-dialog\.palette\s*\{[^}]*--openclaw-modal-show-duration:\s*0ms;[^}]*--openclaw-modal-hide-duration:\s*0ms;/u,
   );
   expect(styles).toMatch(
-    /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*200ms;[^}]*--hide-duration:\s*0ms;/u,
+    /openclaw-modal-dialog\.drawer\s*\{[^}]*--openclaw-modal-show-duration:\s*200ms;[^}]*--openclaw-modal-hide-duration:\s*0ms;/u,
   );
   expect(styles).toMatch(
-    /:host\(\.drawer\)\s+wa-dialog\[open\]::part\(dialog\)\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
+    /openclaw-modal-dialog\.drawer\s*>\s*\.oc-modal-dialog\[open\]\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
   );
   expect(styles).toMatch(
     /@keyframes openclaw-drawer-in\s*\{\s*from\s*\{\s*transform:\s*translateX\(calc\(100% \+ var\(--openclaw-drawer-inset, 0px\)\)\);\s*\}\s*to\s*\{\s*transform:\s*translateX\(0\);/u,
@@ -171,7 +154,7 @@ describe("openclaw-modal-dialog", () => {
     try {
       const { modal } = await renderModal();
       const nested = document.createElement("openclaw-modal-dialog");
-      modal.append(nested);
+      modal.getOverlayContainer()!.append(nested);
       await getRenderedModalDialog(modal);
       expect(changes.mock.calls).toEqual([[false], [true]]);
       expect(modalChanges).toEqual([true]);
@@ -184,7 +167,7 @@ describe("openclaw-modal-dialog", () => {
       expect(modalChanges).toEqual([true, false]);
       // The platform view must stay hidden until the dialog leaves the top layer.
       expect(changes.mock.calls).toEqual([[false], [true]]);
-      notifyModalTransition(modal, "closed");
+      await nextFrame();
       expect(changes.mock.calls).toEqual([[false], [true], [false]]);
       await commitRender(modal);
       modal.show();
@@ -210,7 +193,7 @@ describe("openclaw-modal-dialog", () => {
     const focus = vi.spyOn(HTMLDialogElement.prototype, "focus");
     const { dialog } = await renderModal();
 
-    expect(focus).toHaveBeenCalledWith();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     expect(document.activeElement).not.toBe(container.querySelector("#first-action"));
     expect(dialog.open).toBe(true);
   });
@@ -303,11 +286,11 @@ describe("openclaw-modal-dialog", () => {
       </openclaw-modal-dialog>`,
       container,
     );
-    const { modal } = await getRenderedModalDialog(container);
+    await getRenderedModalDialog(container);
     const notes = container.querySelector<HTMLTextAreaElement>("#notes-field");
     notes?.focus();
 
-    notifyModalTransition(modal, "opened");
+    await nextFrame();
 
     expect(document.activeElement).toBe(notes);
   });
@@ -324,11 +307,11 @@ describe("openclaw-modal-dialog", () => {
         const { modal } = await renderModal();
 
         showToast({ message: "Saved" });
-        expect(appHost.parentElement).toBe(modal);
+        expect(appHost.parentElement).toBe(modal.getOverlayContainer());
         modal[action]();
         await commitRender(modal);
         if (action === "hide") {
-          notifyModalClosedToConsumers(modal);
+          await nextFrame();
         }
         await commitRender(appHost);
 
@@ -400,11 +383,8 @@ describe("openclaw-modal-dialog", () => {
     const { modal } = await renderModal();
 
     modal.setReturnFocusTarget(returnTarget);
-    setTimeout(() => originalTrigger.focus(), 0);
-    notifyModalTransition(modal, "closed");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    modal.hide();
+    await nextFrame();
 
     expect(document.activeElement).toBe(returnTarget);
     originalTrigger.remove();
@@ -418,11 +398,8 @@ describe("openclaw-modal-dialog", () => {
     const { modal } = await renderModal();
 
     modal.setReturnFocusTarget(null);
-    setTimeout(() => originalTrigger.focus(), 0);
-    notifyModalTransition(modal, "closed");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    modal.hide();
+    await nextFrame();
 
     expect(document.activeElement).not.toBe(originalTrigger);
     originalTrigger.remove();

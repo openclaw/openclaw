@@ -203,7 +203,7 @@ suite.define(() => {
         )
         .toBeGreaterThan(0);
       await page
-        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);
       const desktopBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       const viewport = page.viewportSize();
@@ -269,7 +269,7 @@ suite.define(() => {
       await sidebarTrigger.click();
       await sidebarDialog.waitFor({ state: "visible" });
       await page
-        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);
       await page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
         lightbox.style.setProperty("--safe-area-top", "18px");
@@ -448,7 +448,7 @@ suite.define(() => {
         )
         .toBe(true);
       if (captureUiProofEnabled && !reloaded) {
-        await lightbox.locator("wa-dialog dialog").evaluate(finishElementAnimations);
+        await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
         await writeFile(
           path.join(proofDir, "media-gallery-open.png"),
           await takeControlUiViewportScreenshot(page, image, [image]),
@@ -513,7 +513,7 @@ suite.define(() => {
         expect(await previous.isDisabled()).toBe(true);
         await page.keyboard.press("ArrowLeft");
         expect((await counter.textContent())?.trim()).toBe(`1 / ${count}`);
-        await lightbox.locator("wa-dialog dialog").evaluate(finishElementAnimations);
+        await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
         const stageBox = await lightbox.locator(".stage").boundingBox();
         for (let index = 2; index <= count; index++) {
           if (index === 2) {
@@ -567,7 +567,7 @@ suite.define(() => {
     await expect
       .poll(() => lightbox.getByRole("button", { name: "Zoom in", exact: true }).isEnabled())
       .toBe(true);
-    await lightbox.locator("wa-dialog dialog").evaluate(finishElementAnimations);
+    await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
     const touch = await context.newCDPSession(page);
     const readSlideOffset = () =>
       lightbox

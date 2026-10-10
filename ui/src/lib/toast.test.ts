@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../components/modal-dialog.ts";
 import { moveToastToNavDrawer, restoreToastFromNavDrawer } from "../app/navigation-surface.ts";
+import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showToast } from "./toast.ts";
 
 async function mountHost() {
@@ -12,8 +13,13 @@ async function mountHost() {
   return host;
 }
 
+let restoreDialog: () => void;
+beforeEach(() => {
+  restoreDialog = installDialogPolyfill();
+});
 afterEach(() => {
   document.body.replaceChildren();
+  restoreDialog();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -63,7 +69,7 @@ describe("shared toast", () => {
     showToast({ message: "Above overlay" });
     await appHost.updateComplete;
 
-    expect(appHost.parentElement).toBe(modal);
+    expect(appHost.parentElement).toBe(modal.getOverlayContainer());
     expect(appHost.textContent).toContain("Above overlay");
   });
 
@@ -80,7 +86,7 @@ describe("shared toast", () => {
     showToast({ message: "Critical session notice" });
     await appHost.updateComplete;
 
-    expect(appHost.parentElement).toBe(modal);
+    expect(appHost.parentElement).toBe(modal.getOverlayContainer());
     expect(appHost.textContent).toContain("Critical session notice");
   });
 
@@ -105,7 +111,7 @@ describe("shared toast", () => {
         onDismiss,
       });
       await host.updateComplete;
-      expect(host.parentElement).toBe(modal);
+      expect(host.parentElement).toBe(modal.getOverlayContainer());
       await vi.advanceTimersByTimeAsync(40);
       const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
       const toast = host.querySelector<HTMLElement>(".app-toast")!;
@@ -395,7 +401,7 @@ describe("shared toast", () => {
     const modal = document.createElement("openclaw-modal-dialog");
     document.body.append(modal);
     await modal.updateComplete;
-    modal.append(host);
+    modal.getOverlayContainer()!.append(host);
     await host.updateComplete;
     expect(host.contains(document.activeElement)).toBe(false);
     await vi.advanceTimersByTimeAsync(59);

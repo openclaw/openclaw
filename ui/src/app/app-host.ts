@@ -8,7 +8,6 @@ import {
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar.ts";
 import "../components/assistant-panel.ts";
-import "../components/modal-dialog.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/resizable-divider.ts";
 import type { AppSidebarBase } from "../components/app-sidebar-base.ts";

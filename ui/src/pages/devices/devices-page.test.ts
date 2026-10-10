@@ -967,12 +967,15 @@ describe("DevicesPage gateway lifecycle", () => {
         acknowledged = true;
       }),
     );
-    const { modal, webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
+    const { modal } = await waitForRenderedModalDialog(document.body);
 
-    // Escape and backdrop clicks both reach the dialog as a cancelable wa-hide, which
-    // Web Awesome abandons when the listener cancels it; the secret stays on screen.
-    const dismissal = new Event("wa-hide", { bubbles: true, cancelable: true, composed: true });
-    webAwesomeDialog.dispatchEvent(dismissal);
+    // Escape and backdrop dismissal reach the owner through its cancelable modal event.
+    const dismissal = new Event("modal-cancel", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    modal.dispatchEvent(dismissal);
     await modal.updateComplete;
 
     expect(dismissal.defaultPrevented).toBe(true);
@@ -1070,12 +1073,16 @@ describe("DevicesPage gateway lifecycle", () => {
     const pending = dialogs.track(
       page.reportRotationOutcome({ id: "device-2", name: "Mac Studio" }, "operator"),
     );
-    const { webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
+    const { modal } = await waitForRenderedModalDialog(document.body);
 
     // Nothing here is unrecoverable, so Escape and backdrop settle it like any dialog
     // instead of being refused the way the show-once reveal refuses them.
-    const dismissal = new Event("wa-hide", { bubbles: true, cancelable: true, composed: true });
-    webAwesomeDialog.dispatchEvent(dismissal);
+    const dismissal = new Event("modal-cancel", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    modal.dispatchEvent(dismissal);
     await pending;
 
     expect(dismissal.defaultPrevented).toBe(false);
