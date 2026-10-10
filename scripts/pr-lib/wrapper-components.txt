@@ -1099,6 +1099,7 @@ src/infra/sqlite-worker-broker.ts
 src/infra/sqlite-worker-input-admission.ts
 src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
+src/infra/sqlite-worker-database-admission-relay.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-settlement.ts
