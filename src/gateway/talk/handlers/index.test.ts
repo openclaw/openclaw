@@ -3191,7 +3191,9 @@ describe("talk.client.create handler", () => {
         expect.objectContaining({ provider: "openai" }),
         expect.objectContaining({ source: expect.any(Object), release: expect.any(Function) }),
       );
-      const createdVoiceSessionId = mockCallArg(mocks.createOrResumeClientVoiceSession).voiceSessionId;
+      const createdVoiceSessionId = mockCallArg(
+        mocks.createOrResumeClientVoiceSession,
+      ).voiceSessionId;
       expect(createdVoiceSessionId).toMatch(/^[a-f0-9-]{36}$/);
       expectRespondOk(respond, {
         provider: "openai",

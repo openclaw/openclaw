@@ -13,8 +13,8 @@ import {
 import type { TalkAgentConsultLifecycleMethods } from "../client-agent-consult.types.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { closeRelaySession } from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn(), steer: vi.fn() }));
