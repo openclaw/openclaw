@@ -10,6 +10,7 @@ import type {
   ControlUiMockGatewayScenario,
   MockGatewayControls,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { chatToolScenes } from "./chat-tool-scenes.ts";
 import {
   fixedTime,
   sessionKey,
@@ -133,6 +134,7 @@ const loadingRoutes: Array<{ route: RouteId; method: string; ready: string }> = 
   },
 ];
 export const scenes: Scene[] = [
+  ...chatToolScenes,
   ...APP_ROUTE_IDS.map(routeScene),
   ...loadingRoutes.map(({ route, method, ready }): Scene =>
     Object.assign(routeScene(route), {

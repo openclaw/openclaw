@@ -42,8 +42,8 @@ and fixture randomness are fixed. No real Gateway or credentials are used.
 
 ## Catalog and qualification
 
-`scenarios.ts` owns 77 route/state entries. The catalog includes every static
-route ID and its redirects, loading/error fixtures, Workboard, Chat content,
+`scenarios.ts` owns 79 route/state entries. The catalog includes every static
+route ID and its redirects, loading/error fixtures, Workboard, Chat content and collapsed/expanded tool results,
 menus and submenus, a New Group modal, a long model list, selected/disabled
 controls, rich hovercards, and overflowing reader tabs. Twelve profiles cover
 desktop/mobile, light/dark, RTL, enlarged text, forced colors, and reduced motion.

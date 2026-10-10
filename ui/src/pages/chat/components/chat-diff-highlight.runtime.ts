@@ -7,8 +7,14 @@ import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 // synchronously parsing an unbounded source string on the UI thread.
 const MAX_HIGHLIGHT_CHARS = 120_000;
 
-export async function highlightDiffLines(lines: readonly DiffLine[], path: string, oldPath = path) {
-  const highlighted = new Map<DiffLine, unknown>();
+export type DiffHighlightToken = { text: string; classes: string };
+
+export async function highlightDiffTokens(
+  lines: readonly DiffLine[],
+  path: string,
+  oldPath = path,
+) {
+  const highlighted = new Map<DiffLine, DiffHighlightToken[]>();
   let size = 0;
   for (const line of lines) {
     size += line.text.length + 1;
@@ -45,24 +51,38 @@ export async function highlightDiffLines(lines: readonly DiffLine[], path: strin
         }
         const side = part.lines.filter((line) => line.kind !== excluded);
         const code = side.map((line) => line.text).join("\n");
-        const tokens: unknown[][] = [[]];
+        const tokens: DiffHighlightToken[][] = [[]];
         highlightCode(
           code,
           support.language.parser.parse(code),
           classHighlighter,
-          (text, classes) =>
-            tokens.at(-1)!.push(classes ? html`<span class=${classes}>${text}</span>` : text),
+          (text, classes) => tokens.at(-1)!.push({ text, classes }),
           () => {
             tokens.push([]);
           },
         );
         side.forEach((line, index) => {
           if (line.text && (excluded === "del" || line.kind === "del")) {
-            highlighted.set(line, tokens[index]);
+            highlighted.set(line, tokens[index]!);
           }
         });
       }
     }),
   );
   return highlighted;
+}
+
+export async function highlightDiffLines(lines: readonly DiffLine[], path: string, oldPath = path) {
+  const tokens = await highlightDiffTokens(lines, path, oldPath);
+  return new Map(
+    [...tokens].map(
+      ([line, parts]) =>
+        [
+          line,
+          parts.map(({ text, classes }) =>
+            classes ? html`<span class=${classes}>${text}</span>` : text,
+          ),
+        ] as const,
+    ),
+  );
 }

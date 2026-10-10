@@ -25,7 +25,7 @@ export const htmlPreviewElement = {
   get label() {
     return t("chat.detailPanel.renderPreview");
   },
-  loadModule: () => import("./chat-html-preview-element.ts"),
+  loadModule: () => import("./chat-html-preview-element.tsx"),
 };
 
 export function renderHtmlPreview(

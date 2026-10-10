@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolFixture as render } from "./chat-tool-render.test-support.ts";
 
 describe("execution purpose cards", () => {
   it.each([
@@ -14,10 +14,10 @@ describe("execution purpose cards", () => {
       args: { id: "openclaw:core:wait", args: { runId: "cm_test" } },
       label: "Wait",
     },
-  ])("keeps $name readable without distinct detail text", ({ name, args, label }) => {
+  ])("keeps $name readable without distinct detail text", async ({ name, args, label }) => {
     const container = document.createElement("div");
     for (const expanded of [false, true]) {
-      render(
+      await render(
         renderToolCard(
           { id: "no-detail", name, args, completed: true },
           { messageKey: "no-detail", expanded, onToggleExpanded: vi.fn() },
@@ -30,9 +30,9 @@ describe("execution purpose cards", () => {
     }
   });
 
-  it("keeps the tool name icon-only when a distinct preview identifies the operation", () => {
+  it("keeps the tool name icon-only when a distinct preview identifies the operation", async () => {
     const container = document.createElement("div");
-    render(
+    await render(
       renderToolCard(
         { id: "with-detail", name: "custom_tool", args: { text: "Inspect the workspace" } },
         { messageKey: "with-detail", expanded: false, onToggleExpanded: vi.fn() },
@@ -56,7 +56,7 @@ describe("execution purpose cards", () => {
     { name: "shell", args: { command: "pnpm test" } },
   ])(
     "shows the agent purpose immediately for $name and retains execution details",
-    ({ name, args }) => {
+    async ({ name, args }) => {
       const container = document.createElement("div");
       const card = {
         id: "msg:purpose",
@@ -71,14 +71,14 @@ describe("execution purpose cards", () => {
         runActive: true,
         onToggleExpanded: vi.fn(),
       };
-      render(renderToolCard(card, options), container);
+      await render(renderToolCard(card, options), container);
       expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
         "Check the workspace",
       );
       expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
       expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
-      render(
+      await render(
         renderToolCard({ ...card, completed: true }, { ...options, expanded: true }),
         container,
       );
@@ -100,30 +100,33 @@ describe("execution purpose cards", () => {
   it.each([
     { name: "calendar_create", args: { title: "Team meeting", command: "create" } },
     { name: "document_create", args: { title: "Design notes", content: "Draft" } },
-  ])("does not treat $name business title arguments as activity descriptions", ({ name, args }) => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        { id: "business-title", name, args },
-        {
-          messageKey: "business-title",
-          expanded: false,
-          onToggleExpanded: vi.fn(),
-        },
-      ),
-      container,
-    );
-    expect(container.querySelector(".chat-tool-row__title")).toBeNull();
-  });
+  ])(
+    "does not treat $name business title arguments as activity descriptions",
+    async ({ name, args }) => {
+      const container = document.createElement("div");
+      await render(
+        renderToolCard(
+          { id: "business-title", name, args },
+          {
+            messageKey: "business-title",
+            expanded: false,
+            onToggleExpanded: vi.fn(),
+          },
+        ),
+        container,
+      );
+      expect(container.querySelector(".chat-tool-row__title")).toBeNull();
+    },
+  );
 
-  it("previews the useful command after shell setup while retaining the full command", () => {
+  it("previews the useful command after shell setup while retaining the full command", async () => {
     const container = document.createElement("div");
     const card = {
       id: "shell-preamble",
       name: "exec",
       args: { command: "set -euo pipefail\ncd /workspace\npnpm test" },
     };
-    render(
+    await render(
       renderToolCard(card, {
         messageKey: "shell-preamble",
         expanded: true,
@@ -137,12 +140,12 @@ describe("execution purpose cards", () => {
     );
   });
 
-  it("keeps multiline command previews readable and bounded without changing the source", () => {
+  it("keeps multiline command previews readable and bounded without changing the source", async () => {
     const container = document.createElement("div");
     const command =
       "printf '\n--- recovery ---\n'\ncat recovery.md\n" + "echo example\n".repeat(100);
     const card = { id: "multiline-command", name: "exec", args: { command } };
-    render(
+    await render(
       renderToolCard(card, {
         messageKey: "multiline-command",
         expanded: true,
