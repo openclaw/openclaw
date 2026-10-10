@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -10,8 +9,10 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  upsertSessionUpstreamLink,
+  upsertSessionUpstreamLinkAsync,
+} from "../../sessions/session-upstream-links.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -226,7 +227,7 @@ describe("upstream session message-cut methods", () => {
     },
   );
 
-  it("rejects a foreign upstream source change before deferred native fork I/O", async () => {
+  it("rejects a worker-committed upstream source change before deferred native fork I/O", async () => {
     linkToUpstreamConversation();
     installUpstreamForkHarness();
     const nativeWrite = vi.fn();
@@ -234,14 +235,18 @@ describe("upstream session message-cut methods", () => {
       async ({ assertCurrent }: { assertCurrent: () => void }) => {
         assertCurrent();
         await Promise.resolve();
-        const foreign = new DatabaseSync(openOpenClawStateDatabase().path);
-        try {
-          foreign
-            .prepare("UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?")
-            .run("replacement-thread", sessionKey);
-        } finally {
-          foreign.close();
-        }
+        expect(
+          await upsertSessionUpstreamLinkAsync({
+            agentId: "main",
+            catalogId: "codex",
+            hostId: "gateway:local",
+            marker: null,
+            sessionKey,
+            threadId: "replacement-thread",
+            upstreamKind: "codex-app-server",
+            upstreamRef: { connectionFingerprint: "fingerprint", threadId: "replacement-thread" },
+          }),
+        ).toBe(true);
         assertCurrent();
         nativeWrite();
         return { status: "created", key: "agent:main:dashboard:forked" };

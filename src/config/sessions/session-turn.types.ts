@@ -1,3 +1,7 @@
+import type {
+  ClientVoiceRunBinding,
+  ClientVoiceSessionRecord,
+} from "../../talk/client-voice-session-store.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import type {
@@ -28,6 +32,7 @@ import type {
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SessionEntry } from "./types.js";
 export type SqliteExpectedSessionTranscriptTurnResult = {
+  voiceSession?: ClientVoiceSessionRecord;
   transcriptVersion?: SessionTranscriptContextVersion;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
@@ -38,6 +43,8 @@ export type SqliteExpectedSessionTranscriptTurnResult = {
 };
 
 export type SqliteSessionTurnOptions = {
+  /** Same-store voice bookkeeping commits atomically with its reserved transcript event. */
+  voiceTranscript?: ClientVoiceRunBinding & { failureKey: string; role: "user" | "assistant" };
   ownerSource?: PreparedSessionSourceAuthority;
   workerPrepared?: true;
   preparedGoalId?: string;

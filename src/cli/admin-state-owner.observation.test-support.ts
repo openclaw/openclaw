@@ -12,6 +12,7 @@ const { syncBuiltinESMExports } = require("node:module");
 const workerThreads = require("node:worker_threads");
 const { isMainThread, threadId } = workerThreads;
 const native = require("node:sqlite");
+const memoryStatements = new WeakSet();
 const eventsPath = ${JSON.stringify(path.join(control, "sql-observation.jsonl"))};
 const ownerPath = ${JSON.stringify(ownerPath)};
 if (isMainThread) fs.writeFileSync(eventsPath, "");
@@ -29,20 +30,28 @@ if (process.versions.bun) {
   };
 }
 const observe = (sql) => {
-  if (!/\\b(?:channel_pairing_\\w+|exec_approvals_config)\\b/iu.test(sql)) return;
+  const admin = /\\b(?:channel_pairing_\\w+|exec_approvals_config)\\b/iu.test(sql);
+  const write = /^\\s*(?:insert|update|delete)\\b/iu.test(sql);
+  const secretWrite = write && /\\bsecret_store_entries\\b/iu.test(sql);
+  const catalogWrite = write && /\\bconfig_machine_state\\b/iu.test(sql);
+  if (!admin && !secretWrite && !catalogWrite) return;
   let ownerPid;
   try {
     ownerPid = JSON.parse(fs.readFileSync(ownerPath, "utf8")).pid;
   } catch {}
-  fs.appendFileSync(eventsPath, JSON.stringify({ threadId, ownerPid }) + "\\n");
+  fs.appendFileSync(eventsPath, JSON.stringify({ threadId, ownerPid, admin, secretWrite, catalogWrite }) + "\\n");
 };
 for (const method of ["prepare", "exec"]) {
   Object.defineProperty(native.DatabaseSync.prototype, method, {
     ...Object.getOwnPropertyDescriptor(native.DatabaseSync.prototype, method),
     value: new Proxy(native.DatabaseSync.prototype[method], {
       apply(target, receiver, args) {
-        observe(args[0]);
-        return Reflect.apply(target, receiver, args);
+        // Schema validation builds an in-memory reference database without touching persisted state.
+        const inMemory = receiver.location() === null;
+        if (!inMemory) observe(args[0]);
+        const result = Reflect.apply(target, receiver, args);
+        if (inMemory && method === "prepare") memoryStatements.add(result);
+        return result;
       },
     }),
   });
@@ -52,7 +61,7 @@ for (const method of ["get", "all", "run", "iterate"]) {
     ...Object.getOwnPropertyDescriptor(native.StatementSync.prototype, method),
     value: new Proxy(native.StatementSync.prototype[method], {
       apply(target, receiver, args) {
-        observe(receiver.sourceSQL);
+        if (!memoryStatements.has(receiver)) observe(receiver.sourceSQL);
         return Reflect.apply(target, receiver, args);
       },
     }),
@@ -63,8 +72,10 @@ if (isMainThread) process.on("exit", () => {
   const events = fs.readFileSync(eventsPath, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
   fs.writeFileSync(${JSON.stringify(path.join(control, "sql-observation.json"))}, JSON.stringify({
     pid: process.pid,
-    adminSql: events.length,
-    workerSql: events.filter((event) => event.threadId !== 0).length,
+    adminSql: events.filter((event) => event.admin).length,
+    workerSql: events.filter((event) => event.admin && event.threadId !== 0).length,
+    secretWrites: events.filter((event) => event.secretWrite).length,
+    catalogWrites: events.filter((event) => event.catalogWrite).length,
     missingCustody: events.filter((event) => event.ownerPid === undefined).length,
     ownerPids: [...new Set(events.flatMap((event) => event.ownerPid === undefined ? [] : [event.ownerPid]))],
   }));

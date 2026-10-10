@@ -52,6 +52,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     const artwork = result.theme.source === "plugin" ? result.theme.artwork : undefined;
     try {
       definition = normalizeThemeDefinition(result.definition, {
+        iconIds: Object.keys(artwork?.icons ?? {}),
         hatIds: Object.keys(artwork?.hats ?? {}),
         critterIds: Object.keys(artwork?.critters ?? {}),
       });

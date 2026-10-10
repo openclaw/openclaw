@@ -6,7 +6,7 @@ import {
   collectActiveSessionWorkAdmissions,
   collectActiveSessionLifecycleMutationIdentities,
 } from "../../sessions/session-lifecycle-admission.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   addSessionMaintenancePreserveKeys,
   collectSessionWorkAdmissionKeysFromSnapshot,
@@ -86,9 +86,7 @@ export async function prepareSessionMaintenancePreservation(
       preserveKeysProviders.size !== registrations.length ||
       registrations.some((registration) => !preserveKeysProviders.has(registration))
     ) {
-      throw new SessionMaintenancePreservationConflictError(
-        "Session maintenance providers changed during preparation",
-      );
+      throw new SqliteSessionMutationConflictError("session maintenance");
     }
   };
   try {

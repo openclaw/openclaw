@@ -383,7 +383,7 @@ it("propagates an unexpected recorded-admission error without retiring the actor
 });
 
 it.each(["read", "refused-read", "closed-writer"] as const)(
-  "admits first worker creation when a retired %s inode becomes its target",
+  "admits a new target path when a retired %s physical database moves into it",
   async (kind) => {
     await withOpenClawTestState({ label: "state-read-admission" }, async (state) => {
       const inspectedPath = path.join(state.stateDir, "inspected.sqlite");
@@ -432,7 +432,9 @@ it.each(["read", "refused-read", "closed-writer"] as const)(
           ) {
             // The target is absent at admission, then gets the real retained inode before native open.
             renameSync(retainedPath, databasePath);
-            writeFileSync(databasePath, "");
+            if (kind !== "closed-writer") {
+              writeFileSync(databasePath, "");
+            }
             expect(databaseIdentity.readDatabasePathIdentitySync(databasePath).key).toBe(
               retiredIdentity.key,
             );

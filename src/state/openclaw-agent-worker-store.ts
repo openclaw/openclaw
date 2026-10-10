@@ -40,9 +40,9 @@ import {
 } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionScope,
-  AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -111,20 +111,51 @@ export function executeOpenClawAgentWorkerPublication<
   return result as Promise<Operations[Key]["output"]>;
 }
 
+// Published plugins provide the released execution shape, not private host capabilities.
+type AgentWorkerPublicationExecution = Pick<
+  OpenClawAgentDatabaseExecution,
+  | "agentId"
+  | "path"
+  | "fileIdentity"
+  | "assertCurrent"
+  | "captureGenerationClaim"
+  | "prepare"
+  | "runExisting"
+  | "release"
+>;
+
+type AgentWorkerPublicationOptions = {
+  moduleUrl: URL;
+  input: unknown;
+  assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
+  observeAdmission?: (
+    admission: SqliteWorkerOperationAdmission,
+    retained: RetainedWorkerTransactionAdmission,
+  ) => void;
+  onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
+};
+
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
+// Keep the latest released shape last for consumers deriving parameters from this function.
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource:
+    | DatabaseSync
+    | {
+        execution: AgentWorkerPublicationExecution &
+          Pick<OpenClawAgentDatabaseExecution, "capturePreparedGenerationClaim">;
+      },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
 /** Retains a native borrow or checks a caller-held executor; each operation borrows the canonical executor. */
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
-  publicationSource: DatabaseSync | { execution: OpenClawAgentDatabaseExecution },
-  worker: {
-    moduleUrl: URL;
-    input: unknown;
-    assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
-    observeAdmission?: (
-      admission: SqliteWorkerOperationAdmission,
-      retained: RetainedWorkerTransactionAdmission,
-    ) => void;
-    onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
-  },
+  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  worker: AgentWorkerPublicationOptions,
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);

@@ -132,6 +132,9 @@ function seedClaudeCliAllowlist(
       (ref) => resolveClaudeCliAnthropicModelRefs(ref)?.rewriteRef ?? ref,
     ),
     ...selectedRefs,
+    // Native login leaves no auth profile that could route other Claude IDs at
+    // run time, so cover IDs published after sign-in and typed IDs too.
+    "anthropic/*",
   ]);
   for (const ref of runtimeRefs) {
     const current = Object.hasOwn(next, ref) ? next[ref] : undefined;

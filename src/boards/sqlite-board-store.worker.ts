@@ -9,7 +9,7 @@ import {
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import { captureSessionRowChanges } from "../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../state/openclaw-agent-execution-domain.js";
 import { BoardValidationError } from "./board-layout.js";
@@ -90,18 +90,9 @@ export function bindSqliteWorkerBackend(
           throw new BoardValidationError("invalid_operation", "board session changed; retry");
         }
       };
-      const changes: SessionRowChange[] = [];
-      const unsubscribe = sessionChanges.subscribeFacts((change) => {
-        if (
-          "sessionKey" in change &&
-          change.sessionKey === command.input.sessionKey &&
-          change.storePath === database.path
-        ) {
-          changes.push(change);
-        }
-      });
-      try {
-        const value = withSqlitePostCommitPublications(database.db, () =>
+      // Nested actor publication scopes flush after this receipt has returned.
+      const { result: value, changes } = captureSessionRowChanges(database.db, () =>
+        withSqlitePostCommitPublications(database.db, () =>
           runSqliteWorkerTransactionSync(
             admission,
             () => {
@@ -139,11 +130,17 @@ export function bindSqliteWorkerBackend(
               },
             },
           ),
-        );
-        return { value, changes };
-      } finally {
-        unsubscribe();
-      }
+        ),
+      );
+      return {
+        value,
+        changes: changes.filter(
+          (change) =>
+            "sessionKey" in change &&
+            change.sessionKey === command.input.sessionKey &&
+            change.storePath === database.path,
+        ),
+      };
     },
     assertSettled() {
       assertTransactionUsable(database.db);

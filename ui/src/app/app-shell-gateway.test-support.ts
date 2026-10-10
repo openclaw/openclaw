@@ -30,6 +30,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     hello: { auth: { role: "operator", scopes: ["operator.write"] } },
   } as ApplicationGatewaySnapshot;
   const refreshTheme = vi.fn();
+  const requestUpdate = vi.fn();
   const connectionBootstrap = {
     reset: vi.fn(),
     run: (_key: string, task: () => Promise<unknown>) => task(),
@@ -61,6 +62,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
     recoverDeletedActiveSession: vi.fn(),
+    requestUpdate,
     routeState: {},
   } as unknown as ShellGatewayHost;
   return {
@@ -83,6 +85,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     host,
     owner: new ShellGatewayOwner(host),
     refreshTheme,
+    requestUpdate,
     request,
     snapshot,
   };

@@ -31,13 +31,9 @@ import {
   type DailyIngestionState,
 } from "./dreaming-ingestion-state.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import {
-  type DreamNarrativeRequest,
-  type NarrativePhaseData,
-  runDreamNarrative,
-} from "./dreaming-narrative.js";
+import type { NarrativePhaseData, PreparedDreamNarrative } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
-import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { findForgottenMemorySessionIds } from "./memory-entry-origins.js";
 import {
   inspectWorkspaceFile,
   listWorkspaceDirectory,
@@ -77,16 +73,20 @@ import {
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
 type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
-type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> = {
+type DreamingSweepParams = {
   agentId?: string;
   workspaceDir: string;
+  pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
-  config: TConfig;
   logger: Logger;
-  subagent?: DreamNarrativeRequest["subagent"];
-  nowMs: number;
-  admissionPolicy?: SessionAdmissionPolicy;
+  nowMs?: number;
 };
+type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> =
+  DreamingSweepParams & {
+    config: TConfig;
+    nowMs: number;
+    admissionPolicy?: SessionAdmissionPolicy;
+  };
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
@@ -506,19 +506,20 @@ async function collectSessionIngestionBatches(params: {
   const sources: SessionIngestionSource[] = [];
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
-    const forgottenSessionIds = new Set(
-      (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
-    );
-    const selectedSources: SessionIngestionSource[] = [];
-    for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
+    const corpus = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       includeRetainedSqlite: true,
-    })) {
+    });
+    const forgottenSessionIds = await findForgottenMemorySessionIds({
+      agentId,
+      sessionIds: corpus.map((entry) => entry.sessionId),
+    });
+    const selectedSources: SessionIngestionSource[] = [];
+    for (const entry of corpus) {
       knownStateKeys.add(sessionIngestionStateKeyFromCorpus(entry));
       const source = sessionIngestionSourceFromCorpus(entry, "dreaming");
-      if (!source) {
-        continue;
+      if (source) {
+        selectedSources.push(source);
       }
-      selectedSources.push(source);
     }
     const excludedReasons = sessionExclusionReasons(
       selectedSources,
@@ -557,8 +558,7 @@ async function collectSessionIngestionBatches(params: {
     return a.sessionPath.localeCompare(b.sessionPath);
   });
 
-  const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
-  let remaining = totalCap;
+  let remaining = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
   const perFileCap = resolveSessionIngestionFileCap(sortedSources.length);
   for (const source of sortedSources) {
     if (remaining <= 0) {
@@ -1193,7 +1193,7 @@ async function prepareLightDreaming(
     );
   }
 
-  if (params.subagent && capped.length > 0) {
+  if (capped.length > 0) {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     return {
       phase: "light",
@@ -1254,7 +1254,7 @@ async function prepareRemDreaming(
     );
   }
 
-  if (params.subagent && entries.length > 0) {
+  if (entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
     const themes = preview.reflections.filter(
       (r) => !r.startsWith("- No strong") && !r.startsWith("  -"),
@@ -1275,32 +1275,15 @@ async function prepareRemDreaming(
   return undefined;
 }
 
-type DreamingSweepPhaseResult = {
-  degradedPhases: number;
-  pendingNarratives: number;
-};
-
-export async function runDreamingSweepPhases(params: {
-  /**
-   * Agent whose model and credentials own this workspace's narrative completions.
-   * Absent only when no roster or triggering agent can be attributed, which downgrades
-   * narratives to the local diary fallback without stopping the sweep.
-   */
-  agentId?: string;
-  workspaceDir: string;
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-  logger: Logger;
-  subagent?: DreamNarrativeRequest["subagent"];
-  runInBackground?: DreamNarrativeRequest["runInBackground"];
-  nowMs?: number;
-}): Promise<DreamingSweepPhaseResult> {
+export async function runDreamingSweepPhases(
+  params: DreamingSweepParams,
+): Promise<{ narratives: PreparedDreamNarrative[]; failed: boolean }> {
   // All phases in one sweep share the same observation and report timestamp.
   const sweepNowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
-  let degradedPhases = 0;
-  let pendingNarratives = 0;
+  const narratives: PreparedDreamNarrative[] = [];
+  let failed = false;
   async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
     phase: "light" | "rem",
     config: TConfig,
@@ -1315,24 +1298,8 @@ export async function runDreamingSweepPhases(params: {
       // Keep source selection and report publication inside the forget boundary;
       // model work runs outside it and revalidates its inputs before publication.
       const data = await withMemoryWorkspaceLock(params.workspaceDir, () => prepare(phaseParams));
-      if (!data || !params.subagent) {
-        return;
-      }
-      const outcome = await runDreamNarrative({
-        agentId: params.agentId,
-        subagent: params.subagent,
-        workspaceDir: params.workspaceDir,
-        data,
-        nowMs: sweepNowMs,
-        timezone: config.timezone,
-        model: config.execution?.model,
-        logger: params.logger,
-        runInBackground: params.runInBackground,
-      });
-      if (outcome.status === "degraded") {
-        degradedPhases += 1;
-      } else if (outcome.status === "pending") {
-        pendingNarratives += 1;
+      if (data) {
+        narratives.push({ data, timezone: config.timezone, model: config.execution?.model });
       }
     } catch (err) {
       await appendFailedDreamingEvent({
@@ -1343,12 +1310,15 @@ export async function runDreamingSweepPhases(params: {
         nowMs: sweepNowMs,
         logger: params.logger,
       });
-      throw err;
+      params.logger.error(`memory-core: ${phase} dreaming failed: ${formatErrorMessage(err)}`);
+      failed = true;
     }
   }
   await runPhase("light", resolveMemoryLightDreamingConfig(params), prepareLightDreaming);
-  await runPhase("rem", resolveMemoryRemDreamingConfig(params), prepareRemDreaming);
-  return { degradedPhases, pendingNarratives };
+  if (!failed) {
+    await runPhase("rem", resolveMemoryRemDreamingConfig(params), prepareRemDreaming);
+  }
+  return { narratives, failed };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

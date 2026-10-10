@@ -118,6 +118,18 @@ export function registerUpdatePreflightTests({
     await updateCommand({ yes: true, json: true });
 
     expect(retainUpdateRuntime).toHaveBeenCalledOnce();
+    expect(lastWriteJsonCall()).toMatchObject({
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          name: "updater-runtime-retention",
+          command: "retain running updater runtime",
+          cwd: packageRoot,
+          durationMs: expect.any(Number),
+          exitCode: 0,
+          diagnostics: [JSON.stringify(retention)],
+        }),
+      ]),
+    });
     expect(
       listUpdateRuns({ limit: 1 })[0]?.steps.filter(
         (step) => step.step === "updater-runtime-retention",

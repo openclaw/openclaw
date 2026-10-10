@@ -22,6 +22,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "archivedBy",
   "archiveReason",
   "pinnedAt",
+  "sidebarRoot",
   "snoozedUntil",
   "snoozedAt",
   "lastReadAt",
@@ -75,6 +76,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolPolicySource",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "delegatedToolPolicy",
   "lifecycleRunId",
   "lastRunId",
   "activeWriterRunId",
@@ -202,6 +204,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "quotaSuspension",
   "pendingTranscriptRepair",
   "visibility",
+  "communication",
   "publicShare",
   "profileInvolvement",
 ] as const satisfies ReadonlyArray<

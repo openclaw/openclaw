@@ -694,6 +694,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
   ["sessions.catalog.import", "session-catalog", "operator.write", "2026.9"],
   ["backup.status", "backup", "operator.read", "2026.9"],
+  ["backup.recordOutcome", "backup", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["storage.locations.list", "storage", "operator.read", "2026.9"],
   ["storage.locations.probe", "storage", "operator.read", "2026.9"],
   ["mcp.app.onboard", "mcp-app-onboarding", "operator.write", "2026.9", SESSION_WRITE],
@@ -722,4 +723,10 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.workshop.changes", "skills", "operator.read", "2026.9"],
   ["skills.workshop.archive", "skills", "operator.admin", "2026.9"],
   ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
+  ["secrets.store.import", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["secrets.store.allowedHosts", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["users.background.get", "users", "operator.read", "2026.9"],
+  ["users.background.upload", "users", "operator.write", "2026.9"],
+  ["users.background.remove", "users", "operator.write", "2026.9"],
+  ["debugProxy.capture", "debug-proxy", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -114,17 +114,18 @@ survivor and ten minutes for setup and artifacts total 205 minutes, rounded up.
 Targeted first-hop jobs retain their 60-minute job budget. Phase and update-step
 durations are printed in the lane log.
 
-Authenticated update restart uses a 2,280-second container budget and a
-2,580-second (43-minute) lane budget: hosted run `36506342273` exceeded 1,515
-seconds, multiplied by roughly 1.5 with another 300 seconds for host-side work.
-Its restart command took 856 seconds in hosted run `36506210440` and 993 seconds
-on four-CPU Crabbox; 993 × 1.5 gives a lane-specific 1,500-second command timeout.
-The shared 900-second command default stays unchanged. The `package-update-openai`
-job allows 60 minutes for its OpenAI, Codex, onboarding, and root-managed upgrade
-lanes. The separate `package-update-restart-auth` job allows 55 minutes for the
-43-minute authenticated restart lane plus setup and artifacts. CI's 60-minute
-`docker-seed-e2e` job does not select
-`update-restart-auth`, so its budget stays unchanged.
+Authenticated update restart uses a 3,420-second container budget and a
+3,720-second (62-minute) lane budget. Hosted release checks on October 6–7 passed
+in 1,678–2,290 seconds and also hit the former 2,280-second container cap during
+recovery. A roughly 1.5× slow-host margin on 2,290 seconds gives 3,420 seconds,
+with another 300 seconds for host-side work. Its restart command took 856 seconds
+in hosted run `36506210440` and 993 seconds on four-CPU Crabbox; 993 × 1.5 gives
+a lane-specific 1,500-second command timeout. The shared 900-second command default
+stays unchanged. The separate `package-update-restart-auth` job allows 75 minutes,
+matching targeted restart-auth jobs and leaving 13 minutes beyond the lane budget
+for setup and artifacts. The remaining `package-update-openai` job allows 60 minutes.
+These enclosing budgets do not resolve a recovery command that remains pending
+after the restarted Gateway becomes healthy.
 
 Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade; `package-update-restart-auth` owns authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
 

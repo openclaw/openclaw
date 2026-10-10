@@ -5,7 +5,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  getSqliteReadScopeRevision,
+  type SqliteReadScopeRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { getChildLogger } from "../../logging/logger.js";
+import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -17,6 +22,7 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { projectSessionEntryCacheUpdate } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
@@ -54,8 +60,9 @@ import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
   canonicalSessionKeyMigrationRequiredError,
+  markCanonicalSessionValidationPending,
 } from "./session-canonical-key.js";
-import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
+import { validateCanonicalSessionRow } from "./session-canonical-row.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import {
   splitSessionEntrySnapshots,
@@ -82,6 +89,30 @@ export {
   readSessionEntryCount,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-inventory.js";
+
+const writtenEntryPostimages = new WeakMap<
+  SessionEntry,
+  {
+    database: OpenClawAgentDatabase["db"];
+    sessionKey: string;
+    revision: SqliteReadScopeRevision;
+    entry: SessionEntry;
+  }
+>();
+
+/** Only the exact writer result can lend its persisted projection before another mutation. */
+export function readWrittenSessionEntryPostimage(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  written: SessionEntry,
+): SessionEntry | undefined {
+  const postimage = writtenEntryPostimages.get(written);
+  return postimage?.database === database.db &&
+    postimage.sessionKey === sessionKey &&
+    postimage.revision === getSqliteReadScopeRevision(database.db)
+    ? postimage.entry
+    : undefined;
+}
 
 /** Exact reads already own nested values; retain them through identity publication. */
 export function readSessionIdentitySnapshot(
@@ -326,14 +357,6 @@ function clearSqliteSessionEntryPreservingWindows(
       .values({ session_key: params.sessionKey, ...cleared })
       .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
   );
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .updateTable("session_nodes")
-      .set({ entry_valid: -1 })
-      .where("session_key", "=", params.sessionKey),
-  );
-  certifyCanonicalSessionValidationRow(database, params.sessionKey);
 }
 
 export function deleteLifecycleTargetRows(
@@ -415,12 +438,15 @@ export function writeSessionEntry(
     providerReviewMutation?: boolean;
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
+    /** Participant facts were acquired at this native revision, not borrowed from a CAS snapshot. */
+    canonicalPreviousEntryRevision?: SqliteReadScopeRevision;
     consumePendingReset?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
     routeContext?: ConversationRouteContext | null;
   } = {},
 ): SessionEntry {
+  const inputRevision = getSqliteReadScopeRevision(database.db);
   if (!options.allowStoredAliases) {
     assertCanonicalSessionKeyWrite(sessionKey);
     assertCanonicalSessionEntryLineageWrite(entry);
@@ -443,6 +469,12 @@ export function writeSessionEntry(
       : options.allowStoredAliases && options.previousEntry !== undefined
         ? (options.previousEntry ?? undefined)
         : readExactSessionEntryRow(database, sessionKey)?.entry;
+  const previousRevision =
+    options.canonicalPreviousEntry === undefined
+      ? getSqliteReadScopeRevision(database.db)
+      : options.canonicalPreviousEntryRevision === inputRevision
+        ? inputRevision
+        : undefined;
   if (!options.providerReviewMutation && !options.allowStoredAliases) {
     // Bookkeeping can carry a stale snapshot; only the review owner may clear its pause.
     normalizedEntry = {
@@ -535,6 +567,35 @@ export function writeSessionEntry(
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
   }
+  const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
+    projectCanonicalSessionEntryShape({ ...normalizedEntry }),
+  );
+  const persisted = splitSessionEntrySnapshots(canonicalEntry, {
+    previousEntry: canonicalPreviousEntry,
+  });
+  const sessionNode = bindSessionNode({
+    entry: canonicalEntry,
+    entryJson: persisted.entryJson,
+    sessionKey,
+    updatedAt,
+  });
+  if (!options.allowStoredAliases) {
+    // SQLite binds TEXT as UTF-8. Validate that exact projection before any write,
+    // including serialization hooks and replacement of unpaired UTF-16 surrogates.
+    validateCanonicalSessionRow({
+      ...sessionNode,
+      session_key: sessionNode.session_key.toWellFormed(),
+      current_session_id: sessionNode.current_session_id.toWellFormed(),
+      entry_json: sessionNode.entry_json.toWellFormed(),
+      parent_session_key: sessionNode.parent_session_key?.toWellFormed() ?? null,
+      spawned_by: sessionNode.spawned_by?.toWellFormed() ?? null,
+      fork_source_session_key: sessionNode.fork_source_session_key?.toWellFormed() ?? null,
+      retained_window_id: null,
+    });
+  } else {
+    // Offline import/repair can stage aliases; readiness must validate them before use.
+    markCanonicalSessionValidationPending(database, [sessionKey]);
+  }
   // Collaboration rows belong to the exact canonical node being overwritten,
   // which can differ from the selected alias during canonicalization.
   if (canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId) {
@@ -570,25 +631,15 @@ export function writeSessionEntry(
     entry: normalizedEntry,
     previousEntry,
   });
-  const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
-    projectCanonicalSessionEntryShape({ ...normalizedEntry }),
-  );
-  const persisted = splitSessionEntrySnapshots(canonicalEntry, {
-    previousEntry: canonicalPreviousEntry,
-  });
-  const sessionNode = bindSessionNode({
-    entry: canonicalEntry,
-    entryJson: persisted.entryJson,
-    sessionKey,
-    updatedAt,
-  });
   const queries = getSessionEntryWriteQueries(database.db);
+  // Serialization hooks must not certify side-table facts they changed while preparing bytes.
+  const sideMetadataUnchanged =
+    previousRevision !== undefined && previousRevision === getSqliteReadScopeRevision(database.db);
   const writeGeneration = trackSessionEntryCacheWrite(database, () => {
     queries.node(sessionNode);
     if (persisted.snapshotsChanged) {
       writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots);
     }
-    queries.markValid(sessionKey);
   });
   advanceSessionEntryMaintenanceAgeFact(database.db, {
     sessionKey,
@@ -616,9 +667,6 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
-  if (!options.allowStoredAliases) {
-    certifyCanonicalSessionValidationRow(database, sessionKey);
-  }
   publishSessionEntryCacheInvalidation(
     database,
     {
@@ -644,6 +692,7 @@ export function writeSessionEntry(
               previousSessionId: canonicalPreviousEntry?.sessionId,
               sessionId: normalizedEntry.sessionId,
               category: normalizedEntry.category?.trim() || null,
+              communicationBinding: communicationEntryBinding(normalizedEntry),
               clearMembers:
                 canonicalPreviousEntry !== undefined &&
                 canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId,
@@ -656,5 +705,28 @@ export function writeSessionEntry(
     },
     writeGeneration,
   );
+  const revision = getSqliteReadScopeRevision(database.db);
+  if (!options.allowStoredAliases && sideMetadataUnchanged && revision) {
+    const postimage = projectSessionEntryCacheUpdate(
+      persisted.entryJson,
+      structuredClone({
+        owner: canonicalPreviousEntry?.owner,
+        ...(canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
+          ? {
+              participants: canonicalPreviousEntry.participants,
+              participantCount: canonicalPreviousEntry.participantCount,
+            }
+          : {}),
+      }),
+    );
+    if (postimage) {
+      writtenEntryPostimages.set(normalizedEntry, {
+        database: database.db,
+        sessionKey,
+        revision,
+        entry: postimage,
+      });
+    }
+  }
   return normalizedEntry;
 }

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockNodeBuiltinModule } from "../plugin-sdk/test-helpers/node-builtin-mocks.js";
+import {
+  withServiceInspectionBudget,
+  runServiceInspectionGuard,
+} from "./service-inspection-budget.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import {
   GatewayServiceAuthorityError,
@@ -228,4 +232,74 @@ it("does not require effect custody after the native call intentionally ends it"
   } finally {
     await peer.close();
   }
+});
+
+it.each(["healthy", "slow-io", "revoked"] as const)(
+  "retained native queries separate caller guards from manager I/O: %s",
+  async (mode) => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    // Admission's clock must not be retained by later reads on this connection.
+    const peer = await withServiceInspectionBudget((budget) =>
+      openSystemdBroker(address, budget.now() + 100),
+    );
+    try {
+      await withServiceInspectionBudget(async (budget) => {
+        const guard = () => {
+          now += 2_000;
+          if (mode === "revoked") {
+            throw new Error("original guard retired");
+          }
+        };
+        kernel.onCall = () => {
+          now += mode === "slow-io" ? 101 : 1;
+        };
+        const work = peer.query(resetFailed, [], budget.now() + 100, guard);
+        if (mode === "healthy") {
+          await expect(work).resolves.toEqual([]);
+          expect(budget.now()).toBe(1);
+        } else {
+          await expect(work).rejects.toThrow(
+            mode === "revoked" ? "original guard retired" : "deadline expired",
+          );
+        }
+        expect(kernel.calls).toBe(mode === "revoked" ? 0 : 1);
+      });
+    } finally {
+      await peer.close();
+    }
+    expect(kernel.closes).toBe(1);
+  },
+);
+
+it("keeps the dispatched mutation wall deadline despite later synchronous guards", async () => {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  await withServiceInspectionBudget(async (budget) => {
+    const peer = await openSystemdBroker(address, budget.now() + 100);
+    let dispatched = false;
+    kernel.onCall = () => {
+      dispatched = true;
+    };
+    try {
+      await expect(
+        peer.query(
+          resetFailed,
+          [],
+          budget.now() + 100,
+          () => {
+            runServiceInspectionGuard(() => {
+              now += dispatched ? 101 : 2_000;
+            });
+          },
+          undefined,
+          100,
+        ),
+      ).rejects.toThrow("deadline expired");
+      expect(kernel.calls).toBe(1);
+      expect(budget.now()).toBe(0);
+    } finally {
+      await peer.close();
+    }
+  });
 });

@@ -1,6 +1,6 @@
-import { isMainThread } from "node:worker_threads";
 import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
@@ -11,7 +11,6 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
-import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
@@ -67,15 +66,18 @@ import {
   type SessionEntryPatchOperation,
 } from "./session-entry-patch-operation.js";
 import { captureSessionEntryPatchSource } from "./session-entry-patch-source.js";
+import type {
+  SessionEntryUpdater,
+  SqliteSessionEntryPatchOptions,
+  SqliteSessionEntrySnapshotPatchParams,
+} from "./session-entry-patch-source.js";
 import { patchSessionEntryInWorker } from "./session-entry-patch.js";
 import type {
   SessionEntryPatchGuard,
   SessionEntryPatchCommitted,
-  SessionEntryUpdater,
-  SqliteSessionEntryPatchOptions,
-  SqliteSessionEntrySnapshotPatchParams,
 } from "./session-entry-patch.types.js";
 import { buildInboundSessionCreationStamp } from "./session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { patchIncognitoSessionEntry } from "./session-incognito-entry-patch.js";
 import {
@@ -381,9 +383,11 @@ async function patchSqliteSessionEntrySnapshot(
     targetIdentity,
     incognito,
     incognitoBinding,
+    useWorker,
+    ensureIdentitySource,
     assertCapturedSource,
     assertCurrent,
-  } = captureSessionEntryPatchSource(params.resolved, sessionKey, captured);
+  } = captureSessionEntryPatchSource(params);
   const prepare = async (prepared: SqliteLifecycleTargetSnapshot) => {
     const existing = prepared[0]?.entry;
     if (
@@ -400,7 +404,7 @@ async function patchSqliteSessionEntrySnapshot(
     let contextEntryBorrowed = true;
     const patch =
       typeof params.update !== "function"
-        ? reduceSessionEntryPatch(params.update, writeBase)
+        ? reduceSessionEntryPatch(params.update, writeBase, existing)
         : await params.update(structuredClone(writeBase), {
             get existingEntry() {
               if (contextEntryBorrowed) {
@@ -445,22 +449,19 @@ async function patchSqliteSessionEntrySnapshot(
         assertCurrent?.();
         options.workerGuard?.assertCurrent?.();
       },
-      assertCommitAllowed: options.assertCommitAllowed,
+      assertCommitAllowed: () => {
+        options.assertCommitAllowed?.();
+        options.workerGuard?.assertMutationAllowed?.();
+      },
       shouldCommit: options.shouldCommit,
       source: options.workerGuard?.source,
       prepare,
       onCommitted: options.onCommitted,
+      onCommittedSource: options.onCommittedSource,
     });
     return result.entry;
   }
   let wrote = false;
-  // v2026.9.8 plugin-sdk/session-store-runtime promises opaque commit callbacks
-  // inside a native synchronous transaction. Bundled producers carry workerGuard instead.
-  const useWorker =
-    isMainThread &&
-    !options.shouldCommit &&
-    !options.assertCommitAllowed &&
-    supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const workerPatch = (preparedSource?: PreparedSessionSourceAuthority) =>
     patchSessionEntryInWorker({
       database: { ...databaseOptions, path: databasePath },
@@ -471,6 +472,7 @@ async function patchSqliteSessionEntrySnapshot(
       assertCurrent: () => assertCurrent?.(),
       guard: options.workerGuard,
       preparedSource,
+      retainedExecution: options.retainedExecution,
       reduction:
         typeof params.update === "function"
           ? undefined
@@ -488,9 +490,11 @@ async function patchSqliteSessionEntrySnapshot(
               shouldCommitIf: options.workerGuard?.shouldCommitIf,
               cliHistory: options.workerGuard?.cliHistory,
               conversation: options.workerGuard?.conversation,
+              ensureIdentitySource,
             },
       prepare,
       onCommitted: options.onCommitted,
+      onCommittedSource: options.onCommittedSource,
     }).then((result) => {
       wrote = result.wrote;
       return result.entry;
@@ -510,6 +514,10 @@ async function patchSqliteSessionEntrySnapshot(
           )
             ? "same-store"
             : "cross-store";
+        if (ensureIdentitySource && locality !== "same-store") {
+          await source.release?.();
+          throw new Error("Transaction-local entry authority differs from its writer");
+        }
         if (locality === "same-store") {
           return workerPatch(source);
         }
@@ -529,6 +537,7 @@ async function patchSqliteSessionEntrySnapshot(
         // The updater may dispose the prepared handle; re-admit before waiting for the write lock.
         return withDatabase(async () => {
           let result: SessionEntry | null = null;
+          let committedSource: CapturedSessionEntryReadSource | undefined;
           let transcriptPredicate: SessionEntryPatchCommitted["transcriptPredicate"];
           const publish = await runOpenClawAgentWriteWithYieldingAdmission(
             (writeDatabase) => {
@@ -557,6 +566,7 @@ async function patchSqliteSessionEntrySnapshot(
                   ...options,
                   assertCommitAllowed: () => {
                     options.assertCommitAllowed?.();
+                    options.workerGuard?.assertMutationAllowed?.();
                     options.workerGuard?.source?.();
                   },
                 },
@@ -568,6 +578,15 @@ async function patchSqliteSessionEntrySnapshot(
                   : undefined;
               if (!mutation.identity) {
                 return undefined;
+              }
+              if (options.onCommittedSource) {
+                const identity = readOpenClawAgentDatabaseIdentity(writeDatabase);
+                committedSource = {
+                  agentId: writeDatabase.agentId,
+                  path: writeDatabase.path,
+                  databaseIdentity: identity.identity,
+                  databaseBirthtime: identity.birthtime,
+                };
               }
               wrote = true;
               return prepareSessionIdentityPublication(
@@ -588,6 +607,9 @@ async function patchSqliteSessionEntrySnapshot(
               } else {
                 options.onCommitted?.(entry);
               }
+              if (committedSource) {
+                options.onCommittedSource?.(committedSource, structuredClone(result));
+              }
             }
           } finally {
             publish?.();
@@ -598,9 +620,11 @@ async function patchSqliteSessionEntrySnapshot(
     },
     params.operationLabel,
     undefined,
-    // Source-free worker patches may reuse a foreground planner's reservation.
+    // The captured source validated the retained writer before borrowing its reservation.
     // The admission owner still prevents reentry during a worker write grant.
-    useWorker && !sourceAssertion ? "foreground-reentrant" : "foreground",
+    options.retainedExecution || (useWorker && !sourceAssertion)
+      ? "foreground-reentrant"
+      : "foreground",
   );
   if (wrote) {
     kickSessionEntryMaintenanceAfterWrite({
@@ -647,7 +671,7 @@ export async function recordInboundSessionMeta(
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
       preserveActivity: true,
-      workerGuard: {},
+      workerGuard: { assertMutationAllowed: params.assertCommitAllowed },
       ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
     },
   );

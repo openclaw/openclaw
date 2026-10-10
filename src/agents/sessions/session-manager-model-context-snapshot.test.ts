@@ -9,6 +9,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -30,6 +31,7 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -351,6 +353,82 @@ it.each(["durable", "admitted", "incognito"] as const)(
       expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
       expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(false);
       expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
+    });
+  },
+);
+
+it.each([
+  "unchanged",
+  "default-selector",
+  "mutable-message",
+  "native-append",
+  "worker-append",
+  "truncated",
+] as const)(
+  "reuses complete hydration without losing durable model bytes after %s",
+  async (change) => {
+    await withOpenClawTestState({ label: "hydrated-model-context" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "hydrated-model-context",
+        sessionKey: "agent:main:hydrated-model-context",
+        storePath:
+          change === "default-selector"
+            ? resolveDefaultSessionStorePath("main")
+            : state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      await source.appendMessageAsync(makeUserMessage("question", 1));
+      const replyId = await source.appendMessageAsync(
+        Object.assign(makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] }), {
+          __openclaw: { upstreamUserText: "private-durable-context" },
+        }),
+      );
+      await withSelectedTranscriptReader(target, async () => {
+        const manager = await SessionManager[sessionManagerOpenTranscriptCohort](
+          target,
+          { maxBytes: 8192, maxEvents: change === "truncated" ? 1 : 20 },
+          { sessionKey: target.sessionKey, entryIds: [] },
+          () => {},
+        );
+        if (change === "mutable-message") {
+          const reply = manager.getEntry(replyId!);
+          if (reply?.type !== "message" || reply.message.role !== "assistant") {
+            throw new Error("Missing mutable assistant entry");
+          }
+          reply.message.content = [{ type: "text", text: "unpersisted replacement" }];
+        } else if (change === "native-append") {
+          source.appendMessage(makeUserMessage("native successor", 2));
+        } else if (change === "worker-append") {
+          await source.appendMessageAsync(makeUserMessage("worker successor", 2));
+        }
+        const readModel = vi.spyOn(contextWorker, "readSessionTranscriptModelContextInWorker");
+        try {
+          const context = await manager[sessionManagerReadInitialContext]();
+          expect(JSON.stringify(context)).not.toMatch(/private-durable-context|unpersisted/);
+          expect(context.messages).toMatchObject(
+            change === "truncated"
+              ? [{ role: "assistant", content: [{ text: "answer" }] }]
+              : [
+                  { role: "user", content: "question" },
+                  { role: "assistant", content: [{ text: "answer" }] },
+                  ...(change === "native-append"
+                    ? [{ role: "user", content: "native successor" }]
+                    : change === "worker-append"
+                      ? [{ role: "user", content: "worker successor" }]
+                      : []),
+                ],
+          );
+          expect(readModel).toHaveBeenCalledTimes(
+            change === "unchanged" || change === "default-selector" || change === "mutable-message"
+              ? 0
+              : 1,
+          );
+        } finally {
+          readModel.mockRestore();
+        }
+      });
     });
   },
 );

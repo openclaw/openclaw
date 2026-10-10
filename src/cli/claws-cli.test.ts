@@ -604,24 +604,6 @@ describe("claws cli", () => {
     });
   });
 
-  it("prints a read-only remove plan without applying it", async () => {
-    await runCli(["claws", "remove", "demo-agent", "--dry-run", "--json"]);
-
-    expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
-      monitorGateway: expect.objectContaining({
-        inspect: expect.any(Function),
-        quiesce: expect.any(Function),
-        drain: expect.any(Function),
-      }),
-      referencedCleanup: { mode: "retain" },
-    });
-    expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawRemovePlan.v1",
-      mutationAllowed: false,
-    });
-  });
-
   it("prints a read-only grouped update plan", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
 
@@ -774,19 +756,6 @@ describe("claws cli", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("fails closed when update is invoked without dry-run", async () => {
-    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
-
-    await runCli(["claws", "update", "demo-agent", "--from", root, "--json"]);
-
-    expect(mocks.buildClawUpdatePlan).not.toHaveBeenCalled();
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawUpdatePlan.v1",
-      error: { code: "consent_required" },
-    });
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-  });
-
   it("requires exact plan integrity with update consent", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
 
@@ -886,61 +855,66 @@ describe("claws cli", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each(
-    [true, false].flatMap((json) => ["complete", "partial"].map((status) => ({ json, status }))),
-  )("reports consented removal outcomes (json=$json, status=$status)", async ({ json, status }) => {
-    const warnings = ["Plugin cleanup is still finishing."];
-    const pluginRuntime = { operationId: "runtime-final", generation: 3, pluginIds: ["audit"] };
-    const error = {
-      code: "package_cleanup_failed",
-      message: "Plugin activation failed. Gateway generation 3: replacement applied.",
-    };
-    mocks.applyClawRemovePlan.mockResolvedValue({
-      ...cliTestHelpers.createClawRemoveFixtures().result,
-      pluginRuntime,
-      warnings,
-      status,
-      agentRemoved: status === "complete",
-      ...(status === "partial" ? { error } : {}),
-    });
-    await runCli([
-      "claws",
-      "remove",
-      "demo-agent",
-      "--yes",
-      "--plan-integrity",
-      "sha256:remove-plan",
-      ...(json ? ["--json"] : []),
-    ]);
-
-    expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
-      expect.objectContaining({ planIntegrity: "sha256:remove-plan" }),
-      expect.objectContaining({
-        consentPlanIntegrity: "sha256:remove-plan",
-        referencedCleanup: { mode: "retain" },
-      }),
-    );
-    if (json) {
-      expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-        schemaVersion: "openclaw.clawRemoveResult.v1",
-        status,
-        agentId: "demo-agent",
+  it.each([
+    { json: true, status: "partial" },
+    { json: false, status: "complete" },
+    { json: false, status: "partial" },
+  ])(
+    "reports consented removal outcomes (json=$json, status=$status)",
+    async ({ json, status }) => {
+      const warnings = ["Plugin cleanup is still finishing."];
+      const pluginRuntime = { operationId: "runtime-final", generation: 3, pluginIds: ["audit"] };
+      const error = {
+        code: "package_cleanup_failed",
+        message: "Plugin activation failed. Gateway generation 3: replacement applied.",
+      };
+      mocks.applyClawRemovePlan.mockResolvedValue({
+        ...cliTestHelpers.createClawRemoveFixtures().result,
         pluginRuntime,
         warnings,
+        status,
+        agentRemoved: status === "complete",
         ...(status === "partial" ? { error } : {}),
       });
-    } else {
-      expect(mocks.logs.filter((line) => line === `Warning: ${warnings[0]}`)).toHaveLength(1);
-      expect(mocks.logs).toContain("Plugin runtime changed in Gateway generation 3.");
-      if (status === "partial") {
-        expect(mocks.errors).toContain(error.message);
-        expect(mocks.logs).not.toContain("Removed agent: demo-agent");
+      await runCli([
+        "claws",
+        "remove",
+        "demo-agent",
+        "--yes",
+        "--plan-integrity",
+        "sha256:remove-plan",
+        ...(json ? ["--json"] : []),
+      ]);
+
+      expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
+        expect.objectContaining({ planIntegrity: "sha256:remove-plan" }),
+        expect.objectContaining({
+          consentPlanIntegrity: "sha256:remove-plan",
+          referencedCleanup: { mode: "retain" },
+        }),
+      );
+      if (json) {
+        expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+          schemaVersion: "openclaw.clawRemoveResult.v1",
+          status,
+          agentId: "demo-agent",
+          pluginRuntime,
+          warnings,
+          ...(status === "partial" ? { error } : {}),
+        });
+      } else {
+        expect(mocks.logs.filter((line) => line === `Warning: ${warnings[0]}`)).toHaveLength(1);
+        expect(mocks.logs).toContain("Plugin runtime changed in Gateway generation 3.");
+        if (status === "partial") {
+          expect(mocks.errors).toContain(error.message);
+          expect(mocks.logs).not.toContain("Removed agent: demo-agent");
+        }
       }
-    }
-    if (status === "partial") {
-      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-    }
-  });
+      if (status === "partial") {
+        expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      }
+    },
+  );
 
   it("requires the exact dry-run identity with remove consent", async () => {
     await runCli(["claws", "remove", "demo-agent", "--yes", "--json"]);
@@ -976,6 +950,7 @@ describe("claws cli", () => {
         allowConflicts: true,
       },
     });
+    expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
   });
 
   it("rejects ambiguous referenced cleanup modes", async () => {

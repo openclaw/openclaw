@@ -1,3 +1,4 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, vi } from "vitest";
@@ -166,4 +167,35 @@ export function preparePromptCacheStream(params: {
     signal: params.signal,
     streamFn: params.streamFn,
   });
+}
+
+export async function createReadyGooglePromptCacheEntry(params: {
+  now: number;
+  cachedContent?: string;
+  expireTime?: string;
+}) {
+  const entries: SessionCustomEntry[] = [];
+  const { streamFn } = createCapturingStreamFn();
+  const wrapped = await preparePromptCacheStream({
+    now: params.now,
+    sessionManager: makeSessionManager(entries),
+    fetchMock: createCacheFetchMock({
+      name: params.cachedContent ?? "cachedContents/existing",
+      expireTime: params.expireTime ?? new Date(params.now + 3_600_000).toISOString(),
+    }),
+    streamFn,
+  });
+  if (!wrapped) {
+    throw new Error("Expected a Google prompt-cache wrapper");
+  }
+  await wrapped(
+    makeGoogleModel(),
+    { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] },
+    {},
+  );
+  const entry = entries[0];
+  if (!entry?.data || typeof entry.data !== "object") {
+    throw new Error("Expected the cache owner to persist a ready entry");
+  }
+  return { ...entry, data: entry.data };
 }

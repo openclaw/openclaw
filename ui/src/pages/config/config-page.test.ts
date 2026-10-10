@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -346,7 +347,7 @@ describe("ConfigPage synced preference provenance", () => {
       runtimeConfig,
       agentSelection: { state: { selectedId: null } },
       agents: { state: { agentsList: null } },
-      theme: { refresh: vi.fn() },
+      theme: { branding: resolveThemeBranding(undefined), refresh: vi.fn() },
       webPush: { snapshot: {} },
     } as unknown as ApplicationContext;
     const state = page as unknown as {
