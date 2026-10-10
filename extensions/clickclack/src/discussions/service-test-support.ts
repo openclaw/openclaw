@@ -1,6 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
+  PluginStateActionAuthority,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -54,21 +55,31 @@ export function createDiscussionMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
 export function asyncDiscussionTestStore<T>(
   openStore: PluginRuntime["state"]["openSyncKeyedStore"],
   options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+  authority?: PluginStateActionAuthority,
 ): PluginStateKeyedStore<T, 2> {
   if (options.retention === "retained") {
     throw new Error("ClickClack discussion fixture expects a bounded store");
   }
   const store = openStore<T>(options);
+  authority?.assertCurrent();
   const observe = (key: string) => ({
     value: store.lookup(key),
     comparison: JSON.stringify(store.entries().find((entry) => entry.key === key) ?? null),
   });
   return {
     observe: async (key) => observe(key),
-    compareAndApply: async (key, comparison, intent) => {
+    compareAndApply: async (key, comparison, intent, compareOptions) => {
+      authority?.assertCurrent();
       const current = observe(key);
       if (current.comparison !== comparison) {
         return { status: "conflict", current };
+      }
+      for (const condition of compareOptions?.conditions ?? []) {
+        const conditionStore = openStore({ ...options, namespace: condition.namespace });
+        const image = conditionStore.entries().find((entry) => entry.key === condition.key) ?? null;
+        if (JSON.stringify(image) !== condition.comparison) {
+          return { status: "conflict", current };
+        }
       }
       if (intent.action === "keep") {
         return { status: "unchanged" };
@@ -183,7 +194,8 @@ export function createHarness(
       openSyncKeyedStore,
       openKeyedStoreV2: <T>(
         storeOptions: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
-      ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions),
+        authority?: PluginStateActionAuthority,
+      ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions, authority),
     },
     agent: {
       session: {
