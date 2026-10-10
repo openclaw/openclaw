@@ -40,22 +40,31 @@ const parentKey = "agent:main:direct:embedded-parent";
 const parentId = "embedded-parent-session";
 const childKey = (id: string) => `agent:main:subagent:${id}`;
 
+async function seedEmbeddedSession(runId: string, profileId?: string) {
+  const target = { agentId: "main", sessionKey: parentKey };
+  await sessions.upsertSessionEntryCore(target, {
+    sessionId: parentId,
+    updatedAt: 1,
+    createdActor: profileId ? { type: "human", source: "profile", id: profileId } : undefined,
+  });
+  await persistGatewaySessionLifecycleEvent({
+    ...target,
+    event: {
+      runId,
+      sessionId: parentId,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      ts: 1_000,
+      data: { phase: "start", startedAt: 1_000 },
+    },
+  });
+  return target;
+}
+
 it.each(["chat.abort", "sessions.abort", "controller-backed"] as const)(
   "%s stops a live embedded turn and persists cancellation before responding",
   async (mode) => {
     const runId = "http-embedded-run";
-    const target = { agentId: "main", sessionKey: parentKey };
-    await sessions.upsertSessionEntryCore(target, { sessionId: parentId, updatedAt: 1 });
-    await persistGatewaySessionLifecycleEvent({
-      ...target,
-      event: {
-        runId,
-        sessionId: parentId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        ts: 1_000,
-        data: { phase: "start", startedAt: 1_000 },
-      },
-    });
+    const target = await seedEmbeddedSession(runId);
     const context = createDirectChatContext({ getRuntimeConfig });
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId, abort });
@@ -119,6 +128,145 @@ it.each(["chat.abort", "sessions.abort", "controller-backed"] as const)(
       }
     } finally {
       registration?.cleanup();
+      clearActiveEmbeddedRun(parentId, handle, parentKey);
+    }
+  },
+);
+
+it.each(["forbidden", "allowed"] as const)(
+  "chat.abort enforces session access before embedded Stop effects (%s)",
+  async (access) => {
+    const owner = roleClient("none", "embedded-session-owner");
+    const client = access === "allowed" ? owner : roleClient("none", "embedded-session-outsider");
+    client.connect.scopes = ["operator.sessions.write"];
+    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
+    setRuntimeConfigSnapshot(cfg);
+    const runId = "shared-embedded-run";
+    const target = await seedEmbeddedSession(runId, owner.authenticatedUserProfile!.profileId);
+    const before = sessions.loadSessionEntry(target);
+    expect(before).toMatchObject({ lifecycleRunId: runId, abortedLastRun: false });
+    const abort = vi.fn();
+    const handle = createEmbeddedRunHandle({ runId, abort });
+    setActiveEmbeddedRun(parentId, handle, parentKey, undefined, "main");
+    const respond = vi.fn();
+    try {
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "shared-embedded-stop",
+          method: "chat.abort",
+          params: { sessionKey: parentKey },
+        },
+        client,
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: { "chat.abort": handleChatAbortRequest },
+      });
+      expect(respond).toHaveBeenCalledOnce();
+      const after = sessions.loadSessionEntry({ ...target, readConsistency: "latest" });
+      if (access === "forbidden") {
+        expect(abort).not.toHaveBeenCalled();
+        expect(after).toEqual(before);
+        expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: `Session "${parentKey}" was not found.`,
+          }),
+        ]);
+      } else {
+        expect(abort).toHaveBeenCalledOnce();
+        expect(after).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+        expect(after?.lifecycleRunId).toBeUndefined();
+        expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+          true,
+          { ok: true, aborted: true, runIds: [runId] },
+        ]);
+      }
+    } finally {
+      clearActiveEmbeddedRun(parentId, handle, parentKey);
+    }
+  },
+);
+
+it.each(["before signal", "after signal"] as const)(
+  "chat.abort fences embedded Stop effects when authority is revoked %s",
+  async (timing) => {
+    const client = roleClient("none", "revoked-embedded-owner");
+    client.connId = "revoked-embedded-connection";
+    client.connect.scopes = ["operator.sessions.write"];
+    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
+    setRuntimeConfigSnapshot(cfg);
+    const runId = "revoked-embedded-run";
+    const target = await seedEmbeddedSession(runId, client.authenticatedUserProfile!.profileId);
+    const before = sessions.loadSessionEntry(target);
+    expect(before).toMatchObject({ lifecycleRunId: runId, abortedLastRun: false });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const queued = createActiveRun(parentKey, {
+      sessionId: parentId,
+      agentId: "main",
+      owner: { connId: client.connId },
+    });
+    context.chatQueuedTurns.set("authorized-queued", queued);
+    let current = true;
+    if (timing === "before signal") {
+      queued.controller.signal.addEventListener(
+        "abort",
+        () => {
+          current = false;
+        },
+        { once: true },
+      );
+    }
+    const abort = vi.fn(() => {
+      if (timing === "after signal") {
+        current = false;
+      }
+    });
+    const handle = createEmbeddedRunHandle({ runId, abort });
+    setActiveEmbeddedRun(parentId, handle, parentKey, undefined, "main");
+    const respond = vi.fn();
+    const revoked = new Error("embedded Stop authority revoked");
+    try {
+      const outcome = await Promise.allSettled([
+        handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "revoked-embedded-stop",
+            method: "chat.abort",
+            params: { sessionKey: parentKey },
+          },
+          client,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          sessionMutationCommitGuard: () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+          extraHandlers: { "chat.abort": handleChatAbortRequest },
+        }),
+      ]);
+      expect(queued.controller.signal.aborted).toBe(true);
+      expect(abort).toHaveBeenCalledTimes(timing === "after signal" ? 1 : 0);
+      expect(sessions.loadSessionEntry({ ...target, readConsistency: "latest" })).toEqual(before);
+      expect(respond).not.toHaveBeenCalled();
+      expect(outcome).toEqual([
+        {
+          status: "rejected",
+          reason:
+            timing === "before signal"
+              ? revoked
+              : expect.objectContaining({
+                  message: "Chat cancellation and persistence failed",
+                  errors: [revoked, revoked],
+                }),
+        },
+      ]);
+    } finally {
       clearActiveEmbeddedRun(parentId, handle, parentKey);
     }
   },
