@@ -78,7 +78,23 @@ export const en: TranslationMap & {
   devices: TranslationMap & { pairing: TranslationMap };
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect" | "connecting", string>;
-  sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap };
+  sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap } & Record<
+      | "ariaLabel"
+      | "linkedChannel"
+      | "moreParticipants"
+      | "moreParticipantsLabel"
+      | "projectLabel"
+      | "workspaceLabel"
+      | "branchLabel"
+      | "runsOn"
+      | "machineLabel"
+      | "machineCpu"
+      | "machineMemory"
+      | "more"
+      | "changedFile"
+      | "changedFiles",
+      string
+    >;
   filePreview: TranslationMap;
   updates: TranslationMap;
   login: TranslationMap;
@@ -262,20 +278,7 @@ export const en: TranslationMap & {
   mcpApp: {},
   sessionHovercard: {
     ariaLabel: "Session information",
-    agentNotepad: "Agent Notepad",
     linkedChannel: "Linked to {channel}",
-    viaAccount: "Via {account}",
-    topicNumber: "Topic {id}",
-    sessionParticipants: "In this session",
-    chatKinds: {
-      direct: "Direct chat",
-      group: "Group chat",
-      channel: "Channel",
-      thread: "Thread",
-      topic: "Topic",
-    },
-    attributionOther: "& {count} other",
-    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",

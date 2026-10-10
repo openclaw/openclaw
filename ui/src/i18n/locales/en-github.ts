@@ -3,6 +3,33 @@ import { en } from "./en.ts";
 
 const enGitHub = {
   sessionHovercard: {
+    ariaLabel: en.sessionHovercard.ariaLabel,
+    agentNotepad: "Agent Notepad",
+    linkedChannel: en.sessionHovercard.linkedChannel,
+    viaAccount: "Via {account}",
+    topicNumber: "Topic {id}",
+    sessionParticipants: "In this session",
+    chatKinds: {
+      direct: "Direct chat",
+      group: "Group chat",
+      channel: "Channel",
+      thread: "Thread",
+      topic: "Topic",
+    },
+    attributionOther: "& {count} other",
+    attributionOthers: "& {count} others",
+    moreParticipants: en.sessionHovercard.moreParticipants,
+    moreParticipantsLabel: en.sessionHovercard.moreParticipantsLabel,
+    projectLabel: en.sessionHovercard.projectLabel,
+    workspaceLabel: en.sessionHovercard.workspaceLabel,
+    branchLabel: en.sessionHovercard.branchLabel,
+    runsOn: en.sessionHovercard.runsOn,
+    machineLabel: en.sessionHovercard.machineLabel,
+    machineCpu: en.sessionHovercard.machineCpu,
+    machineMemory: en.sessionHovercard.machineMemory,
+    more: en.sessionHovercard.more,
+    changedFile: en.sessionHovercard.changedFile,
+    changedFiles: en.sessionHovercard.changedFiles,
     pullRequestLabel: "Pull request #{number}, {state}",
     pullRequestAuthorLabel: "Opened by {login}",
     states: {
@@ -224,10 +251,12 @@ const enGitHub = {
 
 export const registerGitHubEnglish = Object.assign(
   () => {
-    en.sessionHovercard.pullRequestLabel = enGitHub.sessionHovercard.pullRequestLabel;
-    en.sessionHovercard.pullRequestAuthorLabel = enGitHub.sessionHovercard.pullRequestAuthorLabel;
     Object.assign(en.sessionHovercard.states, enGitHub.sessionHovercard.states);
     Object.assign(en.sessionHovercard.checks, enGitHub.sessionHovercard.checks);
+    Object.assign(en.sessionHovercard, enGitHub.sessionHovercard, {
+      states: en.sessionHovercard.states,
+      checks: en.sessionHovercard.checks,
+    });
     Object.assign(en.chat.pullRequests, enGitHub.chat.pullRequests);
     Object.assign(en.agentTools, enGitHub.agentTools);
     Object.assign(en.githubPublication, enGitHub.githubPublication);

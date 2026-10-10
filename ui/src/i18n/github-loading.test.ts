@@ -39,6 +39,14 @@ it.each([
   const hovercard = en.sessionHovercard;
   const states = hovercard.states;
   const checks = hovercard.checks;
+  expect(hovercard.agentNotepad).toBeUndefined();
+  expect(hovercard.chatKinds).toBeUndefined();
+  expect(manager.t("sessionHovercard.linkedChannel", { channel: "Matrix" })).toBe(
+    "Linked to Matrix",
+  );
+  expect(manager.t("sessionHovercard.moreParticipantsLabel", { count: "3" })).toBe(
+    "3 more participants",
+  );
   expect(hovercard.pullRequestLabel).toBeUndefined();
   expect(states.open).toBeUndefined();
   expect(pullRequests.publishPr).toBeUndefined();
@@ -65,6 +73,13 @@ it.each([
   expect(en.sessionHovercard).toBe(hovercard);
   expect(hovercard.states).toBe(states);
   expect(hovercard.checks).toBe(checks);
+  expect(manager.t("sessionHovercard.agentNotepad")).toBe("Agent Notepad");
+  expect(manager.t("sessionHovercard.chatKinds.group")).toBe("Group chat");
+  expect(manager.t("sessionHovercard.viaAccount", { account: "work" })).toBe("Via work");
+  expect(manager.t("sessionHovercard.topicNumber", { id: "7" })).toBe("Topic 7");
+  expect(manager.t("sessionHovercard.sessionParticipants")).toBe("In this session");
+  expect(manager.t("sessionHovercard.attributionOther", { count: "1" })).toBe("& 1 other");
+  expect(manager.t("sessionHovercard.attributionOthers", { count: "2" })).toBe("& 2 others");
   expect(manager.t("sessionHovercard.states.open")).toBe("Open");
   expect(manager.t("sessionHovercard.checks.passing")).toBe("CI-Prüfungen erfolgreich");
   expect(manager.t("chat.pullRequests.publishPr")).toBe("Publish PR");
