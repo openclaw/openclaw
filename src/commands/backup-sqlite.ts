@@ -170,7 +170,7 @@ async function resolveSnapshotDatabase(options: BackupSqliteCreateOptions) {
   assertNotUpdateCapturePath(databasePath, resolveStateDir());
   return {
     path: await fs.realpath(databasePath),
-    identity: { role: "agent", agentId },
+    identity: { role: "agent" as const, agentId },
   };
 }
 
