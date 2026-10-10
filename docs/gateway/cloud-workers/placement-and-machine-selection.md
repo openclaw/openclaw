@@ -121,8 +121,8 @@ The bundled Crabbox provider advertises Linux, Windows (WSL2), native Windows, a
 
 Select `windows/normal` for native Windows and `windows/wsl2` for the Linux environment inside Windows. Native Windows runs `settings.setup` as PowerShell and requires supported Node.js and npm on the guest. Headless Windows workers additionally require Crabbox's detached-process launcher. A Bash setup recipe cannot be reused unchanged for that target; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
 
-The picker offers only classes reported by the provider, marking the configured
-class as the default for each operating system. It shows reported vCPU and RAM
+The picker offers provider-reported classes plus the configured default, even
+when that default is absent from the catalog. It shows reported vCPU and RAM
 independently; missing or unsupported dimensions stay unknown, including on
 selectable macOS classes. It never guesses hardware from native type names.
 Unavailable or unusable catalog metadata hides the machine selector, but the
