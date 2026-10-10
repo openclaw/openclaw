@@ -43,7 +43,7 @@ export function registerFeishuReasoningPreviewTests(params: {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make(`feishu-first-reasoning-${mode}-`) };
       const authority = { assertCurrent() {} };
       const actor = mode === "bound" ? await openIncognitoTestActor(env, authority) : undefined;
-      const storePath = resolveStorePath(undefined, { agentId: "main", env });
+      const storePath = actor?.path ?? resolveStorePath(undefined, { agentId: "main", env });
       const sessionKey = "agent:main:dashboard:incognito-first-reasoning";
       const cfg = { agents: { defaults: { reasoningDefault: "stream" as const } } };
       const verify = async () => {

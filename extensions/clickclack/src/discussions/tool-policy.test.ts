@@ -3,6 +3,13 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
+  const { createDiscussionSessionRuntimeMock } = await import("./session-source-test-support.js");
+  return createDiscussionSessionRuntimeMock(actual);
+});
 import type { CoreConfig } from "../types.js";
 import {
   attachBindingToCurrentActiveSession,

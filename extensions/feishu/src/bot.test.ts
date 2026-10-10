@@ -207,9 +207,7 @@ const {
       ensureNoVisibleReplyFallback: vi.fn(),
     }),
   ),
-  mockSendMessageFeishu: vi
-    .fn<typeof import("./send.js").sendMessageFeishu>()
-    .mockResolvedValue(createFeishuTestSentMessage("pairing-msg", "oc-dm")),
+  mockSendMessageFeishu: vi.fn<typeof import("./send.js").sendMessageFeishu>(),
   mockGetMessageFeishu: vi
     .fn<typeof import("./send.js").getMessageFeishu>()
     .mockResolvedValue(null),

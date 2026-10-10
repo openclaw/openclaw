@@ -18,6 +18,13 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
+  const { createDiscussionSessionRuntimeMock } = await import("./session-source-test-support.js");
+  return createDiscussionSessionRuntimeMock(actual);
+});
 import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
 import {

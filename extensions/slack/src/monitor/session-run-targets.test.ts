@@ -92,7 +92,9 @@ it("targets Stop at the live bound actor and revokes it on rebind or generation 
           sessionKey,
           entry: { sessionId: "replacement", updatedAt: 2, incognito: true },
         });
-        expect(recaptured.isCurrentSession()).toBe(false);
+        expect(() => recaptured.assertCurrentSession()).toThrow(
+          "Incognito session generation is no longer current",
+        );
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();

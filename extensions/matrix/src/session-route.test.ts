@@ -9,12 +9,13 @@ import {
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
   openIncognitoTestActor,
   withIncognitoSessionBinding,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -24,6 +25,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 const sessionRoot = tempDirs.make("matrix-session-route-");
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+});
 const currentDmSessionKey = "agent:main:matrix:channel:!dm:example.org";
 type MatrixChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>;
 

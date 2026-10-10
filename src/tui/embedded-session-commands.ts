@@ -3,6 +3,7 @@ import type { ErrorShape, SessionsPatchResult } from "../../packages/gateway-pro
 import { prepareAcpSessionEntryRead } from "../acp/runtime/session-meta-read.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "../agents/auth-profiles/path-resolve.js";
 import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -24,6 +25,7 @@ import {
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   withEmbeddedSessionSource,
   type SelectedEmbeddedSession,
@@ -47,6 +49,7 @@ export function createEmbeddedSessionCommands(lifecycle: {
     selected: SelectedEmbeddedSession | undefined,
     assertSelected: () => void,
   ) {
+    const catalogSource = selected ? captureOpenClawStateWorkerContext() : undefined;
     await lifecycle.ready();
     await lifecycle.modelRuntimeReady();
     const cfg = getRuntimeConfig();
@@ -100,12 +103,23 @@ export function createEmbeddedSessionCommands(lifecycle: {
           agentId: target.agentId,
           patch: opts,
           ...(preparedAcp ? { preparedAcpMeta: preparedAcp.session?.acp ?? null } : {}),
-          loadGatewayModelCatalogSnapshot: () =>
-            loadPreparedModelCatalogSnapshot({
+          loadGatewayModelCatalogSnapshot: async () => {
+            if (catalogSource) {
+              assertSelected();
+              await resolveSharedAuthStoreOwnershipAsync(catalogSource);
+              assertSelected();
+            }
+            const catalog = await loadPreparedModelCatalogSnapshot({
               config: cfg,
               agentId: target.agentId,
               readOnly: true,
-            }),
+              ...(catalogSource ? { env: catalogSource.initializationEnvironment } : {}),
+            });
+            catalogSource?.maintenanceScope?.assertAdmission();
+            catalogSource?.admission.assertCurrent();
+            assertSelected();
+            return catalog;
+          },
         }),
     }).finally(() => preparedAcp?.release());
     if (!applied.ok) {

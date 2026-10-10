@@ -5,6 +5,13 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
+  const { createDiscussionSessionRuntimeMock } = await import("./session-source-test-support.js");
+  return createDiscussionSessionRuntimeMock(actual);
+});
 import { resolveClickClackAccount } from "../accounts.js";
 import { createClickClackClient } from "../http-client.js";
 import { handleClickClackInbound } from "../inbound.js";

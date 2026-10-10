@@ -19,9 +19,9 @@ it.each(["native", "bound"] as const)(
   "prepares the %s reasoning policy and revokes previews after a policy change",
   async (mode) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make(`feishu-reasoning-${mode}-`) };
-    const storePath = resolveStorePath(undefined, { agentId: "main", env });
     const sessionKey = "agent:main:dashboard:incognito-reasoning";
     const actor = mode === "bound" ? await openIncognitoTestActor(env, authority) : undefined;
+    const storePath = actor?.path ?? resolveStorePath(undefined, { agentId: "main", env });
     const entry = {
       sessionId: "reasoning-session",
       updatedAt: 1,

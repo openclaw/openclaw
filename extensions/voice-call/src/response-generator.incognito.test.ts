@@ -3,6 +3,10 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -11,13 +15,14 @@ import {
   withIncognitoSessionBinding,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { VoiceCallConfigSchema } from "./config.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 afterAll(() => closeOpenClawAgentDatabasesAsync());
+afterEach(resetPluginRuntimeStateForTest);
 
 it("uses the actor for an explicit same-agent key and the native owner for generated call keys", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("voice-bound-") };
@@ -36,6 +41,7 @@ it("uses the actor for an explicit same-agent key and the native owner for gener
       session = api.runtime.agent.session;
     },
   });
+  setActivePluginRegistry(registry.registry);
   if (!session) {
     throw new Error("Voice fixture did not receive the host session owner");
   }

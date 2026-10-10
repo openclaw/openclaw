@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
+  const { createDiscussionSessionRuntimeMock } = await import("./session-source-test-support.js");
+  return createDiscussionSessionRuntimeMock(actual);
+});
 import type { ClickClackMessage } from "../types.js";
 import {
   recordPendingDiscussionOpen,

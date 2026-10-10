@@ -4,6 +4,13 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
+  const { createDiscussionSessionRuntimeMock } = await import("./session-source-test-support.js");
+  return createDiscussionSessionRuntimeMock(actual);
+});
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
 import { discussionChannel, createHarness } from "./service-test-support.js";

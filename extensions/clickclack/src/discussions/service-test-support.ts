@@ -10,57 +10,8 @@ import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
 import { discussionExternalRef } from "./naming.js";
 import { ClickClackDiscussionService } from "./service.js";
-
-const sessionPreparations = vi.hoisted(() => ({
-  nextPath: 0,
-  runtimes: new Map<string, PluginRuntime>(),
-}));
-
-vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
-  const { isDeepStrictEqual } = await import("node:util");
-  return {
-    ...actual,
-    captureSessionEntryCurrentCheck: async (
-      params: Parameters<typeof actual.captureSessionEntryCurrentCheck>[0],
-    ) => {
-      const runtime = params.storePath && sessionPreparations.runtimes.get(params.storePath);
-      if (!runtime) {
-        return actual.captureSessionEntryCurrentCheck(params);
-      }
-      const entry = runtime.agent.session.getSessionEntryAsync
-        ? await runtime.agent.session.getSessionEntryAsync(params)
-        : runtime.agent.session.getSessionEntry(params);
-      const fields = [
-        ...(params.matchGeneration === false ? [] : (["sessionId", "lifecycleRevision"] as const)),
-        ...(params.fields ?? []),
-      ];
-      const expected = structuredClone(entry);
-      const isCurrent = () => {
-        const current = runtime.agent.session.getSessionEntry(params);
-        return (
-          params.isActive?.() !== false &&
-          (current === undefined) === (expected === undefined) &&
-          fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field]))
-        );
-      };
-      const assertCurrent = () => {
-        if (!isCurrent()) {
-          throw new Error(params.errorMessage);
-        }
-      };
-      assertCurrent();
-      return { entry, isCurrent, assertCurrent };
-    },
-  };
-});
-
-export function bindDiscussionSessionFixture(runtime: PluginRuntime): void {
-  const preparationPath = `/clickclack-test/${++sessionPreparations.nextPath}`;
-  runtime.agent.session.resolveStorePath = () => preparationPath;
-  sessionPreparations.runtimes.set(preparationPath, runtime);
-}
+import { bindDiscussionSessionFixture } from "./session-source-test-support.js";
+export { bindDiscussionSessionFixture } from "./session-source-test-support.js";
 
 const TEST_INSTALLATION_ID = "11111111-2222-4333-8444-555555555555";
 const TEST_BINDING_GENERATION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";

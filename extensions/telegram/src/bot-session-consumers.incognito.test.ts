@@ -5,6 +5,7 @@ import {
   openIncognitoTestActor,
   useSessionStoreTempDirs,
   withIncognitoSessionActor,
+  withIncognitoSessionBinding,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, expect, it } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -56,6 +57,7 @@ it("routes a bound topic to the actor for model and reasoning facts without host
     });
     const sql = observeHostDataSql();
     try {
+      const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
       await withIncognitoSessionActor(actor, async () => {
         const selected = await runtime.resolveTelegramSessionState({
           chatId: -100,
@@ -64,7 +66,6 @@ it("routes a bound topic to the actor for model and reasoning facts without host
           runtimeCfg: cfg,
         });
         expect(selected).toMatchObject({ sessionKey, model: "openai/selected" });
-        const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
         await expect(
           resolveTelegramReasoningLevel({
             cfg,
@@ -73,7 +74,9 @@ it("routes a bound topic to the actor for model and reasoning facts without host
             loadFreshSessionEntry,
           }),
         ).resolves.toBe("stream");
-        await actor.close();
+      });
+      await actor.close();
+      await withIncognitoSessionBinding({ actor }, async () => {
         await expect(
           resolveTelegramReasoningLevel({
             cfg,

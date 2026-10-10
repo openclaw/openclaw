@@ -8,7 +8,7 @@ import {
   withIncognitoSessionActor,
   withIncognitoSessionBinding,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createModelsProviderData, createResolvedAgentRoute } from "./model-picker.test-utils.js";
 import {
   prepareDiscordModelPickerSession,
@@ -18,46 +18,43 @@ import {
 
 const dirs = useSessionStoreTempDirs(afterAll, "discord-bound-picker-");
 const authority = { assertCurrent() {} };
+afterEach(() => vi.unstubAllEnvs());
 
-it("rejects inherited model choices after the parent actor session changes", async () => {
+it("rejects inherited model choices after the parent session changes", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make() };
-  const actor = await openIncognitoTestActor(env, authority);
-  const parentKey = "agent:main:dashboard:incognito-parent";
+  const storePath = path.join(env.OPENCLAW_STATE_DIR, "agents/main/sessions/sessions.json");
+  const parentKey = "agent:main:discord:channel:parent";
   const sessionKey = `${parentKey}:thread:child`;
-  const cfg: OpenClawConfig = { session: { store: actor.path } };
-  try {
-    for (const key of [parentKey, sessionKey]) {
-      await actor.sessions.create(authority, {
-        sessionKey: key,
-        entry: {
-          sessionId: key,
-          updatedAt: 1,
-          incognito: true,
-          ...(key === parentKey ? { providerOverride: "openai", modelOverride: "selected" } : {}),
-        },
-      });
-    }
-    await withIncognitoSessionActor(actor, async () => {
-      const prepared = await prepareDiscordModelPickerSession({
-        cfg,
-        route: createResolvedAgentRoute({ sessionKey }),
-      });
-      await expect(prepared.resolveOverride("openai")).resolves.toMatchObject({
-        model: "selected",
-        source: "parent",
-      });
-      await patchSessionEntry({
-        agentId: "main",
-        env,
-        storePath: actor.path,
-        sessionKey: parentKey,
-        update: () => ({ modelOverride: "replacement" }),
-      });
-      expect(() => prepared.assertCurrent()).toThrow();
+  const cfg: OpenClawConfig = { session: { store: storePath } };
+  for (const key of [parentKey, sessionKey]) {
+    await upsertSessionEntry({
+      agentId: "main",
+      env,
+      storePath,
+      sessionKey: key,
+      entry: {
+        sessionId: key,
+        updatedAt: 1,
+        ...(key === parentKey ? { providerOverride: "openai", modelOverride: "selected" } : {}),
+      },
     });
-  } finally {
-    await actor.close();
   }
+  const prepared = await prepareDiscordModelPickerSession({
+    cfg,
+    route: createResolvedAgentRoute({ sessionKey }),
+  });
+  await expect(prepared.resolveOverride("openai")).resolves.toMatchObject({
+    model: "selected",
+    source: "parent",
+  });
+  await patchSessionEntry({
+    agentId: "main",
+    env,
+    storePath,
+    sessionKey: parentKey,
+    update: () => ({ modelOverride: "replacement" }),
+  });
+  expect(() => prepared.assertCurrent()).toThrow();
 });
 
 it("reads bound model choices without host SQL and refuses a retired actor", async () => {
@@ -81,16 +78,18 @@ it("reads bound model choices without host SQL and refuses a retired actor", asy
     });
     const sql = observeHostDataSql();
     try {
-      await withIncognitoSessionActor(actor, async () => {
+      const prepared = await withIncognitoSessionActor(actor, async () => {
         await expect(resolveDiscordModelPickerCurrentModel({ cfg, route, data })).resolves.toBe(
           "openai/selected",
         );
         await expect(resolveDiscordModelPickerCurrentRuntime({ cfg, route })).resolves.toBe(
           "openclaw",
         );
-        const prepared = await prepareDiscordModelPickerSession({ cfg, route });
-        await actor.close();
-        expect(() => prepared.assertCurrent()).toThrow(/Incognito session ended/);
+        return prepareDiscordModelPickerSession({ cfg, route });
+      });
+      await actor.close();
+      expect(() => prepared.assertCurrent()).toThrow(/Incognito session ended/);
+      await withIncognitoSessionBinding({ actor }, async () => {
         await expect(
           resolveDiscordModelPickerCurrentModel({ cfg, route, data }),
         ).rejects.toMatchObject({
@@ -108,6 +107,7 @@ it("reads bound model choices without host SQL and refuses a retired actor", asy
 
 it("preserves host-owned unbound incognito and actor-selected absence", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make() };
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   const sessionKey = "agent:main:dashboard:incognito-native";
   const storePath = path.join(env.OPENCLAW_STATE_DIR, "agents/main/sessions/sessions.json");
   const cfg: OpenClawConfig = { session: { store: storePath } };
