@@ -1,5 +1,39 @@
 import { describe, expect, it } from "vitest";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+} from "../agents/cli-image-turn-correlation.js";
+import {
+  takeAlignedLocalTurn,
+  type LocalTurnBucket,
+} from "./cli-session-history.merge-aggregates.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.test-support.js";
+
+const RESUME_DRIFT_NOTE =
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt.";
+
+function idempotencyKeys(messages: unknown[]): Array<string | undefined> {
+  return messages.map((message) => {
+    if (typeof message !== "object" || message === null || !("idempotencyKey" in message)) {
+      return undefined;
+    }
+    const key = message.idempotencyKey;
+    return typeof key === "string" ? key : undefined;
+  });
+}
+
+function claudeMeta(externalId: string) {
+  return { __openclaw: { importedFrom: "claude-cli", externalId, cliSessionId: "s" } };
+}
+
+function segment(text: string, externalId: string, timestamp?: number) {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    ...(timestamp === undefined ? {} : { timestamp }),
+    ...claudeMeta(externalId),
+  };
+}
 
 describe("cli session history covered aggregates", () => {
   it.each([
@@ -452,5 +486,301 @@ describe("cli session history covered aggregates", () => {
       second.importedInterim,
       second.importedFinal,
     ]);
+  });
+
+  it("drops a covered aggregate when locals arrive in production page order", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const localUser = { role: "user", content: "question", timestamp: timestamp - 1 };
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Thinking about the request\nHere is the finished answer." }],
+      timestamp,
+      idempotencyKey: "cli-assistant:run-1",
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localOrder: "production-pages",
+      localMessages: [localUser, localAggregate],
+      importedMessages: [
+        {
+          role: "user",
+          content: "question",
+          timestamp: timestamp - 1,
+          ...claudeMeta("user-1"),
+        },
+        segment("Thinking about the request", "interim", timestamp),
+        segment("Here is the finished answer.", "final", timestamp + 1),
+      ],
+    });
+
+    expect(idempotencyKeys(merged)).not.toContain("cli-assistant:run-1");
+    expect(merged).toHaveLength(3);
+  });
+
+  it("assigns aggregates to the older user across a backward local page", () => {
+    const timestamp = Date.parse("2026-03-26T16:00:00.000Z");
+    const olderUser = { role: "user", content: "older question", timestamp };
+    const olderAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Older interim\nOlder final" }],
+      timestamp: timestamp + 3,
+      idempotencyKey: "cli-assistant:older",
+    };
+    const newerUser = { role: "user", content: "newer question", timestamp: timestamp + 60_000 };
+    const newerAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Newer interim\nNewer final" }],
+      timestamp: timestamp + 60_003,
+      idempotencyKey: "cli-assistant:newer",
+    };
+    const pads = Array.from({ length: 62 }, (_, index) => ({
+      role: "assistant",
+      content: `pad ${index}`,
+      timestamp: timestamp + 120_000 + index,
+    }));
+    const merged = mergeImportedChatHistoryMessages({
+      localOrder: "production-pages",
+      localMessages: [olderUser, olderAggregate, newerUser, newerAggregate, ...pads],
+      importedMessages: [
+        {
+          role: "user",
+          content: "older question",
+          timestamp,
+          ...claudeMeta("user-older"),
+        },
+        segment("Older interim", "older-interim", timestamp + 1),
+        segment("Older final", "older-final", timestamp + 2),
+      ],
+    });
+
+    const keys = idempotencyKeys(merged);
+    expect(keys).not.toContain("cli-assistant:older");
+    expect(keys).toContain("cli-assistant:newer");
+  });
+
+  it("keeps both aggregates when repeated prompts share a timestamp window", () => {
+    const start = Date.parse("2026-03-26T16:00:00.000Z");
+    const reply = "Working on it.\nAll done.";
+    const turn = (runId: string, at: number) => ({
+      user: { role: "user", content: "ping", timestamp: at },
+      aggregate: {
+        role: "assistant",
+        content: [{ type: "text", text: reply }],
+        timestamp: at + 3,
+        idempotencyKey: `cli-assistant:${runId}`,
+      },
+    });
+    const first = turn("run-1", start);
+    const second = turn("run-2", start + 60_000);
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [first.user, first.aggregate, second.user, second.aggregate],
+      importedMessages: [
+        { role: "user", content: "ping", timestamp: start + 60_000, ...claudeMeta("user-2") },
+        segment("Working on it.", "interim-2", start + 60_001),
+        segment("All done.", "final-2", start + 60_002),
+      ],
+    });
+
+    const keys = idempotencyKeys(merged);
+    expect(keys).toContain("cli-assistant:run-1");
+    expect(keys).toContain("cli-assistant:run-2");
+  });
+
+  it("drops only the later aggregate when a repeated prompt is outside the window", () => {
+    const start = Date.parse("2026-03-26T16:00:00.000Z");
+    const reply = "Working on it.\nAll done.";
+    const turn = (runId: string, at: number) => ({
+      user: { role: "user", content: "ping", timestamp: at },
+      aggregate: {
+        role: "assistant",
+        content: [{ type: "text", text: reply }],
+        timestamp: at + 3,
+        idempotencyKey: `cli-assistant:${runId}`,
+      },
+    });
+    const first = turn("run-1", start);
+    const later = turn("run-2", start + 10 * 60_000);
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [first.user, first.aggregate, later.user, later.aggregate],
+      importedMessages: [
+        {
+          role: "user",
+          content: "ping",
+          timestamp: start + 10 * 60_000,
+          ...claudeMeta("user-later"),
+        },
+        segment("Working on it.", "interim-later", start + 10 * 60_000 + 1),
+        segment("All done.", "final-later", start + 10 * 60_000 + 2),
+      ],
+    });
+
+    const keys = idempotencyKeys(merged);
+    expect(keys).toContain("cli-assistant:run-1");
+    expect(keys).not.toContain("cli-assistant:run-2");
+  });
+
+  it("does not rescan untimestamped prompts for every timestamped import", () => {
+    const turns = Array.from({ length: 400 }, (_, order) => ({
+      order,
+      timestamp: undefined,
+    }));
+    const bucket: LocalTurnBucket = {
+      turns,
+      cursor: 0,
+      timestamped: [],
+      timestampedCursor: 0,
+      visits: 0,
+    };
+    for (let index = 0; index < turns.length; index += 1) {
+      expect(takeAlignedLocalTurn(bucket, 1_000 + index)).toBeUndefined();
+    }
+    expect(bucket.visits).toBe(0);
+    expect(bucket.cursor).toBe(0);
+    expect(takeAlignedLocalTurn(bucket, 5_000)).toBeUndefined();
+  });
+
+  it("aligns the only untimestamped prompt without scanning a timestamp index", () => {
+    const bucket: LocalTurnBucket = {
+      turns: [{ order: 7, timestamp: undefined }],
+      cursor: 0,
+      timestamped: [],
+      timestampedCursor: 0,
+      visits: 0,
+    };
+    expect(takeAlignedLocalTurn(bucket, 5_000)).toBe(7);
+    expect(bucket.visits).toBe(0);
+  });
+
+  it("drops a covered aggregate for a resumed prompt the matcher already aligned", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const localUser = { role: "user", content: "test ping...", timestamp };
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Resumed check.\nResumed answer." }],
+      timestamp: timestamp + 3,
+      idempotencyKey: "cli-assistant:resume",
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localUser, localAggregate],
+      importedMessages: [
+        {
+          role: "user",
+          content: `${RESUME_DRIFT_NOTE}\n\ntest ping...`,
+          timestamp: timestamp + 1,
+          ...claudeMeta("user-resume"),
+        },
+        segment("Resumed check.", "resume-interim", timestamp + 1),
+        segment("Resumed answer.", "resume-final", timestamp + 2),
+      ],
+    });
+
+    expect(idempotencyKeys(merged)).not.toContain("cli-assistant:resume");
+  });
+
+  it("drops a covered aggregate when external identity pins the local user", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const localUser = {
+      role: "user",
+      content: "stored prompt",
+      timestamp,
+      ...claudeMeta("user-ext"),
+    };
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Identity interim\nIdentity final" }],
+      timestamp: timestamp + 3,
+      idempotencyKey: "cli-assistant:identity",
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localUser, localAggregate],
+      importedMessages: [
+        {
+          role: "user",
+          content: "rewritten prompt",
+          timestamp,
+          ...claudeMeta("user-ext"),
+        },
+        segment("Identity interim", "identity-interim", timestamp + 1),
+        segment("Identity final", "identity-final", timestamp + 2),
+      ],
+    });
+
+    expect(idempotencyKeys(merged)).not.toContain("cli-assistant:identity");
+  });
+
+  it("drops a covered aggregate when an image match pins the local user", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const localEntryId = "local-image-coverage";
+    const imageLocal = {
+      role: "user",
+      content: "look at this",
+      timestamp,
+      __openclaw: {
+        id: localEntryId,
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/coverage.png" }],
+      },
+    };
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Image interim\nImage final" }],
+      timestamp: timestamp + 3,
+      idempotencyKey: "cli-assistant:image",
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [imageLocal, localAggregate],
+      importedMessages: [
+        {
+          role: "user",
+          content: `unrelated caption\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
+          timestamp,
+          ...claudeMeta("image-user"),
+        },
+        segment("Image interim", "image-interim", timestamp + 1),
+        segment("Image final", "image-final", timestamp + 2),
+      ],
+    });
+
+    expect(idempotencyKeys(merged)).not.toContain("cli-assistant:image");
+  });
+
+  it("keeps tool results inside a mixed text and tool assistant turn", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const localUser = { role: "user", content: "run the tool", timestamp: timestamp - 1 };
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "I'll check.\nThe answer is 4." }],
+      timestamp: timestamp + 4,
+      idempotencyKey: "cli-assistant:tool",
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localUser, localAggregate],
+      importedMessages: [
+        {
+          role: "user",
+          content: "run the tool",
+          timestamp: timestamp - 1,
+          ...claudeMeta("user-tool"),
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I'll check." },
+            { type: "toolcall", id: "tool-1", name: "calc", arguments: {} },
+          ],
+          timestamp,
+          ...claudeMeta("assistant-mixed"),
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-1", content: "4" }],
+          timestamp: timestamp + 1,
+          ...claudeMeta("tool-result-1"),
+        },
+        segment("The answer is 4.", "assistant-final", timestamp + 2),
+      ],
+    });
+
+    expect(idempotencyKeys(merged)).not.toContain("cli-assistant:tool");
+    expect(JSON.stringify(merged)).toContain("tool_result");
+    expect(JSON.stringify(merged)).toContain("The answer is 4.");
   });
 });

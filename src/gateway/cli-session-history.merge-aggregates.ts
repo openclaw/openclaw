@@ -2,6 +2,7 @@
 // Drops stored cli-assistant aggregates covered by imported segment runs.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isToolResultBlock } from "../chat/tool-content.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 const CLI_ASSISTANT_IDEMPOTENCY_PREFIX = "cli-assistant:";
@@ -26,6 +27,12 @@ type CliAssistantSegment = ComparableHistoryMessage & { text: string };
 export type LocalTurnBucket = {
   turns: Array<{ order: number; timestamp: number | undefined }>;
   cursor: number;
+  // Indexes into `turns` that carry a timestamp. Untimestamped prompts are not
+  // revisited when a timestamped import fails to name one of them.
+  timestamped: number[];
+  timestampedCursor: number;
+  // Candidate examinations. Stays flat for repeated misses against untimestamped prompts.
+  visits: number;
 };
 
 export function compareHistoryMessages(
@@ -115,34 +122,71 @@ export function dropCoveredCliAssistantAggregates(
   return dropped.size === 0 ? entries : entries.filter((entry) => !dropped.has(entry));
 }
 
-// Picks the local turn an imported user row duplicates. A timestamp inside the
-// dedupe window names one turn outright. Without that evidence the only safe
-// alignment is a single remaining candidate: guessing between repeats of the
-// same prompt can attach an import to the wrong turn, and reconciliation would
-// then drop the aggregate that answered the other one. Ambiguity yields
-// undefined, which leaves every aggregate in that turn alone.
+function advanceBucketCursor(bucket: LocalTurnBucket, next: number): void {
+  bucket.cursor = next;
+  while (
+    bucket.timestampedCursor < bucket.timestamped.length &&
+    (bucket.timestamped[bucket.timestampedCursor] ?? -1) < next
+  ) {
+    bucket.timestampedCursor += 1;
+  }
+}
+
+// Picks the local turn an imported user row duplicates. A timestamp names a
+// turn only when exactly one candidate sits inside the dedupe window. The
+// first of several prompts a minute apart is not that turn: equal-text replies
+// would then hide an earlier answer the import never covered. Without a unique
+// timestamp, the only safe alignment is a single remaining candidate.
+// Ambiguity yields undefined, which leaves every aggregate in that turn alone.
+// Untimestamped prompts are not scanned again on later timestamped misses.
 export function takeAlignedLocalTurn(
   bucket: LocalTurnBucket,
   timestamp: number | undefined,
 ): number | undefined {
-  if (timestamp !== undefined) {
-    for (let i = bucket.cursor; i < bucket.turns.length; i += 1) {
-      const candidate = bucket.turns[i];
-      if (candidate?.timestamp === undefined) {
+  if (timestamp !== undefined && bucket.timestampedCursor < bucket.timestamped.length) {
+    let matched: number | undefined;
+    for (let i = bucket.timestampedCursor; i < bucket.timestamped.length; i += 1) {
+      const turnIndex = bucket.timestamped[i];
+      if (turnIndex === undefined || turnIndex < bucket.cursor) {
         continue;
       }
-      if (Math.abs(candidate.timestamp - timestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS) {
-        bucket.cursor = i + 1;
-        return candidate.order;
+      const candidate = bucket.turns[turnIndex];
+      bucket.visits += 1;
+      if (
+        candidate?.timestamp !== undefined &&
+        Math.abs(candidate.timestamp - timestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS
+      ) {
+        if (matched !== undefined) {
+          return undefined;
+        }
+        matched = turnIndex;
       }
+    }
+    if (matched !== undefined) {
+      advanceBucketCursor(bucket, matched + 1);
+      return bucket.turns[matched]?.order;
     }
   }
   if (bucket.turns.length - bucket.cursor !== 1) {
     return undefined;
   }
   const only = bucket.turns[bucket.cursor];
-  bucket.cursor += 1;
+  advanceBucketCursor(bucket, bucket.cursor + 1);
   return only?.order;
+}
+
+// A native tool result keeps role "user" when the previous assistant message
+// mixed text with tool calls, because coalescing requires a tool-only message.
+export function isNativeToolResultMessage(message: unknown): boolean {
+  const record = asOptionalRecord(message);
+  const content = record?.content;
+  if (record?.role !== "user" || !Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  return content.every((block) => {
+    const item = asOptionalRecord(block);
+    return item ? isToolResultBlock(item) : false;
+  });
 }
 
 type LocalCoverageNote = {
@@ -159,6 +203,14 @@ type ImportedCoverageNote = {
   timestamp: number | null;
   duplicate: boolean;
   claudeAssistant: boolean;
+  // Local user row the history matcher already accepted, when it is a user turn.
+  matchedLocalTurn?: number;
+  // Comparable text of that local row. Resume notes and image captions can differ
+  // from the imported text, so coverage must not look the import up again.
+  matchedLocalText?: string | null;
+  // External identity and image correlation pin one local row. Text matches do not.
+  matchedByIdentity?: boolean;
+  toolResult?: boolean;
 };
 
 // The in-memory merge walked source order while deduping. The history index
@@ -181,16 +233,29 @@ export function createCliAssistantCoverage(): {
     }
     buckets = new Map();
     let turn: number | undefined;
-    for (const local of locals) {
+    // The history reader loads local pages newest first and appends each deferred
+    // boundary row later. Insertion order is not conversation order; the local
+    // id is the canonical source sequence.
+    const ordered = locals.toSorted((left, right) => left.id - right.id);
+    for (const local of ordered) {
       if (local.role === "user") {
         turn = local.id;
         if (local.text) {
           const item = { order: local.id, timestamp: local.timestamp ?? undefined };
           const bucket = buckets.get(local.text);
           if (bucket) {
+            if (item.timestamp !== undefined) {
+              bucket.timestamped.push(bucket.turns.length);
+            }
             bucket.turns.push(item);
           } else {
-            buckets.set(local.text, { turns: [item], cursor: 0 });
+            buckets.set(local.text, {
+              turns: [item],
+              cursor: 0,
+              timestamped: item.timestamp === undefined ? [] : [0],
+              timestampedCursor: 0,
+              visits: 0,
+            });
           }
         }
       }
@@ -215,7 +280,14 @@ export function createCliAssistantCoverage(): {
     noteImported(entry) {
       const localTurns = ensureBuckets();
       if (entry.role === "user") {
-        const bucket = entry.duplicate && entry.text ? localTurns.get(entry.text) : undefined;
+        if (entry.toolResult) {
+          return;
+        }
+        if (entry.matchedByIdentity) {
+          importedTurn = entry.matchedLocalTurn;
+          return;
+        }
+        const bucket = entry.matchedLocalText ? localTurns.get(entry.matchedLocalText) : undefined;
         importedTurn = bucket
           ? takeAlignedLocalTurn(bucket, entry.timestamp ?? undefined)
           : undefined;

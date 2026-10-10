@@ -28,15 +28,61 @@ export async function readClaudeCliSessionMessagesAsync(
   return messages;
 }
 
+// Mirrors prepareCliSessionHistoryReader: pages of 65, newest first, oldest
+// boundary row deferred until the next older page (and the final oldest row last).
+const PRODUCTION_LOCAL_PAGE_MESSAGES = 65;
+
+function appendLocalsLikeProductionReader(
+  index: CliSessionHistoryIndex,
+  localMessages: readonly unknown[],
+): void {
+  let boundaryIndex: number | undefined;
+  let end = localMessages.length;
+  while (end > 0) {
+    const start = Math.max(0, end - PRODUCTION_LOCAL_PAGE_MESSAGES);
+    const page: number[] = [];
+    for (let messageIndex = start; messageIndex < end; messageIndex += 1) {
+      page.push(messageIndex);
+    }
+    const oldestIndex = page[0];
+    if (oldestIndex === undefined) {
+      break;
+    }
+    const withBoundary = boundaryIndex === undefined ? page : [...page, boundaryIndex];
+    const toAppend = withBoundary.filter((messageIndex) => messageIndex !== oldestIndex);
+    if (toAppend.length > 0) {
+      index.appendLocal(
+        toAppend.map((messageIndex) => ({
+          message: localMessages[messageIndex],
+          seq: messageIndex + 1,
+        })),
+      );
+    }
+    boundaryIndex = oldestIndex;
+    if (oldestIndex === 0) {
+      break;
+    }
+    end = start;
+  }
+  if (boundaryIndex !== undefined) {
+    index.appendLocal([{ message: localMessages[boundaryIndex], seq: boundaryIndex + 1 }]);
+  }
+}
+
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
   importedMessages: unknown[];
+  localOrder?: "production-pages";
 }): unknown[] {
   const index = new CliSessionHistoryIndex();
   try {
-    index.appendLocal(
-      params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
-    );
+    if (params.localOrder === "production-pages") {
+      appendLocalsLikeProductionReader(index, params.localMessages);
+    } else {
+      index.appendLocal(
+        params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
+      );
+    }
     for (const message of params.importedMessages) {
       index.appendImported(message);
     }

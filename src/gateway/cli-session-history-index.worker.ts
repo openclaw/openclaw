@@ -26,6 +26,7 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   createCliAssistantCoverage,
   isCliAssistantAggregateMessage,
+  isNativeToolResultMessage,
 } from "./cli-session-history.merge-aggregates.js";
 
 const INDEX_INSERT_BATCH_ROWS = 65;
@@ -190,6 +191,7 @@ export class CliSessionHistoryIndex {
   private nextImport = 0;
   private expanded = false;
   private readonly coverage = createCliAssistantCoverage();
+  private readonly nativeToolResultImports: boolean[] = [];
   count = 0;
 
   constructor(memoryOnly = false) {
@@ -363,6 +365,7 @@ export class CliSessionHistoryIndex {
 
   appendImported(message: unknown): void {
     const row = this.row(message, this.nextImport++);
+    this.nativeToolResultImports[row.id] = isNativeToolResultMessage(message);
     if (this.pendingImportBytes + row.bytes > INDEX_INSERT_BATCH_BYTES) {
       this.flushImports();
     }
@@ -374,15 +377,20 @@ export class CliSessionHistoryIndex {
   }
 
   private noteImportedCoverage(
-    imported: Pick<HistoryRow, "role" | "text" | "timestamp" | "metadata">,
-    duplicate: boolean,
+    imported: Pick<HistoryRow, "id" | "role" | "text" | "timestamp" | "metadata">,
+    match?: { id: number; text: string | null; role: string | null; byIdentity: boolean },
   ): void {
+    const matchedUser = match?.role === "user" ? match : undefined;
     this.coverage.noteImported({
       role: imported.role,
       text: decodeIndexedHistoryText(imported.text),
       timestamp: imported.timestamp,
-      duplicate,
+      duplicate: Boolean(match),
       claudeAssistant: isClaudeCliAssistantImport(imported.role, imported.metadata),
+      matchedLocalTurn: matchedUser?.id,
+      matchedLocalText: matchedUser ? decodeIndexedHistoryText(matchedUser.text) : undefined,
+      matchedByIdentity: match?.byIdentity === true && matchedUser !== undefined,
+      toolResult: this.nativeToolResultImports[imported.id] === true,
     });
   }
 
@@ -424,8 +432,9 @@ export class CliSessionHistoryIndex {
             .groupBy("external_key"),
         ),
     );
-    type Match = Pick<HistoryRow, "id" | "text" | "metadata">;
-    const candidates = () => this.db.selectFrom("messages").select(["id", "text", "metadata"]);
+    type Match = Pick<HistoryRow, "id" | "text" | "metadata" | "role">;
+    const candidates = () =>
+      this.db.selectFrom("messages").select(["id", "text", "metadata", "role"]);
     const matchExternal = prepareSqliteQueryTakeFirstSync<string, Match>(
       this.database,
       (parameter) =>
@@ -556,14 +565,19 @@ export class CliSessionHistoryIndex {
       ).rows;
       runSqliteImmediateTransactionSync(this.database, () => {
         for (const imported of batch) {
-          let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
-          if (duplicate) {
-            this.noteImportedCoverage(imported, true);
-            advance(imported, duplicate);
-            continue;
+          let duplicate: Match | undefined;
+          let byIdentity = false;
+          if (imported.external_key) {
+            duplicate = matchExternal(imported.external_key);
+            if (duplicate) {
+              this.noteImportedCoverage(imported, { ...duplicate, byIdentity: true });
+              advance(imported, duplicate);
+              continue;
+            }
           }
           if (imported.image_mentions && imported.image_key) {
             duplicate = matchImage(imported.image_key);
+            byIdentity = Boolean(duplicate);
           }
           if (!duplicate && !imported.image_mentions) {
             const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
@@ -586,7 +600,17 @@ export class CliSessionHistoryIndex {
               }
             }
           }
-          this.noteImportedCoverage(imported, Boolean(duplicate));
+          this.noteImportedCoverage(
+            imported,
+            duplicate
+              ? {
+                  id: duplicate.id,
+                  text: duplicate.text,
+                  role: duplicate.role,
+                  byIdentity,
+                }
+              : undefined,
+          );
           if (duplicate) {
             const meta: Record<string, unknown> = duplicate.metadata
               ? JSON.parse(duplicate.metadata)
