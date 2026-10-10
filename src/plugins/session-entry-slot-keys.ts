@@ -74,6 +74,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolPolicySource",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "delegatedToolPolicy",
   "lifecycleRunId",
   "lastRunId",
   "activeWriterRunId",

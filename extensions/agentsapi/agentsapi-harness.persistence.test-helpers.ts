@@ -20,7 +20,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import { createModel } from "./agentsapi.test-support.js";
+import { createModel, createHostedSession } from "./agentsapi.test-support.js";
 import plugin from "./index.js";
 
 export function registerHarness(
@@ -231,4 +231,15 @@ export async function createAttempt(stateDir: string) {
       waitForApproval: async () => undefined,
     },
   } satisfies AgentHarnessAttemptParamsV2;
+}
+
+export function mockClient(sessionId: string) {
+  const session = vi
+    .spyOn(AgentsApiClient.prototype, "session")
+    .mockResolvedValue(createHostedSession("idle"));
+  const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(sessionId);
+  const update = vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
+  const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
+  vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+  return { create, update, message, session };
 }

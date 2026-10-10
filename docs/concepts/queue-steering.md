@@ -85,6 +85,9 @@ Steering always targets the current active session run. It does not create a new
 Visible user turns started through the `agent` RPC can also receive compatible
 steering. Direct background turns with optional replies leave new human messages
 queued for a followup turn that can provide the required answer.
+This includes subagent completion and command announcements: when steering is
+rejected, the message runs automatically after the announcement and its cleanup
+finish. The input remains queued and can still be canceled while it waits.
 
 Different signed-in people with the same permissions can steer each other's
 active turn, including from different browsers or after reconnecting. The turn
