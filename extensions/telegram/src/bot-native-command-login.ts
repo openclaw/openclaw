@@ -19,8 +19,10 @@ import {
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  prepareSessionEntryPatch,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -216,16 +218,19 @@ export async function executeTelegramLoginCommand(params: {
         });
         let adoptionDecision: ReturnType<typeof decideProviderLoginSessionAdoption> | undefined;
         try {
-          const persisted = await patchSessionEntry({
+          const persisted = await prepareSessionEntryPatch({
             sessionKey: dispatch.targetSessionKey,
             storePath,
             requireWriteSuccess: true,
             skipMaintenance: true,
-            assertCommitAllowed: composeSessionEntryCommitGuards([], () => {
-              flowSignal.throwIfAborted();
-              assertCurrent();
-            }),
-            update: (entry) => {
+            authority: {
+              kind: "host",
+              assertCurrent() {
+                flowSignal.throwIfAborted();
+                assertCurrent();
+              },
+            },
+            prepare: (entry) => {
               adoptionDecision = decideProviderLoginSessionAdoption({
                 currentModelProvider: params.currentProvider,
                 loginProvider: loginChoice.providerId,

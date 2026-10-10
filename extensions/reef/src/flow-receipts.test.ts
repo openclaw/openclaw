@@ -81,16 +81,10 @@ function createReceiptNotifier(
   return new ReefReceiptNotifier(
     notify,
     {
-      loadState: (peer) => trusted.store.rejectionNoticeState(peer),
-      reserve: (rejection, noticeState) =>
-        trusted.store.reserveOutboundRejectionNotice(
-          rejection.peer,
-          rejection.id,
-          rejection.recipient,
-          noticeState,
-        ),
-      complete: (rejection, noticeState) => {
-        if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+      loadState: (rejection) => rejection.recovery.loadState(),
+      reserve: (rejection, noticeState) => rejection.recovery.reserve(noticeState),
+      complete: async (rejection, noticeState) => {
+        if (!(await rejection.recovery.complete(noticeState))) {
           throw new Error(`missing rejection ${rejection.id}`);
         }
       },
@@ -255,6 +249,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       recipient: reefPeerIdentity(peerTrust(alice)),
       originalTextHash: receipt.bodyHash,
       allowResend: true,
+      recovery: expect.any(Object),
     });
     expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
     expect(trusted.deliveries.has(`alice:${acceptedId}`)).toBe(false);
@@ -340,7 +335,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       status: "rejected",
       category: "guard_deny",
     });
-    await expect(flow.processEntries([receiptEntry(rejected, 2)])).resolves.toEqual([
+    await expect(flow.processEntries([receiptEntry(rejected, 2)])).resolves.toMatchObject([
       {
         id,
         peer: "alice",

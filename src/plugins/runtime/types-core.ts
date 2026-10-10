@@ -430,14 +430,17 @@ export type PluginRuntimeCore = {
           assertCurrent: () => void;
         }>
       >;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
+      prepareSessionEntryPatch: typeof import("../../plugin-sdk/session-store-runtime.js").prepareSessionEntryPatch;
       upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
       runWithWorkAdmission: <T>(
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
