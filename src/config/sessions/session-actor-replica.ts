@@ -12,14 +12,11 @@ import type {
   AgentDatabaseIncognitoIdentity,
 } from "../../state/openclaw-agent-execution-contract.js";
 import type {
-  SessionActorCommandContext,
   SessionActorHotState,
   SessionActorLifetime,
   SessionActorNativeIncognitoIdentity,
   SessionActorOutcome,
-  SessionActorPhase,
   SessionActorTarget,
-  SessionActorVersion,
 } from "./session-actor-contract.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
@@ -116,10 +113,6 @@ function touch(cell: ReplicaCell): void {
   }
 }
 
-function sameVersion(left: SessionActorVersion, right: SessionActorVersion): boolean {
-  return left.epoch === right.epoch && left.sequence === right.sequence;
-}
-
 /** Handles retain their own authority; complete physical postimages survive handle release. */
 export function createSessionActorReplica(
   params: { lifetime: SessionActorLifetime } & (
@@ -185,19 +178,11 @@ export function createSessionActorReplica(
     expectedGeneration !== undefined &&
     expectedGeneration === generation() &&
     targetKey(state.target) === key &&
-    state.version.epoch.length > 0 &&
-    Number.isSafeInteger(state.version.sequence) &&
-    state.version.sequence >= 0 &&
-    state.writeToken.length > 0 &&
     state.writeToken === writeToken;
   const install = (
     state: SessionActorHotState,
     expectedGeneration: string | undefined,
   ): boolean => {
-    if (!accepts(state, expectedGeneration)) {
-      discard(owned);
-      return false;
-    }
     const detached = freezeJsonSnapshot(structuredClone(state));
     if (!accepts(detached, expectedGeneration)) {
       discard(owned);
@@ -267,13 +252,8 @@ export function createSessionActorReplica(
         },
       };
     },
-    beginCommand(
-      command: Pick<SessionActorCommandContext, "commandId" | "phaseId" | "expected"> & {
-        phase: SessionActorPhase;
-      },
-    ) {
+    beginCommand() {
       const previous = owned.snapshot;
-      const captured = structuredClone(command);
       const settle = begin();
       return {
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
@@ -288,23 +268,9 @@ export function createSessionActorReplica(
             if (outcome.kind === "stale-version") {
               return install(outcome.postimage, expectedGeneration);
             }
-            const { receipt } = outcome;
-            const version = receipt.postimage.version;
-            if (
-              receipt.commandId !== captured.commandId ||
-              receipt.phaseId !== captured.phaseId ||
-              receipt.phase !== captured.phase ||
-              (captured.expected !== undefined &&
-                !sameVersion(receipt.beforeVersion, captured.expected)) ||
-              !sameVersion(receipt.afterVersion, version) ||
-              version.epoch !== receipt.beforeVersion.epoch ||
-              version.sequence !== receipt.beforeVersion.sequence + 1
-            ) {
-              discard(owned);
-              return false;
-            }
+            // The command owner has already validated the committed receipt.
             // Closing revokes this handle's disclosure, not accepted commit custody.
-            return install(receipt.postimage, expectedGeneration);
+            return install(outcome.receipt.postimage, expectedGeneration);
           });
         },
       };
