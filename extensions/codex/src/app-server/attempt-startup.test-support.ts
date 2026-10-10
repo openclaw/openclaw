@@ -9,6 +9,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { expect, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import type { CodexAppServerPreparedAuth } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
 import {
   type CodexPluginConfig,
@@ -19,7 +20,6 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
-  type CodexAppServerPreparedAuth,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
@@ -84,12 +84,24 @@ export function createAttemptThreadStarter(
         resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
       pluginConfig: effectivePluginConfig,
       computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
-      startupAuthProfileId: undefined,
-      startupAuthBindingFingerprint: undefined,
+      clientOptions: {
+        ...(overrides?.startupPreparedAuth
+          ? { preparedAuth: overrides.startupPreparedAuth }
+          : { authProfileId: undefined }),
+        authBindingFingerprint: undefined,
+        authRequirement: undefined,
+        ...(overrides?.runtimeArtifactRequest
+          ? {
+              runtimeArtifactMode: "capture",
+              ...(overrides.runtimeArtifactRequest.expected
+                ? { expectedRuntimeArtifact: overrides.runtimeArtifactRequest.expected }
+                : {}),
+            }
+          : {}),
+      },
       ...(overrides?.runtimeArtifactRequest
         ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
         : {}),
-      startupPreparedAuth: overrides?.startupPreparedAuth,
       startupAuthAccountCacheKey: undefined,
       startupEnvApiKeyCacheKey: undefined,
       agentDir: paths.agentDir,
@@ -101,7 +113,6 @@ export function createAttemptThreadStarter(
       dynamicTools: [],
       webSearchAllowed: false,
       developerInstructions: undefined,
-      finalConfigPatch: undefined,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled: true,
       nativeProviderWebSearchSupport: "supported",

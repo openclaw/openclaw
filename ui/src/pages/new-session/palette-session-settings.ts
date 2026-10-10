@@ -12,6 +12,7 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.t
 import { pathDisplayName } from "../../lib/path-display.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { renderAgentSelect } from "./target-controls.ts";
@@ -259,17 +260,11 @@ export class PaletteSessionSettings {
         placement="bottom-end"
         without-arrow
         .open=${this.open}
-        @wa-show=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.open = true;
-            this.host.requestUpdate();
-          }
-        }}
-        @wa-hide=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.close();
-          }
-        }}
+        @wa-show=${onOwnPopoverEvent(() => {
+          this.open = true;
+          this.host.requestUpdate();
+        })}
+        @wa-hide=${onOwnPopoverEvent(() => this.close())}
       >
         <div
           class="palette-session-settings__content"
@@ -305,7 +300,33 @@ export class PaletteSessionSettings {
                     ${groups.map(
                       ({ machine, choices }) => html` <section aria-label=${machine.label}>
                         <div class="palette-session-settings__machine">${machine.label}</div>
-                        ${choices.map((choice) => html`<button type="button" class="palette-session-settings__row" data-machine=${machine.id} data-project=${choice.id} aria-pressed=${String(machine.selected && (choice.id ? draft.browser.projectId === choice.id : !draft.browser.projectId && (machine.remote ? place.freshWorkspace : place.folder === place.workspacePath())))} title=${machine.disabledReason ?? nothing} ?disabled=${locked || Boolean(machine.disabledReason)} @click=${() => choose(machine, choice.id)}><span class="palette-session-settings__icon">${choice.id ? icons.gitBranch : icons.folder}</span><span class="palette-session-settings__label">${choice.label}</span><span class="palette-session-settings__check">${machine.selected && (choice.id ? draft.browser.projectId === choice.id : !draft.browser.projectId && (machine.remote ? place.freshWorkspace : place.folder === place.workspacePath())) ? icons.check : nothing}</span></button>`)}
+                        ${choices.map((choice) => {
+                          const selected =
+                            machine.selected &&
+                            (choice.id
+                              ? draft.browser.projectId === choice.id
+                              : !draft.browser.projectId &&
+                                (machine.remote
+                                  ? place.freshWorkspace
+                                  : place.folder === place.workspacePath()));
+                          return html`<button
+                            type="button"
+                            class="palette-session-settings__row"
+                            data-machine=${machine.id}
+                            data-project=${choice.id}
+                            aria-pressed=${String(selected)}
+                            title=${machine.disabledReason ?? nothing}
+                            ?disabled=${locked || Boolean(machine.disabledReason)}
+                            @click=${() => choose(machine, choice.id)}
+                          >
+                            <span class="palette-session-settings__icon"
+                              >${choice.id ? icons.gitBranch : icons.folder}</span
+                            ><span class="palette-session-settings__label">${choice.label}</span
+                            ><span class="palette-session-settings__check"
+                              >${selected ? icons.check : nothing}</span
+                            >
+                          </button>`;
+                        })}
                         ${machine.disabledReason ? html`<div class="palette-session-settings__unavailable">${machine.disabledReason}</div>` : nothing}
                       </section>`,
                     )}

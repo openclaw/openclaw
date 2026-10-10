@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type {
   AcpSessionRuntimeOptions,
   SessionAcpIdentity,
@@ -12,8 +13,6 @@ import {
 } from "../../state/openclaw-state-db-readonly.js";
 import {
   buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
@@ -31,13 +30,13 @@ export async function readAcpSessionMetaForEntries(
     env?: NodeJS.ProcessEnv;
     databasePath?: string;
   },
-  options: { current?: true } = {},
+  options: { current?: true; signal?: AbortSignal } = {},
 ): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
   }
   const entries = params.entries.map((item) => ({
-    sessionKey: item.sessionKey,
+    sessionKey: normalizeStoreSessionKey(item.sessionKey),
     agentId: item.agentId,
     entry: item.entry
       ? {
@@ -52,11 +51,7 @@ export async function readAcpSessionMetaForEntries(
     {
       type: "acpSessions.metadata",
       entries: entries.map(({ sessionKey, agentId, entry }) => ({
-        keys: [
-          buildAcpDatabaseSessionKey(sessionKey, agentId),
-          ...legacyAcpDatabaseSessionKeys(sessionKey, agentId, params.cfg),
-        ],
-        legacyKey: resolveLegacyFreeAcpSessionKey(sessionKey),
+        keys: [buildAcpDatabaseSessionKey(sessionKey, agentId)],
         entry,
       })),
     },
@@ -119,13 +114,7 @@ export function readAcpSessionMetaForEntry(
   const row = read(
     ({ db }) =>
       resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          sessionKey,
-          params.agentId,
-          params.cfg,
-          params.entry,
-        ),
+        row: selectAcpSessionRowForStoreEntry(db, sessionKey, params.agentId, params.entry),
         entry: params.entry,
       }),
     { env: params.env, path: params.databasePath },

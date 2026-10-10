@@ -14,38 +14,33 @@ export function captureRequiredWorkspaceToolFloor(
       apply: (options?: OpenClawCodingToolsOptions) => Partial<OpenClawCodingToolsOptions>;
     }
   | undefined {
-  const requiredCodexWorkspace = attempt.requireWorkspaceOnly === true && pluginId === "codex";
-  const requiredWorkspace =
-    attempt.requireWorkspaceOnly === true
-      ? {
-          workspaceDir: attempt.workspaceDir,
-          cwd: attempt.cwd ?? attempt.workspaceDir,
-          root: attempt.sandbox?.enabled
-            ? attempt.sandbox.workspaceDir
-            : (attempt.sessionRoot ?? attempt.workspaceDir),
-          sandbox: attempt.sandbox
-            ? Object.freeze({
-                ...attempt.sandbox,
-                tools: cloneSnapshot(attempt.sandbox.tools),
-              })
-            : undefined,
-          permissionMode: attempt.permissionMode,
-        }
-      : undefined;
-  if (requiredWorkspace && (!requiredWorkspace.workspaceDir || !requiredWorkspace.root)) {
-    throw new Error("required workspace tool surface has no captured root");
-  }
-
-  if (!requiredWorkspace) {
+  if (attempt.requireWorkspaceOnly !== true) {
     return undefined;
   }
+  const requiredWorkspace = {
+    workspaceDir: attempt.workspaceDir,
+    cwd: attempt.cwd ?? attempt.workspaceDir,
+    root: attempt.sandbox?.enabled
+      ? attempt.sandbox.workspaceDir
+      : (attempt.sessionRoot ?? attempt.workspaceDir),
+    sandbox: attempt.sandbox
+      ? Object.freeze({
+          ...attempt.sandbox,
+          tools: cloneSnapshot(attempt.sandbox.tools),
+        })
+      : undefined,
+    permissionMode: attempt.permissionMode,
+  };
+  if (!requiredWorkspace.workspaceDir || !requiredWorkspace.root) {
+    throw new Error("required workspace tool surface has no captured root");
+  }
+  const root = requiredWorkspace.root;
   const apply = (options?: OpenClawCodingToolsOptions): Partial<OpenClawCodingToolsOptions> => {
     const requestedPermissionRoot = options?.sessionPermissionPolicy?.root;
     if (
-      requiredWorkspace &&
       requestedPermissionRoot &&
-      requestedPermissionRoot !== requiredWorkspace.root &&
-      !isPathInsideWithRealpath(requiredWorkspace.root!, requestedPermissionRoot)
+      requestedPermissionRoot !== root &&
+      !isPathInsideWithRealpath(root, requestedPermissionRoot)
     ) {
       throw new Error("tool permission root escapes the captured required workspace");
     }
@@ -58,7 +53,7 @@ export function captureRequiredWorkspaceToolFloor(
       sessionPermissionPolicy:
         requiredWorkspace.permissionMode || options?.sessionPermissionPolicy
           ? {
-              root: requestedPermissionRoot ?? requiredWorkspace.root!,
+              root: requestedPermissionRoot ?? root,
               mode:
                 requiredWorkspace.permissionMode === "read-only" ||
                 options?.sessionPermissionPolicy?.mode === "read-only"
@@ -66,7 +61,7 @@ export function captureRequiredWorkspaceToolFloor(
                   : (requiredWorkspace.permissionMode ?? options!.sessionPermissionPolicy!.mode),
             }
           : undefined,
-      ...(requiredCodexWorkspace
+      ...(pluginId === "codex"
         ? {
             // A host shell cwd is not a filesystem confinement boundary.
             exec: { ...options?.exec, mode: "deny" as const },
@@ -83,5 +78,5 @@ export function captureRequiredWorkspaceToolFloor(
         : {}),
     };
   };
-  return { root: requiredWorkspace.root!, apply };
+  return { root, apply };
 }

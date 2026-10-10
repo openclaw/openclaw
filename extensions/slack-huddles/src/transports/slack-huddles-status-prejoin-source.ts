@@ -1,18 +1,15 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-
-type MeetingStatusPreludeParams = Parameters<
-  typeof MeetingPlatformAdapter.createStatusPreludeSource
->[0];
+import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
 // Slack updates the channel header shortly after a Join click; until then the new call cannot be proven.
 export const SLACK_HUDDLE_JOIN_SETTLE_MS = 30_000;
 
-export function slackHuddleStatusPreludeSource(params: MeetingStatusPreludeParams): string {
-  return MeetingPlatformAdapter.createStatusPreludeSource(params, {
-    controlLookupSource: `const findTextButton = (root, pattern) => [...(root?.querySelectorAll("button") || [])]
+export const slackHuddleStatusPrelude: Parameters<
+  typeof MeetingPlatformAdapter.createPageScripts
+>[0]["statusPrelude"] = {
+  controlLookupSource: `const findTextButton = (root, pattern) => [...(root?.querySelectorAll("button") || [])]
     .find((button) => !button.disabled && pattern.test(text(button)));
   const unavailable = (node) => !node || node.disabled || node.getAttribute?.("aria-disabled") === "true";`,
-    lifecycleSource: `const continueInBrowser = undefined;
+  lifecycleSource: `const continueInBrowser = undefined;
   const preview = firstRaw(selectors.preview);
   const join = first(selectors.join) || findTextButton(preview, /^join huddle$/i);
   const leave = first(selectors.leave);
@@ -245,16 +242,5 @@ export function slackHuddleStatusPreludeSource(params: MeetingStatusPreludeParam
         : manualActionFor("slack-confirmation-required", "Complete the Slack confirmation, then retry: " + text(promptNow));
     }
   }`,
-    manualActionSource: "",
-    platform: {
-      displayName: "Slack huddle",
-      globals: {
-        audioOutputs: "__openclawSlackHuddleAudioOutputs",
-        captionArchive: "__openclawSlackHuddleCaptionArchive",
-        captions: "__openclawSlackHuddleCaptions",
-        meeting: "__openclawSlackHuddle",
-      },
-      manualActionReasonPrefix: "slack",
-    },
-  });
-}
+  manualActionSource: "",
+};

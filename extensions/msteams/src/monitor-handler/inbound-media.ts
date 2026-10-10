@@ -138,8 +138,6 @@ export async function resolveMSTeamsInboundMedia(params: {
   deadline?: MSTeamsRequestDeadline;
   /** Opt into Graph lookup when Teams strips file markers from channel/group HTML. */
   graphMediaFallback?: boolean;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia[]> {
   const {
     attachments,
@@ -154,7 +152,6 @@ export async function resolveMSTeamsInboundMedia(params: {
     serviceUrl,
     activity,
     log,
-    preserveFilenames,
   } = params;
 
   let mediaList = await downloadMSTeamsAttachments({
@@ -163,7 +160,6 @@ export async function resolveMSTeamsInboundMedia(params: {
     tokenProvider,
     allowHosts,
     authAllowHosts: params.authAllowHosts,
-    preserveFilenames,
     deadline: params.deadline,
     logger: log,
   });
@@ -199,7 +195,6 @@ export async function resolveMSTeamsInboundMedia(params: {
           maxBytes,
           allowHosts,
           authAllowHosts: params.authAllowHosts,
-          preserveFilenames,
           deadline: params.deadline,
         });
         if (bfMedia.media.length > 0) {
@@ -247,7 +242,6 @@ export async function resolveMSTeamsInboundMedia(params: {
           maxBytes,
           allowHosts,
           authAllowHosts: params.authAllowHosts,
-          preserveFilenames,
           deadline: params.deadline,
           logger: log,
         });

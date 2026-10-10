@@ -109,8 +109,7 @@ export function readControlUiRootAsset(
   }
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
-    maxWorkers: 2,
-    sharedCompute: true,
+    workerClass: "file-reader",
     maxPendingTasks: 2_048,
     maxPendingBytes: 8 * 1024 * 1024,
   }));
@@ -142,7 +141,7 @@ export function readControlUiRootAsset(
     };
     let file = await read(location);
     if (!file && root.kind === "bundled" && fileRel.startsWith("assets/")) {
-      const retained = root.retainedAssets?.resolveAsset(fileRel);
+      const retained = await root.retainedAssets?.resolveAsset(fileRel);
       if (retained) {
         location = { ...retained, rootPath: retained.rootRealPath, rejectHardlinks: true };
         file = await read(location);

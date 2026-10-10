@@ -42,7 +42,6 @@ import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
-  type DoctorSessionSqliteOptions,
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
@@ -58,7 +57,6 @@ const CANONICAL_AGENT_INDEX_NAMES = getCanonicalSqliteNamedIndexContracts(
 /** Restores the latest failed migration run and validates only selected manifest targets. */
 export async function recoverDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
-  options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
   recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
@@ -115,9 +113,9 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             artifact.outcome === "blocked" || artifact.reason === "unsupported-target-ownership",
         ))
     ) {
-      return summarizeRecoverReport(retainedReports);
+      return summarizeDoctorSessionSqliteReport("recover", retainedReports);
     }
-    return summarizeRecoverReport([
+    return summarizeDoctorSessionSqliteReport("recover", [
       createSyntheticRecoverTargetReport(
         params.env,
         "No failed session SQLite migration manifest found.",
@@ -165,7 +163,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       message: `${conflict.sourcePath}: ${conflict.reason}`,
     })),
   );
-  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
+  const report = summarizeDoctorSessionSqliteReport(
+    "recover",
+    targetReports.length > 0 ? targetReports : [reportTarget],
+  );
   if (report.totals.issues === 0) {
     report.migrationRun = {
       manifestPath: failedRun.manifestPath,
@@ -212,28 +213,23 @@ async function recoverCorruptSqliteTargets(
     if (recoveryFiles.existing.length === 0) {
       continue;
     }
-    if (!recoveryFiles.existing.includes(sqlitePath)) {
-      reports.push(
-        recoverCorruptSqliteTarget(
-          target,
-          sqlitePath,
-          new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
-          () => maintenance.assertOwned(),
-        ),
-      );
-      continue;
-    }
-    const inspection = inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing);
+    const hasDatabase = recoveryFiles.existing.includes(sqlitePath);
+    const inspection = hasDatabase
+      ? inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing)
+      : {
+          ok: false,
+          error: new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
+        };
     if (inspection.ok) {
       continue;
     }
-    if (!isSqliteCorruptionError(inspection.error)) {
+    if (hasDatabase && !isSqliteCorruptionError(inspection.error)) {
       reports.push(
         createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error),
       );
       continue;
     }
-    if (!isCanonicalAgentIndexCorruptionError(inspection.error)) {
+    if (!hasDatabase || !isCanonicalAgentIndexCorruptionError(inspection.error)) {
       reports.push(
         recoverCorruptSqliteTarget(target, sqlitePath, inspection.error, () =>
           maintenance.assertOwned(),
@@ -398,13 +394,4 @@ function createEmptyRecoverTargetReport(
     sqlitePath,
     storePath: target.storePath,
   });
-}
-
-function summarizeRecoverReport(
-  targets: DoctorSessionSqliteTargetReport[],
-): DoctorSessionSqliteReport {
-  const report = summarizeDoctorSessionSqliteReport("recover", targets);
-  delete report.totals.archivedLegacyStoreFiles;
-  delete report.totals.reclaimedBytes;
-  return report;
 }

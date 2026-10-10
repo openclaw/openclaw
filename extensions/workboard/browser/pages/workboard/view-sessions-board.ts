@@ -18,6 +18,8 @@ import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { renderSessionStatusBadge } from "./view-session-status.ts";
 import "../../styles/sessions-board.css";
 
+const PULL_REQUEST_STATE_PRIORITY = { open: 0, draft: 1, merged: 2, closed: 3 };
+
 export function renderSessionsBoard(props: {
   board: WorkboardBoardSummary;
   boards: WorkboardBoardSummary[];
@@ -66,9 +68,12 @@ export function renderSessionsBoard(props: {
     );
     const run = session.run === "active" ? "running" : session.run;
     const source = t(`workboard.sessionsBoard.source.${session.source}`);
-    return html`<button
+    const pullRequests = session.pullRequests.toSorted(
+      (left, right) =>
+        PULL_REQUEST_STATE_PRIORITY[left.state] - PULL_REQUEST_STATE_PRIORITY[right.state],
+    );
+    return html`<div
       class="workboard-session-tile ${controller.draggedKey === session.key ? "workboard-session-tile--dragging" : ""}"
-      type="button"
       data-session-key=${session.key}
       title=${[title, source, session.reason].filter(Boolean).join("\n")}
       draggable=${writable ? "true" : "false"}
@@ -86,7 +91,7 @@ export function renderSessionsBoard(props: {
       }}
       @dragend=${() => controller.drag()}
     >
-      <span class="workboard-session-tile__title">${title}</span>
+      <button class="workboard-session-tile__title" type="button">${title}</button>
       ${session.observerDigest?.headline ? html`<span class="workboard-session-tile__headline">${session.observerDigest.headline}</span>` : nothing}
       <span class="workboard-session-tile__meta">
         <span
@@ -97,11 +102,43 @@ export function renderSessionsBoard(props: {
         </span>
         ${renderSessionStatusBadge({ state: run, label: t(`workboard.sessionsBoard.run.${session.run}`), detail: "", visible: true, tone: session.run === "active" ? "live" : session.run === "failed" ? "blocked" : "idle" })}
       </span>
-      ${session.pullRequests.length ? html`<span class="workboard-session-tile__prs">${session.pullRequests.map((pr) => html`<span class="workboard-session-pr" data-state=${pr.state}>${pr.state === "merged" ? icons.gitMerge : icons.gitPullRequest}#${pr.number} · ${t(`workboard.sessionsBoard.pullRequest.${pr.state}`)}</span>`)}</span>` : nothing}
+      ${
+        pullRequests.length
+          ? html`<span class="workboard-session-tile__prs"
+              >${pullRequests.slice(0, 4).map((pr) => {
+                const label = `#${pr.number} · ${t(`workboard.sessionsBoard.pullRequest.${pr.state}`)}`;
+                const content = html`${
+                  pr.state === "merged" ? icons.gitMerge : icons.gitPullRequest
+                }${label}`;
+                return pr.url
+                  ? html`<a
+                      class="workboard-session-pr"
+                      data-state=${pr.state}
+                      href=${pr.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title=${pr.title ?? nothing}
+                      @click=${(event: MouseEvent) => event.stopPropagation()}
+                      @dragstart=${(event: DragEvent) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                      >${content}</a
+                    >`
+                  : html`<span
+                      class="workboard-session-pr"
+                      data-state=${pr.state}
+                      title=${pr.title ?? nothing}
+                      >${content}</span
+                    >`;
+              })}${pullRequests.length > 4 ? html`<span>+${pullRequests.length - 4}</span>` : nothing}</span
+            >`
+          : nothing
+      }
       <span class="workboard-session-tile__time" title=${formatDateTimeMs(session.lastActivityAt)}
         >${cardRelativeTime(session.lastActivityAt, Date.now())}</span
       >
-    </button>`;
+    </div>`;
   };
   return html`<section class="workboard workboard-sessions">
     <div
@@ -114,16 +151,6 @@ export function renderSessionsBoard(props: {
         <div class="workboard-heading__actions settings-section__actions">
           ${host.connection.canWrite ? html`<button class="btn workboard-new-board" type="button" ?disabled=${!writable} @click=${props.onNewBoard}>${icons.plus}${t("workboard.newBoard")}</button>` : nothing}
           ${controller.hasDock ? html`<button class="btn workboard-board-agent" type="button" ?disabled=${!writable || !snapshot} @click=${() => controller.openAgent()}>${icons.messageSquare}${t("workboard.sessionsBoard.agent")}</button>` : nothing}
-          <button
-            class="btn btn--icon btn--ghost workboard-refresh"
-            type="button"
-            aria-label=${t("common.refresh")}
-            aria-busy=${controller.loading || controller.busy}
-            ?disabled=${!host.connection.connected || controller.loading || controller.busy}
-            @click=${() => (host.connection.canWrite ? controller.refresh() : controller.read())}
-          >
-            ${icons.refresh}
-          </button>
         </div>
       </header>
       <div class="workboard-toolbar">

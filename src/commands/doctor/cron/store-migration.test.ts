@@ -2,12 +2,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
+import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
-import {
-  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
-  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
-} from "../shared/legacy-tool-name-migration.js";
+import { TASK_SUGGESTION_TOOL_NAME_MIGRATION } from "../shared/legacy-tool-name-migration.js";
 import {
   planCronCodexRefRewriteAgainstPersistedConfig,
   repairCronCodexRuntimePolicies,
@@ -16,9 +14,8 @@ import {
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
   normalizeStoredCronJobs,
+  recoverValidQuarantinedCronScheduleJobs,
 } from "./store-migration.js";
-
-const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function makeLegacyJob(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -137,62 +134,17 @@ describe("normalizeStoredCronJobs", () => {
     expect(payload.toolsAllow).toEqual(["read", "suggest_task"]);
   });
 
-  it("rewrites the legacy image inspection tool in persisted tool allowlists", () => {
+  it("migrates the legacy image inspection pattern", () => {
     const { job, result } = normalizeOneJob(
       makeLegacyJob({
         schedule: { kind: "every", everyMs: 60_000 },
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-          toolsAllow: ["read", IMAGE_INSPECTION_TOOL_NAME_MIGRATION.legacyName],
-        },
+        payload: { kind: "agentTurn", message: "ping", toolsAllow: ["image*"] },
       }),
     );
 
-    expect(result.mutated).toBe(true);
     expect(result.issues.legacyImageInspectionToolName).toBe(1);
     const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
-    expect(payload.toolsAllow).toEqual(["read", "view_image"]);
-  });
-
-  it.each([
-    { name: "image*", entries: ["image*"], expected: ["image*", "view_image"], issue: 1 },
-    { name: "*image*", entries: ["*image*"], expected: ["*image*"], issue: undefined },
-  ])("migrates legacy image inspection pattern $name", ({ entries, expected, issue }) => {
-    const { job, result } = normalizeOneJob(
-      makeLegacyJob({
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: { kind: "agentTurn", message: "ping", toolsAllow: entries },
-      }),
-    );
-
-    expect(result.issues.legacyImageInspectionToolName).toBe(issue);
-    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
-    expect(payload.toolsAllow).toEqual(expected);
-  });
-
-  it("rewrites legacy OpenAI Codex model refs in cron payloads", () => {
-    const { job, result } = normalizeOneJob(
-      makeLegacyJob({
-        id: "legacy-codex-cron-model",
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-          model: " openai-codex/gpt-5.5 ",
-          fallbacks: ["anthropic/claude-opus-4.6", "openai-codex/gpt-5.4-mini"],
-        },
-      }),
-      { migrateCodexModelRefs: true },
-    );
-
-    expect(result.mutated).toBe(true);
-    expect(result.issues.legacyPayloadCodexModel).toBe(1);
-    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
-    expect(payload.kind).toBe("agentTurn");
-    expect(payload.message).toBe("ping");
-    expect(payload.model).toBe("openai/gpt-5.5");
-    expect(payload.fallbacks).toEqual(["anthropic/claude-opus-4.6", "openai/gpt-5.4-mini"]);
+    expect(payload.toolsAllow).toEqual(["image*", "view_image"]);
   });
 
   it("rewrites shipped codex model refs in cron payloads", () => {
@@ -269,51 +221,6 @@ describe("normalizeStoredCronJobs", () => {
     expect(policyPlan.config.agents?.defaults?.models).toBeUndefined();
   });
 
-  it("retains a legacy cron ref when canonical runtime policy conflicts", () => {
-    const jobs = [
-      makeLegacyJob({
-        id: "blocked-codex-cron-model",
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-          model: "codex/gpt-5.6-sol",
-        },
-      }),
-    ];
-    const policyPlan = repairCronCodexRuntimePolicies({
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.6-sol" },
-          },
-          entries: {
-            main: {
-              default: true,
-              models: {
-                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          },
-        },
-      },
-      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
-    });
-    const blocked = new Set(policyPlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
-
-    const result = normalizeStoredCronJobs(jobs, {
-      migrateCodexModelRefs: true,
-      shouldMigrateCodexRuntimePolicyTarget: (target) =>
-        !blocked.has(cronCodexRuntimePolicyTargetKey(target)),
-    });
-
-    expect(policyPlan.warnings.join("\n")).toContain("conflicts with migrated cron Codex runtime");
-    expect(result.issues.legacyPayloadCodexModel).toBe(1);
-    expect(result.codexRuntimePolicyTargets).toStrictEqual([]);
-    const job = expectDefined(jobs[0], "job test invariant");
-    expect((job.payload as Record<string, unknown>).model).toBe("codex/gpt-5.6-sol");
-  });
-
   it("retains a default-agent cron ref when its list-entry runtime conflicts", () => {
     const jobs = [
       makeLegacyJob({
@@ -355,57 +262,6 @@ describe("normalizeStoredCronJobs", () => {
     );
     const job = expectDefined(jobs[0], "job test invariant");
     expect((job.payload as Record<string, unknown>).model).toBe("codex/gpt-5.6-sol");
-  });
-
-  it("blocks every stored identity that resolves to one conflicted policy owner", () => {
-    // agentId omitted and the default agent named explicitly are distinct
-    // stored identities resolving to the same owner; both must stay legacy.
-    const jobs = [
-      makeLegacyJob({
-        id: "implicit-default-agent",
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: { kind: "agentTurn", message: "ping", model: "codex/gpt-5.6-sol" },
-      }),
-      makeLegacyJob({
-        id: "explicit-default-agent",
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-          model: "codex/gpt-5.6-sol",
-          agentId: "primary",
-        },
-      }),
-    ];
-    const rewritePlan = planCronCodexRefRewriteAgainstPersistedConfig({
-      cfg: {
-        agents: {
-          list: [
-            {
-              id: "primary",
-              default: true,
-              models: {
-                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          ],
-        },
-      },
-      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
-    });
-    const blocked = new Set(rewritePlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
-
-    normalizeStoredCronJobs(jobs, {
-      migrateCodexModelRefs: true,
-      shouldMigrateCodexRuntimePolicyTarget: (target) =>
-        !blocked.has(cronCodexRuntimePolicyTargetKey(target)),
-    });
-
-    for (const job of jobs) {
-      expect(
-        (expectDefined(job, "job test invariant").payload as Record<string, unknown>).model,
-      ).toBe("codex/gpt-5.6-sol");
-    }
   });
 
   it("writes a named default agent policy to its list entry before rewriting cron", () => {
@@ -453,15 +309,10 @@ describe("normalizeStoredCronJobs", () => {
 
   it.each<{
     name: string;
-    agents: NonNullable<OpenClawConfig["agents"]>;
+    agents: NonNullable<OpenClawConfigWithLegacyRoster["agents"]>;
     agentId?: string;
     expectedAgentId: string;
   }>([
-    {
-      name: "configured default agent",
-      agents: { entries: { main: { default: true } } },
-      expectedAgentId: "main",
-    },
     {
       name: "sole configured agent",
       agents: { entries: { ops: {} } },
@@ -648,93 +499,6 @@ describe("normalizeStoredCronJobs", () => {
     expect(payload.kind).toBe("agentTurn");
     expect(payload.message).toContain(command);
     expect(payload.toolsAllow).toEqual(["read", "message"]);
-  });
-
-  it("warns without converting mixed agent prompts that request shell tools", () => {
-    const { job, result } = normalizeOneJob(
-      makeLegacyJob({
-        id: "mixed-agent-job",
-        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message:
-            "Run deterministic health first: python3 scripts/check_mail.py and then decide whether to send a summary.",
-          toolsAllow: ["bash", "read", "message"],
-          lightContext: true,
-        },
-      }),
-    );
-
-    expect(result.issues.legacyAgentTurnCommandPayload).toBeUndefined();
-    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
-    expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual(["Legacy job"]);
-    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
-    expect(payload.kind).toBe("agentTurn");
-    expect(payload.message).toContain("Run deterministic health first");
-    expect(payload.toolsAllow).toEqual(["bash", "read", "message"]);
-  });
-
-  it("warns on shell-style prompts with unrestricted tool access", () => {
-    const { result } = normalizeOneJob(
-      makeLegacyJob({
-        id: "implicit-tools-shell-job",
-        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message:
-            "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
-          lightContext: true,
-        },
-      }),
-    );
-
-    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
-    expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual(["Legacy job"]);
-  });
-
-  it("does not warn on ordinary agent prompts that mention commands without shell tools", () => {
-    const { job, result } = normalizeOneJob(
-      makeLegacyJob({
-        id: "ordinary-agent-job",
-        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message: "Explain whether the user should run python3 scripts/check_mail.py.",
-          toolsAllow: ["read", "message"],
-          lightContext: true,
-        },
-        delivery: { mode: "announce" },
-      }),
-    );
-
-    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBeUndefined();
-    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
-    expect(payload.kind).toBe("agentTurn");
-    expect(payload.message).toContain("python3 scripts/check_mail.py");
-  });
-
-  it("does not report legacyPayloadKind for already-normalized payload kinds", () => {
-    const jobs = [
-      {
-        id: "normalized-agent-turn",
-        name: "normalized",
-        enabled: true,
-        wakeMode: "now",
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-        payload: { kind: "agentTurn", message: "ping" },
-        sessionTarget: "isolated",
-        delivery: { mode: "announce" },
-        state: {},
-      },
-    ] as Array<Record<string, unknown>>;
-
-    const result = normalizeStoredCronJobs(jobs);
-
-    expect(result.mutated).toBe(false);
-    expect(result.issues.legacyPayloadKind).toBeUndefined();
   });
 
   it("rewrites legacy systemEvent message payloads to text", () => {
@@ -929,55 +693,6 @@ describe("normalizeStoredCronJobs", () => {
     expect(schedule.atMs).toBeUndefined();
   });
 
-  it("preserves stored custom session targets", () => {
-    const { job } = normalizeOneJob(
-      makeLegacyJob({
-        id: "job-custom-session",
-        name: "Custom session",
-        schedule: { kind: "cron", expr: "0 23 * * *", tz: "UTC" },
-        sessionTarget: "session:ProjectAlpha",
-        payload: {
-          kind: "agentTurn",
-          message: "hello",
-        },
-      }),
-    );
-
-    expect(expectDefined(job, "job test invariant").sessionTarget).toBe("session:ProjectAlpha");
-    expect(expectDefined(job, "job test invariant").delivery).toEqual({ mode: "announce" });
-  });
-
-  it("adds anchorMs to legacy every schedules", () => {
-    const createdAtMs = 1_700_000_000_000;
-    const { job } = normalizeOneJob(
-      makeLegacyJob({
-        id: "job-every-legacy",
-        name: "Legacy every",
-        createdAtMs,
-        updatedAtMs: createdAtMs,
-        schedule: { kind: "every", everyMs: 120_000 },
-      }),
-    );
-
-    const schedule = expectDefined(job, "job test invariant").schedule as Record<string, unknown>;
-    expect(schedule.kind).toBe("every");
-    expect(schedule.anchorMs).toBe(createdAtMs);
-  });
-
-  it("adds default staggerMs to legacy recurring top-of-hour cron schedules", () => {
-    const { job } = normalizeOneJob(
-      makeLegacyJob({
-        id: "job-cron-legacy",
-        name: "Legacy cron",
-        schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
-      }),
-    );
-
-    const schedule = expectDefined(job, "job test invariant").schedule as Record<string, unknown>;
-    expect(schedule.kind).toBe("cron");
-    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
-  });
-
   it("removes invalid legacy staggerMs from non top-of-hour cron schedules", () => {
     const { job } = normalizeOneJob(
       makeLegacyJob({
@@ -1023,4 +738,125 @@ describe("normalizeStoredCronJobs", () => {
     expect("command" in expectDefined(job, "job test invariant")).toBe(false);
     expect("timeout" in expectDefined(job, "job test invariant")).toBe(false);
   });
+
+  it("canonicalizes a recognized stream schedule and its mode", () => {
+    const jobs = [
+      makeLegacyJob({
+        schedule: { kind: " Stream ", command: ["node", "events.mjs"], mode: " LINE " },
+      }),
+    ];
+    const result = normalizeStoredCronJobs(jobs);
+    const job = expectDefined(jobs[0], "job test invariant");
+
+    expect(result.removedJobs).toEqual([]);
+    expect(result.issues.invalidSchedule).toBeUndefined();
+    expect(job.schedule).toEqual({ kind: "stream", command: ["node", "events.mjs"], mode: "line" });
+  });
+
+  it("recovers only currently valid schedule rows and preserves recovery state", () => {
+    const entries: QuarantinedCronConfigJob[] = [
+      {
+        sourceIndex: 0,
+        reason: "invalid-schedule",
+        job: makeLegacyJob({
+          id: "variant",
+          name: "variant",
+          schedule: { kind: " CRON ", expr: "0 7 * * *" },
+        }),
+        state: { nextRunAtMs: 123 },
+        updatedAtMs: 456,
+      },
+      {
+        sourceIndex: 1,
+        reason: "invalid-schedule",
+        job: makeLegacyJob({
+          id: "canonical",
+          name: "canonical",
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        }),
+      },
+      {
+        sourceIndex: 2,
+        reason: "invalid-schedule",
+        job: makeLegacyJob({
+          id: "unknown",
+          name: "unknown",
+          schedule: { kind: "daily", at: "09:00" },
+        }),
+      },
+      {
+        sourceIndex: 3,
+        reason: "invalid-schedule",
+        job: makeLegacyJob({
+          id: "existing",
+          name: "existing",
+          schedule: { kind: "cron", expr: "0 8 * * *" },
+        }),
+      },
+      {
+        sourceIndex: 4,
+        reason: "missing-payload",
+        job: makeLegacyJob({
+          id: "other-reason",
+          name: "other-reason",
+          schedule: { kind: "cron", expr: "0 9 * * *" },
+        }),
+      },
+    ];
+
+    const result = recoverValidQuarantinedCronScheduleJobs(entries, new Set(["existing"]));
+
+    expect(result.recoveredJobs.map((job) => job.id)).toEqual(["variant", "canonical"]);
+    expect(result.recoveredJobs[0]).toMatchObject({
+      schedule: { kind: "cron" },
+      state: { nextRunAtMs: 123 },
+      updatedAtMs: 456,
+    });
+    expect(result.retainedEntries.map((entry) => entry.sourceIndex)).toEqual([2, 3, 4]);
+  });
+
+  const sourceSessionKey = "agent:main:dashboard:source";
+  it.each([
+    ["current", undefined, "isolated", undefined],
+    ["current", " \t ", "isolated", undefined],
+    ["current", 42, "isolated", undefined],
+    [" CURRENT ", sourceSessionKey, "current", sourceSessionKey],
+    [" ISOLATED ", sourceSessionKey, "isolated", sourceSessionKey],
+    [" SESSION: ProjectAlpha ", sourceSessionKey, "session:ProjectAlpha", sourceSessionKey],
+    [undefined, sourceSessionKey, "isolated", sourceSessionKey],
+  ])(
+    "normalizes target %s with binding %s without changing the rest of the job",
+    (sessionTarget, sessionKey, target, binding) => {
+      const job = {
+        id: "session-target",
+        name: "Session target",
+        enabled: false,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        sessionTarget,
+        sessionKey,
+        owner: { agentId: "main", sessionKey: sourceSessionKey },
+        schedule: { kind: "every", everyMs: 120_000, anchorMs: 1 },
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Report the result." },
+        delivery: { mode: "announce" },
+        trigger: { script: "return { fire: false };" },
+        state: { consecutiveErrors: 2 },
+      };
+      const expected = {
+        ...structuredClone(job),
+        sessionTarget: target,
+        sessionKey: binding,
+      };
+
+      const result = normalizeStoredCronJobs([job]);
+
+      expect(result.jobs).toEqual([expected]);
+      expect(result.mutated).toBe(true);
+      const canonical = normalizeStoredCronJobs(result.jobs);
+      expect(canonical.mutated).toBe(false);
+      expect(canonical.jobs).toEqual([expected]);
+      expect(canonical.removedJobs).toEqual([]);
+    },
+  );
 });

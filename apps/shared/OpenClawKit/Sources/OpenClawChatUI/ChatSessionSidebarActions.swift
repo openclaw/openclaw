@@ -8,6 +8,7 @@ import OpenClawProtocol
 public struct OpenClawSessionMenuConnection {
     public let hello: HelloOk
     public let local: Bool
+    public var groupDefaultsBrowser: OpenClawGroupDefaultsBrowser?
     public let selfProfileID: String?
     public let isCurrent: () -> Bool
     private let sendRequest: (OpenClawChatGatewayRequest) async throws -> Data
@@ -49,7 +50,7 @@ public struct OpenClawSessionMenuConnection {
     }
 
     @discardableResult
-    func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
+    public func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
         let data = try await self.sendRequest(request)
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
@@ -174,6 +175,40 @@ final class ChatSessionSidebarActions {
         return row.createdVia == "operator" && row.spawnDepth == 0 && row.parentSessionId == nil &&
             row.spawnedBy == nil && row.forkSource == nil && row.forkedFromParent != true &&
             !rest.hasPrefix("subagent:") && mainKeys.contains { normalize($0) == normalize(parent) }
+    }
+
+    func setSnooze(
+        _ patch: OpenClawChatSnoozePatch,
+        session: OpenClawChatSessionEntry,
+        viewModel: OpenClawChatViewModel) async throws
+    {
+        guard let connection, connection.allows("sessions.patch"),
+              let expectedID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId)
+        else { throw OpenClawChatTransportSendError.notDispatched }
+        let owner = viewModel.sidebarData
+        let snoozedAt = Date.now.timeIntervalSince1970 * 1000
+        let token = owner?.beginMutation(target: session, field: .snoozed) { row in
+            switch patch {
+            case let .until(date):
+                row.snoozedUntil = date.timeIntervalSince1970 * 1000
+                row.snoozedAt = snoozedAt
+            case .wake:
+                row.snoozedUntil = nil
+                row.snoozedAt = nil
+            }
+        }
+        var receipt: OpenClawChatSessionPatchReceipt?
+        defer { owner?.finishMutation(token, receipt: receipt) }
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { .init(sessionKey: $0, agentID: session.agentId) },
+            unreadAckContract: nil,
+            receivesPatchReceipts: true,
+            request: { try await connection.request($0) })
+        receipt = try await lease.patchSession(
+            key: session.key,
+            agentID: session.agentId,
+            expectedSessionID: expectedID,
+            snoozedUntil: patch)
     }
 
     static func ownerID(_ actor: OpenClawChatSessionEntry.CreatedActor?) -> String? {

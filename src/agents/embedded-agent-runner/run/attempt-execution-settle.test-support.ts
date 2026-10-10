@@ -10,6 +10,7 @@ import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/trans
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
@@ -37,6 +38,7 @@ export function createFixture(mocks: {
     getHeartbeatToolResponse: vi.fn(() => undefined),
     getItemLifecycle: vi.fn(() => ({ startedCount: 0, completedCount: 0, activeCount: 0 })),
     getLastAssistantTextMessageIndex: vi.fn(() => undefined),
+    getKeptAnswer: vi.fn(() => undefined),
     getLastAssistantUsage: vi.fn(() => undefined),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
     getLastToolError: vi.fn(() => undefined),
@@ -98,7 +100,7 @@ export function createFixture(mocks: {
   };
   const sessionManager = {
     kind: "session-manager",
-    appendMessage: vi.fn((message) => messages.push(message)),
+    appendMessageAsync: vi.fn(async (message) => messages.push(message)),
     buildSessionContext: vi.fn(() => ({ messages: [] })),
     getSessionTarget: vi.fn(() => undefined),
     getSessionId: () => "active-session",
@@ -220,7 +222,7 @@ export function createFixture(mocks: {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: { chars: 13 },
       },
-      toolBase: { nestedToolActivities: [] },
+      toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,
@@ -330,17 +332,19 @@ export async function createPersistedImageNoteFixture(
   if (!entry?.lifecycleRevision) {
     throw new Error("Expected a durable lifecycle revision for the admitted image-note writer");
   }
-  const manager = reopen
-    ? await SessionManager.openAsync(target, testState.workspaceDir)
-    : SessionManager.open(target, testState.workspaceDir);
+  const manager = await SessionManager.openAsync(target, testState.workspaceDir);
   const activeSession = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
   if (!reopen) {
-    manager.appendMessage({ role: "user", content: "Describe this image", timestamp: 1 });
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "Describe this image",
+      timestamp: 1,
+    });
     for (const message of activeSession.messages) {
       if (message.role !== "assistant") {
         throw new Error("Expected the completed assistant turn in the settlement fixture");
       }
-      manager.appendMessage(message);
+      await manager.appendMessageAsync(message);
     }
   }
   await waitForSessionTranscriptProjection(target);

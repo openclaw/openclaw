@@ -11,6 +11,20 @@ sidebarTitle: "State and system"
 
 The runtime config snapshot, durable plugin-scoped storage, system utilities, event subscriptions, and logging. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Config and utilities](/plugins/sdk-runtime/config-and-utilities#config-loading-and-writes) covers the wider config read and write guidance.
 
+## SQLite maintenance lifetime
+
+Plugin worker stores using `configureSqliteConnectionPragmas` from
+`openclaw/plugin-sdk/plugin-state-runtime` receive a maintenance handle with
+`stop(): Promise<void>`. Await `stop()` before the existing `close()` checkpoint
+and the database handle's native close. Stopping closes timer admission and joins
+accepted maintenance; it does not change transaction ownership or close the
+database. Synchronous `close()` remains available for failed-open and process-exit
+cleanup, where asynchronous joins cannot be completed.
+Memory Core's private shadow-index owner uses
+`stopMemorySqliteWalMaintenance(db)` from its existing
+`memory-core-host-engine-storage` facade before draining its private queue and
+closing the connection.
+
 ## State, config, and system namespaces
 
 <AccordionGroup>
@@ -196,9 +210,9 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     while the drain still owns the claim, shutdown reports the error and retains
     that ownership.
 
-    <Warning>
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
-    </Warning>
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available to every loaded plugin, including workspace plugins, `plugins.load.paths`, and linked installs. The runtime binds each handle to the calling plugin's namespace; existing quotas, retention and overflow policies, scope checks, and worker ownership still apply. This change requires no provenance repair or data migration.
+
+    `plugins inspect` and startup provenance warnings still report trust information. Trust remains required for hook agent turns and Gateway scope elevation; see [Plugin runtime trust refused](/tools/plugin#plugin-runtime-trust-refused) for those capabilities.
 
   </Accordion>
 </AccordionGroup>
@@ -346,9 +360,8 @@ never selects that compatibility path. The namespace, stored records, and
 retention remain unchanged, so this cutover requires no data migration.
 
 This deprecation adds editor annotations, documentation, and compatibility
-inventory metadata. It adds no runtime warning and changes no trust eligibility:
-the runtime openers remain limited to bundled plugins and trusted official
-installations. Runtime warnings should wait for an actionable supported upgrade.
+inventory metadata. It adds no runtime warning. Both runtime openers are available
+to every loaded plugin. Runtime deprecation warnings should wait for an actionable supported upgrade.
 Only the operations identified above execute on the worker. Callback execution
 is unchanged during this migration.
 
@@ -371,15 +384,20 @@ results or disposing their resources. Model-selection hooks run after write
 admission releases. SessionManager `appendModelChange` and
 `appendThinkingLevelChange` return promises for their committed entry IDs;
 AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
-operations before using the resulting model or thinking state. Other synchronous
-SessionManager operations still need an appropriate caller-owned write boundary.
+operations before using the resulting model or thinking state. Other
+SessionManager transcript writes use their awaited `Async` companions through
+the same canonical SQLite worker. They retain the caller's live write authority,
+commit before dependent publication, and preserve the loaded view on failure
+before commit. See the [complete session migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence).
 
-`SessionManager.appendMessageToTranscript` is a deprecated public SDK compatibility
-method, retained for plugins using the v2026.9.5 contract. It accepts ordinary,
-custom, and Bash execution messages and synchronously returns the persisted
-message ID. It delegates to the canonical append kernel and can perform SQLite
-work on the calling thread. Removal requires a versioned SDK replacement and a
-plugin migration window; the bundled failed-image path does not call it.
+Use `await SessionManager.appendMessageToTranscriptAsync(...)` for static appends
+of ordinary, custom, or Bash execution messages. It resolves to the persisted
+message ID after the worker commits. `SessionManager.appendMessageToTranscript`
+retains its synchronous return contract for third-party plugins using the
+v2026.9.5 API, emits a deprecation warning once per process, and can still perform
+SQLite work on the calling thread. The `session-manager-sync-persistence` record
+sets removal at the next Plugin SDK major. Bundled production paths use awaited
+operations.
 
 Core failed-image settlement uses the internal `appendSessionTranscriptNote`
 operation, which accepts a custom message and returns a promise for its persisted `messageId`, canonical
@@ -400,7 +418,7 @@ preparation, accepted work, and cleanup before releasing the store.
 Failed-image notes use the existing message idempotency key to survive redaction
 and same-run retries. Existing unkeyed notes retain their run-metadata matching.
 
-`SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
+`SessionManager.openAsync`, `openBoundedAsync`, and `setSessionTargetAsync` capture `storePath`
 as an absolute lexical locator before reading the transcript or invoking
 `onTruncated`. Relative locators resolve against the process working directory
 at entry; `getSessionTarget()` returns that captured locator. Later working
@@ -409,12 +427,12 @@ captures the resolved state directory and supervisor mode; environment changes
 cannot redirect later writes. Existing `sessions.json` and custom-store routing
 and symlink spelling are preserved.
 
-File-backed model and thinking transcript writes execute through the canonical
-agent database worker. Queued extension actions retain their original runtime
-and session authority through transaction and commit admission. Synchronous session
-opening, final model-context validation, and incognito transcript persistence still use
-their native owners; an asynchronous method does not imply that every storage
-operation in the enclosing session flow runs off-thread.
+File-backed transcript writes execute through the canonical agent database
+worker. Queued extension actions retain their original runtime and session
+authority through transaction and commit admission. Runtime session hydration
+uses the existing read worker. Deprecated third-party synchronous adapters and
+incognito transcript persistence retain their native owners; the awaited API
+does not move incognito storage off-thread before its separate worker cutover.
 
 Committed metadata updates the bound session's model or thinking state alongside
 transcript-view adoption, before asynchronous cleanup. Settings setters retain

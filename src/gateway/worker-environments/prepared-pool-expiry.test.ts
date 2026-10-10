@@ -7,15 +7,6 @@ import { PROJECT_KEY, RECEIPT, usePreparedPoolFixture } from "./prepared-pool.te
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 
-class TestWorkerServiceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
 describe("prepared worker expiry during admitted work", () => {
   const fixture = usePreparedPoolFixture();
 
@@ -44,9 +35,7 @@ describe("prepared worker expiry during admitted work", () => {
         now: () => fixture.nowMs,
         prepareInstallation,
         isStopping: () => false,
-        inState: (record, ...states) => states.includes(record.state),
         withLock: async (_environmentId, task) => await task(),
-        serviceError: (code, message) => new TestWorkerServiceError(code, message),
         move: async (record, to, patch, assertCurrent) =>
           await fixture.store.transition({
             environmentId: record.environmentId,
@@ -58,14 +47,7 @@ describe("prepared worker expiry during admitted work", () => {
           }),
       } satisfies Pick<
         WorkerProviderLifecycleOptions,
-        | "store"
-        | "now"
-        | "prepareInstallation"
-        | "isStopping"
-        | "inState"
-        | "withLock"
-        | "serviceError"
-        | "move"
+        "store" | "now" | "prepareInstallation" | "isStopping" | "withLock" | "move"
       >;
       const prepareNodeEnrollment = vi.fn<
         NonNullable<WorkerProviderLifecycleOptions["prepareNodeEnrollment"]>
@@ -111,8 +93,6 @@ describe("prepared worker expiry during admitted work", () => {
         callProvider: async (_environmentId, run) => await run(),
         callBootstrap: async (_installation, run) => await run(fixture.abort.signal),
         bootstrapWorker: async () => RECEIPT,
-        isServiceError: (error, code) =>
-          error instanceof TestWorkerServiceError && error.code === code,
         saveError: (record, error) =>
           fixture.store.recordError({
             environmentId: record.environmentId,

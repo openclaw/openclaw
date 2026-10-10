@@ -153,7 +153,6 @@ Per-agent overrides use the same model-scoped shape:
   "agents": {
     "entries": {
       "codex-only": {
-        "default": true,
         "model": "openai/gpt-6-astra",
         "models": {
           "openai/gpt-6-astra": {

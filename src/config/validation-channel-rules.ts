@@ -138,16 +138,33 @@ export function collectChannelDmPolicyDependencyWarnings(
     if (mode === "nestedOnly") {
       continue;
     }
-    const channelViolation = evaluateDmPolicyAllowFromDependency({
-      policy: resolveChannelDmPolicy({ account: channelValue, mode }),
-      allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
-    });
-    if (
-      channelViolation &&
-      (channelViolation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
-    ) {
-      warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
-    }
+    const appendWarning = (account: Record<string, unknown>, accountId?: string) => {
+      const parent = accountId === undefined ? undefined : channelValue;
+      const access = { account, parent, mode };
+      const violation = evaluateDmPolicyAllowFromDependency({
+        policy: resolveChannelDmPolicy(access),
+        allowFrom: resolveChannelDmAllowFrom(access),
+      });
+      if (
+        violation &&
+        (violation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
+      ) {
+        warnings.push(
+          buildDmPolicyDependencyWarning({
+            channelId,
+            accountId,
+            allowFromSource:
+              accountId === undefined
+                ? undefined
+                : hasConfiguredDmAllowFrom(account)
+                  ? "explicit"
+                  : "inherited",
+            violation,
+          }),
+        );
+      }
+    };
+    appendWarning(channelValue);
     if (!isRecord(channelValue.accounts)) {
       continue;
     }
@@ -155,24 +172,7 @@ export function collectChannelDmPolicyDependencyWarnings(
       if (!isRecord(accountValue) || accountValue.enabled === false) {
         continue;
       }
-      const allowFromSource = hasConfiguredDmAllowFrom(accountValue) ? "explicit" : "inherited";
-      const accountViolation = evaluateDmPolicyAllowFromDependency({
-        policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
-        allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),
-      });
-      if (
-        accountViolation &&
-        (accountViolation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
-      ) {
-        warnings.push(
-          buildDmPolicyDependencyWarning({
-            channelId,
-            accountId,
-            allowFromSource,
-            violation: accountViolation,
-          }),
-        );
-      }
+      appendWarning(accountValue, accountId);
     }
   }
   return warnings;

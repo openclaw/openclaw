@@ -4,6 +4,7 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { getUpdateRun, recordUpdateRunDiagnostics } from "../../infra/update-run-ledger.js";
+import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -72,6 +73,15 @@ export async function verifyUpdateFailureRecovery(params: {
       advisory: { kind: "recoverable-maintenance", message },
     });
   };
+  const assertRecoveryFailureCurrent = (error: unknown) => {
+    if (
+      error instanceof UpdateCommandRecoveryPendingError ||
+      hasCommandProcessCleanupError(error)
+    ) {
+      throw error;
+    }
+    params.assertCurrent?.();
+  };
   let recorded: ReturnType<typeof getUpdateRun> | undefined;
   try {
     recorded = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
@@ -107,6 +117,25 @@ export async function verifyUpdateFailureRecovery(params: {
         });
         return;
       }
+      if (
+        params.opts.restart === false &&
+        !params.serviceStopped &&
+        result.steps.some(isUpdatePostInstallVerificationDeferred)
+      ) {
+        result.steps.push({
+          name: "gateway recovery verification",
+          command: "gateway verification",
+          cwd: root,
+          durationMs: 0,
+          exitCode: null,
+          advisory: {
+            kind: "recoverable-maintenance",
+            message:
+              "Gateway recovery verification deferred because --no-restart leaves activation to the operator. Resolve the recorded update failure before restarting the Gateway through its service owner, then run openclaw update status and openclaw doctor.",
+          },
+        });
+        return;
+      }
       if (params.serviceStopped) {
         try {
           result.verification = {
@@ -118,13 +147,7 @@ export async function verifyUpdateFailureRecovery(params: {
             channelsReady: false,
           };
         } catch (error) {
-          if (
-            error instanceof UpdateCommandRecoveryPendingError ||
-            hasCommandProcessCleanupError(error)
-          ) {
-            throw error;
-          }
-          params.assertCurrent?.();
+          assertRecoveryFailureCurrent(error);
           warnRecording(
             `Could not save Gateway recovery verification: ${formatErrorMessage(error)}`,
           );
@@ -182,13 +205,7 @@ export async function verifyUpdateFailureRecovery(params: {
               });
     });
   } catch (error) {
-    if (
-      error instanceof UpdateCommandRecoveryPendingError ||
-      hasCommandProcessCleanupError(error)
-    ) {
-      throw error;
-    }
-    params.assertCurrent?.();
+    assertRecoveryFailureCurrent(error);
     const probeFailureStep: UpdateStepResult = {
       name: "gateway recovery verification",
       command: "gateway verification",

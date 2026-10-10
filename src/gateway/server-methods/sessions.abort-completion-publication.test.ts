@@ -6,7 +6,6 @@ import { expect, it, vi } from "vitest";
 import * as lifecycleCompletion from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import * as lifecycleDelivery from "../../agents/subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import * as registryState from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   registerSubagentRun,
   markSubagentRunTerminated,
@@ -20,22 +19,16 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gatewa
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
-import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-native.js";
+import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import * as stateOperation from "../../state/openclaw-state-worker-operation.js";
 
 const fixture = useSubagentControlFixture();
-const nativeState = await vi.importActual<typeof registryState>(
-  "../../agents/subagents/registry/subagent-registry-state.js",
-);
 
 it.for(["before commit", "after commit"] as const)(
   "retains collector completion through metadata publication %s",
   async (boundary, { signal }) => {
-    vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-    );
     const runId = "completion-publication";
     const childKey = "agent:main:subagent:completion-publication";
     const sessionId = "completion-publication-session";
@@ -172,17 +165,15 @@ it.for(["before commit", "after commit"] as const)(
         (error: unknown) => ({ error }),
       );
     };
-    const freeze = lifecycleDelivery.freezeRunResultAtCompletion;
-    vi.spyOn(lifecycleDelivery, "freezeRunResultAtCompletion").mockImplementation(
-      async (...args) => {
-        const result = await freeze(...args);
-        if (args[1].runId === runId && boundary === "before commit" && !producer) {
-          startProducer();
-          await nativeHeld.promise;
-        }
-        return result;
-      },
-    );
+    const captureResult = lifecycleDelivery.captureSubagentRunResult;
+    vi.spyOn(lifecycleDelivery, "captureSubagentRunResult").mockImplementation(async (...args) => {
+      const result = await captureResult(...args);
+      if (args[1].runId === runId && boundary === "before commit" && !producer) {
+        startProducer();
+        await nativeHeld.promise;
+      }
+      return result;
+    });
     const runState = stateOperation.runWithOpenClawStateWorkerStore;
     vi.spyOn(stateOperation, "runWithOpenClawStateWorkerStore").mockImplementation(
       (store, context, operation, ...rest) =>

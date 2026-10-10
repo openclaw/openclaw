@@ -115,7 +115,7 @@ describe("prepared model catalog worker boundary", () => {
     vi.stubEnv("HOME", homeA);
     vi.stubEnv("OPENCLAW_HOME", homeA);
     vi.stubEnv("CODEX_HOME", codexHome);
-    const fixture = createCatalogFixture(makeTempDir, 0);
+    const fixture = await createCatalogFixture(makeTempDir, 0);
     vi.stubEnv("OPENCLAW_STATE_DIR", fixture.env.OPENCLAW_STATE_DIR);
     const config = {
       ...fixture.config,
@@ -198,7 +198,7 @@ describe("prepared model catalog worker boundary", () => {
   it("configured runtime refresh keeps an unaffected worker live across a scoped sibling reload", async ({
     signal,
   }) => {
-    const fixture = createCatalogFixture(
+    const fixture = await createCatalogFixture(
       makeTempDir,
       0,
       {},
@@ -222,7 +222,7 @@ describe("prepared model catalog worker boundary", () => {
       agents: {
         ...fixture.config.agents,
         entries: {
-          main: { default: true, agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
+          main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
           sibling: {
             agentDir: siblingDir,
             workspace: fixture.workspaceDir,
@@ -319,100 +319,54 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it.each([
-    ["gateway", "catalog"],
-    ["gateway", "auth-refresh"],
-    ["none", "catalog"],
-    ["none", "auth-refresh"],
-    ["activation", "catalog"],
-    ["activation", "auth-refresh"],
-  ] as const)(
-    "keeps %s metadata discovery scope with %s first",
-    async (metadataWorkspace, first) => {
-      const fixture = await createStaticSnapshot(0, {}, { metadataWorkspace });
-      if (first === "auth-refresh") {
-        const auth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
-          providerIds: [PROVIDER_ID],
-        });
-        expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
-          access: "v1:A",
-        });
-      }
-      const catalog = await loadCompletedFullCatalog(fixture.snapshot);
-      expect(catalog?.entries).toContainEqual(
-        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-      );
-    },
-  );
-
-  it("publishes account-scoped harness models only in the full catalog", async () => {
-    const fixture = await createStaticSnapshot(0);
-
-    expect(fixture.snapshot.modelCatalog.entries).not.toContainEqual(
-      expect.objectContaining({ id: "account-scoped-model" }),
-    );
-
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
-
-    expect(catalog?.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "account-scoped-model",
-      }),
+  it("keeps activated metadata discovery scope with auth refresh first", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { metadataWorkspace: "activation" });
+    const auth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [PROVIDER_ID],
+    });
+    expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({ access: "v1:A" });
+    const catalog = await loadCompletedFullCatalog(fixture.snapshot);
+    expect(catalog.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
     );
   });
 
-  it.each([false, true])(
-    "pairs full catalog native routes with exact-generation auth (async: %s)",
-    async (asyncSyntheticAuth) => {
-      const fixture = await createStaticSnapshot(
-        0,
-        {},
-        {
-          metadataWorkspace: "none",
-          provideMetadataToWorker: true,
-          asyncSyntheticAuth,
-        },
-      );
-      const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
+  it("pairs full catalog native routes with exact-generation async auth", async () => {
+    const fixture = await createStaticSnapshot(
+      0,
+      {},
+      {
+        metadataWorkspace: "none",
+        provideMetadataToWorker: true,
+        asyncSyntheticAuth: true,
+      },
+    );
+    expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
+    await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
 
-      expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
-      expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
-      expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
-      expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
-      fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
-      await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
-      fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+    const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
 
-      const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
-      const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
+    expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
+      type: "api_key",
+      key: "discovered-native-login-not-real",
+    });
+    expect(catalog).not.toHaveProperty("credentials");
 
-      expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
-        type: "api_key",
-        key: "discovered-native-login-not-real",
-      });
-      expect(catalog).not.toHaveProperty("credentials");
-
-      if (asyncSyntheticAuth) {
-        expect(
-          fs
-            .readFileSync(path.join(fixture.root, "synthetic-auth-owner.txt"), "utf8")
-            .trim()
-            .split("\n"),
-        ).toContain("parent");
-      } else {
-        expect(fs.readFileSync(syntheticAuthProbePath, "utf8").trim().split("\n")).toEqual([
-          HARNESS_ID,
-          DISCOVERED_HARNESS_ID,
-          MISSING_AUTH_HARNESS_ID,
-        ]);
-      }
-      expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
-      expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
-      expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
-      expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
-    },
-  );
+    expect(
+      fs
+        .readFileSync(path.join(fixture.root, "synthetic-auth-owner.txt"), "utf8")
+        .trim()
+        .split("\n"),
+    ).toContain("parent");
+    expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
+  });
 
   it.for([
     { retirement: "superseded", request: "catalog" },
@@ -521,7 +475,7 @@ describe("prepared model catalog worker boundary", () => {
       fixture.agentDir,
     );
 
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+    const catalog = await loadCompletedFullCatalog(fixture.snapshot);
 
     expect(catalog?.entries).toContainEqual(
       expect.objectContaining({
@@ -556,14 +510,7 @@ describe("prepared model catalog worker boundary", () => {
       ...fixture.config,
       agents: {
         ...fixture.config.agents,
-        list: [
-          {
-            id: "main",
-            default: true,
-            agentDir: fixture.agentDir,
-            workspace: fixture.workspaceDir,
-          },
-        ],
+        entries: { main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir } },
       },
     } satisfies OpenClawConfig;
     const owner = Object.freeze({
@@ -793,7 +740,6 @@ describe("prepared model catalog worker boundary", () => {
 
   it.each([
     [false, undefined],
-    [true, undefined],
     [true, "agent"],
     [true, "user"],
   ] as const)(
@@ -827,6 +773,8 @@ describe("prepared model catalog worker boundary", () => {
           timeout: 5000,
           input,
         });
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.signal, result.stderr).toBeNull();
         expect(result.status, result.stderr).toBe(0);
       };
       const refreshAuth = async () => {

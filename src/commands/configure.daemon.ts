@@ -15,7 +15,6 @@ import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 export type DaemonSetupOutcome = "succeeded" | "failed" | "skipped";
 
-/** Prompt to install, reinstall, restart, or skip the local Gateway service. */
 export async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
   port: number;
@@ -32,38 +31,32 @@ export async function maybeInstallDaemon(params: {
     }
     loaded = false;
   }
-  let shouldInstall = true;
-  if (loaded) {
-    const action = await prompts.select({
-      message: "Gateway service already installed",
-      options: [
-        { value: "restart", label: "Restart" },
-        { value: "reinstall", label: "Reinstall" },
-        { value: "skip", label: "Skip" },
-      ],
-    });
-    if (action === "restart") {
-      await withProgress(
-        { label: "Gateway service", indeterminate: true, delayMs: 0 },
-        async (progress) => {
-          progress.setLabel("Restarting Gateway service…");
-          const restartResult = await service.restart({
-            env: process.env,
-            stdout: process.stdout,
-          });
-          progress.setLabel(
-            describeGatewayServiceRestart("Gateway", restartResult).progressMessage,
-          );
-        },
-      );
-      shouldInstall = false;
-    }
-    if (action === "skip") {
-      return "skipped";
-    }
+  const action = loaded
+    ? await prompts.select({
+        message: "Gateway service already installed",
+        options: [
+          { value: "restart", label: "Restart" },
+          { value: "reinstall", label: "Reinstall" },
+          { value: "skip", label: "Skip" },
+        ],
+      })
+    : "reinstall";
+  if (action === "skip") {
+    return "skipped";
   }
-
-  if (shouldInstall) {
+  if (action === "restart") {
+    await withProgress(
+      { label: "Gateway service", indeterminate: true, delayMs: 0 },
+      async (progress) => {
+        progress.setLabel("Restarting Gateway service…");
+        const restartResult = await service.restart({
+          env: process.env,
+          stdout: process.stdout,
+        });
+        progress.setLabel(describeGatewayServiceRestart("Gateway", restartResult).progressMessage);
+      },
+    );
+  } else {
     // Keep the old service until preparation succeeds; install owns replacement.
     let installError: string | null = null;
     const existingCommand = await service.readCommand(process.env);

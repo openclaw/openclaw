@@ -1,14 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Value } from "typebox/value";
-import type { PresenceQueryParamsSchema } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import {
   isWorkerGatewayToolFrameWithinBudget,
   WorkerGatewayToolResultSchema,
   type WorkerGatewayToolResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
-import type { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { SessionPortalToolSchema } from "../../agents/tools/portal-tool-contract.js";
@@ -27,14 +25,6 @@ export type WorkerSessionToolRequest = {
 } & (
   | { toolName: "sessions_spawn"; request: PlacedSessionsSpawnArguments & { toolCallId: string } }
   | { toolName: "sessions_send"; request: PlacedSessionsSendArguments & { toolCallId: string } }
-  | {
-      toolName: "skill_workshop";
-      request: { toolCallId: string; arguments: Static<typeof SkillLibraryWorkshopSchema> };
-    }
-  | {
-      toolName: "presence";
-      request: Static<typeof PresenceQueryParamsSchema> & { toolCallId: string };
-    }
   | { toolName: "portal"; request: Static<typeof SessionPortalToolSchema> & { toolCallId: string } }
 );
 

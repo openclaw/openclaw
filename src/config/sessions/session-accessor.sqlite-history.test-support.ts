@@ -3,10 +3,7 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import type { TranscriptAnchorPageOptions } from "../../sessions/transcript-anchor-page.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import {
-  withRecentSessionTranscriptActiveEventsInSnapshot,
-  type SessionTranscriptMessageAnchorPage,
-} from "./session-accessor.sqlite-active-events.js";
+import { withRecentSessionTranscriptActiveEventsInSnapshot } from "./session-accessor.sqlite-active-events-read.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptReadScope,
@@ -14,12 +11,15 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { resolveVisibleHistoryEventCount } from "./session-accessor.sqlite-history-projection.js";
 import {
-  readSessionTranscriptHistoryEventsFromProjection,
+  readSessionTranscriptHistoryEventPageFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
   readSessionTranscriptHistoryAnchorPageFromProjection,
   type SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
-import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
+import type {
+  SessionTranscriptMessageEvent,
+  SessionTranscriptMessageAnchorPage,
+} from "./session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
 
 export function readActiveTranscriptStats(scope: SessionTranscriptReadScope) {
@@ -132,7 +132,11 @@ export function readSessionTranscriptHistoryEvents(
 ): SessionTranscriptMessageEvent[] {
   return withCurrentProjectionSnapshot(
     scope,
-    (projection) => readSessionTranscriptHistoryEventsFromProjection(projection),
+    (projection) =>
+      readSessionTranscriptHistoryEventPageFromProjection(projection, {
+        offset: 0,
+        maxMessages: Number.MAX_SAFE_INTEGER,
+      }).events,
     options,
   );
 }

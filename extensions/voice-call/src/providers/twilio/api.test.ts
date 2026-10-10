@@ -11,7 +11,7 @@ vi.mock("../../../api.js", () => ({
 }));
 
 import { resolveTwilioApiBaseUrl } from "../twilio-region.js";
-import { TwilioApiError, twilioApiRequest } from "./api.js";
+import { TwilioApiError, createTwilioApi } from "./api.js";
 
 const DEFAULT_REQUEST = {
   baseUrl: resolveTwilioApiBaseUrl({ accountSid: "AC123" }),
@@ -20,6 +20,18 @@ const DEFAULT_REQUEST = {
   endpoint: "/Calls.json",
   body: {},
 };
+
+async function twilioApiRequest(
+  params: Parameters<typeof createTwilioApi>[0] & {
+    endpoint: string;
+    body: URLSearchParams | Record<string, string | string[]>;
+    allowNotFound?: boolean;
+  },
+) {
+  return createTwilioApi(params).request(params.endpoint, params.body, {
+    allowNotFound: params.allowNotFound,
+  });
+}
 
 type FetchGuardRequest = {
   url?: string;

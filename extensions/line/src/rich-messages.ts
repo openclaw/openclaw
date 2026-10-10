@@ -141,7 +141,7 @@ export function renderLinePresentation(
   const hasCard = presentation.blocks.some(
     (block) => block.type === "buttons" && block.buttons.length > 0,
   );
-  const buttons: Array<{ label: string; action: Action }> = [];
+  const buttons: Action[] = [];
   const quickReplyItems: LineQuickReplyItem[] = [];
   const carriedBlocks: MessagePresentationBlock[] = [];
   const cardBody: string[] = [];
@@ -173,7 +173,7 @@ export function renderLinePresentation(
           }
           questionLabels.add(button.label);
         }
-        buttons.push({ label: button.label, action });
+        buttons.push(action);
       }
     } else if (block.type === "select") {
       const overflow: typeof block.options = [];
@@ -295,12 +295,12 @@ export function renderLineCard(card: LineRichCard): { altText: string; contents:
         source: card.source,
         imageUrl: card.imageUrl,
         isPlaying: card.status ? card.status === "playing" : undefined,
-        controls: Object.fromEntries(
-          ["previous", "play", "pause", "next"].map((action) => [
-            action,
-            { data: lineActionData(action, device) },
-          ]),
-        ),
+        controls: {
+          previous: { data: lineActionData("previous", device) },
+          play: { data: lineActionData("play", device) },
+          pause: { data: lineActionData("pause", device) },
+          next: { data: lineActionData("next", device) },
+        },
       }),
     };
   }

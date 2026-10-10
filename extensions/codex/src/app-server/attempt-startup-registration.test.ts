@@ -95,7 +95,9 @@ function scriptStartup() {
             ? { config: {}, origins: {}, layers: [] }
             : message.method === "configRequirements/read"
               ? { requirements: null }
-              : threadStartResult("thread-recovered", "/repo");
+              : message.method === "skills/list"
+                ? { data: [] }
+                : threadStartResult("thread-recovered", "/repo");
       child.stdout.write(JSON.stringify({ id: message.id, result }) + "\n");
     });
     child.stdin.on("finish", () => exit(child, 0));

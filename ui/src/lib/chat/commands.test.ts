@@ -648,6 +648,23 @@ describe("parseSlashCommand", () => {
     });
   });
 
+  it("keeps remote descriptions when a command name matches an object prototype property", () => {
+    applyRemoteEntries([
+      {
+        name: "constructor",
+        textAliases: ["/constructor"],
+        description: "Construct a sample project.",
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: false,
+      },
+    ]);
+
+    const command = expectDefined(getSlashCommandCompletions("constructor")[0], "completion");
+    expect(command.name).toBe("constructor");
+    expect(getSlashCommandDescription(command)).toBe("Construct a sample project.");
+  });
+
   it("drops remote commands with unsafe identifiers before they reach the palette/parser", () => {
     applyRemoteEntries([
       {

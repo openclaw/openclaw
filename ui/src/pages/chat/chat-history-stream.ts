@@ -1,7 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   isHiddenAssistantStreamText,
@@ -25,10 +24,7 @@ import {
   reconcileChatRunFromSessionRow,
   setChatRunError,
 } from "./run-lifecycle.ts";
-import {
-  latestPersistedSteerBoundary,
-  resolveCumulativeAssistantTail,
-} from "./stream-causal-boundary.ts";
+import { replaceChatStream } from "./stream-causal-boundary.ts";
 import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -54,47 +50,12 @@ export function persistsChatCommentary(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary !== false;
 }
 
-function replayInFlightRunEvents(
-  state: ChatState,
-  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
-): void {
-  if (state.chatRunId !== run.runId || !Array.isArray(run.events)) {
-    return;
-  }
-  for (const event of run.events) {
-    if (!event || event.runId !== run.runId) {
-      continue;
-    }
-    // SAFETY: history replays the same agent events against the pane that owns live tool state.
-    handleAgentEvent(state as never, event as never);
-  }
-}
-
 function resolveInFlightAssistantText(bufferedText: unknown): string | null {
   return typeof bufferedText === "string" &&
     bufferedText &&
     !isHiddenAssistantStreamText(bufferedText)
     ? bufferedText
     : null;
-}
-
-function replayedCommentaryItemIds(
-  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
-): ReadonlySet<string> {
-  const itemIds = new Set<string>();
-  for (const event of run.events ?? []) {
-    const itemId = event.data.itemId;
-    if (
-      event.runId === run.runId &&
-      event.stream === "item" &&
-      event.data.kind === "preamble" &&
-      typeof itemId === "string" &&
-      itemId.trim()
-    ) {
-      itemIds.add(itemId.trim());
-    }
-  }
-  return itemIds;
 }
 
 function runProjectionsUnchanged(
@@ -132,18 +93,6 @@ export function readRunProjections(state: ChatState, sessionKey: string, agentId
   ).runs;
 }
 
-function mergeInFlightAssistantText(snapshot: string | null, live: string | null): string | null {
-  if (!snapshot || live?.startsWith(snapshot)) {
-    return live ?? snapshot;
-  }
-  if (!live || snapshot.startsWith(live)) {
-    return snapshot;
-  }
-  // Divergence: live deltas are newer than the bounded snapshot, so the local
-  // cumulative buffer wins — a lagging snapshot must not rewind streamed text.
-  return live;
-}
-
 export function applyHistoryRun(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
@@ -153,7 +102,6 @@ export function applyHistoryRun(params: {
   runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
   currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   resetStream: boolean;
-  activeStreamBeforeReset: string | null;
 }): void {
   const {
     state,
@@ -164,14 +112,31 @@ export function applyHistoryRun(params: {
     runProjectionsBeforeApply,
     currentRunProjections,
     resetStream,
-    activeStreamBeforeReset,
   } = params;
+  const hasOtherSendingRun = (runId: string) =>
+    state.chatQueue.some(
+      (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== runId,
+    );
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
     if (!sessionInfo) {
       return;
     }
     const localRunId = state.chatRunId?.trim();
+    if (
+      localRunId &&
+      sessionInfo.lastRunId !== localRunId &&
+      historyRun &&
+      !hasOtherSendingRun(localRunId) &&
+      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply) &&
+      reconcileChatRunFromSessionRow(state, sessionInfo, {
+        publishRunStatus: false,
+        historyRun,
+      })
+    ) {
+      // Idle history retires the observed run without borrowing a later run's outcome.
+      return;
+    }
     const terminalRunId =
       sessionInfo.lastRunId ??
       (localRunId && hasExactHistoryTerminal(state, localRunId) ? localRunId : undefined);
@@ -185,10 +150,7 @@ export function applyHistoryRun(params: {
       sessionInfo.hasActiveRun !== true &&
       !isSessionRunActive(sessionInfo) &&
       (!state.chatRunId || state.chatRunId === terminalRunId) &&
-      !state.chatQueue.some(
-        (item) =>
-          item.sendState === "sending" && item.sendRunId && item.sendRunId !== terminalRunId,
-      ) &&
+      !hasOtherSendingRun(terminalRunId) &&
       ((sessionInfo.status !== "killed" && !knownRun) ||
         state.chatRunId === terminalRunId ||
         getChatRunOwner(state) === terminalRunId) &&
@@ -254,13 +216,6 @@ export function applyHistoryRun(params: {
     state.chatRunId === inFlightRunId &&
     projectedInFlightRun?.status === "streaming" &&
     runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
-  const retainsLiveStream =
-    sameRunContinued ||
-    (state.chatRunId === inFlightRunId &&
-      (activeStreamBeforeReset !== null ||
-        state.chatStreamSegments?.some(
-          (segment) => !segment.runId || segment.runId === inFlightRunId,
-        )));
   const activeRunIds = sessionInfo?.activeRunIds;
   const inFlightRunIsActive =
     isSessionRunActive(sessionInfo ?? {}) &&
@@ -277,9 +232,7 @@ export function applyHistoryRun(params: {
     historyRun?.runId === state.chatRunId &&
     historyRun.sessionId === sessionInfo?.sessionId &&
     historyRun.isCurrent() &&
-    !state.chatQueue.some(
-      (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== inFlightRunId,
-    ),
+    !hasOtherSendingRun(inFlightRunId),
   );
   const canAdoptInFlightRun =
     inFlightRunIsActive &&
@@ -291,7 +244,7 @@ export function applyHistoryRun(params: {
     const recoveringRun = state.chatRunId !== inFlightRunId;
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
-    // history is pending; deltas from this same live run must still merge.
+    // history is pending; the same live run retains its ordered text baseline.
     adoptStartedChatRun(state, inFlightRunId, Date.now());
     if (recoveringRun && sessionInfo) {
       observeChatRunModel(state, inFlightRunId, sessionInfo);
@@ -303,45 +256,19 @@ export function applyHistoryRun(params: {
   }
   const snapshotStartedAt =
     typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
-  const liveText = replacesOwnedRun
-    ? null
-    : sameRunContinued
-      ? mergeInFlightAssistantText(
-          resolveInFlightAssistantText(extractText(projectedInFlightRun?.message)),
-          activeStreamBeforeReset,
-        )
-      : activeStreamBeforeReset;
-  state.chatStream = mergeInFlightAssistantText(resolveInFlightAssistantText(run.text), liveText);
-  state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
-  // A retained pane gets its boundary from session.message. Only fresh adoption
-  // reconstructs it from history, with the persisted prefix as cumulative evidence.
-  const boundary = retainsLiveStream
-    ? null
-    : latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
-  const tail =
-    state.chatStream === null
-      ? null
-      : resolveCumulativeAssistantTail(
-          state.chatMessages,
-          state.chatStream,
-          inFlightRunId,
-          boundary?.index,
-          replayedCommentaryItemIds(run),
-        );
-  const prefix = state.chatStream?.slice(0, state.chatStream.length - (tail?.length ?? 0)) ?? "";
-  const accumulated = accumulatedStreamText(state.chatStreamSegments ?? []);
-  if (boundary || advanceAccumulatedStreamText(accumulated, prefix) !== accumulated) {
-    state.chatStreamSegments = [
-      ...(state.chatStreamSegments ?? []),
-      {
-        text: prefix,
-        ts: state.chatStreamStartedAt,
-        runId: inFlightRunId,
-        ...(boundary ? { boundaryRunId: boundary.runId } : {}),
-        ...(prefix ? { persisted: true } : { boundaryMarker: true }),
-      },
-    ];
+  const advancedDuringRead =
+    previousRunProjections[inFlightRunId]?.message !==
+    runProjectionsBeforeApply[inFlightRunId]?.message;
+  // Ordered live frames already establish their baseline, including shrinking
+  // replacements. A pending history snapshot cannot extend that baseline by text.
+  if (advancedDuringRead && !replacesOwnedRun) {
+    state.chatStream = resolveInFlightAssistantText(
+      extractText(runProjectionsBeforeApply[inFlightRunId]?.message),
+    );
+  } else {
+    replaceChatStream(state, resolveInFlightAssistantText(run.text));
   }
+  state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
   const startup = run.events?.findLast(
     (event) => event.runId === inFlightRunId && event.stream === "run_status",
   );
@@ -362,5 +289,12 @@ export function applyHistoryRun(params: {
   // Disconnect cleanup intentionally removes transient activity rows while
   // retaining the owned run. Replay fills that gap; per-identity sequence
   // fences keep a delayed snapshot from replacing newer live progress.
-  replayInFlightRunEvents(state, run);
+  if (state.chatRunId === run.runId && Array.isArray(run.events)) {
+    for (const event of run.events) {
+      if (event?.runId === run.runId) {
+        // SAFETY: history replays the same agent events against the pane that owns live tool state.
+        handleAgentEvent(state as never, event as never);
+      }
+    }
+  }
 }

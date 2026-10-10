@@ -132,6 +132,7 @@ it.each([
         yielded,
       });
       expect(result.owned).toBe(true);
+      expect(result.idempotencyKey).toBe("cli-assistant:cli-media-run");
       expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ content: [{ type: "text", text: sourceText }] }),
         sourceText,

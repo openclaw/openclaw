@@ -1,5 +1,4 @@
 import { html, nothing, type ReactiveController } from "lit";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,7 +6,6 @@ import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-pal
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -29,7 +27,7 @@ import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
-import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
+import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
 registerCommandPaletteEnglish();
 
@@ -145,7 +143,7 @@ export class PaletteSessionDraft implements ReactiveController {
     if (!attachmentDraft) {
       return undefined;
     }
-    const readSignal = attachmentDraft.readSignal;
+    const readSignal = attachmentDraft.reads.readSignal;
     return {
       uploadConfig: this.read().context?.config,
       attachments: attachmentDraft.attachments,
@@ -156,7 +154,7 @@ export class PaletteSessionDraft implements ReactiveController {
       disabled: this.messageLocked,
       getAttachments: () => attachmentDraft.attachments,
       readSignal,
-      onPendingReadsChange: (delta) => attachmentDraft.updatePending(readSignal, delta),
+      onPendingReadsChange: (delta) => attachmentDraft.reads.updatePending(readSignal, delta),
       onAttachmentsChange: (attachments) => {
         if (
           readSignal.aborted ||
@@ -272,9 +270,9 @@ export class PaletteSessionDraft implements ReactiveController {
       !submission.submissionOutcomeUnknown &&
       !submission.error
     ) {
-      submission.attachmentDraft.reset({ release: true });
+      submission.attachmentDraft.reset();
     } else {
-      submission?.attachmentDraft.abortReads();
+      submission?.attachmentDraft.reads.abortReads();
     }
     this.settings.close();
     this.draft?.browser.close();
@@ -328,7 +326,7 @@ export class PaletteSessionDraft implements ReactiveController {
     const attachmentDraft = draft.submission.attachmentDraft;
     if (
       this.coldSubmitReadSignal &&
-      (this.coldSubmitReadSignal.aborted || attachmentDraft.pendingReads === 0)
+      (this.coldSubmitReadSignal.aborted || attachmentDraft.reads.pendingReads === 0)
     ) {
       const ready =
         !this.coldSubmitReadSignal.aborted &&
@@ -435,7 +433,6 @@ export class PaletteSessionDraft implements ReactiveController {
     if (!context) {
       return;
     }
-    const { gateway } = context;
     const isCurrentOwner = captureSessionNoticeOwner(context);
     const row = context.sessions.state.result?.sessions.find(
       (candidate) => candidate.key === result.key,
@@ -452,21 +449,7 @@ export class PaletteSessionDraft implements ReactiveController {
       if (this.read().context !== context || !isCurrentOwner()) {
         return;
       }
-      selectApplicationSession({
-        selection: context.agentSelection,
-        gateway,
-        sessionKey: result.key,
-        agentId: result.agentId,
-      });
-      context.navigate(
-        "chat",
-        sessionNavigationTarget({
-          context,
-          face: "chat",
-          sessionKey: result.key,
-          agentId: result.agentId,
-        }).options,
-      );
+      openSessionNoticeTarget(context, result.key, result.agentId);
       if (result.initialRun.status === "rejected") {
         this.callbacks.onClose();
       }

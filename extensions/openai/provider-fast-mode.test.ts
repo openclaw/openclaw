@@ -1,6 +1,6 @@
 import type { ProviderFastModePolicyContext } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { resolveFastModeSupport } from "./provider-policy-api.js";
+import { resolveFastModeSupport, resolveServiceTiers } from "./provider-policy-api.js";
 
 const request: ProviderFastModePolicyContext = {
   provider: "openai",
@@ -15,7 +15,7 @@ describe("OpenAI selected Fast capability", () => {
   it.each([
     { change: {}, expected: true },
     { change: { api: "openai-completions" }, expected: false },
-    { change: { baseUrl: "https://proxy.example/v1" }, expected: false },
+    { change: { baseUrl: "https://proxy.example/v1" }, expected: true },
     { change: { api: "azure-openai-responses" }, expected: false },
     { change: { params: { serviceTier: "flex" } }, expected: false },
     { change: { params: { service_tier: " PRIORITY " } }, expected: false },
@@ -30,3 +30,19 @@ describe("OpenAI selected Fast capability", () => {
     expect(resolveFastModeSupport({ ...request, ...change })).toBe(expected);
   });
 });
+
+it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
+  "publishes verified tier capabilities for %s without constraining other routes",
+  (modelId) => {
+    const context = { ...request, modelId };
+    expect(resolveFastModeSupport(context)).toBe(modelId === "gpt-daybreak-blue-latest");
+    expect(resolveServiceTiers(context)).toEqual(
+      modelId === "gpt-daybreak-blue-latest" ? ["default", "priority"] : ["default"],
+    );
+    expect(resolveServiceTiers({ ...context, runtimeId: "codex" })).toBeUndefined();
+    expect(
+      resolveServiceTiers({ ...context, baseUrl: "https://proxy.example/v1" }),
+    ).toBeUndefined();
+    expect(resolveServiceTiers({ ...context, modelId: "gpt-5.4" })).toBeUndefined();
+  },
+);

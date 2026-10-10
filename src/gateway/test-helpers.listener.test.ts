@@ -5,7 +5,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import type { GatewayServer } from "./server.js";
 import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
@@ -112,7 +111,6 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
   const competitor = createServer();
   let selected: TestPortClaim | undefined;
   let reclaimed: TestPortClaim | undefined;
-  let restoreReservation: (() => void) | undefined;
   let settled:
     | Promise<PromiseSettledResult<Awaited<ReturnType<typeof startGatewayServerHarness>>>[]>
     | undefined;
@@ -138,19 +136,6 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
 
   await runQaGatewayFixture(
     async () => {
-      const listeners = await import("./test-helpers.listener.js");
-      const reserve = listeners.reserveGatewayTestListener;
-      // This mocked startup needs no derived listeners or outbound sockets.
-      // Keep its port outside sibling tests' deterministic worker candidates.
-      let port = await getFreePort();
-      // The reservation retains the Gateway's five-port block, even for this mock.
-      while (port > 65535 - 4) {
-        port = await getFreePort();
-      }
-      const reservation = vi
-        .spyOn(listeners, "reserveGatewayTestListener")
-        .mockImplementationOnce(() => reserve(port));
-      restoreReservation = () => reservation.mockRestore();
       const starting = startGatewayServerHarness();
       settled = Promise.allSettled([starting]);
       const claim = await Promise.race([
@@ -181,7 +166,6 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
     () => closeListener(observed.adopted.mock.lastCall?.[0]),
     () => selected?.release(),
     () => reclaimed?.release(),
-    () => restoreReservation?.(),
     () => env.restore(),
     () => observed.server.mockReset(),
     () => observed.adopted.mockReset(),

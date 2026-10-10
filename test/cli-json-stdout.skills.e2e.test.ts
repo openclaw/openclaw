@@ -68,13 +68,10 @@ describe("cli json stdout contract", () => {
       { name: "list", args: ["skills", "list", "--json"] },
       { name: "info", args: ["skills", "info", "fixture", "--json"] },
       { name: "check", args: ["skills", "check", "--json"] },
-      { name: "curator status", args: ["skills", "curator", "status", "--json"] },
-      { name: "curator pin", args: ["skills", "curator", "pin", "fixture", "--json"] },
-      { name: "curator unpin", args: ["skills", "curator", "unpin", "fixture", "--json"] },
-      { name: "curator restore", args: ["skills", "curator", "restore", "fixture", "--json"] },
+      { name: "workshop list", args: ["skills", "workshop", "list", "--json"] },
       {
-        name: "workshop apply",
-        args: ["skills", "workshop", "apply", "fixture-proposal", "--json"],
+        name: "workshop archive",
+        args: ["skills", "workshop", "archive", "fixture", "--json"],
       },
     ].map(({ name, args }) => ({
       name: `${name} after an explicit environment Gateway fails`,
@@ -83,31 +80,14 @@ describe("cli json stdout contract", () => {
       explicitGateway: true,
     })),
     {
-      name: "retired curator mutation",
-      args: ["skills", "curator", "pin", "missing-skill", "--json"],
-      message:
-        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
-    },
-    {
-      name: "retired curator mutation with parent JSON",
-      args: ["skills", "curator", "--json", "pin", "missing-skill"],
-      message:
-        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
-    },
-    {
       name: "workshop workspace validation with parent JSON",
       args: ["skills", "--json", "workshop", "list", "--agent", ""],
       message: "--agent must not be blank",
     },
     {
-      name: "workshop mutation",
-      args: ["skills", "workshop", "reject", "missing-proposal", "--json"],
-      message: "Skill proposal not found: missing-proposal",
-    },
-    {
-      name: "workshop inspection",
-      args: ["skills", "workshop", "inspect", "missing-proposal", "--json"],
-      message: "Skill proposal not found: missing-proposal",
+      name: "workshop show",
+      args: ["skills", "workshop", "show", "missing-skill", "--version", "v1", "--json"],
+      message: 'Skill "missing-skill" has no version "v1". Versions: none.',
     },
   ])("returns one canonical JSON document when skills $name fails", async (testCase) => {
     await withTempHome(
@@ -160,7 +140,8 @@ describe("cli json stdout contract", () => {
             message,
           },
         });
-        expect(result.stderr).toContain(message);
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(message);
         expect(result.stderr.length).toBeLessThan(2_048);
       },
       { prefix: "openclaw-skills-json-failure-e2e-" },

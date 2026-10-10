@@ -1,3 +1,5 @@
+import { raceWithTimeout } from "../../../../packages/retry/src/index.js";
+
 const NODE_LIFECYCLE_METHODS = new Set(["node.invoke.progress", "node.invoke.result"]);
 
 export const NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS = 1_000;
@@ -36,17 +38,12 @@ export class GatewayNodeLifecycleDispatchTracker {
       if (remainingMs <= 0) {
         return false;
       }
-      let timeout: ReturnType<typeof setTimeout> | undefined;
       const timedOut = Symbol("node-lifecycle-dispatch-timeout");
-      const result = await Promise.race([
+      const result = await raceWithTimeout(
         Promise.allSettled(this.active),
-        new Promise<typeof timedOut>((resolve) => {
-          timeout = setTimeout(() => resolve(timedOut), remainingMs);
-        }),
-      ]);
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+        remainingMs,
+        () => timedOut,
+      );
       if (result === timedOut) {
         return false;
       }

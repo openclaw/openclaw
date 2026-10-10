@@ -25,6 +25,7 @@ export const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInsta
 
 const mocks = vi.hoisted(() => ({
   outro: vi.fn(),
+  confirm: vi.fn(async () => true),
   config: vi.fn<() => OpenClawConfig>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
@@ -64,6 +65,7 @@ beforeEach(() => {
     return {
       runtime: await params.service.readRuntime(params.env ?? process.env),
       portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
+      outcome: mocks.restartedHealthy ? "ready" : "failed",
       healthy: mocks.restartedHealthy,
       staleGatewayPids: [],
       gatewayVersion: params.expectedVersion ?? null,
@@ -94,6 +96,16 @@ vi.mock("../daemon/service-process-membership.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../infra/container-environment.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/container-environment.js")>();
+  return {
+    ...actual,
+    // Native-manager fixtures model a host installation independently of the test runner.
+    isContainerEnvironment: () =>
+      mocks.emulateNativeInstall ? false : actual.isContainerEnvironment(),
+  };
+});
+
 vi.mock("../daemon/systemd-exec.js", async (original) => {
   const { gatewayMaintenanceSystemdShow } =
     await import("../gateway/health-response.test-support.js");
@@ -113,6 +125,8 @@ vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   note: vi.fn(),
   outro: mocks.outro,
+  confirm: mocks.confirm,
+  select: vi.fn(),
 }));
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -429,9 +443,7 @@ export function registerDoctorConfigReceiptTests(
     async (advisory) => {
       mocks.runContributions.mockImplementation(async (ctx) => {
         ctx.configResult.warnings = ['Plugin "fixture" config repair failed; config preserved.'];
-        await createDoctorHealthContribution({
-          id: "doctor:fixture-warning",
-          label: "Fixture warning",
+        await createDoctorHealthContribution("doctor:fixture-warning", "Fixture warning", {
           healthChecks: {
             description: "Optional fixture maintenance",
             detect: async () => [

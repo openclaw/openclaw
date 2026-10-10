@@ -33,6 +33,8 @@ import {
 import {
   getEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
+  prepareSessionSystemPrompt,
+  persistSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 import type {
@@ -76,63 +78,111 @@ afterEach(() => {
 
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
-  clearEmbeddedSessionPromptStates(["phase-context-replay"]);
+  clearEmbeddedSessionPromptStates([
+    "phase-context-replay",
+    "phase-system-update",
+    "phase-finalization",
+  ]);
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
-  it("wires final Decision withdrawal through the policy and system-prompt owners", async () => {
-    const f = createFixture();
-    const ownedSession = f.input.prepared.sessionRuntime.agentSession;
-    const session = ownedSession.activeSession;
-    session.agent.state.systemPrompt = "pruned prompt";
-    session.agent.state.tools = [];
-    let withdrawals = 0;
-    f.input.prepared.promptToolPolicy.prepareForDispatch = (prepare) => {
-      withdrawals++;
-      return prepare();
-    };
-    const refresh = vi.fn((current: string) => current + " / permitted tools");
-    const preparePrompt = vi.fn(async () => refresh);
-    f.input.prepared.systemPrompt.prepareToolPrompt = preparePrompt;
-    vi.mocked(ownedSession.setActiveSessionSystemPrompt).mockImplementation((prompt) => {
-      session.agent.state.systemPrompt = prompt;
-      return prompt;
-    });
-    const ordinaryAssembly = expectDefined(
-      mocks.preparePromptAssembly.getMockImplementation(),
-      "prompt assembly fixture implementation",
-    );
-    mocks.preparePromptAssembly.mockImplementation(async (input) => ({
-      ...(await ordinaryAssembly(input)),
-      decisionPrefilter: {
-        shouldPruneTools: true,
-        restrictionApplied: true,
-        status: "proposed",
-        reason: "conversational",
-        isCurrent: () => false,
-      },
-    }));
-    mocks.submitPrompt.mockImplementation(async (input: PromptSubmissionCall) => {
-      const readContext = await expectDefined(
-        input.preparePrimaryModelRequest?.(),
-        "foreground restoration preparation",
+  it.each([false, true])(
+    "wires final Decision withdrawal with in-history updates %s",
+    async (inHistorySystemUpdates) => {
+      const f = createFixture();
+      const ownedSession = f.input.prepared.sessionRuntime.agentSession;
+      const session = ownedSession.activeSession;
+      session.agent.state.systemPrompt = "pruned prompt";
+      session.agent.state.tools = [];
+      if (inHistorySystemUpdates) {
+        const state = getEmbeddedSessionPromptState("phase-system-update");
+        const project = (systemPrompt: string) =>
+          prepareSessionSystemPrompt({
+            state,
+            routeKey: "anthropic/claude-opus-5/anthropic-messages",
+            systemPrompt,
+            entries: [],
+          });
+        project("pruned prompt").commit();
+        f.input.prepared.sessionRuntime.prepareSystemPromptUpdate = vi.fn(
+          async (prompt: string, _freshlyRendered?: boolean) => project(prompt),
+        );
+      }
+      let withdrawals = 0;
+      f.input.prepared.promptToolPolicy.prepareForDispatch = (prepare) => {
+        withdrawals++;
+        return prepare();
+      };
+      const refresh = Object.assign(
+        vi.fn((current: string) => current + " / permitted tools"),
+        {
+          freshlyRendered: true,
+        },
       );
-      expect(readContext()).toEqual({ tools: [], systemPrompt: "pruned prompt / permitted tools" });
-    });
-    await runEmbeddedAttemptPromptPhase(f.input, f.promptState);
-    expect(f.readState().promptError).toBeNull();
-    expect(withdrawals).toBe(1);
-    expect(preparePrompt).toHaveBeenCalledWith(
-      f.input.prepared.promptToolPolicy.current.effectiveTools,
-    );
-    expect(refresh).toHaveBeenCalledWith("pruned prompt");
-    const assembly = await mocks.preparePromptAssembly.mock.results[0]!.value;
-    expect(assembly.decisionPrefilter).toMatchObject({
-      restrictionApplied: false,
-      status: "retained",
-      reason: "selection-changed",
-    });
-  });
+      const preparePrompt = vi.fn(async () => refresh);
+      f.input.prepared.systemPrompt.prepareToolPrompt = preparePrompt;
+      vi.mocked(ownedSession.setActiveSessionSystemPrompt).mockImplementation((prompt) => {
+        session.agent.state.systemPrompt = prompt;
+        return prompt;
+      });
+      const ordinaryAssembly = expectDefined(
+        mocks.preparePromptAssembly.getMockImplementation(),
+        "prompt assembly fixture implementation",
+      );
+      mocks.preparePromptAssembly.mockImplementation(async (input) => ({
+        ...(await ordinaryAssembly(input)),
+        decisionPrefilter: {
+          shouldPruneTools: true,
+          restrictionApplied: true,
+          status: "proposed",
+          reason: "conversational",
+          isCurrent: () => false,
+        },
+      }));
+      mocks.submitPrompt.mockImplementation(async (input: PromptSubmissionCall) => {
+        const readContext = await expectDefined(
+          input.preparePrimaryModelRequest?.(),
+          "foreground restoration preparation",
+        );
+        const context = readContext();
+        if (inHistorySystemUpdates) {
+          expect(context).toMatchObject({
+            tools: [],
+            systemPrompt: "pruned prompt",
+            promptUpdate: {
+              update: {
+                customType: "openclaw.system-update",
+                content: expect.stringContaining("pruned prompt / permitted tools"),
+              },
+            },
+          });
+          context.promptUpdate?.commit();
+          expect(session.agent.state.systemPrompt).toBe("pruned prompt");
+        } else {
+          expect(context).toEqual({ tools: [], systemPrompt: "pruned prompt / permitted tools" });
+        }
+      });
+      await runEmbeddedAttemptPromptPhase(f.input, f.promptState);
+      expect(f.readState().promptError).toBeNull();
+      expect(withdrawals).toBe(1);
+      expect(preparePrompt).toHaveBeenCalledWith(
+        f.input.prepared.promptToolPolicy.current.effectiveTools,
+      );
+      expect(refresh).toHaveBeenCalledWith("pruned prompt");
+      if (inHistorySystemUpdates) {
+        expect(f.input.prepared.sessionRuntime.prepareSystemPromptUpdate).toHaveBeenCalledWith(
+          "pruned prompt / permitted tools",
+          true,
+        );
+      }
+      const assembly = await mocks.preparePromptAssembly.mock.results[0]!.value;
+      expect(assembly.decisionPrefilter).toMatchObject({
+        restrictionApplied: false,
+        status: "retained",
+        reason: "selection-changed",
+      });
+    },
+  );
 
   it("observes canonical request prefixes before managed cache consumption and skips compaction", async () => {
     const fixture = createFixture();
@@ -179,7 +229,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         requestIndex: 3,
         broke: false,
         cacheRead: 10_000,
-        changes: [{ code: "tools", detail: "tool set changed with same count" }],
+        changes: [{ code: "tools", detail: '1 -> 1 tools; description: "read"' }],
       },
     ]);
   });
@@ -630,13 +680,53 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     }
   });
 
-  it("skips before_agent_run for settled-turn finalization", async () => {
+  it("keeps ordinary prompt state and ambient hooks out of settled-turn finalization", async () => {
     const fixture = createFixture();
     fixture.input.attempt.operation = "settled-tool-finalization";
+    const sessionManager = SessionManager.inMemory();
+    const state = getEmbeddedSessionPromptState("phase-finalization");
+    const project = (systemPrompt: string) =>
+      prepareSessionSystemPrompt({
+        state,
+        routeKey: "anthropic/claude-opus-5/anthropic-messages",
+        systemPrompt,
+        entries: sessionManager.getBranch(),
+      });
+    project("## Tools\nread, write").commit();
+    await persistSessionSystemPrompt(state, (customType, data) =>
+      sessionManager.appendCustomEntryAsync(customType, data),
+    );
+    project("## Tools\nread").commit();
+    const before = structuredClone({
+      series: state.systemPrompt,
+      pending: state.pendingSystemPrompt,
+    });
+    const runtime = fixture.input.prepared.sessionRuntime;
+    runtime.sessionManager = sessionManager;
+    runtime.sessionPromptState = state;
+    runtime.toolResultPromptProjectionState = state.toolResults;
+    runtime.transcriptPolicy.inHistorySystemUpdates = true;
+    const submit = expectDefined(
+      mocks.submitPrompt.getMockImplementation(),
+      "prompt submission fixture",
+    );
+    mocks.submitPrompt.mockImplementation(async (input: PromptSubmissionCall) => {
+      await input.persistToolResultProjections();
+      return submit(input);
+    });
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
+    expect(fixture.readState().promptError).toBeNull();
     expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
+    expect({ series: state.systemPrompt, pending: state.pendingSystemPrompt }).toEqual(before);
+    expect(
+      sessionManager
+        .getBranch()
+        .filter(
+          (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+        ),
+    ).toHaveLength(1);
     expect(fixture.order).toEqual([
       "assembly",
       "context",

@@ -121,18 +121,8 @@ function buildProfileHealth(params: {
   cfg?: OpenClawConfig;
   now: number;
   warnAfterMs?: number;
-  allowKeychainPrompt?: boolean;
 }): AuthProfileHealth {
-  const {
-    profileId,
-    credential,
-    runtimeCredential,
-    store,
-    cfg,
-    now,
-    warnAfterMs,
-    allowKeychainPrompt,
-  } = params;
+  const { profileId, credential, runtimeCredential, store, cfg, now, warnAfterMs } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
   const healthCredential = runtimeCredential ?? credential;
   const profile = {
@@ -199,10 +189,8 @@ function buildProfileHealth(params: {
   }
 
   const effectiveCredential = resolveEffectiveOAuthCredential({
-    store,
     profileId,
     credential: healthCredential,
-    allowKeychainPrompt,
   });
   const eligibility = evaluateStoredCredentialEligibility({
     credential: effectiveCredential,
@@ -241,7 +229,6 @@ export function buildAuthHealthSummary(params: {
   warnAfterMs?: number;
   providers?: string[];
   runtimeCredentialsByProvider?: ReadonlyMap<string, AuthProfileCredential>;
-  allowKeychainPrompt?: boolean;
   /** Exact prepared metadata for request paths that must not rediscover plugin aliases. */
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
 }): AuthHealthSummary {
@@ -266,7 +253,6 @@ export function buildAuthHealthSummary(params: {
         cfg: params.cfg,
         now,
         warnAfterMs: params.warnAfterMs,
-        allowKeychainPrompt: params.allowKeychainPrompt,
       }),
     )
     .toSorted((a, b) => {
@@ -277,29 +263,20 @@ export function buildAuthHealthSummary(params: {
     });
 
   const providersMap = new Map<string, AuthProviderHealth>();
+  const providerHealth = (provider: string) => {
+    const health: AuthProviderHealth = providersMap.get(provider) ?? {
+      provider,
+      status: "missing",
+      profiles: [],
+    };
+    providersMap.set(provider, health);
+    return health;
+  };
   for (const profile of profiles) {
-    const existing = providersMap.get(profile.provider);
-    if (!existing) {
-      providersMap.set(profile.provider, {
-        provider: profile.provider,
-        status: "missing",
-        profiles: [profile],
-      });
-    } else {
-      existing.profiles.push(profile);
-    }
+    providerHealth(profile.provider).profiles.push(profile);
   }
-
-  if (providerFilter) {
-    for (const provider of providerFilter) {
-      if (!providersMap.has(provider)) {
-        providersMap.set(provider, {
-          provider,
-          status: "missing",
-          profiles: [],
-        });
-      }
-    }
+  for (const provider of providerFilter ?? []) {
+    providerHealth(provider);
   }
 
   const resolveProviderStatusProfiles = (provider: AuthProviderHealth): AuthProfileHealth[] => {
@@ -323,21 +300,17 @@ export function buildAuthHealthSummary(params: {
       provider: provider.provider,
       authAliasLookupParams: params.authAliasLookupParams,
     });
-    const orderedProfiles = ordered
-      .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
-      .filter((profile): profile is AuthProfileHealth => Boolean(profile));
+    const profilesForOrder = (profileIds: readonly string[]) =>
+      profileIds.flatMap(
+        (profileId) => provider.profiles.find((profile) => profile.profileId === profileId) ?? [],
+      );
+    const orderedProfiles = profilesForOrder(ordered);
 
     if (orderedProfiles.length > 0) {
       return orderedProfiles;
     }
 
-    if (explicitOrder) {
-      return explicitOrder
-        .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
-        .filter((profile): profile is AuthProfileHealth => Boolean(profile));
-    }
-
-    return provider.profiles;
+    return explicitOrder ? profilesForOrder(explicitOrder) : provider.profiles;
   };
 
   for (const provider of providersMap.values()) {
@@ -350,58 +323,25 @@ export function buildAuthHealthSummary(params: {
       continue;
     }
 
-    let hasApiKeyProfile = false;
-    let hasExpirableProfile = false;
-    let hasExpired = false;
-    let hasMissing = false;
-    let hasExpiring = false;
+    const expirableProfiles = effectiveProfiles.filter((profile) => profile.type !== "api_key");
+    const statuses = new Set(effectiveProfiles.map((profile) => profile.status));
+    provider.status =
+      (["expired", "missing", "expiring"] as const).find((status) => statuses.has(status)) ??
+      (expirableProfiles.length > 0 ? "ok" : "static");
+
     let earliestExpiry: number | undefined;
-    for (const profile of effectiveProfiles) {
-      if (profile.type === "api_key") {
-        if (profile.status === "static") {
-          hasApiKeyProfile = true;
-        } else if (profile.status === "missing") {
-          hasMissing = true;
-        }
-        continue;
-      }
-      if (profile.type !== "oauth" && profile.type !== "token") {
-        continue;
-      }
-      hasExpirableProfile = true;
-      if (typeof profile.expiresAt === "number" && Number.isFinite(profile.expiresAt)) {
+    for (const profile of expirableProfiles) {
+      if (profile.expiresAt !== undefined) {
         earliestExpiry =
           earliestExpiry === undefined
             ? profile.expiresAt
             : Math.min(earliestExpiry, profile.expiresAt);
       }
-      if (profile.status === "expired") {
-        hasExpired = true;
-      } else if (profile.status === "missing") {
-        hasMissing = true;
-      } else if (profile.status === "expiring") {
-        hasExpiring = true;
-      }
-    }
-
-    if (!hasExpirableProfile) {
-      provider.status = hasMissing ? "missing" : hasApiKeyProfile ? "static" : "missing";
-      continue;
     }
 
     if (earliestExpiry !== undefined) {
       provider.expiresAt = earliestExpiry;
       provider.remainingMs = provider.expiresAt - now;
-    }
-
-    if (hasExpired) {
-      provider.status = "expired";
-    } else if (hasMissing) {
-      provider.status = "missing";
-    } else if (hasExpiring) {
-      provider.status = "expiring";
-    } else {
-      provider.status = "ok";
     }
   }
 

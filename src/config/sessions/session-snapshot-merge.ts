@@ -366,14 +366,12 @@ export function sessionModelOverrideChangesApplied(
 export function mergeSessionSnapshotChanges(
   params: Parameters<typeof projectSessionSnapshotChanges>[0],
 ): SessionEntry {
-  const merged = { ...params.current };
-  const mergedRecord: SessionEntryRecord = merged;
   const patch = projectSessionSnapshotChanges(params);
+  const merged = { ...params.current, ...patch };
+  const mergedRecord: SessionEntryRecord = merged;
   for (const field of Object.keys(patch) as Array<keyof SessionEntry>) {
     if (patch[field] === undefined) {
       delete mergedRecord[field];
-    } else {
-      mergedRecord[field] = patch[field];
     }
   }
   return merged;

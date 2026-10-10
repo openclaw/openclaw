@@ -1,6 +1,6 @@
-import { type Static, type TSchema, Type } from "typebox";
-import { Compile } from "typebox/compile";
+import { type Static, type TProperties, Type } from "typebox";
 import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
+import { closedObject } from "../../packages/gateway-protocol/src/schema/closed-object.js";
 
 export const COMPUTER_EXECUTION_ID_PATTERN =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
@@ -97,18 +97,15 @@ const observedBrowserTargetFields = {
   observationId: Type.String({ minLength: 1 }),
 };
 
-function actionObject<const Actions extends string[], const Properties extends object>(
+function actionObject<const Actions extends string[], const Properties extends TProperties>(
   actions: readonly [...Actions],
   properties: Properties,
 ) {
-  return Type.Object(
-    {
-      action: Type.Enum(actions, { type: "string" }),
-      executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
-      ...properties,
-    },
-    { additionalProperties: false },
-  );
+  return closedObject({
+    action: Type.Enum(actions, { type: "string" }),
+    executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
+    ...properties,
+  });
 }
 
 const ComputerActV1ParamsSchema = Type.Union([
@@ -310,122 +307,95 @@ export const ComputerActParamsSchema = Type.Union([
 const COMPUTER_ACT_RESULT_MAX_ELEMENTS = 2_000;
 const COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS = 64;
 
-const ComputerBoundsSchema = Type.Object(
-  {
-    x: Type.Number(),
-    y: Type.Number(),
-    width: Type.Number({ minimum: 0 }),
-    height: Type.Number({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
+const ComputerBoundsSchema = closedObject({
+  x: Type.Number(),
+  y: Type.Number(),
+  width: Type.Number({ minimum: 0 }),
+  height: Type.Number({ minimum: 0 }),
+});
 
-const ComputerObservationSchema = Type.Object(
-  {
-    kind: Type.Enum(["window", "screen", "browser"] as const, { type: "string" }),
-    base64: Type.Optional(Type.String()),
-    format: Type.Optional(Type.Enum(["jpeg", "png"] as const, { type: "string" })),
-    width: Type.Optional(Type.Integer({ minimum: 1 })),
-    height: Type.Optional(Type.Integer({ minimum: 1 })),
-    observationId: Type.Optional(Type.String({ minLength: 1 })),
-    elements: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            elementRef: Type.String({ minLength: 1 }),
-            role: Type.String({ minLength: 1 }),
-            label: Type.Optional(Type.String()),
-            value: Type.Optional(Type.String()),
-            bounds: ComputerBoundsSchema,
-          },
-          { additionalProperties: false },
-        ),
-        { maxItems: COMPUTER_ACT_RESULT_MAX_ELEMENTS },
-      ),
+const ComputerObservationSchema = closedObject({
+  kind: Type.Enum(["window", "screen", "browser"] as const, { type: "string" }),
+  base64: Type.Optional(Type.String()),
+  format: Type.Optional(Type.Enum(["jpeg", "png"] as const, { type: "string" })),
+  width: Type.Optional(Type.Integer({ minimum: 1 })),
+  height: Type.Optional(Type.Integer({ minimum: 1 })),
+  observationId: Type.Optional(Type.String({ minLength: 1 })),
+  elements: Type.Optional(
+    Type.Array(
+      closedObject({
+        elementRef: Type.String({ minLength: 1 }),
+        role: Type.String({ minLength: 1 }),
+        label: Type.Optional(Type.String()),
+        value: Type.Optional(Type.String()),
+        bounds: ComputerBoundsSchema,
+      }),
+      { maxItems: COMPUTER_ACT_RESULT_MAX_ELEMENTS },
     ),
-  },
-  { additionalProperties: false },
-);
+  ),
+});
 
-export const ComputerActResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-    effect: Type.Optional(
-      Type.Enum(["confirmed", "unverifiable", "suspected_noop"] as const, {
+export const ComputerActResultSchema = closedObject({
+  ok: Type.Boolean(),
+  effect: Type.Optional(
+    Type.Enum(["confirmed", "unverifiable", "suspected_noop"] as const, {
+      type: "string",
+    }),
+  ),
+  observation: Type.Optional(ComputerObservationSchema),
+  escalation: Type.Optional(
+    closedObject({
+      recommended: Type.Enum(["window-pixel", "foreground", "desktop"] as const, {
         type: "string",
       }),
-    ),
-    observation: Type.Optional(ComputerObservationSchema),
-    escalation: Type.Optional(
-      Type.Object(
-        {
-          recommended: Type.Enum(["window-pixel", "foreground", "desktop"] as const, {
-            type: "string",
-          }),
-          reasonCode: Type.String({ minLength: 1 }),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    details: Type.Optional(
-      Type.Record(Type.String({ minLength: 1, maxLength: 128 }), Type.Unknown(), {
-        maxProperties: COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS,
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+      reasonCode: Type.String({ minLength: 1 }),
+    }),
+  ),
+  details: Type.Optional(
+    Type.Record(Type.String({ minLength: 1, maxLength: 128 }), Type.Unknown(), {
+      maxProperties: COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS,
+    }),
+  ),
+});
 
-export const ComputerUseCapabilityDescriptorSchema = Type.Object(
-  {
-    contractVersion: Type.Literal(2),
-    provider: Type.Object(
-      {
-        id: Type.String({ minLength: 1, maxLength: 128 }),
-        label: Type.String({ minLength: 1, maxLength: 256 }),
-        generation: Type.String({ minLength: 1, maxLength: 256 }),
-      },
-      { additionalProperties: false },
-    ),
-    actions: Type.Array(Type.Enum(COMPUTER_USE_V2_ACTION_NAMES, { type: "string" }), {
-      maxItems: COMPUTER_USE_V2_ACTION_NAMES.length,
-      uniqueItems: true,
-    }),
-    targets: Type.Array(Type.Enum(["screen", "window", "element", "browser"] as const), {
-      maxItems: 4,
-      uniqueItems: true,
-    }),
-    deliveryModes: Type.Array(Type.Enum(DELIVERY_MODES, { type: "string" }), {
-      maxItems: DELIVERY_MODES.length,
-      uniqueItems: true,
-    }),
-    observations: Type.Array(
-      Type.Enum(["image", "accessibility", "browser"] as const, { type: "string" }),
-      { maxItems: 3, uniqueItems: true },
-    ),
-    features: Type.Object(
-      {
-        recording: Type.Boolean(),
-        agentCursor: Type.Boolean(),
-        multiDisplay: Type.Boolean(),
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+export const ComputerUseCapabilityDescriptorSchema = closedObject({
+  contractVersion: Type.Literal(2),
+  provider: closedObject({
+    id: Type.String({ minLength: 1, maxLength: 128 }),
+    label: Type.String({ minLength: 1, maxLength: 256 }),
+    generation: Type.String({ minLength: 1, maxLength: 256 }),
+  }),
+  actions: Type.Array(Type.Enum(COMPUTER_USE_V2_ACTION_NAMES, { type: "string" }), {
+    maxItems: COMPUTER_USE_V2_ACTION_NAMES.length,
+    uniqueItems: true,
+  }),
+  targets: Type.Array(Type.Enum(["screen", "window", "element", "browser"] as const), {
+    maxItems: 4,
+    uniqueItems: true,
+  }),
+  deliveryModes: Type.Array(Type.Enum(DELIVERY_MODES, { type: "string" }), {
+    maxItems: DELIVERY_MODES.length,
+    uniqueItems: true,
+  }),
+  observations: Type.Array(
+    Type.Enum(["image", "accessibility", "browser"] as const, { type: "string" }),
+    { maxItems: 3, uniqueItems: true },
+  ),
+  features: closedObject({
+    recording: Type.Boolean(),
+    agentCursor: Type.Boolean(),
+    multiDisplay: Type.Boolean(),
+  }),
+});
 
 /** Canonical inner payload accepted by the `screen.snapshot` node command. */
-export const ScreenSnapshotParamsSchema = Type.Object(
-  {
-    executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
-    screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
-    maxWidth: Type.Optional(Type.Integer({ minimum: 1 })),
-    quality: Type.Optional(Type.Number()),
-    format: Type.Optional(Type.Enum(["jpeg", "png"], { type: "string" })),
-  },
-  { additionalProperties: false },
-);
+export const ScreenSnapshotParamsSchema = closedObject({
+  executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
+  screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
+  maxWidth: Type.Optional(Type.Integer({ minimum: 1 })),
+  quality: Type.Optional(Type.Number()),
+  format: Type.Optional(Type.Enum(["jpeg", "png"], { type: "string" })),
+});
 
 /** Canonical inner payload returned by the `screen.snapshot` node command. */
 export const ScreenSnapshotResultSchema = Type.Object({
@@ -445,14 +415,6 @@ export type ScreenSnapshotParams = Static<typeof ScreenSnapshotParamsSchema>;
 export type ScreenSnapshotResult = Static<typeof ScreenSnapshotResultSchema>;
 
 type ComputerUseValidator<Value> = (value: unknown) => value is Value;
-
-/** Compile one Computer Use wire schema into a reusable type-guard validator. */
-export function compileComputerUseValidator<const Schema extends TSchema>(
-  schema: Schema,
-): ComputerUseValidator<Static<Schema>> {
-  const validator = Compile(schema);
-  return (value: unknown): value is Static<Schema> => validator.Check(value);
-}
 
 const validateComputerActParams = lazyCompile(ComputerActParamsSchema);
 const validateComputerActResult = lazyCompile(ComputerActResultSchema);

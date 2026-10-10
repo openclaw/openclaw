@@ -8,7 +8,7 @@ import {
   upsertSessionEntryCore,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
+import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -16,15 +16,17 @@ import { historyLane } from "../../config/sessions/session-transcript-worker-res
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { SessionManager, type SessionEntry } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabases,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   listOpenIncognitoAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -33,6 +35,8 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "./session-manager-current-turn.js";
+
+const { prepareSessionTranscriptHydration } = transcriptHydration;
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -98,7 +102,43 @@ it.each(["canonical", "shared"])(
         expect(detached.isPersisted()).toBe(false);
         expect(detached.buildSessionContext()).toEqual(expectedBounded);
         detached.appendMessage(makeUserMessage("detached only", 20));
-        await cold.reloadPersistedTranscriptAsync();
+        expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
+        // Warm admission must use the requested lane, not the cold reader's reserved-lane fallback.
+        const warm = openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
+        expect(warm.db.isOpen).toBe(true);
+        probes.forEach((probe) => probe.mockClear());
+        const retirementEntered = createDeferredCore();
+        const releaseRetirement = createDeferredCore();
+        let following: Promise<void> | undefined;
+        const waitForWriter = () => {
+          following ??= runOpenClawAgentWriteAdmission(
+            { agentId: database.agentId, path: database.path },
+            () => {},
+          );
+          retirementEntered.resolve();
+          return Promise.race([following, releaseRetirement.promise]);
+        };
+        const close = vi
+          .spyOn(historyLane.pool, "closeResources")
+          .mockImplementation(waitForWriter);
+        const rotate = vi.spyOn(historyLane.pool, "rotate").mockImplementation(waitForWriter);
+        const reloading = runOpenClawAgentWriteAdmission(
+          { agentId: database.agentId, path: database.path },
+          () => cold.reloadPersistedTranscriptAsync(),
+        );
+        try {
+          await Promise.race([
+            reloading,
+            retirementEntered.promise.then(() => {
+              throw new Error("Manager reload cleanup waits on its own queued writer");
+            }),
+          ]);
+        } finally {
+          releaseRetirement.resolve();
+          await Promise.allSettled([reloading, following]);
+          close.mockRestore();
+          rotate.mockRestore();
+        }
         expect(cold.getCwd()).toBe("/runtime");
         expect(cold.getPersistedEntries()).toEqual(expected);
         const reader = prepareSessionTranscriptHydration(
@@ -289,7 +329,7 @@ it("does not publish a stale retarget over a manager changed while its worker re
 });
 
 it.each(["hydration", "current-turn"] as const)(
-  "releases queued %s admission on abort before its predecessor finishes",
+  "releases queued %s admission on abort before its predecessors finish",
   async (kind) => {
     await withOpenClawTestState({ label: "session-hydration-queued-abort" }, async (state) => {
       const target = canonicalTarget(state, "queued-abort");
@@ -302,11 +342,15 @@ it.each(["hydration", "current-turn"] as const)(
       const queued = createDeferredCore();
       const release = createDeferredCore();
       const run = historyLane.pool.run.bind(historyLane.pool);
+      const capacity = historyLane.pool.getSnapshot().maxWorkers;
       let submissions = 0;
+      let enteredCount = 0;
       const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
-        if (submissions++ === 0) {
+        if (submissions++ < capacity) {
           return run(async () => {
-            entered.resolve();
+            if (++enteredCount === capacity) {
+              entered.resolve();
+            }
             await release.promise;
             return typeof input === "function" ? await input() : input;
           }, options);
@@ -315,11 +359,22 @@ it.each(["hydration", "current-turn"] as const)(
         queued.resolve();
         return result;
       });
-      const predecessor = SessionManager.openAsync(target);
-      const reads: Promise<unknown>[] = [predecessor];
+      const predecessorReads = Array.from({ length: capacity }, () =>
+        SessionManager.openAsync(target),
+      );
+      const predecessors = Promise.all(predecessorReads);
+      const reads: Promise<unknown>[] = [...predecessorReads, predecessors];
       try {
-        await entered.promise;
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        await Promise.race([
+          entered.promise,
+          predecessors.then(() => {
+            throw new Error("Hydration predecessors settled before filling the worker pool");
+          }),
+        ]);
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity,
+        });
         const controller = new AbortController();
         const reason = new Error("queued hydration cancelled");
         const canceled =
@@ -337,14 +392,22 @@ it.each(["hydration", "current-turn"] as const)(
         const refused = expect(canceled).rejects.toBe(reason);
         reads.push(canceled, refused);
         await queued.promise;
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 2 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity + 1,
+        });
         controller.abort(reason);
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity,
+        });
         await refused;
         release.resolve();
-        expect((await predecessor).buildSessionContext().messages).toEqual([
-          makeUserMessage("preserved predecessor", 1),
-        ]);
+        for (const predecessor of await predecessors) {
+          expect(predecessor.buildSessionContext().messages).toEqual([
+            makeUserMessage("preserved predecessor", 1),
+          ]);
+        }
       } finally {
         release.resolve();
         spy.mockRestore();
@@ -455,6 +518,7 @@ it.each([
   { entry: "full", transition: "close" },
   { entry: "full", transition: "replace" },
   { entry: "bounded", transition: "replace" },
+  { entry: "bounded-callback", transition: "close" },
   { entry: "retarget", transition: "replace" },
   { entry: "replay", transition: "replace" },
 ])(
@@ -473,16 +537,46 @@ it.each([
       });
       const source = SessionManager.open(target);
       source.appendMessage(makeUserMessage("discarded private history", 1));
+      if (entry === "bounded-callback") {
+        source.appendMessage(makeUserMessage("latest private history", 2));
+      }
+      const onTruncated = vi.fn(() => closeOpenClawAgentDatabases(state.root));
       const receiver = entry === "replay" ? source : SessionManager.inMemory();
       if (entry === "replay") {
         await receiver.reloadPersistedTranscriptAsync();
       }
       const originalView = receiver.buildSessionContext();
+      const received = createDeferredCore();
+      const publish = createDeferredCore();
+      const holdPublication = async <T>(read: Promise<T>) => {
+        const result = await read;
+        received.resolve();
+        await publish.promise;
+        return result;
+      };
+      const hydration =
+        transition === "replace"
+          ? vi
+              .spyOn(transcriptHydration, "prepareSessionTranscriptHydration")
+              .mockImplementationOnce((...args) => {
+                const reader = prepareSessionTranscriptHydration(...args);
+                return {
+                  ...reader,
+                  read: () => holdPublication(reader.read()),
+                  readCurrentTurnEntry: (request) =>
+                    holdPublication(reader.readCurrentTurnEntry(request)),
+                };
+              })
+          : undefined;
       const pending =
         entry === "full"
           ? SessionManager.openAsync(target)
-          : entry === "bounded"
-            ? SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 })
+          : entry === "bounded" || entry === "bounded-callback"
+            ? SessionManager.openBoundedAsync(target, {
+                maxBytes: 4096,
+                maxEvents: entry === "bounded-callback" ? 1 : 5,
+                ...(entry === "bounded-callback" ? { onTruncated } : {}),
+              })
             : entry === "retarget"
               ? receiver.setSessionTargetAsync(target)
               : receiver[sessionManagerPrepareCurrentTurnReplay](
@@ -492,42 +586,38 @@ it.each([
       const rejected = expect(pending).rejects.toThrow(
         "incognito database owner is no longer current",
       );
-      closeOpenClawAgentDatabases(state.root);
-      if (transition === "replace") {
-        SessionManager.open(target).appendMessage(
-          makeUserMessage("replacement private history", 2),
-        );
+      try {
+        if (transition === "replace") {
+          await Promise.race([
+            received.promise,
+            rejected.then(() => {
+              throw new Error("Hydration settled before its replacement publication barrier");
+            }),
+          ]);
+          await closeOpenClawAgentDatabasesAsync(state.root);
+          const replacement = SessionManager.open(target);
+          replacement.appendMessage(makeUserMessage("replacement private history", 2));
+          expect(replacement.buildSessionContext().messages).toEqual([
+            makeUserMessage("replacement private history", 2),
+          ]);
+          publish.resolve();
+        } else if (entry !== "bounded-callback") {
+          closeOpenClawAgentDatabases(state.root);
+        }
+        await rejected;
+        if (entry === "bounded-callback") {
+          expect(onTruncated).toHaveBeenCalledOnce();
+        }
+        expect(receiver.buildSessionContext()).toEqual(originalView);
+        expect(fs.existsSync(target.storePath)).toBe(false);
+      } finally {
+        publish.resolve();
+        hydration?.mockRestore();
+        await Promise.allSettled([pending, rejected]);
       }
-      await rejected;
-      expect(receiver.buildSessionContext()).toEqual(originalView);
-      expect(fs.existsSync(target.storePath)).toBe(false);
     });
   },
 );
-
-it("rejects incognito bounded publication when its truncation callback closes the owner", async () => {
-  await withOpenClawTestState({ label: "session-hydration-incognito-callback" }, async (state) => {
-    const target = canonicalTarget(
-      state,
-      "private-callback",
-      "agent:main:dashboard:incognito-callback",
-    );
-    await upsertSessionEntryCore(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-      incognito: true,
-    });
-    const source = SessionManager.open(target);
-    source.appendMessage(makeUserMessage("older private history", 1));
-    source.appendMessage(makeUserMessage("latest private history", 2));
-    const onTruncated = vi.fn(() => closeOpenClawAgentDatabases(state.root));
-    await expect(
-      SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 1, onTruncated }),
-    ).rejects.toThrow("incognito database owner is no longer current");
-    expect(onTruncated).toHaveBeenCalledOnce();
-    expect(fs.existsSync(target.storePath)).toBe(false);
-  });
-});
 
 it.each([
   { entry: "openAsync", environment: "explicit" },

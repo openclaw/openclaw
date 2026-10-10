@@ -13,15 +13,15 @@ import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, OAuthCredential } from "../auth-profiles/types.js";
-import {
-  createPreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerTask,
-  type PreparedModelWorkerResult,
-} from "../prepared-model-catalog-worker.js";
+import { createPreparedModelCatalogWorkerInput } from "../prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
   PROVIDER_ID,
 } from "../prepared-model-catalog-worker.test-support.js";
+import type {
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerResult,
+} from "../prepared-model-catalog-worker.types.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 
 type HeldCatalogOAuthRefresh = {
@@ -41,7 +41,7 @@ export async function withHeldCatalogOAuthRefresh(
   run: (fixture: HeldCatalogOAuthRefresh) => Promise<void>,
 ): Promise<void> {
   const { makeTempDir, signal } = params;
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await createCatalogFixture(makeTempDir, 0);
   const profileId = `${PROVIDER_ID}:oauth`;
   const credential: OAuthCredential = {
     type: "oauth",

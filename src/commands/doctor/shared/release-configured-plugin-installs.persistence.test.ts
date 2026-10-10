@@ -97,71 +97,66 @@ it.each(["absent", "2026.9.4"])(
   },
 );
 
-const configuredCases: Array<{ kind: "plugin" | "channel"; id: string; cfg: OpenClawConfig }> = [
+const configuredCases: Array<{
+  kind: "plugin" | "channel" | "repair";
+  id: string;
+  cfg: OpenClawConfig;
+}> = [
   { kind: "plugin", id: "discord", cfg: { plugins: { entries: { discord: { enabled: true } } } } },
   {
     kind: "channel",
     id: "whatsapp",
     cfg: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
   },
+  { kind: "repair", id: "", cfg: { gateway: { mode: "local" } } },
 ];
 
 it.each(configuredCases)(
-  "persists the required completion write for configured $kind work",
+  "persists required $kind work after release backfill",
   async ({ kind, id, cfg }) => {
     await withOpenClawTestState(
       { label: "release-backfill-work", env: updateEnv },
       async (state) => {
-        await state.writeConfig(cfg);
-        mocks.repair.mockResolvedValue({
-          changes: [`Installed configured ${kind} ${id}.`],
-          warnings: [],
-          records: {},
-        });
+        if (kind !== "repair") {
+          await state.writeConfig(cfg);
+          mocks.repair.mockResolvedValue({
+            changes: [`Installed configured ${kind} ${id}.`],
+            warnings: [],
+            records: {},
+          });
+        }
         const ctx = await createContext(state, cfg);
+        ctx.configResult.shouldWriteConfig = kind === "repair";
 
         await runReleaseConfiguredPluginInstallsHealth(ctx);
         await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
-        expect(mocks.repair).toHaveBeenCalledOnce();
-        expect(mocks.repair).toHaveBeenCalledWith(
-          expect.objectContaining({
-            [kind === "plugin" ? "pluginIds" : "channelIds"]: expect.arrayContaining([id]),
-          }),
-        );
-        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+        const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(persisted).toMatchObject({
           ...cfg,
           meta: { lastTouchedVersion: VERSION },
           wizard: { lastRunVersion: VERSION, lastRunCommand: "doctor" },
         });
+        if (kind === "repair") {
+          expect(mocks.repair).not.toHaveBeenCalled();
+          expect(persisted).toMatchObject({
+            plugins: {
+              entries: {
+                anthropic: { config: { sessionCatalog: { enabled: false } } },
+                codex: { config: { sessionCatalog: { enabled: false } } },
+              },
+            },
+          });
+          expect(ctx.configResultWriteCommitted).toBe(true);
+        } else {
+          expect(mocks.repair).toHaveBeenCalledOnce();
+          expect(mocks.repair).toHaveBeenCalledWith(
+            expect.objectContaining({
+              [kind === "plugin" ? "pluginIds" : "channelIds"]: expect.arrayContaining([id]),
+            }),
+          );
+        }
       },
     );
   },
 );
-
-it("still commits a genuine config repair and first-write privacy defaults after empty backfill", async () => {
-  await withOpenClawTestState(
-    { label: "release-backfill-real-repair", env: updateEnv },
-    async (state) => {
-      const ctx = await createContext(state, { gateway: { mode: "local" } });
-      ctx.configResult.shouldWriteConfig = true;
-
-      await runReleaseConfiguredPluginInstallsHealth(ctx);
-      await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
-
-      expect(mocks.repair).not.toHaveBeenCalled();
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
-        gateway: { mode: "local" },
-        meta: { lastTouchedVersion: VERSION },
-        wizard: { lastRunVersion: VERSION, lastRunCommand: "doctor" },
-        plugins: {
-          entries: {
-            anthropic: { config: { sessionCatalog: { enabled: false } } },
-            codex: { config: { sessionCatalog: { enabled: false } } },
-          },
-        },
-      });
-      expect(ctx.configResultWriteCommitted).toBe(true);
-    },
-  );
-});

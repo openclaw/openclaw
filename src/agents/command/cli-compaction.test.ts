@@ -8,10 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  registerContextEngineInRegistry,
-  resolveContextEngine as resolveContextEngineFromRegistry,
-} from "../../context-engine/registry.js";
+import { registerContextEngineInRegistry } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -21,54 +18,25 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
-import { resolveCliBackendConfig } from "../cli-backends.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 import { cliCompactionBackendEntrypoints } from "./cli-compaction-runtime.test-support.js";
-import {
-  resetCliCompactionTestDeps,
-  runCliTurnCompactionLifecycle,
-  setCliCompactionTestDeps,
-} from "./cli-compaction.js";
+import { runCliTurnCompactionLifecycle } from "./cli-compaction.js";
 import {
   buildContextEngine,
   createPreparedRuntimeLease,
   defaultSettingsManager,
   prepareCompactionScenario,
+  prepareContextSuccessorScenario,
+  recordCliCompactionInStoreImpl,
+  resolveCliBackendConfig,
+  resolveContextEngineFromRegistry,
+  setCliCompactionTestDeps,
   systemCompactionHost,
+  type CliCompactionTestDeps,
 } from "./cli-compaction.test-support.js";
-import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
-type CliCompactionTestDeps = Parameters<typeof setCliCompactionTestDeps>[0];
 type CompactParams = Parameters<ContextEngine["compact"]>[0];
-
-async function prepareContextSuccessorScenario(params: {
-  result: (target: {
-    sessionKey: string;
-    sessionId: string;
-    storePath: string;
-  }) =>
-    | Awaited<ReturnType<ContextEngine["compact"]>>
-    | Promise<Awaited<ReturnType<ContextEngine["compact"]>>>;
-  suffix: string;
-  tmpDir: string;
-}) {
-  return prepareCompactionScenario({
-    suffix: `cli-successor-${params.suffix}`,
-    tmpDir: params.tmpDir,
-    contextEngine: () => ({
-      ...buildContextEngine({ compactCalls: [] }),
-      async compact() {
-        const sessionKey = `agent:main:cli-successor-${params.suffix}`;
-        const sessionId = `session-cli-successor-${params.suffix}`;
-        const storePath = path.join(params.tmpDir, `cli-successor-${params.suffix}.sqlite`);
-        return params.result({ sessionId, sessionKey, storePath });
-      },
-    }),
-    recordCliCompactionInStore: vi.fn(
-      async ({ sessionKey, sessionStore }) => sessionStore[sessionKey],
-    ),
-  });
-}
 
 describe("runCliTurnCompactionLifecycle", () => {
   let tmpDir: string;
@@ -82,7 +50,7 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   afterEach(async () => {
-    resetCliCompactionTestDeps();
+    vi.restoreAllMocks();
     vi.clearAllTimers();
     vi.useRealTimers();
     await closeOpenClawAgentDatabasesAsync(tmpDir);
@@ -279,7 +247,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         },
       }),
       deps: {
-        openSessionManager: () =>
+        openSessionManager: async () =>
           ({ getBranch: () => [], buildSessionContext: () => ({ messages: [] }) }) as never,
       },
     });
@@ -320,7 +288,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         claudeCliSessionId: "claude-session",
       },
       deps: {
-        createPreparedEmbeddedAgentSettingsManager: async (params) => {
+        createPreparedEmbeddedAgentSettingsManager: (params) => {
           settingsCwds.push(params.cwd);
           return defaultSettingsManager();
         },
@@ -623,7 +591,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       compacted: true,
       result: { tokensBefore: 950, tokensAfter: 100 },
     }));
-    const applyAgentAutoCompactionGuard = vi.fn(async () => ({
+    const applyAgentAutoCompactionGuard = vi.fn(() => ({
       supported: true,
       disabled: false,
     }));
@@ -759,6 +727,39 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactAgentHarnessSession).not.toHaveBeenCalled();
     expect(compactCalls).toHaveLength(1);
   });
+
+  it.each([
+    { initialHarness: "copilot", updatedHarness: "other", nativeCalls: 1, contextCalls: 0 },
+    { initialHarness: "other", updatedHarness: "copilot", nativeCalls: 0, contextCalls: 1 },
+  ])(
+    "keeps the initial compaction route when the harness changes from $initialHarness to $updatedHarness during engine resolution",
+    async ({ initialHarness, updatedHarness, nativeCalls, contextCalls }) => {
+      const compactAgentHarnessSession = vi.fn<
+        NonNullable<CliCompactionTestDeps["maybeCompactAgentHarnessSession"]>
+      >(async () => ({ ok: true, compacted: true }));
+      const scenario = await prepareCompactionScenario({
+        suffix: `harness-change-${initialHarness}`,
+        tmpDir,
+        provider: "github-copilot",
+        sessionEntry: { agentHarnessId: initialHarness },
+        deps: {
+          resolveCliBackendConfig: () => null,
+          resolveContextEngine: async (): Promise<ContextEngine> => {
+            scenario.sessionEntry.agentHarnessId = updatedHarness;
+            return scenario.contextEngine;
+          },
+          maybeCompactAgentHarnessSession: compactAgentHarnessSession,
+        },
+      });
+
+      const updatedEntry = await scenario.run();
+
+      expect(scenario.sessionEntry.agentHarnessId).toBe(updatedHarness);
+      expect(compactAgentHarnessSession).toHaveBeenCalledTimes(nativeCalls);
+      expect(scenario.compactCalls).toHaveLength(contextCalls);
+      expect(updatedEntry?.compactionCount).toBe(1);
+    },
+  );
 
   it("surfaces a contradictory compacted native harness failure", async () => {
     const reason = "contradictory native result";
@@ -1279,14 +1280,14 @@ describe("runCliTurnCompactionLifecycle", () => {
           bundleMcp: false,
           ownsNativeCompaction: true,
         }),
-        applyAgentAutoCompactionGuard: vi.fn(async () => ({
+        applyAgentAutoCompactionGuard: vi.fn(() => ({
           supported: true,
           disabled: false,
         })),
       },
     });
     const { compactCalls, recordCliCompactionInStore } = scenario;
-    await scenario.run();
+    await scenario.run({ cliBackendId: "codex" });
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(0);
@@ -1312,7 +1313,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactCalls: CompactParams[] = [];
     const recordCliCompactionInStore = vi.fn(async () => sessionEntry);
     setCliCompactionTestDeps({
-      openSessionManager: () =>
+      openSessionManager: async () =>
         SessionManager.fromEntries([
           {
             type: "session",
@@ -1384,11 +1385,8 @@ describe("runCliTurnCompactionLifecycle", () => {
         await options?.initialize?.();
         return buildContextEngine({ compactCalls });
       },
-      createPreparedEmbeddedAgentSettingsManager: async () => ({
-        getCompactionReserveTokens: () => 512,
-        getCompactionKeepRecentTokens: () => 0,
-        applyOverrides: () => {},
-      }),
+      createPreparedEmbeddedAgentSettingsManager: () =>
+        SettingsManager.inMemory({ compaction: { reserveTokens: 512, keepRecentTokens: 0 } }),
       resolveLiveToolResultMaxChars: () => 20_000,
       recordCliCompactionInStore,
     });

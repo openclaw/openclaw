@@ -31,7 +31,6 @@ import {
 } from "../../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { projectWorkerTextOrImageContent } from "../../worker/assistant-message-projection.js";
-import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -72,12 +71,7 @@ export async function prepareWorkerTurnMedia(params: {
   tunnel: WorkerTunnelHandle;
   isAuthorized: () => boolean;
   signal: AbortSignal;
-}): Promise<{
-  prompt: WorkerLaunchPlan["assignment"]["prompt"];
-  history: AgentMessage[];
-  images: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["images"];
-  imageFactIndexes: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["imageFactIndexes"];
-}> {
+}) {
   const { turn, signal } = params;
   const assertCurrent = () => {
     signal.throwIfAborted();

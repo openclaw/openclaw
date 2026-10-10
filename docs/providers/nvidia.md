@@ -75,6 +75,10 @@ first only while the inference inventory still lists them; other available
 bundled chat models follow. A fresh inventory can restore a previously hidden
 model that NVIDIA has republished.
 
+The hosted catalog applies the same feed: NVIDIA's featured models lead its
+[recommended models](/concepts/recommended-models#provider-featured-lists),
+followed by the global list.
+
 The inventory also contains embeddings and other non-chat endpoints, without
 capability metadata. OpenClaw therefore offers only exact models with bundled
 chat metadata or valid featured-model metadata; it does not guess capabilities

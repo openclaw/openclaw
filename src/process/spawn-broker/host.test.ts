@@ -1,17 +1,22 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { setTimeout as delay } from "node:timers/promises";
+import path from "node:path";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 import { SpawnBrokerError } from "./protocol.js";
 
 let broker: SpawnBrokerHost | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await broker?.close();
   broker = undefined;
@@ -23,7 +28,7 @@ async function start() {
   return broker;
 }
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 type BootstrapFixtureMode = "native" | "stale-ambient" | "send-throw" | "send-callback";
 
@@ -151,33 +156,16 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
 }
 
 describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", () => {
-  it("finishes native-resource Host.close after the broker's actual IPC close", async () => {
-    expect(await runBootstrapFixture("native")).toEqual({
-      mode: "native",
-      closed: true,
-      nativeClose: true,
-      refused: 0,
-    });
-  }, 20_000);
-
-  it("ignores stale ambient resource variables during ordinary broker startup", async () => {
-    expect(await runBootstrapFixture("stale-ambient")).toEqual({
-      mode: "stale-ambient",
-      closed: true,
-      ordinaryReady: true,
-      ordinaryCommandClosed: true,
-      refused: 0,
-    });
-  }, 20_000);
-
-  it.each(["send-throw", "send-callback"] as const)(
-    "retains and joins the actual child after initial bootstrap %s refusal",
+  it.each(["native", "stale-ambient", "send-throw", "send-callback"] as const)(
+    "settles private bootstrap and native child closure (%s)",
     async (mode) => {
       expect(await runBootstrapFixture(mode)).toEqual({
         mode,
         closed: true,
-        nativeClose: true,
-        refused: 1,
+        refused: mode.startsWith("send-") ? 1 : 0,
+        ...(mode === "stale-ambient"
+          ? { ordinaryReady: true, ordinaryCommandClosed: true }
+          : { nativeClose: true }),
       });
     },
     20_000,
@@ -185,46 +173,87 @@ describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", 
 });
 
 describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
-  it("runs process commands outside the Gateway process", async () => {
+  it("fences guarded launches and settles custody from native receipts", async () => {
     const host = await start();
-    const argv0 = "openclaw-broker-command";
-    const args = [
-      "-e",
-      "process.stdout.write(JSON.stringify({parent:process.ppid,argv0:process.argv0}))",
-    ];
-    const child = host.spawn(process.execPath, args, {
-      argv0,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    await child.ready();
-    expect(child.spawnfile).toBe(process.execPath);
-    expect(child.spawnargs).toEqual([argv0, ...args]);
-    let stdout = "";
-    child.stdout!.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    await once(child, "close");
-    expect(JSON.parse(stdout)).toEqual({ parent: host.pid, argv0 });
-    expect(host.pid).not.toBe(process.pid);
-  });
+    const marker = path.join(tempDirs.make("openclaw-broker-launch-"), "started");
+    let current = true;
+    const denied = host.spawn(
+      process.execPath,
+      ["-e", "require('node:fs').writeFileSync(process.argv[1], 'started')", marker],
+      { stdio: "ignore" },
+      (launch) => {
+        if (!current) {
+          throw new Error("launch authority revoked");
+        }
+        return launch();
+      },
+    );
+    current = false;
+    await expect(denied.ready()).rejects.toThrow("launch authority refused");
+    expect(denied.pid).toBeUndefined();
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
-  it("preserves completion listeners installed after readiness when IPC messages arrive together", async () => {
-    const host = await start();
-    const executable = process.platform === "darwin" ? "/usr/bin/true" : "/bin/true";
-    for (let iteration = 0; iteration < 3; iteration += 1) {
-      const child = host.spawn(executable, [], { stdio: "ignore" });
-      // Let the request leave, then model a busy Gateway while the broker completes it.
-      await Promise.resolve();
-      const resumeAt = performance.now() + 20;
-      while (performance.now() < resumeAt) {
-        /* Keep the receiving event loop occupied. */
+    const admitted = createDeferredCore();
+    const child = host.spawn(
+      process.execPath,
+      ["-e", "process.stdin.resume(); process.stdin.once('end', () => process.exit(0))"],
+      { stdio: ["pipe", "ignore", "ignore"] },
+      (launch, settlement) => {
+        if (!settlement) {
+          throw new Error("Missing native launch settlement");
+        }
+        void settlement.then(() => admitted.resolve(), admitted.reject);
+        return launch();
+      },
+    );
+    await admitted.promise;
+    expect(child.exitCode).toBeNull();
+    await child.ready();
+    const closed = once(child, "close");
+    child.stdin!.end();
+    expect(await closed).toEqual([0, null]);
+
+    const grantReached = createDeferredCore<{ settlement: Promise<unknown> }>();
+    let pausedPid: number | undefined;
+    const failed = host.spawn(
+      process.execPath,
+      ["-e", "process.exit(0)"],
+      { stdio: "ignore" },
+      (launch, settlement) => {
+        if (!settlement || !host.pid) {
+          throw new Error("Missing native launch settlement");
+        }
+        pausedPid = host.pid;
+        process.kill(pausedPid, "SIGSTOP");
+        try {
+          const dispatched = launch();
+          failed.fail(new Error("synthetic local proxy failure"));
+          grantReached.resolve({ settlement });
+          return dispatched;
+        } catch (error) {
+          process.kill(pausedPid, "SIGCONT");
+          pausedPid = undefined;
+          throw error;
+        }
+      },
+    );
+    const locallyFailed = expect(failed.ready()).rejects.toThrow("synthetic local proxy failure");
+    const { settlement } = await grantReached.promise;
+    let settled = false;
+    void settlement.then(() => {
+      settled = true;
+    });
+    try {
+      await locallyFailed;
+      // Drain host promise reactions while the exact native peer cannot publish a receipt.
+      await nextTurn();
+      expect(settled).toBe(false);
+    } finally {
+      if (pausedPid) {
+        process.kill(pausedPid, "SIGCONT");
       }
-      await child.ready();
-      await Promise.resolve();
-      await Promise.resolve();
-      const [code] = await once(child, "close", { signal: AbortSignal.timeout(1000) });
-      expect(code).toBe(0);
     }
+    await settlement;
   });
 
   it.each(["coalesced", "later"])(
@@ -264,25 +293,25 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     },
   );
 
-  it("preserves independent large output streams and stdin", async () => {
+  it("preserves raw-spawn identity, independent output streams, and stdin", async () => {
     const host = await start();
     const size = 2 * 1024 * 1024 + 137;
-    const child = host.spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+    const argv0 = "openclaw-broker-command";
+    const args = [
+      "-e",
+      `
       process.stdin.resume(); let input = '';
       process.stdin.on('data', x => input += x);
       process.stdin.on('end', () => {
-        process.stdout.write(input + 'o'.repeat(${size}));
+        process.stdout.write(JSON.stringify({parent:process.ppid,argv0:process.argv0}) + '\\n' + input + 'o'.repeat(${size}));
         process.stderr.write('e'.repeat(${size}));
       });
     `,
-      ],
-      { stdio: ["pipe", "pipe", "pipe"] },
-    );
+    ];
+    const child = host.spawn(process.execPath, args, { argv0, stdio: ["pipe", "pipe", "pipe"] });
     await child.ready();
+    expect(child.spawnfile).toBe(process.execPath);
+    expect(child.spawnargs).toEqual([argv0, ...args]);
     let stdout = "",
       stderr = "";
     child.stdout!.on("data", (chunk) => {
@@ -293,7 +322,10 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     });
     child.stdin!.end("input-prefix:");
     await once(child, "close");
-    expect(stdout).toBe("input-prefix:" + "o".repeat(size));
+    const newline = stdout.indexOf("\n");
+    expect(JSON.parse(stdout.slice(0, newline))).toEqual({ parent: host.pid, argv0 });
+    expect(host.pid).not.toBe(process.pid);
+    expect(stdout.slice(newline + 1)).toBe("input-prefix:" + "o".repeat(size));
     expect(stderr).toBe("e".repeat(size));
   });
 

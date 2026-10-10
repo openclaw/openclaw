@@ -2,17 +2,12 @@ import CoreLocation
 import Foundation
 
 @MainActor
-public protocol LocationServiceCommon: AnyObject, CLLocationManagerDelegate {
+public protocol ConcurrentLocationServiceCommon: AnyObject, CLLocationManagerDelegate, Sendable {
     var locationManager: CLLocationManager { get }
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Error>? { get set }
-}
-
-@MainActor
-public protocol ConcurrentLocationServiceCommon: LocationServiceCommon, Sendable {
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Error>] { get set }
 }
 
-extension LocationServiceCommon {
+extension ConcurrentLocationServiceCommon {
     public func configureLocationManager() {
         self.locationManager.delegate = self
         self.locationManager.desiredAccuracy = kCLLocationAccuracyBest
@@ -25,15 +20,11 @@ extension LocationServiceCommon {
     public func accuracyAuthorization() -> CLAccuracyAuthorization {
         self.locationManager.accuracyAuthorization
     }
-}
 
-extension ConcurrentLocationServiceCommon {
     public func completeLocationRequests(with result: Result<CLLocation, Error>) {
-        let continuations = Array(self.locationRequestContinuations.values) + [self.locationRequestContinuation]
-            .compactMap(\.self)
-        // Drain both stores before resuming so a later result cannot complete any waiter twice.
+        let continuations = self.locationRequestContinuations.values
+        // Drain before resuming so a later result cannot complete any waiter twice.
         self.locationRequestContinuations.removeAll()
-        self.locationRequestContinuation = nil
         for continuation in continuations {
             continuation.resume(with: result)
         }
@@ -61,9 +52,7 @@ extension ConcurrentLocationServiceCommon {
                 else {
                     return
                 }
-                if self.locationRequestContinuations.isEmpty,
-                   self.locationRequestContinuation == nil
-                {
+                if self.locationRequestContinuations.isEmpty {
                     self.locationManager.stopUpdatingLocation()
                 }
                 continuation.resume(throwing: CancellationError())

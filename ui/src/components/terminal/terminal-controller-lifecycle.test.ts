@@ -12,6 +12,7 @@ import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
 const runtimeMocks = vi.hoisted(() => ({
   create: vi.fn(),
+  fontReady: vi.fn<() => Promise<void>>(),
   load: vi.fn(),
   activate: vi.fn(),
   proposeDimensions: vi.fn<() => { cols: number; rows: number } | undefined>(),
@@ -49,9 +50,24 @@ function terminalRoot() {
   return { external, previousHost, root };
 }
 
+const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+
 describe("terminal controller lifecycle", () => {
   beforeEach(() => {
     runtimeMocks.load.mockResolvedValue({ FitAddon: MeasurementAddon });
+    runtimeMocks.fontReady.mockReturnValue(new Promise(() => {}));
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { add: vi.fn() }),
+    });
+    vi.stubGlobal(
+      "FontFace",
+      class {
+        load() {
+          return runtimeMocks.fontReady();
+        }
+      },
+    );
     vi.stubGlobal(
       "ResizeObserver",
       class implements ResizeObserver {
@@ -67,6 +83,11 @@ describe("terminal controller lifecycle", () => {
 
   afterEach(() => {
     document.body.replaceChildren();
+    if (originalFonts) {
+      Object.defineProperty(document, "fonts", originalFonts);
+    } else {
+      Reflect.deleteProperty(document, "fonts");
+    }
     runtimeMocks.create.mockReset();
     runtimeMocks.load.mockReset();
     runtimeMocks.proposeDimensions.mockReset();
@@ -156,6 +177,29 @@ describe("terminal controller lifecycle", () => {
       controller.fit();
       expect(underlying.resize).toHaveBeenCalledWith({ columns: 51, rows: 25 });
       controller.dispose();
+    },
+  );
+
+  it.each([false, true])(
+    "remeasures loaded fonts only while the controller is live (disposed=%s)",
+    async (disposed) => {
+      const ready = createDeferred();
+      runtimeMocks.fontReady.mockReturnValue(ready.promise);
+      const underlying = terminalController();
+      runtimeMocks.create.mockResolvedValue(underlying);
+      const parent = document.body.appendChild(document.createElement("div"));
+      const controller = await createIsolatedGhosttyTerminal({ parent, autoFit: false });
+      if (disposed) {
+        controller.dispose();
+      }
+      ready.resolve();
+      await ready.promise;
+      document.fonts.dispatchEvent(new Event("loadingdone"));
+      expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
+      expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
+      controller.dispose();
+      document.fonts.dispatchEvent(new Event("loadingdone"));
+      expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
     },
   );
 

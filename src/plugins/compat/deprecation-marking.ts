@@ -90,13 +90,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "provider-local auth, model, replay, OAuth, and stream helper APIs; retain until every helper is migrated in official providers and absent from published plugins",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
-      "openclaw/plugin-sdk/provider-stream GOOGLE_THINKING_STREAM_HOOKS",
-      "openclaw/plugin-sdk/provider-stream KILOCODE_THINKING_STREAM_HOOKS",
       "openclaw/plugin-sdk/provider-stream MOONSHOT_THINKING_STREAM_HOOKS",
-      "openclaw/plugin-sdk/provider-stream MINIMAX_FAST_MODE_STREAM_HOOKS",
-      "openclaw/plugin-sdk/provider-stream OPENAI_RESPONSES_STREAM_HOOKS",
-      "openclaw/plugin-sdk/provider-stream OPENROUTER_THINKING_STREAM_HOOKS",
-      "openclaw/plugin-sdk/provider-stream TOOL_STREAM_DEFAULT_ON_HOOKS",
       "openclaw/plugin-sdk/provider-stream-shared defaultToolStreamExtraParams",
       "openclaw/plugin-sdk/provider-stream-shared stripTrailingAnthropicAssistantPrefillWhenThinking",
       "openclaw/plugin-sdk/provider-stream-shared createAnthropicThinkingPrefillPayloadWrapper",
@@ -109,16 +103,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/provider-stream-shared createGoogleThinkingPayloadWrapper",
       "openclaw/plugin-sdk/provider-stream-shared createGoogleThinkingStreamWrapper",
       "openclaw/plugin-sdk/provider-model-shared isProxyReasoningUnsupportedModelHint",
-      "openclaw/plugin-sdk/provider-model-shared OPENAI_COMPATIBLE_REPLAY_HOOKS",
-      "openclaw/plugin-sdk/provider-model-shared ANTHROPIC_BY_MODEL_REPLAY_HOOKS",
       "openclaw/plugin-sdk/provider-model-shared NATIVE_ANTHROPIC_REPLAY_HOOKS",
       "openclaw/plugin-sdk/provider-model-shared PASSTHROUGH_GEMINI_REPLAY_HOOKS",
-      "openclaw/plugin-sdk/provider-auth DEFAULT_COPILOT_API_BASE_URL",
-      "openclaw/plugin-sdk/provider-auth deriveCopilotApiBaseUrlFromToken",
-      "openclaw/plugin-sdk/provider-auth resolveCopilotApiToken",
-      "openclaw/plugin-sdk/provider-auth-copilot-cache CachedCopilotToken",
-      "openclaw/plugin-sdk/oauth-utils toFormUrlEncoded",
-      "openclaw/plugin-sdk/oauth-utils generatePkceVerifierChallenge",
+      "openclaw/plugin-sdk/provider-auth toFormUrlEncoded",
+      "openclaw/plugin-sdk/provider-auth generatePkceVerifierChallenge",
       "openclaw/plugin-sdk/provider-oauth-runtime OAuthProvider",
       "openclaw/plugin-sdk/provider-oauth-runtime OAuthProviderInfo",
     ],
@@ -161,7 +149,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "reduceInteractiveReply",
       "@openclaw/discord buildDiscordInteractiveComponents",
       "@openclaw/slack buildSlackInteractiveBlocks",
-      "@openclaw/telegram buildTelegramInteractiveButtons",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations naming MessagePresentation replacements",
@@ -184,21 +171,12 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "openclaw/plugin-sdk/acp-runtime __testing",
-      "openclaw/plugin-sdk/approval-reaction-runtime",
       "openclaw/plugin-sdk/channel-inbound BuildChannelTurnContextParams",
       "openclaw/plugin-sdk/channel-inbound BuiltChannelTurnContext",
       "openclaw/plugin-sdk/channel-inbound buildChannelTurnContext",
       "openclaw/plugin-sdk/channel-inbound finalizeChannelInboundContext",
       "openclaw/plugin-sdk/channel-inbound filterChannelTurnSupplementalContext",
       "openclaw/plugin-sdk/channel-send-result ChannelSendRawResult",
-      "openclaw/plugin-sdk/command-auth",
-      "openclaw/plugin-sdk/command-auth ResolveSenderCommandAuthorizationParams",
-      "openclaw/plugin-sdk/command-auth resolveCommandAuthorizedFromAuthorizers",
-      "openclaw/plugin-sdk/command-auth CommandAuthorizationRuntime",
-      "openclaw/plugin-sdk/command-auth ResolveSenderCommandAuthorizationWithRuntimeParams",
-      "openclaw/plugin-sdk/command-auth resolveDirectDmAuthorizationOutcome",
-      "openclaw/plugin-sdk/command-auth resolveSenderCommandAuthorizationWithRuntime",
-      "openclaw/plugin-sdk/command-auth resolveSenderCommandAuthorization",
       "openclaw/plugin-sdk/keyed-async-queue KeyedAsyncQueue.getTailMapForTesting",
       "openclaw/plugin-sdk/persistent-dedupe PersistentDedupeLegacyPathOptions.lockOptions",
       "openclaw/plugin-sdk/retry-runtime createTelegramRetryRunner",
@@ -213,7 +191,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     ],
     tests: [
       "src/plugin-sdk/channel-inbound.test.ts",
-      "src/plugin-sdk/command-auth.test.ts",
       "src/plugin-sdk/ssrf-policy.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
@@ -255,10 +232,9 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     ...DEPRECATION_MARKING,
     owner: "channel",
     replacement:
-      "the canonical testing export, MessagePresentation renderers, and host-owned timeout/runtime behavior; retain until minimum supported official plugin packages no longer import these aliases",
+      "MessagePresentation renderers and host-owned timeout/runtime behavior; retain until minimum supported official plugin packages no longer import these aliases",
     docsPath: "/plugins/compatibility#current-compatibility-areas",
     surfaces: [
-      "@openclaw/google-meet __testing",
       "@openclaw/discord buildDiscordInteractiveComponents",
       "@openclaw/discord normalizeDiscordListenerTimeoutMs",
       "@openclaw/discord normalizeDiscordInboundWorkerTimeoutMs",
@@ -270,25 +246,20 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on published official-plugin exports",
       "plugin boundary report compatibility inventory",
     ],
-    // Owning discord/slack suites live under extensions/*/src; the core import
-    // guardrail forbids that path shape in core string literals, so cite the
-    // package-root and registry tests here.
-    tests: ["extensions/google-meet/index.test.ts", "src/plugins/compat/registry.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "Published Google Meet testing, channel presentation, and Discord timeout aliases remain available while consumers move to their canonical exports and host-owned behavior.",
+      "Published channel presentation and Discord timeout aliases remain available while consumers move to their canonical exports and host-owned behavior.",
   },
   {
     code: "memory-host-compatibility-aliases",
     ...DEPRECATION_MARKING,
     owner: "sdk",
     replacement:
-      "canonical memory cache/FTS tables and getRuntimeConfig or caller-provided config; retain until memory integrations are verified to use canonical tables and prepared runtime config without these aliases",
+      "canonical memory cache/FTS tables; retain until supported memory integrations are verified to use canonical tables without overrides and legacy table data remains preserved",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "@openclaw/memory-host-sdk ensureMemoryIndexSchema.embeddingCacheTable",
       "@openclaw/memory-host-sdk ensureMemoryIndexSchema.ftsTable",
-      "@openclaw/memory-host-sdk/runtime-core loadConfig",
-      "@openclaw/memory-host-sdk/host/openclaw-runtime loadConfig",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations on memory-host SDK compatibility fields",
@@ -299,7 +270,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Memory-host cache-table overrides and runtime config reload aliases remain available while callers migrate to canonical tables and prepared config.",
+      "Memory-host table overrides remain available until supported artifact usage and legacy data preservation are verified.",
   },
   {
     code: "plugin-runtime-api-compat-aliases",

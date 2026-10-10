@@ -296,8 +296,14 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      authInheritance: { agentId: "support" },
+      heartbeat: { agentId: "support" },
+      systemAgent: { agentId: "support" },
+    },
     entries: {
-      support: { default: true, workspace: "~/.openclaw/workspace-support" },
+      support: { workspace: "~/.openclaw/workspace-support" },
       engineering: { workspace: "~/.openclaw/workspace-engineering" },
     },
   },
@@ -316,12 +322,14 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
         peer: { kind: "group", id: "buzz:<ENGINEERING_ROOM_UUID>" },
       },
     },
+    { agentId: "support", match: { channel: "buzz", accountId: "*" } },
   ],
+  talk: { agentId: "support" },
 }
 ```
 
-Without a room-specific binding, normal OpenClaw routing selects the default
-agent. See [Channel routing](/channels/channel-routing) for matching precedence.
+The channel-wide binding sends other admitted Buzz rooms to `support`.
+See [Channel routing](/channels/channel-routing) for matching precedence.
 
 ## Access control
 
@@ -611,13 +619,13 @@ buzz-admin generate-key
 
 ## Verify the connection
 
-Run the authenticated channel probe:
+Run the authenticated channel check:
 
 ```bash
 openclaw channels status --channel buzz --probe
 ```
 
-A successful probe confirms that the bot can authenticate and that Buzz reports
+A successful check confirms that the bot can authenticate and that Buzz reports
 the selected room with the **Bot** role.
 
 Then send a real message:

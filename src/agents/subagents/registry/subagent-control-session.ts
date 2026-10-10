@@ -1,7 +1,10 @@
 import { cloneEnvWithPlatformSemantics } from "../../../config/config-env-vars.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
-import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import {
+  isSessionDeliveryGenerationRevokedError,
+  prepareSessionGenerationFacts,
+} from "../../../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -11,10 +14,11 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-cont
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import type { AgentDatabaseGenerationClaim } from "../../../state/openclaw-agent-execution-admission-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
 } from "../../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -25,6 +29,7 @@ export type SubagentKillSession = {
   storePath: string;
   entry?: SessionEntry;
   assertCurrent: () => void;
+  prepareRead: () => Promise<void> | undefined;
   withPublication: <T>(run: () => Promise<T>) => Promise<T>;
   release: () => void | Promise<void>;
 };
@@ -47,6 +52,11 @@ export async function prepareSubagentKillSession(
   const storePath = selected?.storePath ?? childOwner.storePath;
   let releaseLifetime: (() => void) | undefined;
   let execution: OpenClawAgentDatabaseExecution | undefined;
+  let nativeGeneration: AgentDatabaseGenerationClaim | undefined;
+  const assertNativeCurrent = () => {
+    assertOwner();
+    nativeGeneration?.assertCurrent();
+  };
   const release = async () => {
     releaseLifetime?.();
     await execution?.release();
@@ -91,28 +101,32 @@ export async function prepareSubagentKillSession(
               birthtime: identity.birthtime,
             },
           });
-          // Registration publishes topology. Finish it before retaining generation facts,
-          // then keep the native owner borrowed across drain and marker publication.
-          await withSessionEntryWorker(
-            database,
-            undefined,
-            () => {
-              assertOwner();
-              owner.assertCurrent();
-            },
-            async (writer, source) => {
-              await owner.refreshBeforeDispatch?.(() => writer.assertCurrent());
-              await writer.runExisting(
-                { ...source, onRegistryChange: owner.onRegistryChange },
-                async () => undefined,
-              );
-            },
-            undefined,
-            execution,
-          );
+          nativeGeneration = execution.capturePreparedGenerationClaim();
+          if (nativeGeneration) {
+            await owner.refreshBeforeDispatch?.(assertNativeCurrent);
+          } else {
+            // Cold registration publishes topology before generation facts are retained.
+            await withSessionEntryWorker(
+              database,
+              undefined,
+              () => {
+                assertOwner();
+                owner.assertCurrent();
+              },
+              async (writer, source) => {
+                await owner.refreshBeforeDispatch?.(() => writer.assertCurrent());
+                await writer.runExisting(
+                  { ...source, onRegistryChange: owner.onRegistryChange },
+                  async () => undefined,
+                );
+              },
+              undefined,
+              execution,
+            );
+            nativeGeneration = execution.captureGenerationClaim();
+          }
           await owner.revalidateTarget?.();
         }
-        const nativeGeneration = execution?.captureGenerationClaim();
         const lifetime = await prepareSessionGenerationFacts({
           storePath: generationStorePath,
           sessionKey,
@@ -124,10 +138,17 @@ export async function prepareSubagentKillSession(
         releaseLifetime = lifetime.release;
         owner.assertCurrent();
         const assertCurrent = () => {
-          assertOwner();
-          nativeGeneration?.assertCurrent();
+          assertNativeCurrent();
           lifetime.assertCurrent();
         };
+        const prepareRead = () => {
+          assertNativeCurrent();
+          return lifetime.prepareRead()?.then(assertNativeCurrent);
+        };
+        for (let pending = prepareRead(); pending; pending = prepareRead()) {
+          await pending;
+          owner.assertCurrent();
+        }
         assertCurrent();
         return {
           agentId,
@@ -135,12 +156,21 @@ export async function prepareSubagentKillSession(
           entry,
           release,
           assertCurrent,
+          prepareRead,
           withPublication: (run) =>
             runOpenClawAgentWriteAdmission(database, async () => {
-              // A pending metadata writer hides generation facts until publication.
-              // Hold its FIFO only over the registry commit, never over cancellation drain.
-              assertCurrent();
-              return await run();
+              try {
+                for (let pending = prepareRead(); pending; pending = prepareRead()) {
+                  await pending;
+                }
+              } catch (error) {
+                if (!isSessionDeliveryGenerationRevokedError(error)) {
+                  throw error;
+                }
+              }
+              // The consumer publishes a truthful revoked-owner outcome under the FIFO.
+              assertNativeCurrent();
+              return run();
             }),
         };
       },
@@ -153,39 +183,43 @@ export async function prepareSubagentKillSession(
 
 export async function persistSubagentAbortedLastRun(params: {
   childSessionKey: string;
-  storePath: string;
-  hasSessionEntry: boolean;
-  expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
+  session: Pick<SubagentKillSession, "storePath" | "entry">;
   abortedLastRun: boolean;
   isCurrent?: (current: SessionEntry) => boolean;
   assertCommitAllowed?: () => void;
 }): Promise<boolean> {
-  if (!params.hasSessionEntry) {
+  const { storePath, entry } = params.session;
+  if (!entry) {
     return true;
   }
+  const { sessionId, lifecycleRevision } = entry;
   try {
     let selected: SessionEntry | undefined;
+    const assertCommitAllowed = () => {
+      params.assertCommitAllowed?.();
+      if (selected && params.isCurrent?.(selected) === false) {
+        throw new Error("Subagent abort-marker owner changed before commit.");
+      }
+    };
     await applySessionEntryExactReplacements({
-      storePath: params.storePath,
+      storePath,
       sessionKeys: [params.childSessionKey],
       activeSessionKey: params.childSessionKey,
       requireWriteSuccess: true,
       skipMaintenance: true,
-      assertCommitAllowed: () => {
-        params.assertCommitAllowed?.();
-        if (selected && params.isCurrent?.(selected) === false) {
-          throw new Error("Subagent abort-marker owner changed before commit.");
-        }
-      },
+      assertCommitAllowed,
       update(entries) {
         selected = entries.find(({ sessionKey }) => sessionKey === params.childSessionKey)?.entry;
         const current = selected;
         const changed =
           current &&
-          current.sessionId === params.expectedSessionId &&
-          current.lifecycleRevision === params.expectedLifecycleRevision &&
+          current.sessionId === sessionId &&
+          current.lifecycleRevision === lifecycleRevision &&
           params.isCurrent?.(current) !== false;
+        if (changed && current.abortedLastRun === params.abortedLastRun) {
+          assertCommitAllowed();
+          return { result: undefined };
+        }
         return {
           result: undefined,
           replacements: changed

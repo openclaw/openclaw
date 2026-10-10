@@ -44,7 +44,6 @@ import { sessionRunVisibility } from "./session-run-visibility.ts";
 
 type SessionCatalogGroupsParams = {
   catalogs: readonly SidebarSessionCatalog[];
-  connected: boolean;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;

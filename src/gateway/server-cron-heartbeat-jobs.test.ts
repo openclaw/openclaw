@@ -152,7 +152,7 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "15m" } },
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     } as OpenClawConfig;
 

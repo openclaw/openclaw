@@ -44,42 +44,28 @@ function searchClient(runs: Run[]) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("release-priority pause-window discovery", () => {
-  it("retains older deferred runs beyond GitHub’s 1,000-result search cap", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(until);
-    const runs = Array.from({ length: 1_201 }, (_, index) => ({
-      id: index + 1,
-      created_at: new Date(since + index * 1_000).toISOString(),
-    })).toReversed();
-    const found = await searchClient(runs).listRuns(
-      `created=${encodeURIComponent(`>=${new Date(since).toISOString()}`)}`,
-    );
-    expect(found).toEqual(runs);
-    expect(new Set(found.map((run) => run.id)).size).toBe(runs.length);
-  });
-
-  it("keeps a complete 1,000-run same-second result without requiring a split", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(until);
-    const runs = Array.from({ length: 1_000 }, (_, index) => ({
-      id: index + 1,
-      created_at: new Date(since).toISOString(),
-    }));
-    await expect(
-      searchClient(runs).listRuns(
+  it.each([
+    { count: 1_201, interval: 1_000, truncated: false },
+    { count: 1_000, interval: 0, truncated: false },
+    { count: 1_001, interval: 0, truncated: true },
+  ])(
+    "requires a complete $count-run inventory (spacing: $interval ms)",
+    async ({ count, interval, truncated }) => {
+      vi.spyOn(Date, "now").mockReturnValue(until);
+      const runs = Array.from({ length: count }, (_, index) => ({
+        id: index + 1,
+        created_at: new Date(since + index * interval).toISOString(),
+      })).toReversed();
+      const result = searchClient(runs).listRuns(
         `created=${encodeURIComponent(`>=${new Date(since).toISOString()}`)}`,
-      ),
-    ).resolves.toEqual(runs);
-  });
-
-  it("refuses to silently restore a partial unsplittable timestamp window", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(until);
-    const runs = Array.from({ length: 1_001 }, (_, index) => ({
-      id: index + 1,
-      created_at: new Date(since).toISOString(),
-    }));
-    await expect(
-      searchClient(runs).listRuns(
-        `created=${encodeURIComponent(`>=${new Date(since).toISOString()}`)}`,
-      ),
-    ).rejects.toThrow(/timestamp window/u);
-  });
+      );
+      if (truncated) {
+        await expect(result).rejects.toThrow(/timestamp window/u);
+      } else {
+        const found = await result;
+        expect(found).toEqual(runs);
+        expect(new Set(found.map((run) => run.id)).size).toBe(runs.length);
+      }
+    },
+  );
 });

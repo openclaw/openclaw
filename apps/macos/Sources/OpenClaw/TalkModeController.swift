@@ -17,24 +17,13 @@ final class TalkModeController {
         let interruptMonitor: TalkSpeechInterruptMonitor
     }
 
-    typealias OwnersProvider = @MainActor @Sendable () -> Owners
     @ObservationIgnored private let state: AppVoiceRuntime.State
-    @ObservationIgnored private let owners: OwnersProvider
+    @ObservationIgnored private let owners: Owners
     @ObservationIgnored private let publishTalk: AppVoiceRuntime.PublishTalk
 
-    static func liveOwners() -> Owners {
-        let voice = AppStateStore.shared.voiceRuntime
-        return Owners(
-            runtime: voice.talkRuntime,
-            wake: voice.wake,
-            hotkey: voice.hotkey,
-            overlay: voice.talkOverlay,
-            interruptMonitor: voice.interruptMonitor)
-    }
-
     init(
-        state: @escaping AppVoiceRuntime.State = { AppStateStore.shared },
-        owners: @escaping OwnersProvider = TalkModeController.liveOwners,
+        state: @escaping AppVoiceRuntime.State,
+        owners: Owners,
         publishTalk: @escaping AppVoiceRuntime.PublishTalk = AppVoiceRuntime.livePublishTalk)
     {
         self.state = state
@@ -63,7 +52,7 @@ final class TalkModeController {
 
     func setEnabled(_ enabled: Bool) async {
         guard !enabled || self.state() != nil else { return }
-        let owners = self.owners()
+        let owners = self.owners
         let transitionID = UUID()
         self.transitionID = transitionID
         // Preference updates must not reopen PTT during Talk admission or audio teardown.
@@ -119,7 +108,7 @@ final class TalkModeController {
         if phase == .idle || phase == .thinking {
             self.updateLevel(0)
         }
-        self.owners().overlay.updatePhase(phase)
+        self.owners.overlay.updatePhase(phase)
 
         if phase != previousPhase {
             self.playPhaseSound(phase, previousPhase: previousPhase)
@@ -160,7 +149,7 @@ final class TalkModeController {
             let response = clamped > self.level ? 0.45 : 0.18
             self.level += (clamped - self.level) * response
         }
-        self.owners().overlay.updateLevel(self.level)
+        self.owners.overlay.updateLevel(self.level)
     }
 
     /// Playback level published while agent speech plays; nil (path without
@@ -201,7 +190,7 @@ final class TalkModeController {
         guard self.isPaused != paused else { return }
         self.logger.info("talk paused=\(paused)")
         self.isPaused = paused
-        let owners = self.owners()
+        let owners = self.owners
         owners.overlay.updatePaused(paused)
         guard self.state()?.voiceRuntime.isActive == true else { return }
         self.publishPhase()
@@ -213,7 +202,7 @@ final class TalkModeController {
     }
 
     func stopSpeaking(reason: TalkStopReason = .userTap) {
-        let runtime = self.owners().runtime
+        let runtime = self.owners.runtime
         Task { await runtime.stopSpeaking(reason: reason) }
     }
 

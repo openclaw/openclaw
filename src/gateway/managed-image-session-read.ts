@@ -1,14 +1,13 @@
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
+import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
+import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptReadScope } from "./session-transcript-readers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -30,45 +29,19 @@ export async function withManagedImageSessionRead<T>(
     ...process.env,
     OPENCLAW_STATE_DIR: stateDir,
   });
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: prepared.env });
-  return withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-    let registryStarted = false;
-    const assertDiscoveryCurrent = () => {
-      params.assertCurrent();
-      discovery.assertCurrent();
-      if (registryStarted) {
-        registry.assertCurrent();
+  const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...prepared, candidates });
+  const assertSelectionCurrent = () => {
+    params.assertCurrent();
+    for (const candidate of candidates) {
+      if (
+        captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
+        candidate.physicalPath
+      ) {
+        throw new Error("Managed media session store changed during read");
       }
-      for (const candidate of candidates) {
-        if (
-          captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-          candidate.physicalPath
-        ) {
-          throw new Error("Managed media session store changed during read");
-        }
-      }
-    };
-    let inventory = await discovery.readTargetInventory({
-      ...prepared,
-      registeredDatabases: { status: "deferred" },
-    });
-    assertDiscoveryCurrent();
-    if (inventory.kind === "session-target-registry-required") {
-      registryStarted = true;
-      const current = await registry.read();
-      assertDiscoveryCurrent();
-      inventory = await discovery.readTargetInventory({
-        ...prepared,
-        registeredDatabases:
-          current.result.status === "available"
-            ? current.result.entries
-            : { status: "unavailable" },
-      });
-      assertDiscoveryCurrent();
     }
-    if (inventory.kind !== "session-target-inventory") {
-      throw new Error("Session store inventory requested registry rows twice");
-    }
+  };
+  return inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
     const source = inventory.agents[0];
     if (!source?.result.available) {
       return null;
@@ -187,5 +160,5 @@ export async function withManagedImageSessionRead<T>(
         );
       },
     );
-  });
+  }, assertSelectionCurrent);
 }

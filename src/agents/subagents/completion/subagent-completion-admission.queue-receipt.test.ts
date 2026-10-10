@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.js";
 import {
   deleteDeliveryQueueEntryInDatabase,
   upsertDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite.kernel.js";
+import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.test-support.js";
 import {
   scheduleSessionDelivery,
   startSessionDeliveryRuntime,
@@ -29,8 +29,12 @@ import {
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import { settleRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import {
+  SubagentCompletionSourceChangedError,
+  mutateRequesterCompletionBatch,
+} from "./subagent-completion-admission.store.js";
 import { admitCompletionFixtureDatabase } from "./subagent-completion-admission.test-helpers.js";
 import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
@@ -78,7 +82,7 @@ describe("committed requester outcome queue receipts", () => {
           batchRunIds: ["blocked-requester-outcome"],
         },
       });
-      upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(entry));
+      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(entry)], []);
       subagentRuns.set(entry.runId, entry);
       const context = captureOpenClawStateWorkerContext();
       const clock = createGatewaySchedulerClock(Date.now());
@@ -95,11 +99,20 @@ describe("committed requester outcome queue receipts", () => {
       });
       let committed: RequesterWakeCommittedWrite | undefined;
       const settle = (onPublished: () => void) =>
-        settleRequesterCompletionBatch({
-          entries: [{ subagent: entry }],
-          outcome: { delivered: false, path: "none", error: "Requester unavailable" },
+        mutateRequesterCompletionBatch({
+          entries: [entry],
+          operation: {
+            kind: "settle",
+            outcome: { delivered: false, path: "none", error: "Requester unavailable" },
+          },
           context,
-          isCurrent: () => subagentRuns.get(entry.runId) === entry,
+          assertCurrent: () => {
+            if (!isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry)) {
+              throw new SubagentCompletionSourceChangedError(
+                "Subagent completion owner changed before settlement",
+              );
+            }
+          },
           committed,
           onCommitted: (receipt) => {
             committed = receipt;
@@ -121,7 +134,7 @@ describe("committed requester outcome queue receipts", () => {
           throw new Error("Blocked outcome did not retain a system-event intent");
         }
         expect(queued.text).toContain("Requester unavailable");
-        expect(entry.requesterSettleWake).toBeUndefined();
+        expect(subagentRuns.get(entry.runId)?.requesterSettleWake).toBeUndefined();
         expect(deliver).not.toHaveBeenCalled();
         const advanceToIntent = () =>
           clock.advanceBy(Math.max(0, (queued.availableAt ?? queued.enqueuedAt) - scheduler.now()));

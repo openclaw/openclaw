@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type {
   GatewayRequestContext,
@@ -30,7 +30,13 @@ beforeEach(async () => {
 afterEach(async () => {
   (await import("../../plugins/runtime.js")).resetPluginRuntimeStateForTest();
   (await import("../../infra/agent-run-registry.js")).resetAgentRunRegistryForTest();
-  await fixture.cleanupWorkerTurnLauncherTest();
+  await fixture.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+});
+afterAll(async () => {
+  const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+    await import("../../state/openclaw-state-db.js");
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("webchat admission to plugin node duplex authority", () => {
@@ -340,7 +346,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                     if (claimed?.type !== "return") {
                       throw new Error("expected an admitted placement claim");
                     }
-                    placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
+                    await placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
                       reason: "node-disconnect",
                     });
                     break;

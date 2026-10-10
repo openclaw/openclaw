@@ -10,6 +10,8 @@ describe("tool display", () => {
       { name: " EXEC ", icon: "squareTerminal" },
       { name: "web_search", icon: "search" },
       { name: "read", icon: "fileText" },
+      { name: "message", icon: "mail" },
+      { name: "image_generate", icon: "image" },
       { name: "unknown_tool", icon: "puzzle" },
       { name: "constructor", icon: "puzzle" },
     ]) {
@@ -18,7 +20,28 @@ describe("tool display", () => {
     }
   });
 
+  it("preserves foreign tool aliases in previews and rows without classifiable arguments", () => {
+    for (const [name, icon] of [
+      [" SHELL ", "squareTerminal"],
+      ["search", "search"],
+      ["grep", "search"],
+      ["find", "search"],
+      ["glob", "search"],
+    ] as const) {
+      expect(resolveToolDisplayIcon(name)).toBe(icon);
+      expect(resolveToolDisplay({ name, args: {} }).icon).toBe(icon);
+    }
+  });
+
   it.each([
+    {
+      name: "Tool Search inner query",
+      params: {
+        name: "tool_call",
+        args: { id: "web_search", args: { query: "OpenClaw release notes" } },
+      },
+      detail: 'with for "OpenClaw release notes"',
+    },
     {
       name: "trimmed action with a false first detail",
       params: {

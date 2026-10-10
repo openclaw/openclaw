@@ -300,13 +300,13 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         const completed = await pollProviderOperationJson<RunwayTaskDetailResponse>({
           url: `${baseUrl}/v1/tasks/${taskId}`,
           headers,
-          deadline: createProviderOperationDeadline({
-            timeoutMs: resolveProviderOperationTimeoutMs({
-              deadline,
-              defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-            }),
-            label: `Runway video generation task ${taskId}`,
-          }),
+          deadline:
+            deadline.deadlineAtMs === undefined
+              ? createProviderOperationDeadline({
+                  timeoutMs: DEFAULT_TIMEOUT_MS,
+                  label: `Runway video generation task ${taskId}`,
+                })
+              : { ...deadline, label: `Runway video generation task ${taskId}` },
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
           maxAttempts: MAX_POLL_ATTEMPTS,

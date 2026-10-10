@@ -102,10 +102,7 @@ export function resolveTrustedOfficialClawHubPackageName(
     return undefined;
   }
   const packageNames = resolveRecordedClawHubPackageNames(record);
-  if (!packageNames || packageNames.length === 0 || new Set(packageNames).size !== 1) {
-    return undefined;
-  }
-  return packageNames[0];
+  return packageNames && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
 }
 
 /** Binds official trust to the actual package and consistent recorded source identity. */
@@ -193,11 +190,7 @@ function resolveOfficialNpmInstallIdentity(params: {
   npmSpec: string;
   replaceNpmPackage?: true;
 }): TrustedSourceLinkedOfficialNpmInstall {
-  const canonicalPluginId = resolveOfficialExternalPluginId(params.entry);
-  const pluginId =
-    canonicalPluginId && canonicalPluginId !== params.requestPluginId
-      ? canonicalPluginId
-      : params.requestPluginId;
+  const pluginId = resolveOfficialExternalPluginId(params.entry) ?? params.requestPluginId;
   return {
     ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
     npmSpec: params.npmSpec,
@@ -329,7 +322,7 @@ export function resolveTrustedSourceLinkedOfficialNpmInstall(params: {
 export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;
-}): { clawhubSpec?: string; npmSpec?: string } | undefined {
+}): { clawhubSpec?: string; npmSpec?: string; expectedIntegrity?: string } | undefined {
   if (params.record.source !== "clawhub") {
     return undefined;
   }
@@ -372,5 +365,8 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   return {
     ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
     ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
+    ...(officialNpmSpec && install?.expectedIntegrity
+      ? { expectedIntegrity: install.expectedIntegrity }
+      : {}),
   };
 }

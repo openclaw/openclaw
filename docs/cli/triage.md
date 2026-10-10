@@ -15,17 +15,20 @@ Collect sanitized diagnostics and open a coding agent on this machine to diagnos
 openclaw triage
 ```
 
-In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Codex (`codex`), Claude Code (`claude`), Pi (`pi`), OpenCode (`opencode`), Muse Code (`muse`), Grok Build (`grok`), Cursor (`cursor-agent`), Kimi Code (`kimi`), then Qwen Code (`qwen`). When both Codex and Claude Code are available, Codex takes priority unless you select an agent with `--agent`. An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication and native execution policy.
+In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Codex (`codex`), Claude Code (`claude`), Pi (`pi`), OpenCode (`opencode`), Muse Code (`muse`), Grok Build (`grok`), Cursor (`cursor-agent`), Kimi Code (`kimi`), Qwen Code (`qwen`), then Google Antigravity CLI (`agy`). When both Codex and Claude Code are available, Codex takes priority unless you select an agent with `--agent`. An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication and native execution policy.
+
+Google Antigravity CLI uses `agy --prompt-interactive` to start with the repair prompt and keep the session open. Install and sign in to the [official CLI](https://antigravity.google/docs/cli/install/) first. Triage uses Antigravity's existing authentication and permission settings; it does not import Google credentials or bypass tool approvals.
 
 Cursor selection uses `--agent cursor` and requires the `cursor-agent` alias installed by Cursor's CLI installer. Triage does not use the `cursor` editor command or the generic `agent` alias, which Grok also installs.
 
 Kimi Code uses `kimi --prompt` for a single repair turn. Its native prompt mode uses automatic permissions without approval prompts; triage prints this policy before launch or manual handoff. Kimi Code does not expose an interactive initial-prompt flag. Qwen Code uses `qwen --prompt-interactive` to start with the repair prompt and keep the interactive session open, including its normal tool approvals.
 
-Claude Code starts with `--safe-mode`, which disables custom hooks, plugins, skills, MCP servers, and project instructions while retaining authentication and built-in tools. This prevents project startup hooks, such as dependency installation, from delaying the repair prompt. Direct launch requires Claude Code 2.1.169 or newer. When the installed CLI does not advertise safe-mode support, triage prints a manual handoff instead. Printed manual commands use Claude's normal customization settings, including plugins and MCP servers.
+Claude Code starts with `--safe-mode` when supported, which disables custom hooks, plugins, skills, MCP servers, and project instructions while retaining authentication and built-in tools. This prevents project startup hooks, such as dependency installation, from delaying the repair prompt. When the installed CLI does not advertise safe-mode support, triage prints a notice and runs `claude -p` with normal customization settings. Printed manual commands also use Claude's normal customization settings, including plugins and MCP servers.
 
 Choose a particular agent with `--agent`, or collect diagnostics without starting one with `--json` or `--non-interactive`:
 
 ```bash
+openclaw triage --agent agy
 openclaw triage --agent codex
 openclaw triage --agent cursor
 openclaw triage --agent grok
@@ -79,6 +82,15 @@ Plain `triage --run` validates update history through the resolution owner, even
 
 An explicit `--update-result` artifact or pending notification without a run identity or recorded target remains **unrepaired**, including Doctor/config failures. Triage reports that it cannot establish the update target and directs you to inspect `openclaw update status --json`, then run `openclaw update repair`. It never falls back to a healthy Doctor verdict for an uncorrelated update failure. An intentionally stopped or unmanaged Gateway cannot supply managed-service verification. When the initial checks prove resolution, the human output says **already resolved**; after a repair turn, it says **repaired** only when the same checks pass. The worker protocol retains its existing `repaired` and `unrepaired` statuses. An agent's successful exit or claim that it fixed the problem is not evidence of resolution.
 
+Pending package activation also prevents triage from reporting resolution, even
+when Doctor passes, the last run succeeded, and no recovery sets are listed.
+For a missing or changed handoff lease database after a reboot, triage directs you
+to `openclaw update repair` before retrying the update. Run repair from a CLI
+containing the [lease recovery fix](/cli/update/repair-and-recovery#update-repair);
+an older blocked CLI may need the manual installation hop described there.
+If triage has no resolution predicate for a recorded failure, it says so and names
+`openclaw update repair` as the next step.
+
 Post-turn Doctor checks run only after the executor confirms cleanup. If cleanup fails or times out, repair reports failure, retains execution state, and refuses another repair in that CLI process. Inspect the diagnostics and stop any remaining work before retrying from a new process.
 
 The operator owns the update or the explicit `--run` request. Embedded repair therefore replaces interactive exec approval with a prompt-free run, scoped to the installation or staged candidate root (`fs.workspaceOnly: true`). It preserves safe-bin and tool allowlists. It never overrides explicit exec or repair-tool denies. It refuses configured sandbox, node, and remote execution routes instead of redirecting them onto the host, and does not launch external coding-agent CLIs. An explicit deny reports `exec-denied-by-policy`. Use `openclaw triage` for an external handoff. The saved execution policy is unchanged.
@@ -97,9 +109,10 @@ On Windows, recognized npm `.cmd` and `.bat` shims launch their Node.js or nativ
 
 ## Manual handoff
 
-Non-interactive sessions save diagnostics without starting an agent. Human output prints one next step for the explicitly selected or first detected coding agent. If no coding agent is detected, it explains how to install one and rerun triage. Windows wrappers that require a shell remain available as manual commands. JSON output retains all external handoff commands and the explicit embedded route. Saved external prompts are read from stdin or, for Grok and Muse, with `--prompt-file`. Kimi Code receives a short instruction to read the saved prompt because it has no prompt-file or stdin input option. On macOS and Linux, the commands look like this:
+Non-interactive sessions save diagnostics without starting an agent. Human output prints one next step for the explicitly selected or first detected coding agent. If no coding agent is detected, it explains how to install one and rerun triage. Windows wrappers that require a shell remain available as manual commands. JSON output retains all external handoff commands and the explicit embedded route. Saved external prompts are read from stdin or, for Grok and Muse, with `--prompt-file`. Kimi Code and Antigravity CLI receive a short instruction to read the saved prompt rather than piping it to stdin. On macOS and Linux, the commands look like this:
 
 ```bash
+env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' agy --prompt-interactive 'Read the debugging prompt at <prompt-path> and follow its repair and verification instructions.'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' claude -p < '<prompt-path>'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' codex exec --skip-git-repo-check - < '<prompt-path>'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' cursor-agent --print < '<prompt-path>'
@@ -112,7 +125,7 @@ env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCL
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' openclaw triage --run
 ```
 
-A captured update failure adds `--update-result <saved-failure-path>` to the embedded command. The external commands use their agent's native non-interactive tool policy, including Kimi Code's automatic permissions. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
+A captured update failure adds `--update-result <saved-failure-path>` to the embedded command. The external commands use their agent's native tool policy, including Kimi Code's automatic permissions. Antigravity's saved command starts an interactive session. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
 
 Printed Windows commands target PowerShell, including Windows PowerShell 5.1. They read saved prompts as UTF-8, preserve literal paths, and restore your installation selectors after the command completes. WSL uses POSIX shell commands.
 
@@ -122,7 +135,7 @@ JSON output also includes `detectedAgents`, listing the external agents found on
 
 Failed updates that reached installation changes, unhealthy update restarts, and recorded Gateway server startup failures can invoke the same triage flow automatically. Existing update settlement runs first. Restoration requires the update owner to verify that restarting is safe. After package replacement, the installed CLI owns triage. Unavailable or incompatible CLI files leave saved failure diagnostics and manual guidance. A supervised Gateway attempts triage only when its existing crash-loop breaker first trips. Later failures in the same Gateway process do not launch another agent.
 
-The automatic handoff selects the configured embedded agent first, otherwise a directly launchable Codex or Claude Code CLI, in that order. External agents run non-interactively with their existing authentication and permissions. Claude Code uses `--safe-mode` to disable custom hooks, plugins, and project instructions while retaining authentication and built-in tools. Finding an executable does not establish authentication. A failed selected route, including a Claude version that does not support safe mode, is reported without trying another agent. The private prompt and manual handoff commands remain available.
+The automatic handoff selects the configured embedded agent first, otherwise a directly launchable Codex or Claude Code CLI, in that order. External agents run non-interactively with their existing authentication and permissions. Claude Code uses `--safe-mode` when supported to disable custom hooks, plugins, and project instructions while retaining authentication and built-in tools; otherwise, triage prints a notice and runs `claude -p` with normal customization settings. Finding an executable does not establish authentication. A failed selected route is reported without trying another agent. The private prompt and manual handoff commands remain available.
 
 Automatic embedded recovery retains the configured runtime because it must investigate the original failure, including symptoms that Doctor lint cannot detect. Its repair prompt can permit an owned atomic Gateway restart when running health verification is required. An intentionally stopped installation stays stopped. This differs from manual `triage --run`, whose Doctor-validated repair loop never owns service lifecycle changes.
 
@@ -179,14 +192,14 @@ Embedded repair exits with 0 when its validation proves resolution, 2 when a tim
 
 ## Options
 
-| Option                   | Effect                                                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `--json`                 | Emit prompt and archive paths, finding counts, detected agents, and commands.                                           |
-| `--no-export`            | Skip the diagnostics archive; still prepare the prompt and use the selected handoff route.                              |
-| `--agent <name>`         | Select `claude`, `codex`, `cursor`, `grok`, `kimi`, `muse`, `opencode`, `pi`, or `qwen` instead of automatic detection. |
-| `--run`                  | Run one bounded embedded repair turn with installation or update-resolution validation.                                 |
-| `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.                                    |
-| `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.                                    |
+| Option                   | Effect                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--json`                 | Emit prompt and archive paths, finding counts, detected agents, and commands.                                                  |
+| `--no-export`            | Skip the diagnostics archive; still prepare the prompt and use the selected handoff route.                                     |
+| `--agent <name>`         | Select `agy`, `claude`, `codex`, `cursor`, `grok`, `kimi`, `muse`, `opencode`, `pi`, or `qwen` instead of automatic detection. |
+| `--run`                  | Run one bounded embedded repair turn with installation or update-resolution validation.                                        |
+| `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.                                           |
+| `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.                                           |
 
 `--run` cannot be combined with `--json`, `--non-interactive`, or `--agent`.
 

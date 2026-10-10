@@ -18,12 +18,7 @@ export async function postJsonWithRetry<T>(params: {
   return await retry(
     async () => {
       return await postJson<T>({
-        url: params.url,
-        headers: params.headers,
-        ssrfPolicy: params.ssrfPolicy,
-        fetchImpl: params.fetchImpl,
-        body: params.body,
-        errorPrefix: params.errorPrefix,
+        ...params,
         parse: async (payload) => payload as T,
       });
     },

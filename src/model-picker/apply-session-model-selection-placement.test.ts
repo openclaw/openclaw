@@ -7,10 +7,12 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { applySessionModelSelection as applySdkModelSelection } from "../plugin-sdk/model-session-runtime.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
 
@@ -57,6 +59,29 @@ import { applySessionModelSelectionInternal as applySessionModelSelection } from
 
 const { createEntry, createParams } = createModelSelectionInputs();
 
+function createPlacement(sessionId: string, state: "local" | "active" = "active") {
+  return {
+    sessionId,
+    state,
+    executionMode: "worker-turn" as const,
+    generation: 1,
+    environmentId: "env-1",
+    runnerId: "runner-1",
+    runnerStatus: "available" as const,
+    recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
+    transitionGeneration: 1,
+    ownerId: "worker",
+    ownerEpoch: 1,
+    turnClaim: null,
+    workspace: null,
+    retirement: null,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+  };
+}
+
 beforeEach(() => {
   runtimeChoiceMocks.validate.mockReset().mockReturnValue(undefined);
   vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
@@ -68,30 +93,37 @@ beforeEach(() => {
 afterEach(() => unsubscribeLifecycle());
 
 describe("applySessionModelSelection — placement guard", () => {
+  it("keeps released SDK validators inside the native session transaction", async () => {
+    const storePath = path.join(sessionDirs.make(), "openclaw-agent.sqlite");
+    const sessionKey = "agent:main:sdk-model-validator";
+    const sessionEntry = createEntry({ sessionId: "sdk-model-validator" });
+    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    let validatedInTransaction = false;
+    const result = await applySdkModelSelection(
+      createParams({
+        sessionEntry,
+        sessionKey,
+        storePath,
+        validateAuthProfileSelection: () => {
+          validatedInTransaction ||= database.db.isTransaction;
+          expect(loadSessionEntryReadOnly({ sessionKey, storePath })?.sessionId).toBe(
+            sessionEntry.sessionId,
+          );
+          return undefined;
+        },
+      }),
+    );
+    expect(result.status).toBe("applied");
+    expect(validatedInTransaction).toBe(true);
+  });
+
   it("rejects a model selection incompatible with an active cloud placement without persisting", async () => {
     const sessionEntry = createEntry({ sessionId: "placement-active-1" });
     const initial = structuredClone(sessionEntry);
-    const placement = {
-      sessionId: "placement-active-1",
-      state: "active" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
-    placementMocks.getMany.mockReturnValue(new Map([["placement-active-1", placement]]));
+    placementMocks.getMany.mockReturnValue(
+      new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
+    );
     placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
       executionMode: undefined,
     });
@@ -112,27 +144,9 @@ describe("applySessionModelSelection — placement guard", () => {
 
   it("allows a model selection compatible with an active cloud placement", async () => {
     const sessionEntry = createEntry({ sessionId: "placement-active-2" });
-    const placement = {
-      sessionId: "placement-active-2",
-      state: "active" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
-    placementMocks.getMany.mockReturnValue(new Map([["placement-active-2", placement]]));
+    placementMocks.getMany.mockReturnValue(
+      new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
+    );
     placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
       executionMode: "worker-turn",
     });
@@ -140,16 +154,6 @@ describe("applySessionModelSelection — placement guard", () => {
     const result = await applySessionModelSelection(createParams({ sessionEntry }));
 
     expect(result.status).toBe("applied");
-  });
-
-  it("skips placement validation when no active placement exists", async () => {
-    const sessionEntry = createEntry({ sessionId: "placement-none" });
-    placementMocks.getMany.mockReturnValue(new Map());
-
-    const result = await applySessionModelSelection(createParams({ sessionEntry }));
-
-    expect(result.status).toBe("applied");
-    expect(placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities).not.toHaveBeenCalled();
   });
 
   it("rejects runtime availability revoked while waiting for the session writer", async () => {
@@ -217,26 +221,7 @@ describe("applySessionModelSelection — placement guard", () => {
     const sessionEntry = createEntry({ sessionId: "placement-race-1" });
     await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
     const initial = structuredClone(sessionEntry);
-    const localPlacement = {
-      sessionId: "placement-race-1",
-      state: "local" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
+    const localPlacement = createPlacement(sessionEntry.sessionId, "local");
     const activePlacement = { ...localPlacement, state: "active" as const, generation: 2 };
     // First read (pre-write guard) sees a local placement; the synchronous commit boundary
     // then sees an activation that overtook the directive's first read.

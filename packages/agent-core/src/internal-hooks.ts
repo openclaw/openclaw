@@ -1,19 +1,22 @@
 import type {
   AgentLoopConfig,
+  AfterToolOutcomeContext,
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
-  InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
   ToolLoopWarning,
+  ToolLoopIntervention,
+  ToolLoopRecoveryState,
 } from "./types.js";
 
-export type InternalBeforeToolBatchHook = (
-  context: InternalBeforeToolBatchContext,
-  signal?: AbortSignal,
-) => Promise<InternalBeforeToolBatchResult | undefined>;
+export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
+
+export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+
+const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
@@ -23,9 +26,14 @@ export type InternalToolBatchLifecycle = {
    * before their implementations start, argument-validation rejections when the
    * launch reaches them. May throw before launch.
    */
-  commitReadyCalls: (calls: readonly InternalReadyToolCall[]) => void;
+  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
   /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
-  releaseSkippedCalls: (toolCallIds: readonly string[]) => void;
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
+  /** Observe settled outcomes in assistant order, before warning text changes their identity. */
+  observeOutcome?: (
+    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    state: ToolLoopRecoveryState,
+  ) => ToolLoopIntervention | undefined;
 };
 
 const toolBatchLifecycleByResult = new WeakMap<
@@ -42,6 +50,7 @@ const syncSteeringGetterByCallback = new WeakMap<
 
 export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
+  drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
   subscribe: (listener: () => void) => () => void;
 };
@@ -93,6 +102,23 @@ export function setInternalBeforeToolBatch(
 
 export function getInternalBeforeToolBatch(agent: object): InternalBeforeToolBatchHook | undefined {
   return beforeToolBatchByAgent.get(agent);
+}
+
+export function setInternalToolTurnCompletion(
+  agent: object,
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnCompletionByAgent.set(agent, hook);
+  } else {
+    toolTurnCompletionByAgent.delete(agent);
+  }
+}
+
+export function getInternalToolTurnCompletion(
+  agent: object,
+): InternalToolTurnCompletionHook | undefined {
+  return toolTurnCompletionByAgent.get(agent);
 }
 
 /** Attach scheduler lifecycle ownership without widening the public admission result. */

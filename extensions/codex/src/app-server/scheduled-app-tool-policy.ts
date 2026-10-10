@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppPolicyContextEntry } from "./plugin-thread-config.js";
+import type { CodexAppPolicyContextEntry } from "./session-binding-record-codec.js";
 
 export type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
 export type CodexScheduledAppTool = {
@@ -91,17 +91,11 @@ export function intersectToolApprovalMode(
   captured: CodexAppToolApprovalMode,
   current: CodexAppToolApprovalMode,
 ): CodexAppToolApprovalMode {
-  if (captured === current) {
+  if (captured === current || current === "approve") {
     return captured;
-  }
-  if (captured === "prompt" || current === "prompt") {
-    return "prompt";
   }
   if (captured === "approve") {
     return current;
-  }
-  if (current === "approve") {
-    return captured;
   }
   // `auto` and `writes` are annotation-dependent and not totally ordered.
   return "prompt";
