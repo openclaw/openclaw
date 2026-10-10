@@ -99,16 +99,16 @@ export async function executeFollowupTurn(params: {
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () => {
-    source?.admissionSignal?.throwIfAborted();
-    if (source && "kind" in source) {
-      source.assertCurrent();
+    incognitoSource?.admissionSignal?.throwIfAborted();
+    if (incognitoSource && "kind" in incognitoSource) {
+      incognitoSource.assertCurrent();
       return false;
     }
-    source?.actor.assertReadable();
+    incognitoSource?.actor.assertReadable();
     if (
-      source &&
+      incognitoSource &&
       verboseReadScope?.sessionKey &&
-      !source.actor.sessions.readSteering(verboseReadScope.sessionKey)
+      !incognitoSource.actor.sessions.readSteering(verboseReadScope.sessionKey)
     ) {
       return false;
     }
@@ -125,7 +125,7 @@ export async function executeFollowupTurn(params: {
         })
       : undefined;
   const verboseReadScope = verboseRead?.scope;
-  const source = captureIncognitoSessionSource(verboseReadScope);
+  const incognitoSource = captureIncognitoSessionSource(verboseReadScope);
   const currentVerboseLevel = (prepared?: { entry: SessionEntry | undefined }): VerboseLevel => {
     if (turn.queued.run.verboseLevelOverride !== undefined) {
       return turn.queued.run.verboseLevelOverride;
@@ -135,10 +135,13 @@ export async function executeFollowupTurn(params: {
       try {
         const loadedEntry = prepared
           ? prepared.entry
-          : source
-            ? "kind" in source
+          : incognitoSource
+            ? "kind" in incognitoSource
               ? undefined
-              : { ...session.current(), ...source.actor.sessions.readSteering(session.key) }
+              : {
+                  ...session.current(),
+                  ...incognitoSource.actor.sessions.readSteering(session.key),
+                }
             : loadSessionEntryReadOnly({ storePath: session.storePath, sessionKey: session.key });
         const ownedEntry = session.current();
         const loadedGenerationMatches =
@@ -193,7 +196,7 @@ export async function executeFollowupTurn(params: {
         };
         assertCurrent();
         if (verboseReadScope?.storePath && turn.queued.run.verboseLevelOverride === undefined) {
-          if (source) {
+          if (incognitoSource) {
             return withSessionEntryReadOnlyInWorker(
               verboseReadScope,
               assertCurrent,

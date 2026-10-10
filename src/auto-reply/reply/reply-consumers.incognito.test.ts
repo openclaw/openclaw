@@ -254,8 +254,8 @@ it("exports the selected private transcript on an owner request without host SQL
 it("refuses an export whose source changes during prompt preparation without writing an artifact", async () => {
   const { scope, entry } = await create("export");
   const workspaceDir = tempDirs.make("incognito-export-output-");
-  const entered = createDeferredCore<void>();
-  const release = createDeferredCore<void>();
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
   exportPrompt.mockImplementationOnce(async () => {
     entered.resolve();
     await release.promise;

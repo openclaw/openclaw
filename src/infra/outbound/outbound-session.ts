@@ -389,7 +389,10 @@ async function persistOutboundSessionEntryWithPolicy(
       agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
     });
   const assertCommitAllowed = incognitoSource
-    ? composeSessionSourceAssertion([params.assertCommitAllowed, incognitoSource.assertCurrent])
+    ? composeSessionSourceAssertion([
+        params.assertCommitAllowed,
+        () => incognitoSource.assertCurrent(),
+      ])
     : params.assertCommitAllowed;
   assertCommitAllowed?.();
   let creation = params.creation ?? incognitoSource?.policy;

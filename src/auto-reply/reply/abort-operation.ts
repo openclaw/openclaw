@@ -371,7 +371,7 @@ export async function executeFastAbortRequest(
               : undefined;
           const targets = await Promise.all(
             [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
-              (key) => preparedTargets.get(key) ?? prepareTarget(key),
+              async (key) => preparedTargets.get(key) ?? (await prepareTarget(key)),
             ),
           );
           assertCurrent();

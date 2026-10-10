@@ -140,7 +140,7 @@ it("keeps an exact active-entry claim across unrelated appends and revokes it on
           parentId: "anchor-later",
           targetId: "anchor-input",
         },
-        authority.assertCurrent,
+        () => authority.assertCurrent(),
       );
       expect(() => retained.assertCurrent()).toThrow("no longer current");
     } finally {
@@ -171,8 +171,8 @@ it("uses the actor's TTS preference and rejects a change during preference prepa
     expect(await maybeApplyTtsToMessageActionSendPayload(params)).toMatchObject({
       audioAsVoice: true,
     });
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     vi.mocked(ttsPreferences.prepareTtsPreferences).mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;

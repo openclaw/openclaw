@@ -151,7 +151,7 @@ async function deliverClientVoiceMutationDigest(
         assertCurrent,
         async (entry, assertReadCurrent) => {
           if (!entry) {
-            return;
+            return undefined;
           }
           const deliver = () => send(entry, assertReadCurrent);
           await ("kind" in incognito ? deliver() : withIncognitoSessionBinding(incognito, deliver));
