@@ -2,6 +2,8 @@ import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_t
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
@@ -175,6 +177,57 @@ function patch(snapshot: SessionActorHotState, updatedAt: number): Mutation {
   };
 }
 
+it("hydrates a cold command inside its transaction and returns a retryable preimage without rereading", async () => {
+  await withActor(async (f) => {
+    const command: Mutation = {
+      type: "session.actor.patch",
+      input: {
+        target: f.target,
+        commandId: "cold-patch",
+        phaseId: "turn",
+        reducers: [{ kind: "activity", updatedAt: 25 }],
+      },
+    };
+    await f.prepare(command);
+    const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) => {
+      if (!/^select\b/iu.test(sql)) {
+        return null;
+      }
+      expect(f.database.db.isTransaction).toBe(true);
+      return "select";
+    });
+    try {
+      const first = f.mutate(command);
+      if (first.kind !== "committed") {
+        throw new Error("Expected cold command to commit");
+      }
+      expect(first.receipt.postimage.entry?.updatedAt).toBe(25);
+      expect(reads.counts.select).toBe(1);
+      f.restartActor();
+      const stale = f.mutate(patch(first.receipt.postimage, 26));
+      if (stale.kind !== "stale-version") {
+        throw new Error("Expected replacement worker to return its current preimage");
+      }
+      expect(stale.expected).toEqual(first.receipt.afterVersion);
+      expect(stale.postimage.entry?.updatedAt).toBe(25);
+      expect(stale.postimage.version.epoch).not.toBe(first.receipt.afterVersion.epoch);
+      expect(reads.counts.select).toBe(2);
+      const retried = f.mutate(patch(stale.postimage, 26));
+      expect(retried).toMatchObject({
+        kind: "committed",
+        receipt: {
+          beforeVersion: stale.postimage.version,
+          postimage: { entry: { updatedAt: 26 } },
+        },
+      });
+      expect(reads.counts.select).toBe(2);
+      expect(f.hooks.transactions).toBe(3);
+    } finally {
+      reads.restore();
+    }
+  });
+});
+
 it("installs native commits before reply, retains known commits after reply failure, and rolls back revoked authority", async () => {
   await withActor(async (f) => {
     const initial = f.read();
@@ -223,6 +276,21 @@ it("installs native commits before reply, retains known commits after reply fail
     expect(f.nativeEntry()?.updatedAt).toBe(10);
     delete f.hooks.admit;
     expect(f.read().entry?.updatedAt).toBe(10);
+    f.hooks.admit = (stage) => {
+      if (stage === "commit") {
+        f.database.db
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.updatedAt', ?) WHERE session_key = ?",
+          )
+          .run(999, f.target.sessionKey);
+      }
+    };
+    expect(f.mutate(patch(f.read(), 21))).toMatchObject({
+      kind: "rolled-back",
+      error: { message: "Session actor database changed during authority admission" },
+    });
+    expect(f.receipt()).toBeUndefined();
+    expect(f.nativeEntry()?.updatedAt).toBe(10);
   });
 });
 
@@ -247,23 +315,38 @@ it("fences a commit whose settlement is lost and rehydrates its durable state wi
     expect(recovered.version.epoch).not.toBe(initial.version.epoch);
     expect(f.hooks.transactions).toBe(writesBeforeRead);
     expect(f.mutate(command)).toMatchObject({
-      kind: "rolled-back",
-      reason: "stale-version",
+      kind: "stale-version",
+      postimage: recovered,
       error: { message: "Session actor version changed before command admission" },
     });
-    expect(f.hooks.transactions).toBe(writesBeforeRead);
+    expect(f.hooks.transactions).toBe(writesBeforeRead + 1);
     expect(f.nativeEntry()?.updatedAt).toBe(30);
   });
 });
 
 it("invalidates resident facts on native writes and keeps missing, replaced, and closed targets distinct", async () => {
   await withActor((f) => {
+    const otherKey = "agent:main:other-native-writer";
+    runSqliteImmediateTransactionSync(f.database.db, () =>
+      writeSessionEntry(f.database, otherKey, { sessionId: "other-session", updatedAt: 1 }),
+    );
     const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
       /^select\b/iu.test(sql) ? "select" : null,
     );
     try {
       const initial = f.read();
       expect(reads.counts.select).toBe(1);
+      expect(f.read()).toEqual(initial);
+      expect(reads.counts.select).toBe(1);
+      using sibling = openNodeSqliteDatabase(f.database.path);
+      withSqliteDatabaseWriteScope(sibling, [otherKey], () =>
+        runSqliteImmediateTransactionSync(sibling, () => {
+          sibling
+            .prepare("UPDATE session_nodes SET updated_at = 2 WHERE session_key = ?")
+            .run(otherKey);
+          expect(() => f.read()).toThrow("Session actor has an unsettled database writer");
+        }),
+      );
       expect(f.read()).toEqual(initial);
       expect(reads.counts.select).toBe(1);
       f.database.db
@@ -275,8 +358,8 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
       expect(replaced.entry?.label).toBe("native writer");
       expect(replaced.version.epoch).not.toBe(initial.version.epoch);
       expect(reads.counts.select).toBe(2);
-      expect(f.mutate(patch(initial, 40)).kind).toBe("rolled-back");
-      expect(f.hooks.transactions).toBe(0);
+      expect(f.mutate(patch(initial, 40)).kind).toBe("stale-version");
+      expect(f.hooks.transactions).toBe(1);
 
       const missing = f.read({ ...f.target, sessionKey: "agent:main:absent" });
       expect(missing.entry).toBeUndefined();
@@ -737,7 +820,7 @@ it("publishes actual pending-final state and evidence only after live commit aut
       });
     });
     const initial = f.read();
-    const command: Mutation = {
+    const command = {
       type: "session.actor.deliverySettled",
       input: {
         target: f.target,
@@ -755,7 +838,7 @@ it("publishes actual pending-final state and evidence only after live commit aut
           result: { channel: "telegram", target: { id: "chat" }, platformMessageId: "message" },
         },
       },
-    };
+    } satisfies Mutation;
     f.hooks.admit = (stage) => {
       if (stage === "commit") throw new Error("harness claim revoked");
     };

@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
-import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
@@ -33,6 +36,7 @@ import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type Options = OpenClawAgentDatabaseOptions & { path: string };
 type NativeTarget = SessionActorTarget & { database: SessionActorNativeIncognitoIdentity };
@@ -254,12 +258,14 @@ export async function captureNativeIncognitoSessionActor(params: {
       replica: createSessionActorReplica({
         target,
         lifetime,
-        currentWriteToken() {
+        currentWriteToken(state) {
           if (!database.db.isOpen) {
             return undefined;
           }
-          const revision = readSqliteDatabaseWriteRevision(database.db);
-          return revision === undefined ? undefined : `${target.database.incarnation}:${revision}`;
+          return readSqliteDatabaseScopedWriteToken(database.db, [
+            ...collectSessionEntryLookupKeys(target.sessionKey),
+            ...state.dependencySessionIds.map(sqliteSessionIdWriteScope),
+          ]);
         },
       }),
       transport: {

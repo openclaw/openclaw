@@ -91,7 +91,7 @@ describe("restart recovery terminal delivery receipt", () => {
   });
 
   it.each(["metadata", "source"] as const)(
-    "reprepares a proven actor conflict without replacing a newer %s",
+    "adopts command-local state without replacing a newer %s or issuing a read",
     async (change) => {
       await seed(claim);
       const initial = read()!;
@@ -134,10 +134,7 @@ describe("restart recovery terminal delivery receipt", () => {
         await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe(
           change === "metadata" ? "started" : "stale",
         );
-        expect(commands.filter((command) => command !== "session.actor.read")).toEqual([
-          "session.actor.deliveryPending",
-          "session.actor.deliveryPending",
-        ]);
+        expect(commands).toEqual(["session.actor.deliveryPending"]);
         if (change === "metadata") {
           expect(read()).toMatchObject({
             label: "new metadata",

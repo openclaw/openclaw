@@ -4,6 +4,7 @@ import type {
   SessionActor,
   SessionActorAppendCommitted,
   SessionActorFactory,
+  SessionActorHotState,
   SessionActorOperations,
 } from "../config/sessions/session-actor-contract.js";
 import { assertCanonicalSessionKeyWrite } from "../config/sessions/session-canonical-key.js";
@@ -35,7 +36,7 @@ export function createIncognitoSessionActorFactory(params: {
     operation: (scope: Pick<SqliteWorkerStore<SessionActorOperations>, "execute">) => Promise<T>,
     admission: SqliteWorkerAdmissionFactory,
   ): Promise<T>;
-  writeToken: { value: string | undefined };
+  writeTokens: Map<string, { writeToken: string; dependencySessionIds: string[] }>;
   sessionFacts: { invalidate(sessionKey: string): void };
   sessionActors: Set<SessionActor>;
   acquiredActors: Set<SessionActor>;
@@ -51,7 +52,7 @@ export function createIncognitoSessionActorFactory(params: {
     withGrant,
     retain,
     run,
-    writeToken,
+    writeTokens,
     sessionFacts,
     sessionActors,
     acquiredActors,
@@ -91,6 +92,12 @@ export function createIncognitoSessionActorFactory(params: {
         assertCurrent: assertActorCurrent,
         assertReadable: assertActorCurrent,
       };
+      const rememberToken = (state: SessionActorHotState) => {
+        writeTokens.set(sessionKey, {
+          writeToken: state.writeToken,
+          dependencySessionIds: state.dependencySessionIds,
+        });
+      };
       const actor = createSessionActor({
         target,
         lifetime: {
@@ -101,7 +108,7 @@ export function createIncognitoSessionActorFactory(params: {
         replica: createSessionActorReplica({
           target: { sessionKey, database: identity },
           lifetime,
-          currentWriteToken: () => writeToken.value,
+          currentWriteToken: () => writeTokens.get(sessionKey)?.writeToken,
         }),
         transport: {
           retain,
@@ -114,31 +121,27 @@ export function createIncognitoSessionActorFactory(params: {
                   async execute(command) {
                     try {
                       const result = await scope.execute(command);
-                      if (isRecord(result) && "writeToken" in result) {
-                        writeToken.value =
-                          typeof result.writeToken === "string" ? result.writeToken : undefined;
-                      } else if (
-                        isRecord(result) &&
-                        result.kind === "committed" &&
-                        isRecord(result.receipt) &&
-                        isRecord(result.receipt.postimage)
-                      ) {
+                      if ("writeToken" in result) {
+                        rememberToken(result);
+                      } else if (result.kind === "committed") {
                         sessionFacts.invalidate(sessionKey);
-                        writeToken.value =
-                          typeof result.receipt.postimage.writeToken === "string"
-                            ? result.receipt.postimage.writeToken
-                            : undefined;
-                      } else {
-                        writeToken.value = undefined;
-                        if (isRecord(result) && result.kind === "unknown") {
-                          sessionFacts.invalidate(sessionKey);
-                        }
+                        rememberToken(result.receipt.postimage);
+                      } else if (result.kind === "stale-version") {
+                        rememberToken(result.postimage);
+                      } else if (result.kind === "unknown") {
+                        writeTokens.delete(sessionKey);
+                        sessionFacts.invalidate(sessionKey);
                       }
                       return result;
                     } catch (error) {
-                      writeToken.value = undefined;
+                      const pendingToken = writeTokens.get(sessionKey);
                       if (command.type !== "session.actor.read") {
                         sessionFacts.invalidate(sessionKey);
+                      }
+                      // The facade decides commit versus unknown from native evidence.
+                      // A lost ordinary reply cannot erase the final grant's token.
+                      if (pendingToken) {
+                        writeTokens.set(sessionKey, pendingToken);
                       }
                       throw error;
                     }
@@ -167,6 +170,17 @@ export function createIncognitoSessionActorFactory(params: {
                         // Legacy live claims remain usable by this command's final grant;
                         // fence their projection before the native commit can be observed.
                         sessionFacts.invalidate(sessionKey);
+                        if (
+                          isRecord(facts.snapshot) &&
+                          typeof facts.snapshot.writeToken === "string" &&
+                          Array.isArray(facts.snapshot.dependencySessionIds) &&
+                          facts.snapshot.dependencySessionIds.every((id) => typeof id === "string")
+                        ) {
+                          writeTokens.set(sessionKey, {
+                            writeToken: facts.snapshot.writeToken,
+                            dependencySessionIds: facts.snapshot.dependencySessionIds,
+                          });
+                        }
                       }
                     }),
                 );
@@ -242,6 +256,9 @@ export function createIncognitoSessionActorFactory(params: {
           await actor.release();
           acquiredActors.delete(shared);
           sessionActors.delete(shared);
+          if (![...sessionActors].some((candidate) => candidate.target.sessionKey === sessionKey)) {
+            writeTokens.delete(sessionKey);
+          }
         },
       };
       acquiredActors.add(shared);

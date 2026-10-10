@@ -52,7 +52,7 @@ function decodeJsonProjection<T>(value: T | string): T {
   return decoded as T;
 }
 
-/** One autocommit statement admits all hot facts from one physical writer snapshot. */
+/** One statement admits all hot facts, inside the command transaction or an autocommit read. */
 export function hydrateSessionActorState(
   database: OpenClawAgentDatabase,
   target: SessionActorTarget,
@@ -366,6 +366,7 @@ export function hydrateSessionActorState(
       target,
       version,
       writeToken,
+      dependencySessionIds: [],
       entry,
       participants,
       members,
@@ -411,6 +412,13 @@ export function hydrateSessionActorState(
 /** Derives disclosure only from the actor's owned postimage, without touching SQLite. */
 export function projectSessionActorHotState(state: SessionActorStoredState): SessionActorHotState {
   const hot = structuredClone(state.hot);
+  hot.dependencySessionIds = [
+    ...new Set([
+      ...[...state.entryRows.values()].flatMap((row) => (row ? [row.entry.sessionId] : [])),
+      ...(state.window ? [state.window.session_id] : []),
+      ...(hot.entry ? [hot.entry.sessionId] : []),
+    ]),
+  ].sort();
   hot.pendingInputs = [...state.pendingInputs.values()].map(
     ({ message_json: _message, ...row }) => row,
   );

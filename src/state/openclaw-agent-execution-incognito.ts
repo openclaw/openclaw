@@ -111,7 +111,10 @@ function createIncognitoAgentExecutionOwner(
   let nativeStopped: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
   let releaseShared: (() => void) | undefined;
-  const actorWriteToken: { value: string | undefined } = { value: undefined };
+  const actorWriteTokens = new Map<
+    string,
+    { writeToken: string; dependencySessionIds: string[] }
+  >();
   const sessionActors = new Set<SessionActor>();
   const pending = new Set<Promise<unknown>>();
   const continuations = new AsyncLocalStorage<{ borrow: object; active: boolean }>();
@@ -158,6 +161,27 @@ function createIncognitoAgentExecutionOwner(
     assertRetainedCurrent,
     withGrant,
     assertOutsideGrant,
+    (targets) => {
+      if (!targets) {
+        actorWriteTokens.clear();
+        return;
+      }
+      const keys = new Set(targets.map((target) => target.sessionKey));
+      const sessionIds = new Set(
+        targets.flatMap((target) => {
+          const sessionId = target.sharing?.entry?.sessionId;
+          return [
+            ...(sessionId ? [sessionId] : []),
+            ...(actorWriteTokens.get(target.sessionKey)?.dependencySessionIds ?? []),
+          ];
+        }),
+      );
+      for (const [key, held] of actorWriteTokens) {
+        if (keys.has(key) || held.dependencySessionIds.some((id) => sessionIds.has(id))) {
+          actorWriteTokens.delete(key);
+        }
+      }
+    },
     assertCurrent,
   );
   const admission =
@@ -218,7 +242,7 @@ function createIncognitoAgentExecutionOwner(
               onNativeLost(error) {
                 loss ??= new IncognitoSessionEndedError({ cause: error });
                 state = "lost";
-                actorWriteToken.value = undefined;
+                actorWriteTokens.clear();
                 sessionFacts.clear();
               },
               onNativeStopped(stopped) {
@@ -358,7 +382,6 @@ function createIncognitoAgentExecutionOwner(
         operationSignal?: AbortSignal,
         createAdmission?: SqliteWorkerAdmissionFactory,
         cleanup = false,
-        legacy = true,
       ): Promise<T> => {
         assertOutsideGrant();
         currentAuthority.assertCurrent();
@@ -381,9 +404,6 @@ function createIncognitoAgentExecutionOwner(
               { target: identity, assertCurrent: assertOperation },
               async () => {
                 try {
-                  if (legacy) {
-                    actorWriteToken.value = undefined;
-                  }
                   const result = await runSqliteWorkerStoreOperation(
                     opened,
                     operation,
@@ -423,8 +443,8 @@ function createIncognitoAgentExecutionOwner(
           withGrant,
           retain: (operation) => retain(operation, "settlement"),
           run: (actorAuthority, operation, actorAdmission) =>
-            run(actorAuthority, operation, undefined, actorAdmission, false, false),
-          writeToken: actorWriteToken,
+            run(actorAuthority, operation, undefined, actorAdmission, false),
+          writeTokens: actorWriteTokens,
           sessionFacts,
           sessionActors,
           acquiredActors,
@@ -524,7 +544,7 @@ function createIncognitoAgentExecutionOwner(
         await drain(pending);
         await opening?.catch(() => undefined);
         await Promise.all([...sessionActors].map((actor) => actor.release()));
-        actorWriteToken.value = undefined;
+        actorWriteTokens.clear();
         // Accepted compositions own their cleanup and commit facts until they settle.
         sessionFacts.clear();
         await store?.close();

@@ -102,8 +102,8 @@ export async function withAgentTurnCompletion<T>(
             return snapshot.entry!;
           }
           finished = true;
+          await refresh();
           for (let attempt = 0; ; attempt++) {
-            await refresh();
             const { reducers } = project();
             if (reducers.length === 0 && !pendingFinalDelivery) return snapshot.entry!;
             const committed: { receipt?: SessionActorReceipt } = {};
@@ -133,11 +133,8 @@ export async function withAgentTurnCompletion<T>(
               snapshot = committed.receipt.postimage;
               params.publish(snapshot.entry!);
             }
-            if (
-              outcome.kind === "rolled-back" &&
-              outcome.reason === "stale-version" &&
-              attempt === 0
-            ) {
+            if (outcome.kind === "stale-version" && attempt === 0) {
+              snapshot = outcome.postimage;
               continue;
             }
             if (

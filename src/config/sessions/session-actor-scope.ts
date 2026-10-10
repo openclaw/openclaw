@@ -20,15 +20,10 @@ import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 export async function runSessionActorCommand<Value>(
   actor: SessionActor,
   authority: SessionActorAuthority,
-  command: (snapshot: SessionActorHotState) => Promise<SessionActorOutcome<Value>>,
+  command: (snapshot: SessionActorHotState | undefined) => Promise<SessionActorOutcome<Value>>,
 ): Promise<SessionActorOutcome<Value>> {
-  for (let attempt = 0; ; attempt++) {
-    const snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
-    const outcome = await command(snapshot);
-    if (outcome.kind !== "rolled-back" || outcome.reason !== "stale-version" || attempt >= 3) {
-      return outcome;
-    }
-  }
+  const outcome = await command(actor.snapshot(authority));
+  return outcome.kind === "stale-version" ? command(outcome.postimage) : outcome;
 }
 
 /** Retain the captured physical writer, never reselect a target after an accepted command. */

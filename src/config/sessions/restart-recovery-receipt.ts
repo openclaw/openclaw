@@ -95,7 +95,7 @@ export async function beginRestartRecoveryTerminalDelivery(
           {
             commandId: randomUUID(),
             phaseId: randomUUID(),
-            expected: snapshot.version,
+            expected: snapshot?.version,
             claim: scope,
             updatedAt: Date.now(),
           },
@@ -135,7 +135,7 @@ async function updatePendingTerminalDelivery(
           {
             commandId: randomUUID(),
             phaseId: randomUUID(),
-            expected: snapshot.version,
+            expected: snapshot?.version,
             restart: { claim: scope, outcome, updatedAt: Date.now() },
           },
           receiptAuthority,

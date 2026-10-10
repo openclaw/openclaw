@@ -1,7 +1,13 @@
-import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expect, it } from "vitest";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { patchSessionEntry as patchSdkSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -40,6 +46,7 @@ import { createSessionActorReplica } from "./session-actor-replica.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -86,11 +93,19 @@ async function withReplica(
       });
     const replica = reacquire();
     const load = (epoch = "first", sequence = 0): SessionActorHotState => {
-      const writeToken = readSqliteDatabaseWriteTokenForPath(database.path);
+      const writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+        database.path,
+        collectSessionEntryLookupKeys(target.sessionKey),
+      );
       if (!writeToken) {
         throw new Error("Replica fixture has an unsettled native writer");
       }
-      return hydrateSessionActorState(database, target, { epoch, sequence }, writeToken).hot;
+      const state = hydrateSessionActorState(database, target, { epoch, sequence }, writeToken).hot;
+      state.writeToken = readSqliteDatabaseScopedWriteTokenForPath(database.path, [
+        ...collectSessionEntryLookupKeys(target.sessionKey),
+        ...state.dependencySessionIds.map(sqliteSessionIdWriteScope),
+      ])!;
+      return state;
     };
     try {
       await run({
@@ -192,6 +207,47 @@ it("shares committed facts across released handles and retires them for writes a
   });
 });
 
+it("retains unrelated session postimages but invalidates a shared physical session window", async () => {
+  await withReplica((fixture) => {
+    const other = { ...fixture.scope, sessionKey: "agent:main:other-replica" };
+    replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 1, label: "other" });
+    const snapshot = hydrate(fixture);
+    replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 2, label: "changed" });
+    expect(fixture.replica.read()).toEqual(snapshot);
+    using sibling = openNodeSqliteDatabase(fixture.database.path);
+    withSqliteDatabaseWriteScope(
+      sibling,
+      [other.sessionKey, sqliteSessionIdWriteScope("other-session")],
+      () =>
+        runSqliteImmediateTransactionSync(sibling, () => {
+          sibling
+            .prepare("UPDATE session_windows SET display_name = ? WHERE session_id = ?")
+            .run("sibling-window", "other-session");
+          expect(fixture.replica.read()).toBeUndefined();
+        }),
+    );
+    expect(fixture.replica.read()).toEqual(snapshot);
+
+    // A second logical key can point at the actor's existing physical window.
+    replaceSessionEntrySync(other, { sessionId: "replica-session", updatedAt: 3, label: "shared" });
+    expect(fixture.replica.read()).toBeUndefined();
+    expect(
+      fixture.database.db
+        .prepare("SELECT display_name FROM session_windows WHERE session_id = ?")
+        .get("replica-session"),
+    ).toEqual({ display_name: "shared" });
+    expect(hydrate(fixture).entry?.label).toBe("before");
+    const shared = fixture.replica.read();
+    assignSessionOwner(other, {
+      owner: { type: "agent", id: "other-owner" },
+      assignedBy: { type: "agent", id: "main" },
+      assignedAt: 4,
+    });
+    // Ownership belongs to the other logical row, not its shared window.
+    expect(fixture.replica.read()).toEqual(shared);
+  });
+});
+
 it("invalidates partial native publications before disclosure and count-only participant writes through the shared receipt", async () => {
   await withReplica((fixture) => {
     const { replica, scope, database, load } = fixture;
@@ -280,6 +336,27 @@ it("installs only matching complete outcomes, fences unknowns, and rejects delay
       }),
     ).toBe(false);
     expect(replica.read()).toBeUndefined();
+
+    const staleContext = command(initial, "stale");
+    const stale = replica.beginCommand(staleContext);
+    const superseded = load("superseded");
+    expect(
+      stale.settle({
+        kind: "stale-version",
+        expected: initial.version,
+        postimage: superseded,
+        error: { name: "SessionActorStaleVersionError", message: "Session actor version changed" },
+      }),
+    ).toBe(true);
+    expect(replica.read()?.version).toEqual(superseded.version);
+    const noPreflight = replica.beginCommand({
+      commandId: "adopt-preimage",
+      phaseId: "turn",
+      phase: "patch",
+    });
+    const adopted = command(superseded, "adopt-preimage");
+    expect(noPreflight.settle(committed(adopted, load("superseded", 1)))).toBe(true);
+    expect(replica.read()?.version.sequence).toBe(1);
 
     const older = replica.beginRead();
     const newer = replica.beginRead();

@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { serialize } from "node:v8";
 import {
-  readSqliteDatabasePendingWriteRevision,
-  readSqliteDatabasePendingWriteToken,
+  readSqliteDatabasePendingScopedWriteToken,
+  readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseWriteRevision,
-  readSqliteDatabaseWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+  withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -38,6 +40,7 @@ import {
 } from "./session-actor-transaction.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 const MAX_RESIDENT_SESSIONS = 128;
@@ -79,13 +82,15 @@ export function createSessionActorWorker(
       drop(oldest);
     }
   };
-  const token = (database: OpenClawAgentDatabase, target: SessionActorTarget) => {
-    if (target.database.kind === "file") {
-      return readSqliteDatabaseWriteTokenForPath(database.path);
-    }
-    const revision = readSqliteDatabaseWriteRevision(database.db);
-    return revision === undefined ? undefined : `${target.database.incarnation}:${revision}`;
-  };
+  const scopes = (target: SessionActorTarget, sessionIds: readonly string[] = []) => [
+    ...collectSessionEntryLookupKeys(target.sessionKey),
+    ...sessionIds.map(sqliteSessionIdWriteScope),
+  ];
+  const token = (
+    database: OpenClawAgentDatabase,
+    target: SessionActorTarget,
+    sessionIds?: readonly string[],
+  ) => readSqliteDatabaseScopedWriteToken(database.db, scopes(target, sessionIds));
   const requireTarget = (target: SessionActorTarget) => {
     const current = physicalIdentity();
     const requested = target.database;
@@ -108,12 +113,12 @@ export function createSessionActorWorker(
   };
   const read = (database: OpenClawAgentDatabase, target: SessionActorTarget) => {
     requireTarget(target);
-    const currentToken = token(database, target);
+    const resident = residents.get(target.sessionKey)?.state;
+    const currentToken = token(database, target, resident?.hot.dependencySessionIds);
     if (!currentToken) {
-      drop(target.sessionKey);
+      // The shared fence can belong to another session; retain this preimage privately.
       throw new Error("Session actor has an unsettled database writer");
     }
-    const resident = residents.get(target.sessionKey)?.state;
     if (resident?.hot.writeToken === currentToken) {
       const held = residents.get(target.sessionKey)!;
       residents.delete(target.sessionKey);
@@ -121,15 +126,22 @@ export function createSessionActorWorker(
       return resident;
     }
     drop(target.sessionKey);
+    const revision = readSqliteDatabaseWriteRevision(database.db);
     const hydrated = hydrateSessionActorState(
       database,
       target,
       { epoch: randomUUID(), sequence: 0 },
       currentToken,
     );
-    if (token(database, target) !== currentToken) {
+    const hydratedToken = token(database, target, hydrated.hot.dependencySessionIds);
+    if (
+      !hydratedToken ||
+      revision === undefined ||
+      readSqliteDatabaseWriteRevision(database.db) !== revision
+    ) {
       throw new Error("Session actor changed while hydrating");
     }
+    hydrated.hot.writeToken = hydratedToken;
     remember(hydrated);
     return hydrated;
   };
@@ -155,48 +167,62 @@ export function createSessionActorWorker(
             { kind: "committed" }
           >
         | undefined;
-      let staleReason: "stale-version" | "stale-state" | undefined;
+      let stale: Extract<SessionActorOutcome<never>, { kind: "stale-version" }> | undefined;
       try {
         database = context.open();
         requireTarget(target);
         const opened = database;
-        const before = read(database, target);
         if (command.type === "session.actor.read") {
+          const before = read(database, target);
           context.admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
           observed.settled("read");
           return structuredClone(before.hot);
         }
-        if (!isDeepStrictEqual(before.hot.version, command.input.expected)) {
-          staleReason = "stale-version";
-          throw new Error("Session actor version changed before command admission");
-        }
-        const working = cloneSessionActorStoredState(before);
-        const borrowed: AgentWorkerOperationContext = {
-          ...context,
-          open: () => opened,
-          writeTransaction(_label, _owner, operation) {
-            if (!opened.db.isTransaction) {
-              throw new Error("Session actor kernel escaped its transaction");
-            }
-            return operation(opened);
-          },
-          admit(stage, publication) {
-            context.admit(stage, {
-              kind: "session-actor-admission",
-              snapshot: projectSessionActorHotState(working),
-              publication,
-            });
-          },
-        };
         const outcome = context.writeTransaction(`session.actor.${phase}`, "Session actor", () => {
-          // Native/SDK writers can bypass the host queue; compare their in-process revision
-          // after acquiring SQLite's writer lock, before using any retained preimage.
-          if (token(opened, target) !== before.hot.writeToken) {
-            staleReason = "stale-version";
-            throw new Error("Session actor preimage changed before transaction entry");
+          const admit = (stage: "transaction" | "commit", publication: unknown) => {
+            const revision = readSqliteNativeMutationRevision(opened.db);
+            withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
+            if (readSqliteNativeMutationRevision(opened.db) !== revision) {
+              throw new Error("Session actor database changed during authority admission");
+            }
+          };
+          // The writer owns both hydration and version validation. A replica miss
+          // never requires a separate read command before this transaction.
+          const before = read(opened, target);
+          admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
+          if (
+            command.input.expected !== undefined &&
+            !isDeepStrictEqual(before.hot.version, command.input.expected)
+          ) {
+            const error = new Error("Session actor version changed before command admission");
+            error.name = "SessionActorStaleVersionError";
+            stale = {
+              kind: "stale-version",
+              expected: command.input.expected,
+              postimage: structuredClone(before.hot),
+              error: errorFacts(error),
+            };
+            throw error;
           }
+          const working = cloneSessionActorStoredState(before);
+          const borrowed: AgentWorkerOperationContext = {
+            ...context,
+            open: () => opened,
+            writeTransaction(_label, _owner, operation) {
+              if (!opened.db.isTransaction) {
+                throw new Error("Session actor kernel escaped its transaction");
+              }
+              return operation(opened);
+            },
+            admit(stage, publication) {
+              admit(stage, {
+                kind: "session-actor-admission",
+                snapshot: projectSessionActorHotState(working),
+                publication,
+              });
+            },
+          };
           return withSessionActorTransactionState(opened, working, () => {
-            borrowed.admit("transaction");
             const applied = applySessionActorPhase(command, working, borrowed);
             const { value } = applied;
             working.hot.version = {
@@ -204,14 +230,14 @@ export function createSessionActorWorker(
               sequence: before.hot.version.sequence + 1,
             };
             working.hot = projectSessionActorHotState(working);
-            const pendingRevision = readSqliteDatabasePendingWriteRevision(opened.db);
-            if (pendingRevision === undefined) {
+            const pendingToken = readSqliteDatabasePendingScopedWriteToken(
+              opened.db,
+              scopes(target, working.hot.dependencySessionIds),
+            );
+            if (pendingToken === undefined) {
               throw new Error("Session actor lost its native writer revision");
             }
-            working.hot.writeToken =
-              target.database.kind === "file"
-                ? (readSqliteDatabasePendingWriteToken(opened.db) ?? before.hot.writeToken)
-                : `${target.database.incarnation}:${pendingRevision}`;
+            working.hot.writeToken = pendingToken;
             const turn =
               value && "kind" in value && value.kind === "session-turn"
                 ? value
@@ -282,7 +308,7 @@ export function createSessionActorWorker(
             } else {
               deferSqliteWorkerCommitReceipt(opened.db, accepted);
             }
-            context.admit("commit", {
+            admit("commit", {
               kind: "session-actor-admission",
               snapshot: projectSessionActorHotState(working),
               final: true,
@@ -322,8 +348,15 @@ export function createSessionActorWorker(
           };
         }
         const retained = residents.get(target.sessionKey)?.state;
-        if (retained && database && token(database, target) !== retained.hot.writeToken) {
-          drop(target.sessionKey);
+        if (retained && database) {
+          const currentToken = token(database, target, retained.hot.dependencySessionIds);
+          if (currentToken !== undefined && currentToken !== retained.hot.writeToken) {
+            drop(target.sessionKey);
+          }
+        }
+        if (stale) {
+          observed.settled("stale-version");
+          return stale;
         }
         observed.settled("rolled-back");
         return {
@@ -331,9 +364,7 @@ export function createSessionActorWorker(
           error: errorFacts(error),
           ...(error instanceof SessionActorStaleStateError
             ? { reason: "stale-state" as const }
-            : staleReason
-              ? { reason: staleReason }
-              : {}),
+            : {}),
         };
       }
     },

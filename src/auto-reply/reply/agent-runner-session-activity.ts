@@ -37,7 +37,7 @@ export async function commitQueuedReplySessionActivity(params: {
           {
             commandId: randomUUID(),
             phaseId: `activity:${params.target.sessionKey}`,
-            expected: snapshot.version,
+            expected: snapshot?.version,
             reducers: [{ kind: "activity", updatedAt: params.updatedAt }],
           },
           authority,

@@ -1,4 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  withSqliteDatabaseWriteScope,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 
 let current: { database: DatabaseSync; state: SessionActorStoredState } | undefined;
@@ -14,7 +18,16 @@ export function withSessionActorTransactionState<T>(
   }
   current = { database: database.db, state };
   try {
-    const result = run();
+    const result = withSqliteDatabaseWriteScope(
+      database.db,
+      [
+        ...state.entryRows.keys(),
+        ...(state.hot.entry?.sessionId
+          ? [sqliteSessionIdWriteScope(state.hot.entry.sessionId)]
+          : []),
+      ],
+      run,
+    );
     if (result instanceof Promise) {
       throw new Error("Session actor transactions cannot await work");
     }

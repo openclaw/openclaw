@@ -207,7 +207,7 @@ export async function settlePendingFinalDelivery(
           {
             commandId: randomUUID(),
             phaseId: randomUUID(),
-            expected: snapshot.version,
+            expected: snapshot?.version,
             settlement,
             ...(claim
               ? {
