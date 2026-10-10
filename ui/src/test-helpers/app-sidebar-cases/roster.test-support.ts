@@ -122,15 +122,15 @@ export async function mountRoster(
   patchSettings({ gatewayUrl });
   const sessions = createSessionsHarness("main", ["agent:main:main"]);
   sessions.list.mockImplementation((options) => {
-    const children =
-      childRows ??
-      (options?.spawnedBy
-        ? result.sessions.filter((row) => row.spawnedBy === options.spawnedBy)
-        : undefined);
+    const children = options?.spawnedBy
+      ? (childRows ?? result.sessions.filter((row) => row.spawnedBy === options.spawnedBy))
+      : undefined;
     return Promise.resolve(
       children
         ? { ...result, sessions: children, count: children.length }
-        : sessions.sessions.state.result,
+        : options?.archivedFilter === "all" && !options.agentId
+          ? result
+          : sessions.sessions.state.result,
     );
   });
   const mainRows = fixtureRows.filter((row) => row.agentId === "main");
@@ -160,21 +160,20 @@ export function sessionKeys(sidebar: HTMLElement) {
   );
 }
 
-export async function toggleRoster(sidebar: HTMLElement) {
+export async function toggleRoster(sidebar: HTMLElement, agentId = "main") {
   const trigger = sidebar.querySelector<HTMLButtonElement>(
     ".sidebar-agent-card__main, .sidebar-workspace-header__main",
   );
   if (!trigger) {
     throw new Error("Missing agent switch control");
   }
+  const value = sidebar.querySelector(".sidebar-workspace-header__main")
+    ? `agent:${encodeURIComponent(agentId)}`
+    : "scope:all";
   trigger.click();
-  await vi.waitFor(() => {
-    expect(sidebar.querySelector('[value="command:sidebar-agents"]')).not.toBeNull();
-  });
-  const item = sidebar.querySelector('[value="command:sidebar-agents"]');
-  sidebar
-    .querySelector(".sidebar-agent-menu")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+  const selector = `.sidebar-agent-menu [value="${value}"]`;
+  await vi.waitFor(() => expect(sidebar.querySelector(selector)).not.toBeNull());
+  sidebar.querySelector<HTMLElement>(selector)?.click();
 }
 
 export async function selectFilter(sidebar: SidebarLifecycleState, value: string) {

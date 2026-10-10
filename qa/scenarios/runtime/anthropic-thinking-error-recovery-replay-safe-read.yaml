@@ -14,6 +14,9 @@ scenario:
         enabled: false
     agents:
       defaults:
+        modelPolicy:
+          allow:
+            - anthropic/claude-opus-4-8
         models:
           anthropic/claude-opus-4-8:
             params: {}

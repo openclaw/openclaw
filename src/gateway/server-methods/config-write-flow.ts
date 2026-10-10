@@ -1,5 +1,3 @@
-// Config write flow helpers commit control-plane config edits, detect auth
-// changes, write restart sentinels, and schedule gateway restarts when required.
 import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
@@ -37,7 +35,6 @@ type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 
-/** Resolves the on-disk config path used in config method responses. */
 export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "path">): string {
   return snapshot?.path ?? createConfigIO().configPath;
 }
@@ -145,16 +142,12 @@ function resolveConfigRestartRequirement(params: {
     previousConfig: params.previousConfig,
     candidateConfig: params.nextConfig,
   });
-  if (isNoopGatewayReloadPlan(plan)) {
-    return { requiresRestart: false, scheduleDirectRestart: false };
-  }
-  if (reloadSettings.mode === "off") {
-    return { requiresRestart: true, scheduleDirectRestart: true };
-  }
-  if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: false };
-  }
-  return { requiresRestart: false, scheduleDirectRestart: false };
+  const requiresRestart =
+    !isNoopGatewayReloadPlan(plan) && (reloadSettings.mode === "off" || plan.restartGateway);
+  return {
+    requiresRestart,
+    scheduleDirectRestart: requiresRestart && reloadSettings.mode === "off",
+  };
 }
 
 /** Returns whether a managed config write can settle without restarting the Gateway. */
@@ -164,44 +157,6 @@ export function shouldAwaitGatewayConfigApplication(params: {
   nextConfig: OpenClawConfig;
 }): boolean {
   return !resolveConfigRestartRequirement(params).requiresRestart;
-}
-
-function resolveConfigRestartRequest(params: unknown): {
-  sessionKey: string | undefined;
-  note: string | undefined;
-  restartDelayMs: number | undefined;
-  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
-  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
-} {
-  const {
-    sessionKey,
-    deliveryContext: requestedDeliveryContext,
-    threadId: requestedThreadId,
-    note,
-    restartDelayMs,
-  } = parseRestartRequestParams(params);
-
-  // Extract deliveryContext + threadId for routing after restart.
-  // Uses generic :thread: parsing plus plugin-owned session grammars.
-  const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
-    extractDeliveryInfo(sessionKey);
-
-  return {
-    sessionKey,
-    note,
-    restartDelayMs,
-    deliveryContext: requestedDeliveryContext ?? sessionDeliveryContext,
-    threadId: requestedThreadId ?? sessionThreadId,
-  };
-}
-
-async function tryWriteRestartSentinelPayload(payload: RestartSentinelPayload): Promise<boolean> {
-  try {
-    await writeRestartSentinel(payload);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Persists a gateway config write and returns follow-up work that must run after response. */
@@ -274,7 +229,6 @@ export async function commitGatewayConfigWrite(params: {
   };
 }
 
-/** Builds restart sentinel/queue state for config.patch and config.apply writes. */
 export async function resolveGatewayConfigRestartWriteResult(params: {
   requestParams: unknown;
   kind: RestartSentinelPayload["kind"];
@@ -290,8 +244,11 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   sentinelPersisted: boolean;
   restart: ReturnType<typeof scheduleGatewayRestart> | undefined;
 }> {
-  const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
-    resolveConfigRestartRequest(params.requestParams);
+  const { sessionKey, note, restartDelayMs, deliveryContext, threadId } = parseRestartRequestParams(
+    params.requestParams,
+  );
+  // Restart delivery uses generic :thread: parsing plus plugin-owned session grammars.
+  const sessionDelivery = extractDeliveryInfo(sessionKey);
   const restartRequirement = resolveConfigRestartRequirement({
     changedPaths: params.changedPaths,
     previousConfig: params.previousConfig,
@@ -302,8 +259,8 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     status: "ok",
     ts: Date.now(),
     sessionKey,
-    deliveryContext,
-    threadId,
+    deliveryContext: deliveryContext ?? sessionDelivery.deliveryContext,
+    threadId: threadId ?? sessionDelivery.threadId,
     message: note ?? null,
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {
@@ -312,7 +269,10 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
       requiresRestart: restartRequirement.requiresRestart,
     },
   };
-  const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
+  const sentinelPersisted = await writeRestartSentinel(payload).then(
+    () => true,
+    () => false,
+  );
   const restart = restartRequirement.scheduleDirectRestart
     ? scheduleGatewayRestart({
         delayMs: restartDelayMs,

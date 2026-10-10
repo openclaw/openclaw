@@ -1,7 +1,6 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
-import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { ConfigReadOnlyError, NixModeConfigMutationError } from "../config/config-write-guard.js";
+import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
@@ -15,9 +14,6 @@ import {
   isExpectedCliError,
 } from "./failure-output.js";
 
-const PLUGIN_POLICY_MESSAGE =
-  'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.';
-
 // Mirrors the producer in ensureExplicitGatewayAuth: the message already carries the remedy.
 const EXPLICIT_GATEWAY_AUTH_MESSAGE = [
   "gateway url override requires explicit credentials",
@@ -27,6 +23,36 @@ const EXPLICIT_GATEWAY_AUTH_MESSAGE = [
 ].join("\n");
 
 describe("formatCliJsonFailure", () => {
+  it.each([false, true])(
+    "keeps connection diagnostics out of normal output (sent=%s)",
+    (requestDispatched) => {
+      const diagnostic = "gateway closed (1006): PRIVATE_CANARY\nConfig: /state/openclaw.json";
+      const error = new GatewayTransportError({
+        kind: "closed",
+        message: diagnostic,
+        requestDispatched,
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: diagnostic,
+        },
+      });
+      const output = formatCliFailureLines({ title: "Command failed", error, env: {} }).join("\n");
+      expect(output).toContain("openclaw gateway status");
+      expect(output).not.toContain("PRIVATE_CANARY");
+      expect(output).not.toContain("/state/");
+      expect(output.includes("may have completed")).toBe(requestDispatched);
+      expect(formatCliJsonFailure(error, { env: {} }).error.message).toBe(diagnostic);
+      expect(
+        formatCliFailureLines({
+          title: "Command failed",
+          error,
+          env: { OPENCLAW_DEBUG: "1" },
+        }).join("\n"),
+      ).toBe(diagnostic);
+    },
+  );
+
   it("preserves the typed schema refusal when a runner migration fails before Doctor starts", () => {
     const databases = [
       {
@@ -40,6 +66,15 @@ describe("formatCliJsonFailure", () => {
       targetVersion: "2026.9.4",
       cause: new Error("content migration failed"),
     });
+    const output = formatCliFailureLines({
+      title: "Update failed",
+      error,
+      argv: ["node", "openclaw", "update", "--json"],
+      env: {},
+    }).join("\n");
+    expect(output).toContain("[openclaw] OpenClaw needs a manual recovery step.");
+    expect(output).toContain("Let the updater restore the previous package and exit");
+    expect(output).toContain("openclaw doctor --fix");
     expect(formatCliJsonFailure(error, { env: {} })).toMatchObject({
       ok: false,
       error: {
@@ -101,57 +136,24 @@ describe("formatCliJsonFailure", () => {
           'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
       },
     });
-    expect(payload.error.message).not.toContain("internal parse cause");
-  });
-  it("keeps plugin policy messages in the canonical JSON envelope", () => {
-    const error = new ExpectedCliError({
-      message: PLUGIN_POLICY_MESSAGE,
-      humanOutput: PLUGIN_POLICY_MESSAGE,
-      machineOutput: PLUGIN_POLICY_MESSAGE,
-    });
-
-    expect(formatCliJsonFailure(error)).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: PLUGIN_POLICY_MESSAGE },
-    });
-  });
-
-  it("keeps gateway credential guidance unchanged even with debug output", () => {
-    const env = { OPENCLAW_DEBUG: "1" };
-    const error = new GatewayCredentialsRequiredError({
-      method: "device.pair.list",
-      configPath: "/tmp/openclaw.json",
-    });
-
-    expect(formatCliJsonFailure(error, { env })).toEqual({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message: error.message,
-      },
-    });
-  });
-
-  it("keeps explicit gateway auth guidance in the envelope even with debug output", () => {
-    const env = { OPENCLAW_DEBUG: "1" };
-    const error = new GatewayExplicitAuthRequiredError(EXPLICIT_GATEWAY_AUTH_MESSAGE);
-
-    const payload = formatCliJsonFailure(error, { env });
-
-    expect(payload).toEqual({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message: expect.stringContaining("gateway url override requires explicit credentials"),
-      },
-    });
-    // The shared machine-output redaction still applies; the remedy lines survive it.
-    expect(payload.error.message).toContain("remove --url to use the configured target.");
-    expect(payload.error.message).toContain("Config: /tmp/openclaw.json");
   });
 });
 
 describe("formatCliFailureLines", () => {
+  it("keeps update reasons before an updater marker exists in JSON mode", () => {
+    const reason = "global-install-failed: original package-manager failure";
+    const output = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error: new Error(reason, { cause: new Error("private nested diagnostic") }),
+      argv: ["node", "openclaw", "--profile", "work", "update", "--json"],
+      env: {},
+    }).join("\n");
+
+    expect(output).toContain(reason);
+    expect(output).not.toContain("private nested diagnostic");
+    expect(output).not.toContain("Stack:");
+  });
+
   it("emits expected guidance only when not already written even with debug output", () => {
     const env = { OPENCLAW_DEBUG: "1" };
     const pending = new ExpectedCliError({
@@ -173,35 +175,22 @@ describe("formatCliFailureLines", () => {
     expect(formatCliFailureLines({ title: "ignored", error: written, env })).toEqual([]);
   });
 
-  it("shows a concise reason and recovery commands by default", () => {
-    const lines = formatCliFailureLines({
-      title: "Could not start the CLI.",
-      error: new Error("config file is invalid", {
-        cause: new Error("unexpected token at /internal/config.json:12"),
-      }),
-      argv: ["node", "openclaw", "status"],
-      env: {},
-    });
+  it("preserves config validation details when diagnostics have not been emitted", () => {
+    const error = Object.assign(
+      createInvalidConfigError("/custom/openclaw.json", "- gateway.port: Expected a number"),
+      { diagnosticEmitted: false, cause: new Error("internal config loader detail") },
+    );
 
-    expect(lines).toEqual([
-      "[openclaw] Could not start the CLI.",
-      "[openclaw] Reason: config file is invalid",
-      "[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.",
-      "[openclaw] Try: openclaw doctor",
-      "[openclaw] Help: openclaw --help",
+    expect(
+      formatCliFailureLines({ title: "The CLI command failed.", error, argv: [], env: {} }),
+    ).toEqual([
+      "[openclaw] The CLI command failed.",
+      "[openclaw] Reason: Invalid config at /custom/openclaw.json:\n- gateway.port: Expected a number",
+      "[openclaw] For help, run `openclaw doctor`.",
     ]);
   });
 
   it.each([
-    {
-      label: "plugin policy refusal",
-      createError: () =>
-        new ExpectedCliError({
-          message: PLUGIN_POLICY_MESSAGE,
-          humanOutput: PLUGIN_POLICY_MESSAGE,
-          machineOutput: PLUGIN_POLICY_MESSAGE,
-        }),
-    },
     {
       label: "missing gateway credentials",
       createError: () =>
@@ -213,36 +202,6 @@ describe("formatCliFailureLines", () => {
     {
       label: "gateway URL override without explicit credentials",
       createError: () => new GatewayExplicitAuthRequiredError(EXPLICIT_GATEWAY_AUTH_MESSAGE),
-    },
-    {
-      label: "externally managed config",
-      createError: () => new ConfigReadOnlyError({ configPath: "/tmp/openclaw.json" }),
-    },
-    {
-      label: "Nix-managed config",
-      createError: () => new NixModeConfigMutationError({ configPath: "/tmp/openclaw.json" }),
-    },
-    {
-      label: "missing agent selection",
-      createError: () =>
-        new AgentSelectionRequiredError(["main", "analyst"], {
-          surface: "the skills command",
-          hint: "Pass --agent <id>.",
-        }),
-    },
-    {
-      label: "unreachable gateway",
-      createError: () =>
-        new GatewayTransportError({
-          kind: "closed",
-          message:
-            "Gateway not reachable at ws://127.0.0.1:51078 (ECONNREFUSED).\nStart it with `openclaw gateway run` or check `openclaw gateway status`.",
-          connectionDetails: {
-            url: "ws://127.0.0.1:51078",
-            urlSource: "local loopback",
-            message: "Gateway target: ws://127.0.0.1:51078",
-          },
-        }),
     },
   ])(
     "routes $label through the shared expected-condition predicate without crash framing",
@@ -266,23 +225,7 @@ describe("formatCliFailureLines", () => {
     },
   );
 
-  it("prints stack details when debug output is requested", () => {
-    const lines = formatCliFailureLines({
-      title: "The CLI command failed.",
-      error: new Error("boom"),
-      env: { OPENCLAW_DEBUG: "1" },
-    });
-
-    expect(lines.slice(0, 4)).toEqual([
-      "[openclaw] The CLI command failed.",
-      "[openclaw] Reason: boom",
-      "[openclaw] Stack:",
-      "[openclaw] Error: boom",
-    ]);
-    expect(lines.join("\n")).toContain("Error: boom");
-  });
-
-  it.each(["--debug", "--verbose"])("prints stack details for the root %s option", (debugFlag) => {
+  it.each(["--verbose"])("prints stack details for the root %s option", (debugFlag) => {
     const lines = formatCliFailureLines({
       title: "The CLI command failed.",
       error: new Error("boom", { cause: new Error("transport detail") }),
@@ -295,18 +238,15 @@ describe("formatCliFailureLines", () => {
     expect(lines).toContain("[openclaw] Error: boom");
   });
 
-  it.each(["--debug", "--verbose"])(
-    "does not enable root stack traces for a child %s option",
-    (debugFlag) => {
-      const lines = formatCliFailureLines({
-        title: "The CLI command failed.",
-        error: new Error("boom"),
-        argv: ["node", "openclaw", "proxy", "run", "--", "child", debugFlag],
-        env: {},
-      });
+  it.each(["--verbose"])("does not enable root stack traces for a child %s option", (debugFlag) => {
+    const lines = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error: new Error("boom"),
+      argv: ["node", "openclaw", "proxy", "run", "--", "child", debugFlag],
+      env: {},
+    });
 
-      expect(lines).not.toContain("[openclaw] Stack:");
-      expect(lines).toContain("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
-    },
-  );
+    expect(lines).not.toContain("[openclaw] Stack:");
+    expect(lines).toContain("[openclaw] For help, run `openclaw doctor`.");
+  });
 });

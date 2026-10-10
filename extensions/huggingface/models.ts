@@ -1,6 +1,9 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  buildLiveModelProviderConfig,
+  readLiveModelCatalogStringField,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
@@ -41,10 +44,6 @@ type HFModelEntry = {
   }>;
 };
 
-type OpenAIListModelsResponse = {
-  data?: HFModelEntry[];
-};
-
 export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
   providerId: "huggingface",
   catalog: HUGGINGFACE_MANIFEST_CATALOG,
@@ -57,32 +56,24 @@ export function isHuggingfacePolicyLocked(modelRef: string): boolean {
 
 function isReasoningModelHeuristic(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
-  return (
-    lower.includes("r1") ||
-    lower.includes("reason") ||
-    lower.includes("thinking") ||
-    lower.includes("grok") ||
-    lower.includes("qwq")
-  );
+  return ["r1", "reason", "thinking", "grok", "qwq"].some((hint) => lower.includes(hint));
 }
 
 function displayNameFromApiEntry(entry: HFModelEntry): string {
-  const fromApi =
-    (typeof entry.name === "string" && entry.name.trim()) ||
-    (typeof entry.title === "string" && entry.title.trim()) ||
-    (typeof entry.display_name === "string" && entry.display_name.trim());
+  const fromApi = readLiveModelCatalogStringField(entry, ["name", "title", "display_name"]);
   if (fromApi) {
     return fromApi;
   }
   const base = entry.id.split("/").pop() ?? entry.id;
-  if (typeof entry.owned_by === "string" && entry.owned_by.trim()) {
-    return `${entry.owned_by.trim()}/${base}`;
+  const owner = readLiveModelCatalogStringField(entry, "owned_by");
+  if (owner) {
+    return `${owner}/${base}`;
   }
   return base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
 }
 
 function readHuggingfaceModelRows(body: unknown): readonly unknown[] {
-  const data = (body as OpenAIListModelsResponse | undefined)?.data;
+  const data = (body as { data?: unknown } | undefined)?.data;
   if (!Array.isArray(data)) {
     throw new Error("Hugging Face model discovery response must contain a data array");
   }

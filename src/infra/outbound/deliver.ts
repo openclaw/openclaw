@@ -7,7 +7,6 @@ export type {
   DurableFinalDeliveryRequirement,
   DurableFinalDeliveryRequirements,
   OutboundDeliveryIntent,
-  OutboundDeliveryQueuePolicy,
 } from "./deliver-contracts.js";
 export { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js";
 

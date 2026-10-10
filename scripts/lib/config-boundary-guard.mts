@@ -12,7 +12,6 @@ const COMPAT_CONFIG_API_FILES = new Set([
   "src/config/io.ts",
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",
-  "src/plugin-sdk/config-runtime.ts",
   "src/plugin-sdk/memory-core-host-runtime-core.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/registry.runtime-config.test.ts",
@@ -75,7 +74,7 @@ function collectTypeScriptFiles(dir: string): string[] {
       files.push(...collectTypeScriptFiles(fullPath));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".ts")) {
+    if (entry.isFile() && /\.tsx?$/u.test(entry.name)) {
       files.push(fullPath);
     }
   }
@@ -90,13 +89,10 @@ function isProductionExtensionFile(relPath: string) {
   if (
     relPath.includes("/test-support/") ||
     relPath.includes(".test.") ||
-    relPath.includes(".live.test.") ||
     relPath.includes(".test-d.") ||
     relPath.includes(".test-harness.") ||
     relPath.includes(".test-shared.") ||
-    relPath.endsWith(".test-support.ts") ||
-    relPath.endsWith("-test-helpers.ts") ||
-    relPath.endsWith("-test-support.ts")
+    /(?:\.test-support|-test-helpers|-test-support)\.tsx?$/u.test(relPath)
   ) {
     return false;
   }
@@ -106,17 +102,12 @@ function isProductionExtensionFile(relPath: string) {
 function isTestOrHarnessFile(relPath: string) {
   return (
     relPath.includes("test-support") ||
-    relPath.includes("/test-support/") ||
     relPath.includes("/test-helpers/") ||
     relPath.includes(".test.") ||
-    relPath.includes(".live.test.") ||
     relPath.includes(".test-d.") ||
     relPath.includes(".test-harness.") ||
     relPath.includes(".test-shared.") ||
-    relPath.endsWith(".test-helpers.ts") ||
-    relPath.endsWith(".test-support.ts") ||
-    relPath.endsWith("-test-helpers.ts") ||
-    relPath.endsWith("-test-support.ts")
+    /[.-]test-helpers\.tsx?$/u.test(relPath)
   );
 }
 
@@ -398,17 +389,17 @@ const CHANNEL_EXTENSION_IDS = new Set([
 ]);
 
 const RUNTIME_HELPER_BASENAME_PATTERNS = [
-  /^action-runtime\.ts$/,
-  /^actions(?:\..*)?\.ts$/,
-  /^active-listener\.ts$/,
-  /^access-control\.ts$/,
-  /^channel\.ts$/,
-  /^client(?:[-.].*)?\.ts$/,
-  /^recipient-resolution\.ts$/,
-  /^rich-menu\.ts$/,
-  /^send(?:[-.].*)?\.ts$/,
-  /^sent-message-cache\.ts$/,
-  /^thread-bindings\.ts$/,
+  /^action-runtime\.tsx?$/,
+  /^actions(?:\..*)?\.tsx?$/,
+  /^active-listener\.tsx?$/,
+  /^access-control\.tsx?$/,
+  /^channel\.tsx?$/,
+  /^client(?:[-.].*)?\.tsx?$/,
+  /^recipient-resolution\.tsx?$/,
+  /^rich-menu\.tsx?$/,
+  /^send(?:[-.].*)?\.tsx?$/,
+  /^sent-message-cache\.tsx?$/,
+  /^thread-bindings\.tsx?$/,
 ];
 
 const RUNTIME_ACTION_FORBIDDEN_CONFIG_LOAD_PATTERNS = [
@@ -424,11 +415,7 @@ function isRuntimeActionLoadConfigCandidate(relPath: string) {
   if (!CHANNEL_EXTENSION_IDS.has(parts[1]!)) {
     return false;
   }
-  if (
-    relPath.endsWith(".test.ts") ||
-    relPath.endsWith(".test-harness.ts") ||
-    relPath.endsWith(".d.ts")
-  ) {
+  if (/\.(?:test|test-harness)\.tsx?$/u.test(relPath) || relPath.endsWith(".d.ts")) {
     return false;
   }
   if (parts.includes("monitor") || parts.includes("cli")) {

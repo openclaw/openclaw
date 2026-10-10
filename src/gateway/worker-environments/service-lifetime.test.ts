@@ -192,36 +192,48 @@ describe("worker environment service", () => {
     expect(maintain).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps maintenance off reconciliation and allocation while shutdown aborts and drains it", async () => {
-    const { promise: pending, resolve: finish } = createDeferred();
-    const maintainProviders = vi.fn(async (_signal: AbortSignal) => pending);
-    const workerService = support.createService(support.createProvider(), { maintainProviders });
-    let stopped = false;
-    let stopping: Promise<void> | undefined;
-    try {
-      await workerService.reconcileOnce();
+  it.each(["service", "scheduler"] as const)(
+    "keeps maintenance off reconciliation and allocation while %s shutdown aborts and drains it",
+    async (closingOwner) => {
+      const { promise: pending, resolve: finish } = createDeferred();
+      const maintainProviders = vi.fn(async (_signal: AbortSignal) => pending);
+      const scheduler = createTestGatewayScheduler();
+      const workerService = support.createService(support.createProvider(), {
+        maintainProviders,
+        scheduler,
+      });
+      let stopped = false;
+      let stopping: Promise<void> | undefined;
+      try {
+        await workerService.reconcileOnce();
+        await workerService.reconcileOnce();
+        expect(maintainProviders).toHaveBeenCalledOnce();
+        await expect(
+          workerService.createWithRequest({
+            profileId: "development",
+            idempotencyKey: "during-maintenance",
+          }),
+        ).resolves.toMatchObject({ state: "ready" });
+        if (closingOwner === "scheduler") {
+          scheduler.beginClose();
+          expect(maintainProviders.mock.calls[0]![0].aborted).toBe(true);
+        }
+        stopping = workerService.stop().then(() => {
+          stopped = true;
+        });
+        expect(maintainProviders.mock.calls[0]![0].aborted).toBe(true);
+        await Promise.resolve();
+        expect(stopped).toBe(false);
+      } finally {
+        finish();
+        await (stopping ?? workerService.stop());
+        await scheduler.stop();
+      }
+      expect(stopped).toBe(true);
       await workerService.reconcileOnce();
       expect(maintainProviders).toHaveBeenCalledOnce();
-      await expect(
-        workerService.createWithRequest({
-          profileId: "development",
-          idempotencyKey: "during-maintenance",
-        }),
-      ).resolves.toMatchObject({ state: "ready" });
-      stopping = workerService.stop().then(() => {
-        stopped = true;
-      });
-      expect(maintainProviders.mock.calls[0]![0].aborted).toBe(true);
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-    } finally {
-      finish();
-      await stopping;
-    }
-    expect(stopped).toBe(true);
-    await workerService.reconcileOnce();
-    expect(maintainProviders).toHaveBeenCalledOnce();
-  });
+    },
+  );
 
   it("reports failed maintenance and retries on the next sweep", async () => {
     const warn = vi.fn();
@@ -480,8 +492,8 @@ describe("worker environment service", () => {
       readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => false),
       isWorkerTurnToolAuthorized: vi.fn(() => false),
-      updateAckCursors: vi.fn(),
-      prepareWorkspaceResultOwnerRevocation: vi.fn(),
+      updateAckCursors: vi.fn(async () => {}),
+      prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
       registerTurnClaimClosedHandler: vi.fn(() => unsubscribeTurnClaimClosed),
     };
     const workerService = support.createService(support.createProvider({ inspect }), {

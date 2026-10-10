@@ -13,8 +13,6 @@ import {
   formatQuotaReset,
   type ProviderQuotaGroup,
   type ProviderUsageDisplayProps,
-  type QuotaBudgetSummary,
-  type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
@@ -152,28 +150,8 @@ function formatBudgetAmount(amount: number, unit: string): string {
   return `${amount.toFixed(2)} ${unit}`;
 }
 
-function renderLimitBar(usedPercent: number, ariaLabel: string) {
+function renderQuotaRow(label: string, usedPercent: number, value: string, reset?: string | null) {
   const severity = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : null;
-  return html`
-    <div
-      class="context-usage__limit-bar"
-      role="progressbar"
-      aria-label=${ariaLabel}
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow=${usedPercent}
-    >
-      <span
-        class=${severity ? `context-usage__limit-fill--${severity}` : ""}
-        style="width: ${usedPercent}%"
-      ></span>
-    </div>
-  `;
-}
-
-function renderQuotaLimitRow(limit: QuotaLimitSummary) {
-  const label = formatUsageWindowLabel(limit.label);
-  const reset = formatQuotaReset(limit.resetAt);
   return html`
     <div class="context-usage__limit">
       <div class="context-usage__limit-head">
@@ -186,28 +164,22 @@ function renderQuotaLimitRow(limit: QuotaLimitSummary) {
                 >`
               : nothing
           }
-          <strong>${limit.usedPercent}%</strong>
+          <strong>${value}</strong>
         </span>
       </div>
-      ${renderLimitBar(limit.usedPercent, label)}
-    </div>
-  `;
-}
-
-function renderQuotaBudgetRow(budget: QuotaBudgetSummary) {
-  const label = budget.label || t("chat.composer.contextUsage.usageCredits");
-  const usedPercent = Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100)));
-  const value = t("chat.composer.contextUsage.budgetValue", {
-    used: formatBudgetAmount(budget.used, budget.unit),
-    limit: formatBudgetAmount(budget.limit, budget.unit),
-  });
-  return html`
-    <div class="context-usage__limit">
-      <div class="context-usage__limit-head">
-        <span class="context-usage__limit-label">${label}</span>
-        <span class="context-usage__limit-meta"><strong>${value}</strong></span>
+      <div
+        class="context-usage__limit-bar"
+        role="progressbar"
+        aria-label=${label}
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow=${usedPercent}
+      >
+        <span
+          class=${severity ? `context-usage__limit-fill--${severity}` : ""}
+          style="width: ${usedPercent}%"
+        ></span>
       </div>
-      ${renderLimitBar(usedPercent, label)}
     </div>
   `;
 }
@@ -234,14 +206,37 @@ function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
         : nothing
     }
     <div class="context-usage__limits">
-      ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
-      ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
+      ${group.windows.map((limit) =>
+        renderQuotaRow(
+          formatUsageWindowLabel(limit.label),
+          limit.usedPercent,
+          `${limit.usedPercent}%`,
+          formatQuotaReset(limit.resetAt),
+        ),
+      )}
+      ${group.budgets.map((budget) =>
+        renderQuotaRow(
+          budget.label || t("chat.composer.contextUsage.usageCredits"),
+          Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100))),
+          t("chat.composer.contextUsage.budgetValue", {
+            used: formatBudgetAmount(budget.used, budget.unit),
+            limit: formatBudgetAmount(budget.limit, budget.unit),
+          }),
+        ),
+      )}
     </div>
     <div class="context-usage__provenance" data-chat-usage-provider="true">
       <span>${t("sessionsView.provider")}:</span>
       <strong>${group.displayName}</strong>
     </div>
   `;
+}
+
+function renderContextStat(label: string, value: string) {
+  return html`<div>
+    <dt>${label}</dt>
+    <dd>${value}</dd>
+  </div>`;
 }
 
 export function renderContextNotice(
@@ -288,14 +283,7 @@ export function renderContextNotice(
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
-    value === undefined || value <= 0
-      ? nothing
-      : html`
-          <div>
-            <dt>${label}</dt>
-            <dd>${formatCost(value)}</dd>
-          </div>
-        `;
+    value === undefined || value <= 0 ? nothing : renderContextStat(label, formatCost(value));
   const hasProviderCosts = providerCosts && Object.values(providerCosts).some((value) => value > 0);
   return html`
     <div
@@ -370,23 +358,15 @@ export function renderContextNotice(
                       ${t("chat.composer.contextUsage.latestRunTokens")}
                     </div>
                     <dl class="context-usage__stats">
-                      <div>
-                        <dt>${t("usage.breakdown.input")}</dt>
-                        <dd>${formatStat(model.input)}</dd>
-                      </div>
-                      <div>
-                        <dt>${t("usage.breakdown.output")}</dt>
-                        <dd>${formatStat(model.output)}</dd>
-                      </div>
+                      ${renderContextStat(t("usage.breakdown.input"), formatStat(model.input))}
+                      ${renderContextStat(t("usage.breakdown.output"), formatStat(model.output))}
                       ${
                         !showCosts || model.cost === null
                           ? nothing
-                          : html`
-                              <div>
-                                <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                                <dd>${formatCost(model.cost)}</dd>
-                              </div>
-                            `
+                          : renderContextStat(
+                              t("chat.composer.contextUsage.estimatedCost"),
+                              formatCost(model.cost),
+                            )
                       }
                     </dl>
                   `

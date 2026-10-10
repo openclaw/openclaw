@@ -2,13 +2,15 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { createChangedNodeTestShards } from "../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
   createUiTestShardGroups,
   resolveCanonicalNodeTestConfig,
 } from "../scripts/lib/ci-node-test-plan.mts";
-import { listPrExemptRuntimeTestFiles } from "../scripts/lib/ci-proof-test-inventory.mts";
+import {
+  listPrExemptRuntimeTestFiles,
+  RELEASE_ONLY_UI_TEST_FILES,
+} from "../scripts/lib/ci-proof-test-inventory.mts";
 import {
   createExtensionTestShards,
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
@@ -23,17 +25,8 @@ type PlannedTestOwner = {
 };
 
 // Whole-inventory proof runs periodically; the policy watch owns PR opt-in.
-function fallbackGroups(shards: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) {
+function fallbackGroups(shards: ReturnType<typeof createNodeTestShardBundles>) {
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
-}
-
-function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
-  return (shards ?? []).flatMap((shard) =>
-    (shard.targets ?? []).concat(
-      shard.includePatterns ?? [],
-      shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
-    ),
-  );
 }
 
 function createPrExemptCensus() {
@@ -63,7 +56,7 @@ function createPrExemptCensus() {
       for (const config of JSON.parse(process.argv[1])) {
         const module = await import(pathToFileURL(path.resolve(config)).href);
         const root = config === "test/vitest/vitest.ui-e2e.config.ts"
-          ? module.createUiE2eVitestConfig({ ...process.env, OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, [])
+          ? module.createUiE2eVitestConfig({ ...process.env, OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "0" }, [])
           : module.default;
         projects[config] = (root.test.projects ?? [root]).map(project => {
           if (!project || typeof project !== "object" || !project.test) {
@@ -137,19 +130,6 @@ function createPrExemptCensus() {
     };
     return { ui, e2e, canonical: [browser, ...e2e] };
   };
-  // Node retains canonical jsdom ownership. The UI package independently runs
-  // those projects; native Chromium and mocked E2E have dedicated owners only.
-  const projectNodeOwners = (jobs: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) =>
-    jobs.flatMap<PlannedTestOwner>((shard) =>
-      shard.targets
-        ? shard.targets.flatMap((file) =>
-            buildVitestRunPlans([file]).map((plan) => ({
-              configs: [resolveCanonicalNodeTestConfig(file, plan.config) ?? plan.config],
-              includePatterns: [file],
-            })),
-          )
-        : fallbackGroups([shard]),
-    );
   const configsByFile = new Map(
     prExemptFiles.map((file) => {
       const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
@@ -179,9 +159,7 @@ function createPrExemptCensus() {
   return {
     prExemptFiles,
     retainedExtensionGroups,
-    configsByFile,
     dedicatedGroups,
-    projectNodeOwners,
     indexOwners,
   };
 }
@@ -198,132 +176,72 @@ const prExemptPlanOptions = {
   includeReleaseOnlyRuntimeTests: false,
 };
 
-it("omits unchanged PR-exempt files from PR plans except the fixed smoke", () => {
-  const pr = expectDefined(
-    createChangedNodeTestShards(["src/infra/retry.test.ts"], {
+it.each(["hourly", "release"] as const)(
+  "retains one canonical owner for every PR-exempt file in %s plans",
+  (mode) => {
+    const { prExemptFiles, retainedExtensionGroups, dedicatedGroups, indexOwners } =
+      getPrExemptCensus();
+    const periodic = createNodeTestShardBundles({
       ...prExemptPlanOptions,
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyToolingShards: false,
-    }),
-    "unrelated PR owner plan",
-  );
-  const { prExemptFiles, dedicatedGroups, projectNodeOwners, indexOwners } = getPrExemptCensus();
-  const prUiOwners = dedicatedGroups(
-    createUiTestShardGroups({ includePrExemptRuntimeTests: false }),
-  );
-  const prOwners = indexOwners([...projectNodeOwners(pr), ...prUiOwners.canonical]);
-  const targets = selectedFiles(pr);
-  for (const file of prExemptFiles) {
-    const fixedSmokeOptIn = file === "src/config/utility-model-separation-migration.io.test.ts";
-    expect(
-      targets.filter((target) => target === file),
-      file,
-    ).toHaveLength(fixedSmokeOptIn ? 1 : 0);
-    expect(prOwners.get(file) ?? [], file).toHaveLength(fixedSmokeOptIn ? 1 : 0);
-    if (file.startsWith("ui/")) {
+      includeReleaseOnlyRuntimeTests: mode === "release",
+      includePrExemptRuntimeTests: true,
+      includeReleaseOnlyToolingShards: true,
+      ...(mode === "hourly"
+        ? {
+            compactMode: "pull-request",
+            includeProofTests: true,
+            compactNodeJobCap: 77,
+          }
+        : {}),
+    });
+    const uiOwners = dedicatedGroups(
+      createUiTestShardGroups({ includeReleaseOnlyTests: mode === "release" }),
+    );
+    if (mode === "hourly") {
+      expect(periodic.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+      expect(periodic.length).toBeLessThanOrEqual(79);
+    }
+    const owners = indexOwners([
+      ...fallbackGroups(periodic),
+      ...retainedExtensionGroups,
+      ...uiOwners.canonical,
+    ]);
+    for (const file of prExemptFiles) {
+      expect(owners.get(file) ?? [], file).toHaveLength(1);
+      if (file.startsWith("ui/")) {
+        const kind = isUiTestTarget(file) ? "ui" : "e2e";
+        expect(
+          uiOwners[kind].filter((group) => group.includePatterns.includes(file)),
+          file,
+        ).toHaveLength(1);
+      }
+    }
+    for (const file of RELEASE_ONLY_UI_TEST_FILES) {
+      expect(prExemptFiles, file).not.toContain(file);
       const kind = isUiTestTarget(file) ? "ui" : "e2e";
       expect(
-        prUiOwners[kind].filter((group) => group.includePatterns.includes(file)),
+        uiOwners[kind].filter((group) => group.includePatterns.includes(file)),
         file,
-      ).toHaveLength(0);
+      ).toHaveLength(mode === "release" ? 1 : 0);
     }
-  }
-});
+  },
+);
 
-it("retains one canonical owner for every PR-exempt file in hourly plans within the job cap", () => {
-  const { prExemptFiles, retainedExtensionGroups, dedicatedGroups, indexOwners } =
-    getPrExemptCensus();
-  const hourly = createNodeTestShardBundles({
-    ...prExemptPlanOptions,
-    compactMode: "pull-request",
-    includePrExemptRuntimeTests: true,
-    includeReleaseOnlyToolingShards: true,
-    includeProofTests: true,
-    compactNodeJobCap: 77,
-  });
-  const hourlyUiOwners = dedicatedGroups(
-    createUiTestShardGroups({ includeReleaseOnlyTests: false }),
-  );
-  expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
-  expect(hourly.length).toBeLessThanOrEqual(79);
-  const hourlyOwners = indexOwners([
-    ...hourly.flatMap((job) => job.groups),
-    ...retainedExtensionGroups,
-    ...hourlyUiOwners.canonical,
-  ]);
-  for (const file of prExemptFiles) {
-    expect(hourlyOwners.get(file) ?? [], file).toHaveLength(1);
-    if (file.startsWith("ui/")) {
-      const kind = isUiTestTarget(file) ? "ui" : "e2e";
-      expect(
-        hourlyUiOwners[kind].filter((group) => group.includePatterns.includes(file)),
-        file,
-      ).toHaveLength(1);
-    }
-  }
-});
-
-it("retains one canonical owner for every PR-exempt file in release plans", () => {
-  const { prExemptFiles, retainedExtensionGroups, dedicatedGroups, indexOwners } =
-    getPrExemptCensus();
-  const release = createNodeTestShardBundles({
-    ...prExemptPlanOptions,
-    includeReleaseOnlyRuntimeTests: true,
-    includePrExemptRuntimeTests: true,
-    includeReleaseOnlyToolingShards: true,
-  });
-  const releaseUiOwners = dedicatedGroups(createUiTestShardGroups());
-  const releaseOwners = indexOwners([
-    ...fallbackGroups(release),
-    ...retainedExtensionGroups,
-    ...releaseUiOwners.canonical,
-  ]);
-  for (const file of prExemptFiles) {
-    expect(releaseOwners.get(file) ?? [], file).toHaveLength(1);
-    if (file.startsWith("ui/")) {
-      const kind = isUiTestTarget(file) ? "ui" : "e2e";
-      expect(
-        releaseUiOwners[kind].filter((group) => group.includePatterns.includes(file)),
-        file,
-      ).toHaveLength(1);
-    }
-  }
-});
-
-it("opts every directly edited PR-exempt file into its canonical PR owner", () => {
-  const { prExemptFiles, configsByFile, dedicatedGroups, projectNodeOwners, indexOwners } =
-    getPrExemptCensus();
-  const changedPr = expectDefined(
-    createChangedNodeTestShards(prExemptFiles, {
-      ...prExemptPlanOptions,
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyToolingShards: false,
-      dedicatedUiTests: true,
-      dedicatedUiE2e: true,
-    }),
-    "directly edited PR-exempt owner plan",
-  );
-  const changedUiOwners = dedicatedGroups(
+it("keeps release-only UI files out of ordinary owner-selected plans", () => {
+  const { dedicatedGroups } = getPrExemptCensus();
+  const owners = dedicatedGroups(
     createUiTestShardGroups({
       includeReleaseOnlyTests: false,
       includePrExemptRuntimeTests: false,
-      changedPaths: prExemptFiles,
+      changedPaths: ["ui/vite.config.ts"],
+      uiE2eFiles: [...RELEASE_ONLY_UI_TEST_FILES].filter((file) => !isUiTestTarget(file)),
     }),
   );
-  const changedPrOwners = indexOwners(projectNodeOwners(changedPr));
-  // Dedicated UI executes its inline projects; preserve that handoff rather
-  // than assigning its ordinary package projects to generic Node rows.
-  for (const group of [...changedUiOwners.ui, ...changedUiOwners.e2e]) {
-    for (const file of group.includePatterns) {
-      if (!configsByFile.has(file)) {
-        continue;
-      }
-      const entries = changedPrOwners.get(file) ?? [];
-      entries.push(group);
-      changedPrOwners.set(file, entries);
-    }
-  }
-  for (const file of prExemptFiles) {
-    expect(changedPrOwners.get(file)?.length ?? 0, file).toBeGreaterThan(0);
+  for (const file of RELEASE_ONLY_UI_TEST_FILES) {
+    const kind = isUiTestTarget(file) ? "ui" : "e2e";
+    expect(
+      owners[kind].filter((group) => group.includePatterns.includes(file)),
+      file,
+    ).toHaveLength(0);
   }
 });

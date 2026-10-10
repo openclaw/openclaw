@@ -33,9 +33,12 @@ describe("kimi provider plugin", () => {
     );
   });
 
-  it("uses binary thinking with thinking off by default", async () => {
+  it("uses binary thinking with thinking off by default and repairs replay signatures", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
+    expect(provider.buildReplayPolicy?.({ provider: "kimi" })).toEqual({
+      preserveSignatures: false,
+    });
     expect(
       provider.resolveThinkingProfile?.({
         provider: "kimi",

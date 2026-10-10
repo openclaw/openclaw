@@ -9,7 +9,6 @@ import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-conf
 import {
   formatNonClawHubInstallWarning,
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
-  type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
 import { resolvePluginInstallSourcePlan } from "../../plugins/install-source-plan.js";
 import type {
@@ -36,21 +35,6 @@ export function formatPluginCommandCapabilityConsentError(
   ].join("\n");
 }
 
-function resolveNonClawHubChatInstallAcknowledgement(params: {
-  force: boolean;
-  sourceClass: NonClawHubInstallSourceClass;
-  spec: string;
-}): { ok: true; warning: string } | { ok: false; error: string } {
-  const warning = formatNonClawHubInstallWarning(params);
-  if (params.force) {
-    return { ok: true, warning };
-  }
-  return {
-    ok: false,
-    error: `${warning}\nReview the source, then rerun this chat command with ${NON_CLAWHUB_INSTALL_FORCE_FLAG} to continue.`,
-  };
-}
-
 export async function installPluginFromPluginsCommand(params: {
   raw: string;
   acceptCapabilities: boolean;
@@ -74,13 +58,13 @@ export async function installPluginFromPluginsCommand(params: {
     return { ok: false, error: plan.error.replace(/^Plugin path not found:/, "Path not found:") };
   }
   const acknowledgement = plan.acknowledgement
-    ? resolveNonClawHubChatInstallAcknowledgement({
-        force: params.force,
-        ...plan.acknowledgement,
-      })
-    : null;
-  if (acknowledgement && !acknowledgement.ok) {
-    return acknowledgement;
+    ? formatNonClawHubInstallWarning(plan.acknowledgement)
+    : undefined;
+  if (acknowledgement !== undefined && !params.force) {
+    return {
+      ok: false,
+      error: `${acknowledgement}\nReview the source, then rerun this chat command with ${NON_CLAWHUB_INSTALL_FORCE_FLAG} to continue.`,
+    };
   }
   const warnings: string[] = plan.warning ? [plan.warning] : [];
   const logger = createPluginInstallLogger();
@@ -114,8 +98,8 @@ export async function installPluginFromPluginsCommand(params: {
     throw error;
   }
   warnings.push(...(result.warnings ?? []).map(stripAnsi));
-  if (acknowledgement?.ok) {
-    warnings.push(acknowledgement.warning);
+  if (acknowledgement !== undefined) {
+    warnings.push(acknowledgement);
   }
   return {
     ok: true,

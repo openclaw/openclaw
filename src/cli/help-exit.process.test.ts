@@ -10,7 +10,8 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
@@ -130,6 +131,8 @@ async function runCliProcess(params: {
   }
   const expectedExitCode = params.expectedExitCode ?? 0;
   const exit = await runCliProcessChild({
+    nodeExecutable:
+      params.forbidTlsImport || params.failRunMainImport ? resolveTestNodeExecPath() : undefined,
     nodeArgs: [
       // Prepared entrypoints still load source-checkout plugins; keep the same TSX loader.
       "--import",
@@ -197,10 +200,6 @@ function parseJsonLines(stdout: string): Array<Record<string, unknown>> {
 }
 
 describe("CLI help process exit", () => {
-  it("disables esbuild worker IPC for source CLI children", () => {
-    expect(process.env.ESBUILD_WORKER_THREADS).toBe("0");
-  });
-
   it("exits promptly after root --help", async () => {
     // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
     // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
@@ -387,7 +386,11 @@ describe("models list JSON failure process output", () => {
       args: ["models", "list", "--provider", provider, "--json"],
       entry: preparedCliEntry,
       config: {},
-      env,
+      env: {
+        ...env,
+        OPENCLAW_DEBUG: undefined,
+        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+      },
       expectedExitCode: 1,
     });
 
@@ -397,7 +400,13 @@ describe("models list JSON failure process output", () => {
       ok: false,
       error: { type: "cli_error", message },
     });
-    expect(result.stderr).toContain(message);
+    if (provider === "autoqa-no-such-provider") {
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
+      expect(result.stderr).not.toContain(message);
+    } else {
+      expect(result.stderr).toContain(message);
+    }
   });
 });
 
@@ -419,6 +428,7 @@ describe("message broadcast process exit", () => {
       const entryPath = path.join(root, "run-message-broadcast.mjs");
       const largePayload = "x".repeat(8_388_608);
       const helpersUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.helpers);
+      const nodeExecutable = resolveTestNodeExecPath();
       const commandSpecifier = /\.[cm]?ts$/u.test(helpersUrl.pathname)
         ? "../../../commands/message.js"
         : resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.command).href;
@@ -472,9 +482,9 @@ await runCliWithExitFinalization({
       const spawned: { child?: ChildProcess } = {};
       const child = await lifetime.track(
         runNodeScript(
-          [
+          (workerArgv) => [
             ...resolveVitestNodeArgs(),
-            ...resolveRuntimeWorkerArgv(helpersUrl).slice(0, -1),
+            ...workerArgv(helpersUrl).slice(0, -1),
             entryPath,
           ],
           {
@@ -497,6 +507,7 @@ await runCliWithExitFinalization({
           },
           CLI_PROCESS_DEADLOCK_GUARD_MS,
           {
+            executable: nodeExecutable,
             cwd: path.resolve("."),
             maxBuffer,
             signal: AbortSignal.any([signal, finished.signal, overflow.signal]),
@@ -529,76 +540,6 @@ await runCliWithExitFinalization({
 });
 
 describe("backup create process", () => {
-  it.runIf(process.platform !== "win32")(
-    "creates a verified backup through an absolute configured config link",
-    async () => {
-      const root = tempDirs.make("openclaw-backup-cli-config-link-");
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const managedConfigPath = path.join(root, "nix-store", "openclaw.json");
-      const outputDir = path.join(root, "output");
-      await Promise.all([
-        fs.mkdir(stateDir, { recursive: true }),
-        fs.mkdir(path.dirname(managedConfigPath), { recursive: true }),
-        fs.mkdir(outputDir, { recursive: true }),
-      ]);
-      await fs.writeFile(managedConfigPath, '{"logging":{"level":"silent"}}\n');
-      await fs.symlink(managedConfigPath, configPath);
-
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          "--import",
-          "tsx",
-          fileURLToPath(preparedCliEntry),
-          "backup",
-          "create",
-          "--no-include-workspace",
-          "--output",
-          outputDir,
-          "--verify",
-          "--json",
-        ],
-        env: {
-          ...process.env,
-          HOME: root,
-          USERPROFILE: root,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          NODE_ENV: undefined,
-          NODE_OPTIONS: undefined,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_HOME: root,
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_STATE_DIR: stateDir,
-          VITEST: undefined,
-        },
-      });
-      if (result.code !== 0) {
-        throw new Error(
-          formatCliProcessFailure({
-            reason: `backup CLI exited with code ${result.code} and signal ${result.signal}`,
-            stdout: result.stdout,
-            stderr: result.stderr,
-          }),
-        );
-      }
-
-      const output: unknown = JSON.parse(result.stdout);
-      expect(output).toMatchObject({ includeWorkspace: false, verified: true });
-      if (
-        !output ||
-        typeof output !== "object" ||
-        !("archivePath" in output) ||
-        typeof output.archivePath !== "string"
-      ) {
-        throw new Error("backup CLI did not return an archive path");
-      }
-      const entries = await listBackupArchiveEntries(output.archivePath);
-      expect(entries.some((entry) => entry.endsWith("/state/openclaw.json"))).toBe(true);
-    },
-  );
-
   it.runIf(process.platform !== "win32")(
     "excludes a configured workspace before archive link validation",
     async () => {
@@ -725,8 +666,10 @@ describe("JSON console style process output", () => {
           },
         },
         env: {
+          OPENCLAW_DEBUG: undefined,
           OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
           OPENCLAW_TEST_CONSOLE_STYLE: undefined,
+          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
         },
         failRunMainImport: true,
         stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
@@ -742,10 +685,15 @@ describe("JSON console style process output", () => {
           }),
           expect.objectContaining({
             level: "error",
-            message: expect.stringContaining("forced run-main import failure"),
+            message: "[openclaw] Could not start the CLI.",
+          }),
+          expect.objectContaining({
+            level: "error",
+            message: "[openclaw] For help, run `openclaw doctor`.",
           }),
         ]),
       );
+      expect(result.stderr).not.toContain("forced run-main import failure");
     },
     SLOW_DOTENV_TEST_TIMEOUT_MS,
   );

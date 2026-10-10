@@ -463,7 +463,7 @@ describe("ModelSetupWizardRunner", () => {
     );
     resolveDone!({ done: true, status: "done" });
     await expect(answer).resolves.toEqual({ startMethod: "openclaw.setup.auth.start" });
-    expect(runner.state).toEqual({ phase: "done", authChoice: "openai-oauth" });
+    expect(runner.state).toEqual({ phase: "done" });
   });
 
   it("cancels the gateway wizard when advancing fails", async () => {
@@ -572,7 +572,7 @@ describe("ModelSetupWizardRunner", () => {
         { timeoutMs: 30_000 },
       );
       await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
-      expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+      expect(runner.state).toEqual({ phase: "done" });
     },
   );
 
@@ -676,7 +676,7 @@ describe("ModelSetupWizardRunner", () => {
 
         await runner.cancel();
         await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
-        expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+        expect(runner.state).toEqual({ phase: "done" });
       } finally {
         vi.useRealTimers();
       }

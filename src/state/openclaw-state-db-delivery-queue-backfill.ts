@@ -12,11 +12,6 @@ function nonNegativeSafeInteger(value: unknown): number | undefined {
     ? number
     : undefined;
 }
-const inferLegacyRetention = (
-  entry: ReturnType<typeof safeParseJsonRecord>,
-  id: string,
-  queue: string,
-) => inferDeliveryQueueFailureRetention(entry ?? {}, id, queue, true);
 
 /** Compact every preexisting failed row without inferring replay or owner policy. */
 export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
@@ -48,15 +43,16 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
       continue;
     }
     const parsedEntry = safeParseJsonRecord(String(row.entry_json));
+    const entry = parsedEntry ?? {};
     const queueName = String(row.queue_name);
     const id = String(row.id);
     if (row.status === "pending") {
       if (
-        parsedEntry?.retainOnFailure !== true &&
-        inferLegacyRetention(parsedEntry, id, queueName)
+        entry.retainOnFailure !== true &&
+        inferDeliveryQueueFailureRetention(entry, id, queueName, true)
       ) {
         retainPending.run(
-          JSON.stringify({ ...parsedEntry, retainOnFailure: true }),
+          JSON.stringify({ ...entry, retainOnFailure: true }),
           queueName,
           id,
           String(row.entry_json),
@@ -68,12 +64,13 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
       nonNegativeSafeInteger(row.failed_at) ??
       nonNegativeSafeInteger(row.updated_at) ??
       migrationNow;
-    const entry = parsedEntry ?? {};
     const retryCount = Math.max(
       nonNegativeSafeInteger(row.retry_count) ?? 0,
       nonNegativeSafeInteger(entry.retryCount) ?? 0,
     );
-    const retention = parsedEntry ? inferLegacyRetention(entry, id, queueName) : "permanent";
+    const retention = parsedEntry
+      ? inferDeliveryQueueFailureRetention(entry, id, queueName, true)
+      : "permanent";
     if (!retention) {
       remove.run(queueName, id);
       continue;

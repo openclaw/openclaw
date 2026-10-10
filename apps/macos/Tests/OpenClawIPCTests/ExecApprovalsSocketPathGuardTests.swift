@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct ExecApprovalsSocketPathGuardTests {
     private static func canonicalPath(_ url: URL) throws -> String {
         guard let resolved = realpath(url.path, nil) else {
@@ -288,17 +288,11 @@ struct ExecApprovalsSocketPathGuardTests {
             request = Task {
                 await ExecApprovalsSocketTestSupport.requestDecision(socketPath: socketPath, timeoutMs: 1000)
             }
-            let admitted = await withTaskGroup(of: Bool.self) { group in
-                group.addTask {
-                    var iterator = started.stream.makeAsyncIterator()
-                    return await iterator.next() != nil
-                }
-                group.addTask {
-                    try? await Task.sleep(for: .seconds(1))
-                    return false
-                }
-                defer { group.cancelAll() }
-                return await group.next() ?? false
+            var iterator = started.stream.makeAsyncIterator()
+            let admitted = await iterator.next() != nil
+            guard !Task.isCancelled else {
+                Issue.record("Still waiting for admitted approval request")
+                throw CancellationError()
             }
             try #require(admitted)
 

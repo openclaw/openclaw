@@ -4,6 +4,7 @@ import {
   findMarkdownCodeSpans,
   findMarkdownCodeRegions,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import {
   consumeMarkdownRawHtmlLine,
   findMarkdownRawHtmlRanges,
@@ -123,12 +124,7 @@ export function streamingMarkdownState(streamKey?: string): StreamingMarkdownSta
   const state = streamingCache.get(streamKey) ?? {};
   streamingCache.delete(streamKey);
   streamingCache.set(streamKey, state);
-  if (streamingCache.size > STREAMING_CACHE_LIMIT) {
-    const oldest = streamingCache.keys().next().value;
-    if (oldest !== undefined) {
-      streamingCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(streamingCache, STREAMING_CACHE_LIMIT);
   return state;
 }
 

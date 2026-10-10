@@ -18,6 +18,7 @@ on:
         default: stock
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -35,6 +36,7 @@ jobs:
           set -euo pipefail
           export PROOF_PATH="$RUNNER_TEMP/ios-release-e2e-proof.json"
           echo "PROOF_PATH=$PROOF_PATH" >> "$GITHUB_ENV"
+          echo "GATEWAY_SELECTION_DIR=$RUNNER_TEMP/ios-release-gateway-selection" >> "$GITHUB_ENV"
           echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
           python3 - <<'PY'
           import json, os, re
@@ -66,6 +68,48 @@ jobs:
           test -f scripts/lib/ios-release-e2e-native.ts
           test -f test/helpers/openclaw-test-instance.ts
 
+      - name: Find this run's stable Gateway selection
+        id: gateway-selection
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const name = `ios-release-gateway-selection-${context.runId}`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo,
+              run_id: context.runId,
+              name,
+              per_page: 100,
+            });
+            const matches = artifacts.filter((artifact) => artifact.name === name);
+            if (matches.length > 1) {
+              throw new Error('Multiple stable Gateway selections exist for this run.');
+            }
+            if (matches.length === 0) {
+              if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) {
+                throw new Error('This rerun has no saved stable Gateway selection. Start a new workflow run.');
+              }
+              core.setOutput('create', 'true');
+              core.setOutput('artifact-id', '');
+              return;
+            }
+            const artifact = matches[0];
+            if (artifact.expired || artifact.workflow_run?.id !== context.runId ||
+                artifact.workflow_run?.head_sha !== process.env.TARGET_SHA) {
+              throw new Error('The saved stable Gateway selection is expired or belongs to another source/run. Start a new workflow run.');
+            }
+            core.setOutput('create', 'false');
+            core.setOutput('artifact-id', String(artifact.id));
+
+      - name: Restore this run's stable Gateway selection
+        if: steps.gateway-selection.outputs.artifact-id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.gateway-selection.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          path: ${{ env.GATEWAY_SELECTION_DIR }}
+          digest-mismatch: error
+
       - name: Start shared toolchain installation clock
         id: install-start
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
@@ -76,6 +120,33 @@ jobs:
           node-version: "24.21.0"
           install-bun: "false"
           cache-mode: "off"
+
+      - name: Prepare stable Gateway selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTORED_SELECTION: ${{ steps.gateway-selection.outputs.artifact-id != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RESTORED_SELECTION" == true ]]; then
+            test -f "$GATEWAY_SELECTION_DIR/selection.json"
+            test -f "$GATEWAY_SELECTION_DIR/package.json"
+            test -f "$GATEWAY_SELECTION_DIR/package-lock.json"
+          fi
+          node --import ./scripts/tsx.mjs scripts/ios-release-gateway.ts \
+            --target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"
+
+      - name: Save this run's stable Gateway selection
+        if: steps.gateway-selection.outputs.create == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-gateway-selection-${{ github.run_id }}
+          path: |
+            ${{ env.GATEWAY_SELECTION_DIR }}/selection.json
+            ${{ env.GATEWAY_SELECTION_DIR }}/package.json
+            ${{ env.GATEWAY_SELECTION_DIR }}/package-lock.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Select Xcode and install pinned native tools
         shell: bash
@@ -112,7 +183,8 @@ jobs:
           OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.simslim.outputs.binary }}
         run: |
           node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-            --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH"
+            --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
+            --gateway-selection "$GATEWAY_SELECTION_DIR"
 
       - name: Complete sanitized timing proof
         if: always()
@@ -139,7 +211,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ios-release-e2e-${{ inputs.mode }}
+          name: ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ios-release-e2e-proof.json
           if-no-files-found: error
           retention-days: 14

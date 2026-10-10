@@ -5,8 +5,8 @@ import type {
   ControlUiSessionListSubscription,
 } from "openclaw/plugin-sdk/control-ui";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { workboardHost } from "../../host.ts";
 import { formatUiError } from "../format-error.ts";
-import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
 import { workboardCardSessionKey } from "./card-state.ts";
 import { isReservedSessionKey, workboardSessionKeyMatches } from "./session-links.ts";
 import type { WorkboardCard } from "./types.ts";
@@ -42,7 +42,7 @@ function resolveSession(
   result: ControlUiSessionListResult,
 ): WorkboardSessionResolution {
   const exact = result.sessions.find(
-    (session) => normalizeSessionKeyForUiComparison(session.key) === key,
+    (session) => workboardHost().sessions.normalizeKey(session.key) === key,
   );
   if (exact) {
     return { key, status: "resolved", session: exact };
@@ -75,7 +75,7 @@ export function createWorkboardSessionResolver(host: ControlUiHost, notify: () =
       return resolution;
     },
     sync(sessionKey: string | undefined, enabled: boolean) {
-      const nextKey = normalizeSessionKeyForUiComparison(sessionKey ?? "");
+      const nextKey = workboardHost().sessions.normalizeKey(sessionKey ?? "");
       if (disposed || (key === nextKey && active === enabled)) {
         return;
       }

@@ -30,16 +30,16 @@ import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import { buildContextEngineBinding } from "./thread-context-engine.js";
 import {
-  buildContextEngineBinding,
-  buildTurnCollaborationMode,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
-} from "./thread-lifecycle.js";
+} from "./thread-fingerprints.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import {
   buildCodexHistoryProvenancePrefix,
   buildCodexParentLocalInstructions,
+  buildTurnCollaborationMode,
 } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -54,6 +54,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,
@@ -80,6 +81,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const availableToolNames = () =>
+    flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
+      .map((tool) => tool.name)
+      .filter(isNonEmptyString);
   const nativeHistoryProvenancePrefix =
     params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined;
   const forkedSession =
@@ -160,11 +165,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   const applyContinuityProjection = async (messages: typeof historyState.messages) => {
     const projection = await projectContextEngineAssemblyForCodex({
-      assembledMessages: messages,
+      assembledMessages: [...messages, ...(params.continuation?.messages ?? [])],
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
       toolPayloadMode:
-        params.pluginRuntimeRefreshMessages || preserveForkedToolResults ? "preserve" : "elide",
+        params.continuation || params.pluginRuntimeRefreshMessages || preserveForkedToolResults
+          ? "preserve"
+          : "elide",
       prepareFileContext,
       currentUserTurnIdempotencyKey,
     });
@@ -187,11 +194,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         sessionKey: contextSessionKey,
         messages: historyState.messages,
         tokenBudget: effectiveContextTokenBudget,
-        availableTools: new Set(
-          flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
-            .map((tool) => tool.name)
-            .filter(isNonEmptyString),
-        ),
+        availableTools: new Set(availableToolNames()),
         citationsMode: params.config?.memory?.citations,
         sandboxed: sandbox?.enabled === true,
         modelId: effectiveRuntimeModelId,
@@ -210,25 +213,27 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       const contextEngineProjection = readContextEngineThreadBootstrapProjection(
         assembled.contextProjection,
       );
-      const projectionDecision = contextEngineProjection
-        ? resolveContextEngineBootstrapProjectionDecision({
-            startupBinding: decisionStartupBinding,
-            expectedBinding: buildContextEngineBinding(
-              { ...runtimeParams },
-              contextEngineProjection,
-            ),
-            projection: contextEngineProjection,
-            dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
-            legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
-          })
-        : { project: true, reason: "per-turn-projection" };
+      const projectionDecision =
+        contextEngineProjection && !params.continuation
+          ? resolveContextEngineBootstrapProjectionDecision({
+              startupBinding: decisionStartupBinding,
+              expectedBinding: buildContextEngineBinding(
+                { ...runtimeParams },
+                contextEngineProjection,
+              ),
+              projection: contextEngineProjection,
+              dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+              legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
+            })
+          : { project: true, reason: "per-turn-projection" };
       const projection = await projectContextEngineAssemblyForCodex({
-        assembledMessages: assembled.messages,
+        assembledMessages: [...assembled.messages, ...(params.continuation?.messages ?? [])],
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
         maxRenderedContextChars: codexContextProjectionMaxChars,
         toolPayloadMode:
           contextEngineProjection ||
+          params.continuation ||
           params.pluginRuntimeRefreshMessages ||
           preserveForkedToolResults
             ? "preserve"
@@ -268,6 +273,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     } catch (assembleErr) {
       if (
         assembleErr instanceof CodexContextAttachmentError ||
+        params.continuation ||
         params.pluginRuntimeRefreshMessages
       ) {
         throw assembleErr;
@@ -304,18 +310,20 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {
         fingerprint: params.toolAuthorityFingerprint,
-        activeToolNames: () =>
-          flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
-            .map((tool) => tool.name)
-            .filter(isNonEmptyString),
-        assertActive: connection.assertCurrent,
+        activeToolNames: availableToolNames,
+        // Shipped prompt-hook capabilities revalidate synchronously after awaits.
+        assertActive: connection.assertLegacyCurrent,
       },
     });
-  const resolveShiftedPromptInputRange = (
+  const resolveShiftedPromptRanges = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
     turnPromptText: string,
-  ): CodexProjectedContextRange | undefined => {
+  ): {
+    inputRange?: CodexProjectedContextRange;
+    contextRange?: CodexProjectedContextRange;
+    requestRange?: CodexProjectedContextRange;
+  } => {
     if (
       !promptInputRange ||
       promptInputRange.start < 0 ||
@@ -323,51 +331,35 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       promptInputRange.end > prompt.length ||
       !turnPromptText.endsWith(prompt)
     ) {
-      return undefined;
+      return {};
     }
     const turnPromptOffset = turnPromptText.length - prompt.length;
-    return {
+    const inputRange = {
       start: turnPromptOffset + promptInputRange.start,
       end: turnPromptOffset + promptInputRange.end,
     };
-  };
-  const resolveShiftedPromptContextRange = (
-    prompt: string,
-    promptInputRange: { start: number; end: number } | undefined,
-    turnPromptText: string,
-  ) => {
-    const promptTextInputOffset = promptInputRange
-      ? promptInputRange.end - promptState.promptText.length
-      : undefined;
+    const promptTextInputOffset = promptInputRange.end - promptState.promptText.length;
     if (
       !promptState.promptContextRange ||
-      !promptInputRange ||
-      promptTextInputOffset === undefined ||
-      promptInputRange.start < 0 ||
-      promptInputRange.end < promptInputRange.start ||
-      promptInputRange.end > prompt.length ||
       promptTextInputOffset < promptInputRange.start ||
-      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptState.promptText ||
-      !turnPromptText.endsWith(prompt)
+      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptState.promptText
     ) {
-      return undefined;
+      return { inputRange };
     }
     const promptTextOffset = prompt.endsWith(promptState.promptText)
       ? prompt.length - promptState.promptText.length
       : promptTextInputOffset;
-    if (promptTextOffset < 0) {
-      return undefined;
-    }
-    const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
+    const contextOffset = turnPromptOffset + promptTextOffset;
     const contextRange = {
-      start: turnPromptOffset + promptState.promptContextRange.start,
-      end: turnPromptOffset + promptState.promptContextRange.end,
+      start: contextOffset + promptState.promptContextRange.start,
+      end: contextOffset + promptState.promptContextRange.end,
     };
     return {
+      inputRange,
       contextRange,
       requestRange: {
         start: contextRange.end,
-        end: turnPromptOffset + promptState.promptText.length,
+        end: contextOffset + promptState.promptText.length,
       },
     };
   };
@@ -387,31 +379,29 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           params.bootstrapContextRunKind === "cron",
       },
     );
-    const projectedRanges = resolveShiftedPromptContextRange(
+    const projectedRanges = resolveShiftedPromptRanges(
       promptBuildResult.prompt,
       promptBuildResult.promptInputRange,
       turnPromptText,
     );
     const preservedRange =
-      resolveShiftedPromptInputRange(
-        promptBuildResult.prompt,
-        promptBuildResult.promptInputRange,
-        turnPromptText,
-      ) ??
+      projectedRanges.inputRange ??
       resolveCodexDeliveryHintPreservedInputRange({
         prompt: promptBuildResult.prompt,
         promptInputRange: promptBuildResult.promptInputRange,
         decoratedPrompt: turnPromptText,
       });
     const imageOffset =
-      projectedRanges && promptState.promptContextRange
+      projectedRanges.contextRange && promptState.promptContextRange
         ? projectedRanges.contextRange.start - promptState.promptContextRange.start
         : undefined;
     const inputLimit =
       CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (nativeHistoryProvenancePrefix?.length ?? 0);
     const requiredInputChars =
       turnPromptText.length -
-      (projectedRanges ? projectedRanges.contextRange.end - projectedRanges.contextRange.start : 0);
+      (projectedRanges.contextRange
+        ? projectedRanges.contextRange.end - projectedRanges.contextRange.start
+        : 0);
     // Optional paths may consume projected history, never current inbound or hook context.
     const attachmentNote =
       inputAttachmentNote && requiredInputChars + inputAttachmentNote.length + 2 <= inputLimit
@@ -442,39 +432,36 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   const parentLocalContext = {
-    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-    memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+    personaInstructions: workspaceBootstrapContext.personaInstructions,
+    memoryInstructions: workspaceBootstrapContext.memoryInstructions,
   };
   // Observability view of the whole developer surface the model sees (reports,
   // trajectory, size estimates). The lifecycle receives the generic policy and the
-  // skill catalog separately; joining them here must never feed thread requests.
+  // refreshable instructions separately; joining them here must never feed thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       turnState.promptBuild.developerInstructions,
-      parentLocalEgress ? undefined : skillsInstructions,
+      parentLocalEgress ? undefined : refreshableInstructions,
       (parentLocalEgress
         ? buildCodexParentLocalInstructions(params, { ...parentLocalContext, skillsInstructions })
-        : buildTurnCollaborationMode(params, parentLocalContext).settings.developer_instructions) ??
-        undefined,
+        : buildTurnCollaborationMode(params).settings.developer_instructions) ?? undefined,
     );
-  const rebuildCodexPromptBuildFromCurrentProjection = async () => {
-    turnState.promptBuild = await buildPromptFromCurrentInputs();
-    turnState.codexTurnPromptText = decorateCodexTurnPromptText(turnState.promptBuild);
-  };
-  const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
+  const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
-    turnState.promptBuild = {
-      ...turnState.promptBuild,
-      prompt: nextPromptBuild.prompt,
-      promptInputRange: nextPromptBuild.promptInputRange,
-    };
+    turnState.promptBuild = preserveInstructions
+      ? {
+          ...turnState.promptBuild,
+          prompt: nextPromptBuild.prompt,
+          promptInputRange: nextPromptBuild.promptInputRange,
+        }
+      : nextPromptBuild;
     turnState.codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
   };
-  const selectNewerVisibleHistoryAfterBinding = (
+  const applyResumeStaleBindingContinuityProjection = async (
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
     const cutoff = Date.parse(binding.historyCoveredThrough ?? "");
-    return historyState.messages.filter((message) => {
+    const newerVisibleMessages = historyState.messages.filter((message) => {
       if (
         message.role !== "user" &&
         message.role !== "assistant" &&
@@ -501,31 +488,30 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
       );
     });
-  };
-  const applyResumeStaleBindingContinuityProjection = async (
-    binding: NonNullable<typeof mutable.startupBinding>,
-  ) => {
-    const newerVisibleMessages = selectNewerVisibleHistoryAfterBinding(binding);
     if (newerVisibleMessages.length === 0) {
       return false;
     }
     await applyContinuityProjection(newerVisibleMessages);
     return true;
   };
+  let staleBindingContinuityForcedFreshStart = false;
+  let inactiveThreadBootstrapBindingForcedFreshStart =
+    connection.initialInactiveThreadBootstrapBindingForcedFreshStart;
   const precomputeNoContextEngineStaleBindingProjection = async () => {
-    promptState.precomputedStaleBindingContinuityProjectionApplied = false;
-    promptState.staleBindingContinuityForcedFreshStart = false;
     const binding = mutable.startupBinding;
-    if (activeContextEngine || !binding?.threadId || binding.pendingSupervisionBranch) {
+    if (
+      activeContextEngine ||
+      params.continuation ||
+      !binding?.threadId ||
+      binding.pendingSupervisionBranch
+    ) {
       return false;
     }
     if (isInactiveThreadBootstrapBinding(binding)) {
-      promptState.inactiveThreadBootstrapBindingForcedFreshStart = true;
+      inactiveThreadBootstrapBindingForcedFreshStart = true;
       return false;
     }
-    const projected = await applyResumeStaleBindingContinuityProjection(binding);
-    promptState.precomputedStaleBindingContinuityProjectionApplied = projected;
-    return projected;
+    return await applyResumeStaleBindingContinuityProjection(binding);
   };
   const applyNoContextEngineContinuityProjection = async (
     action: "started" | "resumed" | "forked",
@@ -544,16 +530,23 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             (message.role === "assistant" &&
               message.content.some((part) => part.type === "text" && part.text.trim())))),
     );
-    if (activeContextEngine || (!hasContinuity && !params.pluginRuntimeRefreshMessages?.length)) {
+    if (activeContextEngine) {
       return false;
     }
-    if (action === "resumed" && promptState.precomputedStaleBindingContinuityProjectionApplied) {
+    if (params.continuation) {
+      await applyContinuityProjection(action === "started" ? historyState.messages : []);
       return true;
     }
-    if (action === "started" && promptState.staleBindingContinuityForcedFreshStart) {
+    if (!hasContinuity && !params.pluginRuntimeRefreshMessages?.length) {
+      return false;
+    }
+    if (action === "resumed" && precomputedStaleBindingContinuityProjectionApplied) {
       return true;
     }
-    if (action === "started" && promptState.inactiveThreadBootstrapBindingForcedFreshStart) {
+    if (action === "started" && staleBindingContinuityForcedFreshStart) {
+      return true;
+    }
+    if (action === "started" && inactiveThreadBootstrapBindingForcedFreshStart) {
       return false;
     }
     if (action === "resumed" && binding) {
@@ -565,7 +558,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
     return false;
   };
-  if (await precomputeNoContextEngineStaleBindingProjection()) {
+  const precomputedStaleBindingContinuityProjectionApplied =
+    await precomputeNoContextEngineStaleBindingProjection();
+  if (precomputedStaleBindingContinuityProjectionApplied) {
     await rebuildCodexPromptBuildFromCurrentProjection();
   }
   const rotateStartupBindingForProjectedTurn = async () => {
@@ -577,6 +572,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       assertCurrent: connection.assertCurrent,
+      authority: connection.authority,
       binding,
       bindingStore,
       identity: bindingIdentity,
@@ -595,11 +591,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     if (mutable.startupBinding?.threadId) {
       return;
     }
-    promptState.inactiveThreadBootstrapBindingForcedFreshStart = hadInactiveThreadBootstrapBinding;
-    promptState.staleBindingContinuityForcedFreshStart =
-      promptState.precomputedStaleBindingContinuityProjectionApplied &&
-      !promptState.inactiveThreadBootstrapBindingForcedFreshStart;
-    if (promptState.staleBindingContinuityForcedFreshStart) {
+    inactiveThreadBootstrapBindingForcedFreshStart = hadInactiveThreadBootstrapBinding;
+    staleBindingContinuityForcedFreshStart =
+      precomputedStaleBindingContinuityProjectionApplied &&
+      !inactiveThreadBootstrapBindingForcedFreshStart;
+    if (staleBindingContinuityForcedFreshStart) {
       await applyContinuityProjection(historyState.messages);
     }
     if (activeContextEngine) {
@@ -624,6 +620,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       developerInstructions: buildRenderedCodexDeveloperInstructions(),
       workspaceBootstrapContext,
       omitWorkspaceReferences,
+      parentLocalEgress,
       skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
       tools: toolBridge.availableSpecs,
     });
@@ -648,7 +645,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     buildRenderedCodexDeveloperInstructions,
-    rebuildCodexTurnPromptTextFromCurrentProjection,
+    rebuildCodexTurnPromptTextFromCurrentProjection: () =>
+      rebuildCodexPromptBuildFromCurrentProjection(true),
     applyNoContextEngineContinuityProjection,
     systemPromptReport,
   };

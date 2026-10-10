@@ -13,6 +13,11 @@ alongside text inference. Register each one inside `register(api)` next to
 your existing `api.registerProvider(...)` call. Part of the [Building provider
 plugins](/plugins/sdk-provider-plugins) guide.
 
+Bundled runtime adapters can create deferred promises with `createDeferred` from
+the private `openclaw/plugin-sdk/concurrency-runtime` subpath. It returns
+`promise`, `resolve`, and `reject` without loading logging or provider auth;
+the adapter retains responsibility for cancellation and terminal settlement.
+
 ## Media and search capabilities
 
 <Tabs>
@@ -56,6 +61,13 @@ plugins](/plugins/sdk-provider-plugins) guide.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
+    that reports usage calls it once per successful upstream request, before
+    resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
+    response has no valid counts. Callers can sum these reports and treat any
+    unavailable response as incomplete usage. The shared remote factory reports
+    OpenAI-style usage; vector return values and existing plugins stay unchanged.
+
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
     both creation options and cold index identity checks. Keep it configuration-only:
@@ -76,6 +88,11 @@ plugins](/plugins/sdk-provider-plugins) guide.
     `maxInputVideos` / `maxDurationSeconds` are not enough to advertise
     transform-mode support or disabled modes cleanly. Music generation
     follows the same `generate` / `edit` pattern.
+
+    Bundled providers can use `selectSupportedVideoDuration` from the private
+    `openclaw/plugin-sdk/video-generation` subpath to select the nearest value
+    from a nonempty list, preferring the longer duration on ties. Keep input
+    validation, rounding, bounds, and default durations in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({
@@ -164,6 +181,10 @@ plugins](/plugins/sdk-provider-plugins) guide.
     the plugin supplies its request, completion/failure checks, and wait function.
     `pollProviderOperationJson` adds the standard HTTP JSON transport.
     Keep vendor authentication and deadline scope in the provider adapter.
+
+    Reuse `createProviderOperationTimeoutError(deadline)` when a custom body
+    reader exhausts that same deadline. It preserves the operation label and
+    optional timeout in the shared error format.
 
     `readGeneratedVideoAsset` from `openclaw/plugin-sdk/media-generation-runtime`
     reads a response under a byte cap and derives the asset's MIME type and filename.

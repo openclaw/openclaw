@@ -1,6 +1,5 @@
 import type { AgentWaitResult } from "../../run-wait.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import type { captureRequesterFollowupAuthority } from "../requester-cron-authority.js";
 
 export type FollowupReply = AgentWaitResult & { replyText?: string };
 type FollowupCustody = {
@@ -8,6 +7,10 @@ type FollowupCustody = {
   assertCurrent(): void;
   signal: AbortSignal;
   release(): void;
+};
+export type FollowupRequesterAuthority = {
+  release(): void;
+  run<T>(runId: string, run: () => Promise<T>): Promise<T>;
 };
 export type FollowupRequest = {
   runId: string;
@@ -17,7 +20,7 @@ export type FollowupRequest = {
   targetSessionKey: string;
   targetAgentId: string;
   custody: FollowupCustody;
-  requesterAuthority?: ReturnType<typeof captureRequesterFollowupAuthority>;
+  requesterAuthority?: FollowupRequesterAuthority | undefined;
   completion?: FollowupCompletionOwner;
 };
 export type FollowupCohort = { entries: readonly SubagentRunRecord[]; generation: number };
@@ -53,6 +56,6 @@ export interface FollowupCompletionOwner {
     assertCurrent?: () => void,
   ): Promise<FollowupSettlement>;
   take(timeoutMs?: number): Promise<FollowupReply | undefined>;
-  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): () => void;
+  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void;
   close(error?: unknown): void;
 }

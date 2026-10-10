@@ -1,54 +1,43 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
-import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
-import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
 function formatJobNameList(names: string[]): string {
   const preview = names.slice(0, 5).map((name) => `\`${name}\``);
   const remaining = names.length - preview.length;
-  return remaining > 0 ? `: ${preview.join(", ")} (+${remaining} more)` : `: ${preview.join(", ")}`;
+  return `: ${preview.join(", ")}${remaining > 0 ? ` (+${remaining} more)` : ""}`;
 }
 
 /**
- * Advisory for isolated agentTurn cron jobs that describe a command but cannot access shell tools.
- * These need operator attention, but `doctor --fix` cannot safely infer whether to grant tool
- * access or recreate them as command cron jobs.
+ * Neither prompt shape is auto-repairable: command prompts lack proven shell access,
+ * while supported shell-tool prompts keep running unchanged. Keep both out of --fix previews.
  */
-export function formatUnresolvedCommandPromptAdvisory(names: string[]): string | null {
+export function formatUnresolvedPromptAdvisory(
+  names: string[],
+  kind: "command" | "shell",
+): string | null {
   if (names.length === 0) {
     return null;
   }
-  const describeVerb = names.length === 1 ? "describes" : "describe";
-  const accessVerb = names.length === 1 ? "lacks" : "lack";
-  return [
-    `${pluralize(names.length, "isolated automation")} ${describeVerb} a shell command in the agent prompt but ${accessVerb} shell/process tool access${formatJobNameList(names)}.`,
-    "- This is not the supported shell-tool prompt shape, so doctor cannot prove the job will execute the requested command.",
-    '- Recreate it as a command automation (`openclaw automations add ... --command "<shell>"`) or grant explicit shell/process tool access before relying on it.',
-  ].join("\n");
-}
-
-/**
- * Advisory for isolated agentTurn cron jobs that drive shell/process tools from the prompt.
- * These keep running and are not a legacy store row, so `doctor --fix` cannot rewrite them;
- * routing this through the auto-repair preview made the finding persist after every --fix.
- */
-export function formatUnresolvedShellPromptAdvisory(names: string[]): string | null {
-  if (names.length === 0) {
-    return null;
-  }
-  const verb = names.length === 1 ? "drives" : "drive";
-  const keepVerb = names.length === 1 ? "keeps" : "keep";
-  return [
-    `${pluralize(names.length, "isolated automation")} ${verb} shell/process tools from the agent prompt and ${keepVerb} running as-is${formatJobNameList(names)}.`,
-    "- This is a supported shape, not a legacy store row, so the doctor fix path cannot convert it and the finding is informational only.",
-    '- For a deterministic run, recreate it as a command automation (`openclaw automations add ... --command "<shell>"`).',
-  ].join("\n");
+  const singular = names.length === 1;
+  return (
+    kind === "command"
+      ? [
+          `${pluralize(names.length, "isolated automation")} ${singular ? "describes" : "describe"} a shell command in the agent prompt but ${singular ? "lacks" : "lack"} shell/process tool access${formatJobNameList(names)}.`,
+          "- This is not the supported shell-tool prompt shape, so doctor cannot prove the job will execute the requested command.",
+          '- Recreate it as a command automation (`openclaw automations add ... --command "<shell>"`) or grant explicit shell/process tool access before relying on it.',
+        ]
+      : [
+          `${pluralize(names.length, "isolated automation")} ${singular ? "drives" : "drive"} shell/process tools from the agent prompt and ${singular ? "keeps" : "keep"} running as-is${formatJobNameList(names)}.`,
+          "- This is a supported shape, not a legacy store row, so the doctor fix path cannot convert it and the finding is informational only.",
+          '- For a deterministic run, recreate it as a command automation (`openclaw automations add ... --command "<shell>"`).',
+        ]
+  ).join("\n");
 }
 
 /** Advisory for jobs whose scheduled authority cannot be recovered without a caller decision. */
@@ -72,7 +61,7 @@ export function formatScheduledToolPolicyAdvisory(params: {
   }
   lines.push(
     "- These jobs continue through restrictive sender-policy resolution; doctor will not infer authority from delivery or current configuration.",
-    "- Reauthorize with an exact explicit cap: `openclaw cron edit <id> --tools <tool,...>`.",
+    "- Recreate the job from a fresh authenticated creator turn, or reauthorize its complete tool cap from a trusted operator shell: `openclaw automations edit <id> --tools <tool,...>`.",
   );
   return lines.join("\n");
 }
@@ -89,19 +78,6 @@ export function formatLegacyGatewayExecAdvisory(names: string[]): string | null 
   ].join("\n");
 }
 
-/** Advisory for legacy default caps that were captured before configured MCP was final. */
-export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): string | null {
-  if (names.length === 0) {
-    return null;
-  }
-  return [
-    `${pluralize(names.length, "automation")} ${names.length === 1 ? "has" : "have"} an inherited default tool cap captured before final configured-MCP provenance was recorded${formatJobNameList(names)}.`,
-    "- The stored finite cap remains unchanged; doctor will not silently widen or rewrite it.",
-    "- If the job uses Codex configured MCP, reauthorize in place with an exact explicit list: `openclaw automations edit <id> --tools <tool,...>`.",
-  ].join("\n");
-}
-
-/** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const descriptions: Record<string, string> = {
     jobId: "still uses legacy `jobId`",
@@ -127,51 +103,12 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
     invalidSchedule: "has an invalid persisted schedule and will be removed",
     invalidPayload: "has an invalid persisted payload and will be removed",
   };
-  const lines: string[] = [];
-  for (const [key, description] of Object.entries(descriptions)) {
+  return Object.entries(descriptions).flatMap(([key, description]) => {
     const count = issues[key];
-    if (count) {
-      lines.push(`- ${pluralize(count, "job")} ${description}`);
-    }
-  }
-  return lines;
+    return count ? [`- ${pluralize(count, "job")} ${description}`] : [];
+  });
 }
 
-function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalStringifiedId(job.id) ??
-    normalizeOptionalStringifiedId(job.jobId) ??
-    resolveLegacyCronMigrationId(job)
-  );
-}
-
-/** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */
-export function mergeLegacyCronJobs(params: {
-  currentJobs: Array<Record<string, unknown>>;
-  legacyJobs: Array<Record<string, unknown>>;
-}): { jobs: Array<Record<string, unknown>>; importedCount: number } {
-  const merged = [...params.currentJobs];
-  const currentKeys = new Set(
-    params.currentJobs.map((job) => cronJobMigrationKey(job)).filter((key) => key !== undefined),
-  );
-  let importedCount = 0;
-
-  for (const legacyJob of params.legacyJobs) {
-    const key = cronJobMigrationKey(legacyJob);
-    if (key && currentKeys.has(key)) {
-      continue;
-    }
-    if (key) {
-      currentKeys.add(key);
-    }
-    merged.push(legacyJob);
-    importedCount += 1;
-  }
-
-  return { jobs: merged, importedCount };
-}
-
-/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };

@@ -9,6 +9,7 @@ import {
   formatMediaPlaceholderText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { jidToE164 } from "./targets-runtime.js";
 
 // Outbound callers only have a message ID; retain the sender and preview needed for quotes.
@@ -51,12 +52,7 @@ export function cacheInboundMessageMeta(
   if (!accountId || !messageId || !remoteJid) {
     return;
   }
-  if (cache.size >= MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(cache, MAX_ENTRIES - 1);
   cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
 }
 
@@ -65,7 +61,10 @@ export function lookupInboundMessageMeta(
   remoteJid: string,
   messageId: string,
 ): QuotedMeta | undefined {
-  const cacheKey = makeCacheKey(accountId, remoteJid, messageId);
+  return readCachedMessageMeta(makeCacheKey(accountId, remoteJid, messageId));
+}
+
+function readCachedMessageMeta(cacheKey: string): QuotedMeta | undefined {
   const entry = cache.get(cacheKey);
   if (!entry) {
     return undefined;
@@ -146,23 +145,16 @@ export function lookupInboundMessageMetaForTarget(
   const prefix = `${accountId}:`;
   const suffix = `:${messageId}`;
   let matched: QuotedMetaLookup | undefined;
-  for (const [cacheKey, entry] of cache.entries()) {
+  for (const cacheKey of cache.keys()) {
     if (!cacheKey.startsWith(prefix) || !cacheKey.endsWith(suffix)) {
       continue;
     }
-    if (Date.now() - entry.ts > CACHE_TTL_MS) {
-      cache.delete(cacheKey);
+    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
+    const meta = readCachedMessageMeta(cacheKey);
+    if (!meta) {
       continue;
     }
-    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
-    const candidate = {
-      remoteJid,
-      participant: entry.participant,
-      participantE164: entry.participantE164,
-      body: entry.body,
-      media: entry.media,
-      fromMe: entry.fromMe,
-    };
+    const candidate = { remoteJid, ...meta };
     if (!matchesQuotedConversationTarget(targetJid, candidate)) {
       continue;
     }

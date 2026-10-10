@@ -35,7 +35,6 @@ export async function resolveNodeBootstrapRuntimeChunks(packageRoot: string, fil
   const root = await openFsRoot(packageRoot, {
     hardlinks: "allow",
     symlinks: "reject",
-    nonBlockingRead: true,
   });
   const fileSet = new Set(files);
   const imports = new Map<string, string[]>();

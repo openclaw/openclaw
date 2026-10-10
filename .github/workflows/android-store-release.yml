@@ -1,7 +1,21 @@
 name: Android Store Release
 
+run-name: Android ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'Internal testing distribution' || 'Store release' }}
+
 on:
-  workflow_dispatch: {}
+  schedule:
+    - cron: "0 7 * * *"
+      timezone: America/Los_Angeles
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Stage a Google Play release or distribute an Internal testing build
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - internal
 
 permissions: {}
 
@@ -17,12 +31,16 @@ env:
 jobs:
   release:
     name: Prepare and upload Android release
-    if: github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    if: >-
+      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
+      ((github.event_name == 'schedule' && vars.ANDROID_INTERNAL_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.operation == 'release' || inputs.operation == 'internal')))
     permissions:
       contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    environment: android-store-release
+    environment: ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
     steps:
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +56,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Prepare trusted Linux Android tooling
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
         shell: bash
         run: |
           set -euo pipefail
@@ -81,13 +100,13 @@ jobs:
         uses: ./.github/actions/setup-android-toolchain
         with:
           cache-mode: off
-          install-screenshot-emulators: "true"
+          install-screenshot-emulators: ${{ (github.event_name == 'workflow_dispatch' && inputs.operation == 'release') && 'true' || 'false' }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          ruby-version: "3.4.11"
+          bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/android
 
@@ -95,9 +114,9 @@ jobs:
         working-directory: apps/android
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.22_ install --jobs 4 --retry 3
+          bundle _4.0.22_ check
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Create apps-signing read token
         id: apps-signing-token
@@ -127,18 +146,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANDROID_RELEASE_DESTINATION: ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'internal' || 'play-store' }}
           GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
+          FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA: ${{ secrets.FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA }}
+          FIREBASE_APP_ID: "1:627614795142:android:3daa833ca787ca67959807"
+          FIREBASE_TESTER_GROUPS: android-daily
           GOOGLE_PLAY_PACKAGE_NAME: ai.openclaw.app
           GOOGLE_PLAY_RELEASE_STATUS: completed
           GOOGLE_PLAY_TRACK: internal
           GOOGLE_PLAY_VALIDATE_ONLY: "0"
           SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
-          SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW: "true"
-          SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW: "false"
         run: |
           set -euo pipefail
           gh auth setup-git
           pnpm android:release:upload -- \
+            --destination "$ANDROID_RELEASE_DESTINATION" \
             --recovery-dir "$RUNNER_TEMP/android-release-recovery"
 
       - name: Remove materialized signing files
@@ -155,11 +177,12 @@ jobs:
           path: |
             ${{ runner.temp }}/android-release-recovery/release-notes.json
             ${{ runner.temp }}/android-release-recovery/android-plan.json
+            ${{ runner.temp }}/android-release-recovery/firebase-result.json
           if-no-files-found: error
           retention-days: 30
 
-      - name: Retain emulator startup diagnostics
-        if: always()
+      - name: Retain screenshot diagnostics
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -168,6 +191,8 @@ jobs:
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator.log
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator-args.txt
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/process-status.txt
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/ui-dumps/openclaw-*.xml
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/activity-start/openclaw-*.txt
           if-no-files-found: ignore
           retention-days: 30
 

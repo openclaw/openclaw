@@ -18,13 +18,13 @@ vi.mock("./auth-profiles.js", async () => ({
   isProfileInCooldown: (await import("./auth-profiles/usage-state.js")).isProfileInCooldown,
   resolveAuthProfileDisplayLabel: (await import("./auth-profiles/display.js"))
     .resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay: () => "/tmp/catalog-auth/auth-profiles.json",
 }));
 const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {
   const capturedStore = structuredClone(store);
   const labels = prepareModelCatalogAuthLabels({
     config: cfg,
     agentDir: "/tmp/catalog-auth",
+    authStorePath: "/tmp/catalog-auth/auth-profiles.json",
     env: {},
     store: capturedStore,
     providers: [provider],
@@ -35,22 +35,6 @@ const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig 
 
 describe("captured catalog auth labels", () => {
   beforeEach(() => envKey.mockReset().mockReturnValue(null));
-
-  it("labels an unresolved API key reference", () => {
-    const captured = capture("openai", {
-      version: 1,
-      profiles: {
-        default: {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-      },
-    });
-    expect(captured.labels.get("openai")?.all).toMatchObject({
-      profiles: { default: "default=ref" },
-    });
-  });
 
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();
@@ -89,6 +73,7 @@ describe("captured catalog auth labels", () => {
       config,
       store,
       agentDir: "/tmp/catalog-auth",
+      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
       env: {},
       providers: ["OPENAI", "amazon-bedrock", "anthropic", "openai"],
     });
@@ -125,6 +110,7 @@ describe("captured catalog auth labels", () => {
       config,
       store,
       agentDir: "/tmp/catalog-auth",
+      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
       env: {},
       providers: ["openai"],
     });
@@ -197,6 +183,7 @@ describe("captured catalog auth labels", () => {
     const labels = prepareModelCatalogAuthLabels({
       config,
       agentDir: "/tmp/catalog-auth",
+      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
       workspaceDir: "/tmp/workspace",
       env,
       store,

@@ -25,7 +25,9 @@ import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { inspectUpdateManagedServices } from "./update-command-database-context.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
+import type { StagedUpdateCandidateAdmission } from "./update-command-initialization-types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
+import type { UpdateAdmissionReportParams } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
@@ -41,19 +43,45 @@ type CandidateAdmissionParams = {
   presentation: ReturnType<typeof createUpdateProgress>;
 };
 
+export function createUpdateCandidateAdmissionReport(
+  { target, opts, prepared }: Pick<CandidateAdmissionParams, "target" | "opts" | "prepared">,
+  error: UpdatePreMutationError,
+): UpdateAdmissionReportParams {
+  return {
+    root: target.root,
+    mode: target.mode,
+    installKind: target.updateInstallKind,
+    opts,
+    controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+    reason: error.reason,
+    message: error.message,
+    nextAction: error.nextAction,
+    failureFacts: error.failureFacts,
+    stepResult: error.stepResult,
+    recoverySteps: error.recoverySteps,
+  };
+}
+
+function isUpdateAdmissionConfigUnchanged(
+  before: ConfigFileSnapshot,
+  after: ConfigFileSnapshot,
+): boolean {
+  return (
+    before.path === after.path &&
+    before.raw === after.raw &&
+    before.hash === after.hash &&
+    isDeepStrictEqual(before.includedPaths, after.includedPaths) &&
+    isDeepStrictEqual(before.includeProvenance, after.includeProvenance) &&
+    isDeepStrictEqual(before.sourceConfig, after.sourceConfig)
+  );
+}
+
 /** Admission observes one authored source; private staging cannot replace that source. */
 export function assertUpdateAdmissionConfigUnchanged(
   before: ConfigFileSnapshot,
   after: ConfigFileSnapshot,
 ): void {
-  if (
-    before.path !== after.path ||
-    before.raw !== after.raw ||
-    before.hash !== after.hash ||
-    !isDeepStrictEqual(before.includedPaths, after.includedPaths) ||
-    !isDeepStrictEqual(before.includeProvenance, after.includeProvenance) ||
-    !isDeepStrictEqual(before.sourceConfig, after.sourceConfig)
-  ) {
+  if (!isUpdateAdmissionConfigUnchanged(before, after)) {
     throw new UpdatePreMutationError(
       "invalid-config",
       "Config changed during candidate admission; rerun the update before activating.",
@@ -69,7 +97,7 @@ export async function inspectStagedUpdateCandidateAdmission(
     env?: NodeJS.ProcessEnv;
     assertCurrent?: () => void;
   },
-): Promise<UpdateCandidateAdmissionResult> {
+): Promise<StagedUpdateCandidateAdmission> {
   return await withOwnedManagedUpdateEnv(params.env, async () => {
     const { target, opts, prepared } = params;
     const installTarget = target.packageInstallTarget;
@@ -161,7 +189,7 @@ export async function inspectStagedUpdateCandidateAdmission(
       );
       target.targetVersion ??= candidateVersion;
     }
-    return result;
+    return { result, configSnapshot: before };
   });
 }
 
@@ -242,21 +270,44 @@ export function applyUpdateCandidateAdmission(params: {
 export async function withUpdateCandidateAdmission<T>(
   params: CandidateAdmissionParams & {
     stagedPackage?: StagedPackageInstallUpdate;
-    candidateAdmission?: UpdateCandidateAdmissionResult;
+    candidateAdmission?: Awaited<ReturnType<typeof inspectStagedUpdateCandidateAdmission>>;
   },
   execute: (stagedPackage?: StagedPackageInstallUpdate) => Promise<T>,
 ): Promise<T> {
   const { target, opts, prepared } = params;
   const run = opts.run!;
   try {
+    const inspect = async (stage: StagedPackageInstallUpdate): Promise<T> => {
+      const { result } = await inspectStagedUpdateCandidateAdmission({
+        ...params,
+        candidateRoot: stage.root,
+        runId: run.runId,
+        assertCurrent: () => run.executorFence?.assertCurrent(),
+      });
+      applyUpdateCandidateAdmission({ target, opts, result });
+      return await execute(stage);
+    };
     if (params.candidateAdmission) {
-      applyUpdateCandidateAdmission({ target, opts, result: params.candidateAdmission });
-      return await execute(params.stagedPackage);
+      if (
+        isUpdateAdmissionConfigUnchanged(
+          params.candidateAdmission.configSnapshot,
+          target.configSnapshot,
+        )
+      ) {
+        applyUpdateCandidateAdmission({ target, opts, result: params.candidateAdmission.result });
+        return await execute(params.stagedPackage);
+      }
+      run.candidateAdmissionChecks = undefined;
+      defaultRuntime.error(
+        "Warning: Configuration changed after candidate admission; rechecking the retained candidate.",
+      );
     }
+    const recheckStaged = params.candidateAdmission && params.stagedPackage;
     if (
-      target.packageAlreadyCurrent ||
-      !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
-      target.updateInstallKind !== "package"
+      !recheckStaged &&
+      (target.packageAlreadyCurrent ||
+        !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
+        target.updateInstallKind !== "package")
     ) {
       applyUpdateCandidateAdmission({
         target,
@@ -268,16 +319,6 @@ export async function withUpdateCandidateAdmission<T>(
       });
       return await execute(params.stagedPackage);
     }
-    const inspect = async (stage: StagedPackageInstallUpdate): Promise<T> => {
-      const result = await inspectStagedUpdateCandidateAdmission({
-        ...params,
-        candidateRoot: stage.root,
-        runId: run.runId,
-        assertCurrent: () => run.executorFence?.assertCurrent(),
-      });
-      applyUpdateCandidateAdmission({ target, opts, result });
-      return await execute(stage);
-    };
     if (params.stagedPackage) {
       return await inspect(params.stagedPackage);
     }
@@ -304,18 +345,6 @@ export async function withUpdateCandidateAdmission<T>(
     if (!(error instanceof UpdatePreMutationError)) {
       throw error;
     }
-    return await reportPreMutationUpdateResult({
-      root: target.root,
-      mode: target.mode,
-      installKind: target.updateInstallKind,
-      opts,
-      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-      reason: error.reason,
-      message: error.message,
-      nextAction: error.nextAction,
-      failureFacts: error.failureFacts,
-      stepResult: error.stepResult,
-      recoverySteps: error.recoverySteps,
-    });
+    return await reportPreMutationUpdateResult(createUpdateCandidateAdmissionReport(params, error));
   }
 }

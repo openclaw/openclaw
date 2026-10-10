@@ -7,27 +7,11 @@ import {
   assertSameCompactionPayload,
   assertSameReliabilityState,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type RestoreCrashPoint = "after-publish" | "before-publish";
-type RestoreExit =
-  ReliabilityReport["maintenanceProof"]["restoreInterruption"]["beforePublish"]["exit"];
-type RestoreCrashResult = {
-  existingTargetPreserved: boolean;
-  exit: RestoreExit;
-  payloadAfterRecovery: CompactionPayloadProof;
-  recoveryVerified: true;
-  repositoryVerified: true;
-  retryRestored: boolean;
-  stagingEntries: number;
-  stateAfterRecovery: ReliabilityStateProof;
-  targetVerifiedAfterCrash: boolean;
-  targetVisibleAfterCrash: boolean;
-};
-
 const RESTORE_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-restore-worker.ts", import.meta.url),
 );
@@ -51,28 +35,18 @@ function listRestoreStagingEntries(scratchPath: string): string[] {
     .filter((entry) => entry.startsWith(".sqlite-publish-") || entry.startsWith(".tmp-restore-"));
 }
 
-function listOuterRestoreStagingEntries(scratchPath: string): string[] {
-  return listRestoreStagingEntries(scratchPath).filter((entry) =>
-    entry.startsWith(".tmp-restore-"),
-  );
-}
-
-function hasPublicationStaging(scratchPath: string): boolean {
-  return listRestoreStagingEntries(scratchPath).some((entry) =>
-    entry.startsWith(".sqlite-publish-"),
-  );
-}
-
 function assertCrashPoint(params: {
   crashPoint: RestoreCrashPoint;
   scratchPath: string;
   targetPath: string;
 }): void {
-  const outerStagingEntries = listOuterRestoreStagingEntries(params.scratchPath);
+  const stagingEntries = listRestoreStagingEntries(params.scratchPath);
   const targetVisible = fs.existsSync(params.targetPath);
-  const publicationStagingVisible = hasPublicationStaging(params.scratchPath);
+  const publicationStagingVisible = stagingEntries.some((entry) =>
+    entry.startsWith(".sqlite-publish-"),
+  );
   const barrierValid =
-    outerStagingEntries.length > 0 &&
+    stagingEntries.some((entry) => entry.startsWith(".tmp-restore-")) &&
     (params.crashPoint === "before-publish"
       ? !targetVisible && publicationStagingVisible
       : targetVisible && !publicationStagingVisible);
@@ -99,19 +73,12 @@ async function assertRepositorySnapshotAvailable(params: {
   }
 }
 
-async function runCrashPoint(params: {
-  crashPoint: RestoreCrashPoint;
-  expectedPayload: CompactionPayloadProof;
-  expectedSnapshotBytes: number;
-  expectedState: ReliabilityStateProof;
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  repositoryPath: string;
-  scratchPath: string;
-  snapshotPath: string;
-  validationRootPath: string;
-  verifyPayload: (databasePath: string) => CompactionPayloadProof;
-  verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<RestoreCrashResult> {
+async function runCrashPoint(
+  params: Parameters<typeof runRestoreInterruptionProof>[0] & {
+    crashPoint: RestoreCrashPoint;
+    provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  },
+) {
   const targetPath = path.join(params.scratchPath, `${params.crashPoint}.sqlite`);
   const worker = startReliabilityCrashWorker(
     RESTORE_WORKER_PATH,
@@ -143,11 +110,7 @@ async function runCrashPoint(params: {
     if (!crashStagingEntries.some((entry) => entry.startsWith(".tmp-restore-"))) {
       throw new Error(`SQLite restore worker left no owned staging at ${params.crashPoint}.`);
     }
-    await assertRepositorySnapshotAvailable({
-      expectedSnapshotBytes: params.expectedSnapshotBytes,
-      provider: params.provider,
-      snapshotPath: params.snapshotPath,
-    });
+    await assertRepositorySnapshotAvailable(params);
 
     const targetVisibleAfterCrash = fs.existsSync(targetPath);
     let retryRestored = false;
@@ -199,11 +162,7 @@ async function runCrashPoint(params: {
       params.expectedPayload,
       `${params.crashPoint} restore`,
     );
-    await assertRepositorySnapshotAvailable({
-      expectedSnapshotBytes: params.expectedSnapshotBytes,
-      provider: params.provider,
-      snapshotPath: params.snapshotPath,
-    });
+    await assertRepositorySnapshotAvailable(params);
     for (const entry of crashStagingEntries) {
       if (!fs.existsSync(path.join(params.scratchPath, entry))) {
         throw new Error(`SQLite restore retry removed crash staging it did not own: ${entry}`);
@@ -241,7 +200,7 @@ export async function runRestoreInterruptionProof(params: {
   validationRootPath: string;
   verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<ReliabilityReport["maintenanceProof"]["restoreInterruption"]> {
+}) {
   if (params.expectedSnapshotBytes < MIN_STAGED_RESTORE_BYTES * 2) {
     throw new Error(
       `SQLite restore interruption snapshot is too small: ${params.expectedSnapshotBytes} bytes`,
@@ -252,11 +211,7 @@ export async function runRestoreInterruptionProof(params: {
     repositoryPath: params.repositoryPath,
     validationRootPath: params.validationRootPath,
   });
-  await assertRepositorySnapshotAvailable({
-    expectedSnapshotBytes: params.expectedSnapshotBytes,
-    provider,
-    snapshotPath: params.snapshotPath,
-  });
+  await assertRepositorySnapshotAvailable({ ...params, provider });
 
   const beforePublish = await runCrashPoint({
     ...params,
@@ -287,20 +242,8 @@ export async function runRestoreInterruptionProof(params: {
   }
 
   return {
-    afterPublish: {
-      ...afterPublish,
-      existingTargetPreserved: true,
-      retryRestored: false,
-      targetVerifiedAfterCrash: true,
-      targetVisibleAfterCrash: true,
-    },
-    beforePublish: {
-      ...beforePublish,
-      existingTargetPreserved: false,
-      retryRestored: true,
-      targetVerifiedAfterCrash: false,
-      targetVisibleAfterCrash: false,
-    },
+    afterPublish,
+    beforePublish,
     snapshotBytes: params.expectedSnapshotBytes,
   };
 }

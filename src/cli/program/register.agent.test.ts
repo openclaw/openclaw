@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentTurnCommand } from "./register.agent-turn.js";
@@ -9,11 +10,10 @@ const mocks = vi.hoisted(() => ({
   agentsAddCommandMock: vi.fn(),
   agentsTeamCreateCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
-  agentsBindCommandMock: vi.fn(),
+  agentsUpdateBindingsCommandMock: vi.fn(),
   agentsDeleteCommandMock: vi.fn(),
   agentsListCommandMock: vi.fn(),
   agentsSetIdentityCommandMock: vi.fn(),
-  agentsUnbindCommandMock: vi.fn(),
   requestExitAfterOneShotOutputMock: vi.fn(),
   setVerboseMock: vi.fn(),
   runtime: {
@@ -39,10 +39,10 @@ vi.mock("../../commands/agents.commands.team.js", () => ({
   agentsTeamCreateCommand: mocks.agentsTeamCreateCommandMock,
 }));
 
-vi.mock("../../commands/agents.commands.bind.js", () => ({
+vi.mock("../../commands/agents.commands.bind.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/agents.commands.bind.js")>()),
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
-  agentsBindCommand: mocks.agentsBindCommandMock,
-  agentsUnbindCommand: mocks.agentsUnbindCommandMock,
+  agentsUpdateBindingsCommand: mocks.agentsUpdateBindingsCommandMock,
 }));
 
 vi.mock("../../commands/agents.commands.delete.js", () => ({
@@ -152,12 +152,14 @@ describe("agent command registration", () => {
   it.each([
     {
       args: ["alpha"],
-      options: { name: "alpha", workspace: undefined, bind: [] },
+      options: { name: "alpha", bind: [] },
+      workspace: undefined,
       hasAutomationFlags: false,
     },
     {
       args: "editor --role writer --json".split(" "),
       options: { name: "editor", role: "writer", json: true, nonInteractive: false },
+      workspace: undefined,
       hasAutomationFlags: false,
     },
     {
@@ -166,21 +168,25 @@ describe("agent command registration", () => {
       ),
       options: {
         name: "beta",
-        workspace: "/tmp/ws",
         bind: ["telegram", "discord:acct"],
         nonInteractive: true,
         json: true,
       },
+      workspace: "/tmp/ws",
       hasAutomationFlags: true,
     },
-  ])("selects agent creation posture for $args", async ({ args, options, hasAutomationFlags }) => {
-    await runCli(["agents", "add", ...args]);
-    expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining(options),
-      runtime,
-      { hasAutomationFlags },
-    );
-  });
+  ])(
+    "selects agent creation posture for $args",
+    async ({ args, options, workspace, hasAutomationFlags }) => {
+      await runCli(["agents", "add", ...args]);
+      expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining(options),
+        runtime,
+        { hasAutomationFlags },
+      );
+      expect(mocks.agentsAddCommandMock.mock.calls[0]?.[0].workspace).toBe(workspace);
+    },
+  );
 
   it.each([
     ["", mocks.agentsListCommandMock, {}],
@@ -192,13 +198,15 @@ describe("agent command registration", () => {
     ["bindings --agent ops --json", mocks.agentsBindingsCommandMock, { agent: "ops", json: true }],
     [
       "bind --agent ops --bind matrix:ops --bind telegram --json",
-      mocks.agentsBindCommandMock,
+      mocks.agentsUpdateBindingsCommandMock,
       { agent: "ops", bind: ["matrix:ops", "telegram"], json: true },
+      "bind",
     ],
     [
       "unbind --agent ops --all --json",
-      mocks.agentsUnbindCommandMock,
+      mocks.agentsUpdateBindingsCommandMock,
       { agent: "ops", bind: [], all: true, json: true },
+      "unbind",
     ],
     [
       "delete worker-a --force --json",
@@ -228,10 +236,17 @@ describe("agent command registration", () => {
         json: true,
       },
     ],
-  ] as const)("dispatches agents %s", async (args, command, options) => {
-    await runCli(["agents", ...(args ? args.split(" ") : [])]);
-    expect(command).toHaveBeenCalledExactlyOnceWith(options, runtime);
-  });
+  ] as const)(
+    "dispatches agents %s",
+    async (args, command, options, operation?: "bind" | "unbind") => {
+      await runCli(["agents", ...(args ? args.split(" ") : [])]);
+      expect(command).toHaveBeenCalledExactlyOnceWith(
+        ...(operation ? [operation] : []),
+        options,
+        runtime,
+      );
+    },
+  );
 
   it("renders Gateway request failures without internal class names", async () => {
     const message =

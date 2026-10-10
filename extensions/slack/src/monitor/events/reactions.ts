@@ -5,12 +5,10 @@ import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normaliz
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { allowListMatches } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackReactionEvent } from "../types.js";
-import {
-  authorizeAndResolveSlackSystemEventContext,
-  resolveSlackListenerEventScope,
-} from "./system-event-context.js";
+import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
 function shouldEmitSlackReactionNotification(params: {
   ctx: SlackMonitorContext;
@@ -49,82 +47,73 @@ export function registerSlackReactionEvents(params: {
   const resolveUserName = (userId: string, eventScope?: SlackEventScope) =>
     eventScope ? ctx.resolveUserName(userId, eventScope) : ctx.resolveUserName(userId);
 
-  const handleReactionEvent = async (
-    event: SlackReactionEvent,
-    action: "added" | "removed",
-    eventScope: SlackEventScope | undefined,
-    eventId: string,
-  ) => {
-    try {
-      const runtimeContext = await params.ctx.readRuntimeContext();
-      const item = event.item;
-      if (!item || item.type !== "message") {
-        return;
-      }
-      if (runtimeContext.reactionMode === "off") {
-        return;
-      }
-      if (
-        runtimeContext.reactionMode === "own" &&
-        (!runtimeContext.botUserId || event.item_user !== runtimeContext.botUserId)
-      ) {
-        return;
-      }
-      trackEvent?.();
-
-      const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-        ctx: runtimeContext,
-        senderId: event.user,
-        channelId: item.channel,
-        eventKind: "reaction",
-        eventScope,
-      });
-      if (!ingressContext) {
-        return;
-      }
-
-      const actorInfoPromise: Promise<{ name?: string } | undefined> = event.user
-        ? resolveUserName(event.user, eventScope)
-        : Promise.resolve(undefined);
-      const authorInfoPromise: Promise<{ name?: string } | undefined> = event.item_user
-        ? resolveUserName(event.item_user, eventScope)
-        : Promise.resolve(undefined);
-      const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
-      if (
-        !shouldEmitSlackReactionNotification({
-          ctx: runtimeContext,
-          event,
-          eventScope,
-          actorName: actorInfo?.name,
-        })
-      ) {
-        return;
-      }
-      const actorLabel = actorInfo?.name ?? event.user;
-      const emojiLabel = event.reaction ?? "emoji";
-      const authorLabel = authorInfo?.name ?? event.item_user;
-      const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${ingressContext.channelLabel} msg ${item.ts}`;
-      const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-      enqueueRoutedSystemEvent(text, ingressContext.route, {
-        contextKey: `slack:reaction:${eventScope ? `${eventScope.teamId}:` : ""}${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}:${eventId}`,
-      });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack reaction handler failed: ${formatErrorMessage(err)}`));
-    }
-  };
-
   for (const action of ["added", "removed"] as const) {
     ctx.app.event(
       `reaction_${action}`,
       async (
         args: SlackEventMiddlewareArgs<"reaction_added" | "reaction_removed"> & AllMiddlewareArgs,
       ) => {
-        const { event, body, context, client } = args;
-        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        const { body, context, client } = args;
+        const event = args.event as SlackReactionEvent;
+        const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
         if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
-        await handleReactionEvent(event as SlackReactionEvent, action, eventScope, body.event_id);
+        const eventId = body.event_id;
+        try {
+          const runtimeContext = await params.ctx.readRuntimeContext();
+          const item = event.item;
+          if (!item || item.type !== "message") {
+            return;
+          }
+          if (runtimeContext.reactionMode === "off") {
+            return;
+          }
+          if (
+            runtimeContext.reactionMode === "own" &&
+            (!runtimeContext.botUserId || event.item_user !== runtimeContext.botUserId)
+          ) {
+            return;
+          }
+          trackEvent?.();
+
+          const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+            ctx: runtimeContext,
+            senderId: event.user,
+            channelId: item.channel,
+            eventKind: "reaction",
+            eventScope,
+          });
+          if (!ingressContext) {
+            return;
+          }
+
+          const [actorInfo, authorInfo] = await Promise.all(
+            [event.user, event.item_user].map((userId) =>
+              userId ? resolveUserName(userId, eventScope) : Promise.resolve(undefined),
+            ),
+          );
+          if (
+            !shouldEmitSlackReactionNotification({
+              ctx: runtimeContext,
+              event,
+              eventScope,
+              actorName: actorInfo?.name,
+            })
+          ) {
+            return;
+          }
+          const actorLabel = actorInfo?.name ?? event.user;
+          const emojiLabel = event.reaction ?? "emoji";
+          const authorLabel = authorInfo?.name ?? event.item_user;
+          const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${ingressContext.channelLabel} msg ${item.ts}`;
+          const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
+          enqueueRoutedSystemEvent(text, ingressContext.route, {
+            contextKey: `slack:reaction:${eventScope ? `${eventScope.teamId}:` : ""}${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}:${eventId}`,
+          });
+        } catch (err) {
+          ctx.runtime.error?.(danger(`slack reaction handler failed: ${formatErrorMessage(err)}`));
+        }
       },
     );
   }

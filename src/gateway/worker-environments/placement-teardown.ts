@@ -1,10 +1,16 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertRequiredWorkerMove,
+  RequiredWorkerProfileError,
+} from "../../config/required-worker-profile.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 
-type ReconcilingPlacement = Extract<WorkerSessionPlacementRecord, { state: "reconciling" }>;
 type PlacementTeardownStore = Pick<
   WorkerSessionPlacementStore,
   | "completePlacementMoveSourceToLocal"
@@ -13,37 +19,38 @@ type PlacementTeardownStore = Pick<
   | "transition"
 >;
 
-export function completeRecoveredWorkspaceTeardown(params: {
-  placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMove">;
+export async function completeRecoveredWorkspaceTeardown(params: {
+  placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMoveAsync">;
   placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
   turnClaim: WorkerSessionTurnClaim;
+  destination?: "reclaimed";
+  currentCheck?: PlacementTurnClaimCurrentCheck;
 }) {
-  const move = params.placements.getPlacementMove(params.placement.sessionId);
-  return move
-    ? completeMovedWorkspaceTeardown({
-        placements: params.placements,
-        turnClaim: params.turnClaim,
-        environmentId: params.placement.environmentId,
-        ownerEpoch: params.placement.activeOwnerEpoch,
-        operationId: move.operationId,
-      })
-    : completeReclaimedWorkspaceTeardown({
-        placements: params.placements,
-        turnClaim: params.turnClaim,
-        environmentId: params.placement.environmentId,
-        ownerEpoch: params.placement.activeOwnerEpoch,
-      });
+  const move = await params.placements.getPlacementMoveAsync(params.placement.sessionId);
+  return completeWorkerWorkspaceTeardown({
+    placements: params.placements,
+    turnClaim: params.turnClaim,
+    environmentId: params.placement.environmentId,
+    ownerEpoch: params.placement.activeOwnerEpoch,
+    move: params.destination === "reclaimed" ? undefined : move,
+    currentCheck: params.currentCheck,
+  });
 }
 
 /** Close the workspace-result fence, then advance the exact drained owner into reconciliation. */
-function completeDrainedWorkspaceTeardown(params: {
+export async function completeWorkerWorkspaceTeardown(params: {
   placements: PlacementTeardownStore;
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;
   ownerEpoch: number;
-  complete: (placement: ReconcilingPlacement) => WorkerSessionPlacementRecord;
-}): WorkerSessionPlacementRecord {
-  const drained = params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+  move?: Pick<WorkerPlacementMoveIntent, "operationId" | "target">;
+  currentCheck?: PlacementTurnClaimCurrentCheck;
+}): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>> {
+  const drained = await params.placements.completeWorkspaceResultAndReleaseTurn(
+    params.turnClaim,
+    undefined,
+    params.currentCheck,
+  );
   if (
     drained.state !== "draining" ||
     drained.environmentId !== params.environmentId ||
@@ -51,7 +58,7 @@ function completeDrainedWorkspaceTeardown(params: {
   ) {
     throw new Error(`Session ${params.turnClaim.sessionId} lost its drained placement owner`);
   }
-  const reconciling = params.placements.startReconcile({
+  const reconciling = await params.placements.startReconcile({
     sessionId: drained.sessionId,
     environmentId: params.environmentId,
     ownerEpoch: params.ownerEpoch,
@@ -60,46 +67,34 @@ function completeDrainedWorkspaceTeardown(params: {
   if (reconciling.state !== "reconciling") {
     throw new Error(`Session ${params.turnClaim.sessionId} did not enter reconciliation`);
   }
-  return params.complete(reconciling);
-}
-
-export function completeMovedWorkspaceTeardown(params: {
-  placements: PlacementTeardownStore;
-  turnClaim: WorkerSessionTurnClaim;
-  environmentId: string;
-  ownerEpoch: number;
-  operationId: string;
-}): Extract<WorkerSessionPlacementRecord, { state: "local" }> {
-  const completed = completeDrainedWorkspaceTeardown({
-    ...params,
-    complete: (reconciling) =>
-      params.placements.completePlacementMoveSourceToLocal({
-        operationId: params.operationId,
-        sessionId: reconciling.sessionId,
-        expectedGeneration: reconciling.generation,
-      }),
-  });
-  if (completed.state !== "local") {
-    throw new Error(`Session ${params.turnClaim.sessionId} move did not finish local`);
+  const move = params.move;
+  if (move) {
+    try {
+      const completed = await params.placements.completePlacementMoveSourceToLocal(
+        {
+          operationId: move.operationId,
+          sessionId: reconciling.sessionId,
+          expectedGeneration: reconciling.generation,
+        },
+        { assertCurrent: () => assertRequiredWorkerMove(getRuntimeConfig(), move.target) },
+      );
+      if (completed.state !== "local") {
+        throw new Error(`Session ${params.turnClaim.sessionId} move did not finish local`);
+      }
+      return completed;
+    } catch (error) {
+      if (!(error instanceof RequiredWorkerProfileError)) {
+        throw error;
+      }
+      // Destruction is committed, but destination admission was refused and rolled back.
+      // The existing reclaimed transition settles only this source and retires its Move.
+    }
   }
-  return completed;
-}
-
-export function completeReclaimedWorkspaceTeardown(params: {
-  placements: PlacementTeardownStore;
-  turnClaim: WorkerSessionTurnClaim;
-  environmentId: string;
-  ownerEpoch: number;
-}): Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }> {
-  const completed = completeDrainedWorkspaceTeardown({
-    ...params,
-    complete: (reconciling) =>
-      params.placements.transition({
-        sessionId: reconciling.sessionId,
-        from: "reconciling",
-        to: "reclaimed",
-        expectedGeneration: reconciling.generation,
-      }),
+  const completed = await params.placements.transition({
+    sessionId: reconciling.sessionId,
+    from: "reconciling",
+    to: "reclaimed",
+    expectedGeneration: reconciling.generation,
   });
   if (completed.state !== "reclaimed") {
     throw new Error(`Session ${params.turnClaim.sessionId} teardown did not finish reclaimed`);

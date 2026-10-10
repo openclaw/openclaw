@@ -9,12 +9,15 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "../../src/plugin-sdk/plugin-state-test-runtime.js";
-import { createTestPluginApi } from "../../src/plugin-sdk/plugin-test-api.js";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "../../src/plugin-sdk/plugin-test-api.js";
 import * as processRuntime from "../../src/plugin-sdk/process-runtime.js";
 import { createPluginRuntimeMock } from "../../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import type { OpenClawPluginService, WorkerProvider } from "../../src/plugins/types.js";
+import type { OpenClawPluginApi, WorkerProvider } from "../../src/plugins/types.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../../src/state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../../src/state/openclaw-agent-db-lifecycle.js";
 
 describe("Crabbox allocation through Gateway ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -146,7 +149,8 @@ describe("Crabbox allocation through Gateway ownership", () => {
           return result();
         });
       const providers: WorkerProvider[] = [];
-      const services: OpenClawPluginService[] = [];
+      const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+      const scheduler = createTestPluginServiceScheduler();
       const api = createTestPluginApi({
         id: "crabbox",
         runtime,
@@ -238,13 +242,19 @@ describe("Crabbox allocation through Gateway ownership", () => {
         }
       } finally {
         released.resolve();
-        await service.stop();
-        for (const owner of services) {
-          await owner.stop?.({
-            config: support.testState.config,
-            stateDir: support.testState.root,
-            logger: api.logger,
-          });
+        scheduler.beginClose();
+        try {
+          await service.stop();
+          for (const owner of services) {
+            await owner.stop?.({
+              config: support.testState.config,
+              stateDir: support.testState.root,
+              logger: api.logger,
+              scheduler,
+            });
+          }
+        } finally {
+          await scheduler.stop();
         }
       }
     },

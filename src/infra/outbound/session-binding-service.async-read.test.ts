@@ -26,24 +26,18 @@ describe("awaited binding read ownership", () => {
   it.each([false, true])(
     "keeps admission inspection free of resolver mutations (async inspector=%s)",
     async (asyncInspector) => {
-      let resolutionEffects = 0;
+      const resolve = vi.fn(() => record);
       registerSessionBindingAdapter({
         channel: "external",
         accountId: "default",
         listBySession: () => [],
         inspectByConversation: () => record,
         ...(asyncInspector ? { inspectByConversationAsync: async () => record } : {}),
-        resolveByConversation: () => {
-          resolutionEffects += 1;
-          return record;
-        },
-        resolveByConversationAsync: async () => {
-          resolutionEffects += 1;
-          return record;
-        },
+        resolveByConversation: resolve,
+        resolveByConversationAsync: async () => resolve(),
       });
       expect(await readSessionBindingSelectionCurrent([record.conversation])).toEqual([record]);
-      expect(resolutionEffects).toBe(0);
+      expect(resolve).not.toHaveBeenCalled();
     },
   );
 

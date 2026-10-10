@@ -36,9 +36,6 @@ export function shouldUseMainOwnerForLocalOAuthCredential(params: {
   if (!isSafeToAdoptMainStoreOAuthIdentity(params.local, params.main)) {
     return false;
   }
-  if (isDeepStrictEqual(params.local, params.main)) {
-    return true;
-  }
   const mainExpires = asDateTimestampMs(params.main.expires);
   if (mainExpires === undefined) {
     return false;

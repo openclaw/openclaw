@@ -42,6 +42,11 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+The config-repair module can export `historicalWebhookListener` to describe a
+retired default endpoint. The existing compatibility normalizer reports eligible
+accounts; the host owns the one-shot pin and completion write.
+See [webhook migration contracts](/plugins/sdk-overview/infrastructure#webhook-body-rejection).
+
 When Doctor renames saved credentials, it updates exact `authProfileId` and
 `defaultAuthProfileId` references inside plugin config and channel config. This
 preserves the shipped `authProfileId` migration and also covers defaults such as
@@ -66,7 +71,12 @@ plan its owner and receipt without loading plugin code:
 
 The array must match the migration IDs, order, `doctorOnly` flags, and phases
 exported by the doctor-contract module. The older value `true` still declares
-the dynamic module. Installed external plugin manifests remain outside the
+the dynamic module. During an in-process package update, Doctor loads the replacement
+package's callbacks in its new inventory; earlier inventories retain their original
+callbacks. A changed action list between package versions is allowed, but each
+version's manifest and module must agree.
+
+Installed external plugin manifests remain outside the
 copied-state and candidate content identity, including when they use the
 descriptor array. Candidate validation must bind those artifacts separately.
 Until then, Doctor records an explicit planning refusal instead of treating an
@@ -169,6 +179,7 @@ execute plugin code or require the Custom plugin UI Labs setting.
       "name": "Xenovessel",
       "description": "Near-black indigo, acid lime, and alien cyan with monospace text.",
       "source": "themes/xenovessel.json",
+      "icons": { "rocket": "assets/theme-art/rocket.svg" },
       "hats": { "beret": "assets/theme-art/beret.svg" },
       "critters": {
         "ferris": {
@@ -196,11 +207,11 @@ published package's `files` list. Absolute paths, traversal, and symlinks escapi
 the root are rejected. Each source file can contain at most 16 KiB including
 formatting whitespace. Its normalized definition must fit in 4096 UTF-8 bytes.
 
-Each theme may declare `hats`, a map of artwork IDs to relative `.svg` paths,
+Each theme may declare `icons` and `hats`, maps of artwork IDs to relative `.svg` paths,
 and `critters`, a map of artwork IDs to objects containing `source` and optional
 `title` and `crossMs`. Each map allows at most 8 entries. Artwork IDs must match
 `^[a-z0-9][a-z0-9_-]{0,31}$`; duplicates and collisions with the corresponding
-built-in hat or critter catalog are manifest errors. `title` is untranslated
+built-in brand icon (`claw`, `mark`), hat, or critter catalog are manifest errors. `title` is untranslated
 hover text of at most 60 printable characters. `crossMs` is an integer from
 5000 through 90000, defaulting to 12000 milliseconds.
 
@@ -235,12 +246,16 @@ diagnostic; other plugin capabilities remain available.
 
 The source JSON also accepts optional presentation fields. They belong in the definition referenced by `themes[].source`, alongside `name`, `description`, and the palettes:
 
-- `mascot`: `"claw"` (the default) or `"none"`; `"none"` uses neutral branding and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled, and the toggle stays unchanged.
+- `mascot`: `"claw"` (the default) or `"none"`; `"none"` defaults to neutral branding and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled, and the toggle stays unchanged.
+- `brandName`: a trimmed display name of 1–80 printable characters; defaults to “OpenClaw.”
+- `brandIcon`: `"claw"`, `"mark"`, or an ID from this theme's declared `icons` map. Omission follows `mascot`: claw for `"claw"`, mark for `"none"`. An ID declared only as a hat or critter is not a brand icon.
+- `workingIndicator`: `"claw"`, `"dots"`, `"brand"` (the selected brand icon), or `"none"`. Omission uses claw for the claw mascot and dots otherwise; it does not change long-wait phrases.
+- `lobsterdex` and `communityLinks`: booleans controlling their respective navigation entries; each defaults to `true` independently of the mascot. These are presentation choices, not deletion or authorization controls.
 - `workingPhrases`: up to 24 literal, untranslated long-wait status phrases. Each phrase is trimmed, must contain 1–24 characters, and cannot contain control characters or duplicate another trimmed phrase. Omit it to keep the default vocabulary; use `[]` to hide long-wait phrases.
 - `critters`: up to 8 unique IDs from the built-in `"penguin"` and `"fedora"` catalog or this theme's declared `critters` map, adding occasional visitors to ordinary composer ledge traffic while Lobster visits is enabled. Omit it or use `[]` for no theme-supplied critters. Unknown IDs and duplicates are rejected.
 - `avatarHat`: `"fedora"`, `"crown"`, `"santa"`, `"party"`, `"pumpkin"`, or an ID from this theme's declared `hats` map adds an occasional decorative hat to agent avatars; omission adds no hat.
 
-These fields count toward the same 4096-byte normalized definition limit and are returned with the catalog descriptor. The [theme definition example](/tools/theme#create-and-apply-a-personal-theme) includes all four fields.
+These fields count toward the same 4096-byte normalized definition limit and are returned with the catalog descriptor. The [theme definition example](/tools/theme#create-and-apply-a-personal-theme) shows these presentation fields.
 Definitions carry IDs only, never SVG markup or URLs. Personal themes imported
 through the agent's `theme` tool remain limited to built-in artwork IDs.
 
@@ -547,10 +562,9 @@ If a plugin fails to load, invoking its declared `runtime-slash` command in chat
 Use `qaRunners` when a plugin contributes one or more transport runners beneath
 the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
 runtime still owns actual CLI registration through a lightweight
-`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`. For
-plugins using the shipped `runtime-api.ts` contract, that legacy surface remains
-accepted through 2026-10-01 while authors migrate. An
-optional `adapterFactory` exposes the transport to shared QA scenarios without
+`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`.
+The pre-July 2026 `runtime-api.ts` fallback is retired; move runner registrations
+to `qa-runner-api.ts`. An optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 
 Module-backed flow scenarios are an adapter-owned execution form. Set

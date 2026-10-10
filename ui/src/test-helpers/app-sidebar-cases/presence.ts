@@ -10,6 +10,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
@@ -31,6 +32,14 @@ describe("AppSidebar viewer presence", () => {
       "main",
       owners.map((owner) => `agent:main:${owner.id}`),
     );
+    const observeList = sessions.sessions.observeList;
+    let activityReady = Promise.resolve();
+    vi.spyOn(sessions.sessions, "observeList").mockImplementation((query, listener) => {
+      const observation = observeList(query, listener);
+      return query.source === "activity"
+        ? { ...observation, refresh: () => (activityReady = observation.refresh()) }
+        : observation;
+    });
     const result = sessions.sessions.state.result!;
     result.owners = owners;
     result.sessions.forEach((row, index) => {
@@ -123,6 +132,8 @@ describe("AppSidebar viewer presence", () => {
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe(ownerName),
     );
+    await activityReady;
+    await settleLitElement(sidebar);
     const offlineCard = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
     expect(
       offlineCard.querySelector(".person-activity-card__status--offline")?.textContent?.trim(),
@@ -279,19 +290,12 @@ describe("AppSidebar viewer presence", () => {
     const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", ["agent:main:work"]);
     const result = sessions.sessions.state.result!;
-    sessions.publishList({
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) => ({
-          ...row,
-          createdActor: {
-            type: "human" as const,
-            id: "alice",
-            identity: { type: "profile" as const, id: "alice" },
-          },
-        })),
-      },
-    });
+    result.sessions[0]!.createdActor = {
+      type: "human",
+      id: "alice",
+      identity: { type: "profile", id: "alice" },
+    };
+    sessions.publishList({ result });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.connected = true;
     const now = Date.now();
@@ -337,17 +341,17 @@ describe("AppSidebar viewer presence", () => {
     expect([...card.querySelectorAll("h3")].map((heading) => heading.textContent)).toEqual([
       "Recent sessions",
     ]);
-    expect(document.activeElement?.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
-    expect(document.activeElement?.closest("section")?.querySelector("h3")?.textContent).toBe(
-      "Recent sessions",
-    );
-    sessions.publishList({ result: { ...result, sessions: [], count: 0 } });
-    await sidebar.updateComplete;
+    // The initially empty recent selection cannot admit a new link mid-open,
+    // even when it leaves Viewing now. Reopening takes a fresh selection.
+    expect(card.querySelector(".person-activity-card__session")).toBeNull();
     expect(document.activeElement).toBe(button);
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
-    expect(document.activeElement).toBe(button);
-    expect(button.getAttribute("aria-expanded")).toBe("false");
+    button.blur();
+    button.focus();
+    await settleLitElement(sidebar);
+    const recentLink = document.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
+    expect(recentLink.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
+    expect(recentLink.closest("section")?.querySelector("h3")?.textContent).toBe("Recent sessions");
   });
 
   it("expires activity when the deadline passes during rendering", async () => {
@@ -526,32 +530,6 @@ describe("AppSidebar viewer presence", () => {
     );
     expect(facepile?.querySelectorAll("[data-viewer-id]")).toHaveLength(2);
     expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
-  });
-
-  it("renders the self user's avatar route in the footer identity chip", async () => {
-    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    sidebar.connected = true;
-
-    gatewayHarness.publish({
-      selfUser: {
-        id: "00-self",
-        email: "test@example.com",
-        name: "Self User",
-        avatarUrl: "/api/users/00-self/avatar?v=7",
-      },
-    });
-
-    await vi.waitFor(() => {
-      const avatar = sidebar.querySelector<HTMLImageElement>(
-        ".sidebar-identity-card openclaw-viewer-avatar img",
-      );
-      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
-    });
   });
 
   it("groups identified viewers for session rows and keeps the footer identity-only", async () => {

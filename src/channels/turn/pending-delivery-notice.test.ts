@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 
 const PENDING_DELIVERY_NOTICE =
@@ -27,7 +26,7 @@ vi.mock("../../infra/outbound/delivery-queue-storage.js", async (importOriginal)
 });
 
 describe("pending delivery notice", () => {
-  let tmpDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-pending-notice-");
   let storePath: string;
   const sessionKey = "agent:main:telegram:direct:chat-1";
 
@@ -36,8 +35,7 @@ describe("pending delivery notice", () => {
     sendRecoveryNotice.mockResolvedValue({ suppressed: false });
     findDeliveryIntentOwner.mockReturnValue(null);
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pending-notice-"));
-    storePath = path.join(tmpDir, "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -58,10 +56,6 @@ describe("pending delivery notice", () => {
         },
       },
     );
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("retains acknowledgment after the stable notice is recorded", async () => {

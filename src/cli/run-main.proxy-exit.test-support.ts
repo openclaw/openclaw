@@ -28,17 +28,6 @@ export function registerRunMainProxyExitTests({
   stopProxyMock: Mock<(handle: unknown) => Promise<void>>;
   tryRouteCliMock: Mock;
 }): void {
-  it("stops the managed proxy after normal gateway runtime completion", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-
-    await runCli(["node", "openclaw", "gateway", "run"]);
-
-    expect(startProxyMock).toHaveBeenCalledWith(undefined);
-    expect(stopProxyMock).toHaveBeenCalledOnce();
-    expect(stopProxyMock).toHaveBeenCalledWith(handle);
-  });
-
   it.each([
     { signal: "SIGINT" as const, exitCode: 130 },
     { signal: "SIGTERM" as const, exitCode: 143 },

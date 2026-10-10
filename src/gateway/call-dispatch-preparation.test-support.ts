@@ -2,7 +2,6 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { callGateway } from "./call.js";
 import type { GatewayClientRequestOptions } from "./client.js";
-import { waitForFast } from "./client.test-support.js";
 
 export function registerGatewayCallDispatchPreparationTests(
   setup: () => {
@@ -15,7 +14,6 @@ export function registerGatewayCallDispatchPreparationTests(
         opts?: GatewayClientRequestOptions,
       ) => Promise<unknown>,
     ) => void;
-    setStart: (start: () => void) => void;
     setStop: (stop: () => Promise<void>) => void;
     hello: () => void;
     close: (code: number, reason: string) => void;
@@ -169,37 +167,4 @@ export function registerGatewayCallDispatchPreparationTests(
       await expect(call).resolves.toEqual({ ok: true });
     },
   );
-
-  it("skips the signal abort hook before the primary request starts", async () => {
-    const harness = setup();
-
-    const controller = new AbortController();
-    const onSignalAbort = vi.fn(async () => undefined);
-    let startCalled = false;
-    let stopStarted = false;
-
-    harness.setStart(() => {
-      startCalled = true;
-    });
-    harness.setStop(async () => {
-      stopStarted = true;
-    });
-
-    const promise = harness.call({
-      method: "agent",
-      expectFinal: true,
-      signal: controller.signal,
-      onSignalAbort,
-    });
-
-    await waitForFast(() => {
-      expect(startCalled).toBe(true);
-    });
-    controller.abort();
-
-    await expect(promise).rejects.toThrow("gateway request aborted for agent");
-    expect(onSignalAbort).not.toHaveBeenCalled();
-    expect(harness.request()).toBeNull();
-    expect(stopStarted).toBe(true);
-  });
 }

@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startTunnel } from "./tunnel.js";
 
 function isProcessAlive(pid: number): boolean {
@@ -13,27 +21,38 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
 async function readPid(pidPath: string): Promise<number> {
-  let pid = Number.NaN;
-  await expect
-    .poll(
-      async () => {
-        try {
-          pid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
-          return Number.isInteger(pid) && pid > 0;
-        } catch {
-          return false;
-        }
-      },
-      { timeout: 2_000, interval: 20 },
-    )
-    .toBe(true);
+  const pid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
+  expect(Number.isInteger(pid) && pid > 0).toBe(true);
   return pid;
 }
 
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+// Ngrok stop can finish its bounded close wait before the OS has reaped the process.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<boolean> {
   try {
-    await expect.poll(() => isProcessAlive(pid), { timeout: timeoutMs, interval: 20 }).toBe(false);
+    for (;;) {
+      signal.throwIfAborted();
+      if (!isProcessAlive(pid)) {
+        return true;
+      }
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`ngrok process ${pid} did not exit`, { cause });
+  }
+}
+
+async function waitForRescueProcessExit(pid: number): Promise<boolean> {
+  try {
+    await expect.poll(() => isProcessAlive(pid), { timeout: 1_000, interval: 20 }).toBe(false);
     return true;
   } catch {
     return false;
@@ -51,16 +70,20 @@ async function withNgrok(
       evidencePath: path.join(tempDir, "ngrok-auth-evidence.json"),
     };
     await fs.writeFile(
-      path.join(tempDir, "ngrok"),
+      path.join(tempDir, "ngrok.mjs"),
       [
         "#!/usr/bin/env node",
-        'const fs = require("node:fs");',
-        ...script,
+        'import fs from "node:fs";',
+        fixtureReceiptClientSource(receipts.endpoint),
+        // The PID record precedes the ready stdout; the receipt also follows signal setup.
         "fs.writeFileSync(process.env.OPENCLAW_NGROK_PID_FILE, String(process.pid));",
+        ...script,
+        'sendReceipt(process.env.OPENCLAW_NGROK_PID_FILE, "ready");',
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       { mode: 0o755 },
     );
+    await fs.symlink("ngrok.mjs", path.join(tempDir, "ngrok"));
     await withEnvAsync(
       {
         PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -75,7 +98,7 @@ async function withNgrok(
           const pid = Number.parseInt(await fs.readFile(paths.pidPath, "utf8").catch(() => ""), 10);
           if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
             process.kill(pid, "SIGKILL");
-            await waitForProcessExit(pid, 1_000);
+            await waitForRescueProcessExit(pid);
           }
         }
       },
@@ -106,12 +129,11 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
           throw new Error("Expected ngrok tunnel to start");
         }
         try {
-          await expect
-            .poll(async () => JSON.parse(await fs.readFile(evidencePath, "utf8")), {
-              timeout: 2_000,
-              interval: 20,
-            })
-            .toEqual({ argvContainsToken: false, envHasToken: true });
+          // The fixture writes auth evidence before the stdout that resolves startup.
+          expect(JSON.parse(await fs.readFile(evidencePath, "utf8"))).toEqual({
+            argvContainsToken: false,
+            envHasToken: true,
+          });
         } finally {
           await tunnel.stop();
         }
@@ -119,7 +141,7 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
     );
   });
 
-  it("force-kills ngrok when it ignores graceful shutdown", async () => {
+  it("force-kills ngrok when it ignores graceful shutdown", async ({ signal }) => {
     await withNgrok(['process.on("SIGTERM", () => {});', announceTunnel], async ({ pidPath }) => {
       const tunnel = await startNgrok();
       if (!tunnel) {
@@ -127,11 +149,11 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
       }
       const childPid = await readPid(pidPath);
       await tunnel.stop();
-      expect(await waitForProcessExit(childPid, 1_000)).toBe(true);
+      expect(await waitForProcessExit(childPid, signal)).toBe(true);
     });
   });
 
-  it("force-kills ngrok before rejecting a startup timeout", async () => {
+  it("force-kills ngrok before rejecting a startup timeout", async ({ signal }) => {
     await withNgrok(
       [
         'process.on("SIGTERM", () => fs.writeFileSync(process.env.OPENCLAW_NGROK_SIGNAL_FILE, "SIGTERM"));',
@@ -155,6 +177,15 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
         } finally {
           timeoutSpy.mockRestore();
         }
+        await withinTest(
+          // This fixture emits no ready stdout; only the test triggers startup settlement.
+          awaitGateBeforeSettlement(
+            receipts.waitFor(pidPath, "ready"),
+            result,
+            "ngrok settled before publishing its PID",
+          ),
+          signal,
+        );
         const childPid = await readPid(pidPath);
 
         expect(timeoutCalls).toEqual([[expect.any(Function), 30_000]]);
@@ -167,19 +198,9 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
         clearTimeout(startupTimer);
         callback();
         await expect(result).rejects.toThrow("ngrok startup timed out (30s)");
-        await expect
-          .poll(
-            async () => {
-              try {
-                return await fs.readFile(signalPath, "utf8");
-              } catch {
-                return "";
-              }
-            },
-            { timeout: 1_000, interval: 20 },
-          )
-          .toBe("SIGTERM");
-        expect(await waitForProcessExit(childPid, 1_000)).toBe(true);
+        // Timeout rejection follows the termination owner, including its SIGTERM handler.
+        expect(await fs.readFile(signalPath, "utf8")).toBe("SIGTERM");
+        expect(await waitForProcessExit(childPid, signal)).toBe(true);
       },
     );
   }, 40_000);

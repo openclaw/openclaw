@@ -65,7 +65,7 @@ async function listSessions(params: {
 
 async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    agents: { entries: { main: {}, work: {} } },
   };
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey: "agent:main:active" },
@@ -397,10 +397,10 @@ describe("sessions.list catalog scoping", () => {
       expect(mainOwner.loadFullModelCatalog).not.toHaveBeenCalled();
 
       const workAgentDir = `${resolveAgentDir(config, "work")}-replacement`;
-      config.agents!.list = [
-        { id: "main", default: true },
-        { id: "work", agentDir: workAgentDir },
-      ];
+      config.agents!.entries = {
+        main: {},
+        work: { agentDir: workAgentDir },
+      };
       owners.set("work", {
         ...preparedOwner({ config, agentId: "work", entries, pluginRegistry: mainRegistry }),
         agentDir: workAgentDir,
@@ -415,10 +415,10 @@ describe("sessions.list catalog scoping", () => {
         ...config,
         agents: {
           ...config.agents,
-          list: [
-            { id: "main", default: true },
-            { id: "work", agentDir: `${workAgentDir}-next` },
-          ],
+          entries: {
+            main: {},
+            work: { agentDir: `${workAgentDir}-next` },
+          },
         },
       };
       currentConfig = nextConfig;

@@ -25,6 +25,10 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { mergeSlackAccountConfig } from "./accounts.js";
 import {
+  BLOCKS_FINAL_PRESENTATION,
+  BLOCKS_FINAL_TEXT,
+  SHORT_FINAL_TEXT,
+  assertSlackSteeringTransportTrace,
   buildSlackDeliveryProofVerdict,
   collectSlackWireTexts,
   createSlackTsNormalizer,
@@ -192,7 +196,6 @@ type SlackTraceScenarioName =
   | "short-final-native-rejection"
   | "final-blocks-and-text"
   | "cancel-mid-stream"
-  | "preview-edit-fallback"
   | "progress-compact-commentary"
   | "progress-session-card"
   | "progress-native-unified"
@@ -210,20 +213,6 @@ const NATIVE_PROGRESS_NARRATION =
   "I’m checking the native Slack stream before applying the focused patch.";
 const NATIVE_PROGRESS_NARRATION_UPDATED = `${NATIVE_PROGRESS_NARRATION} I’m applying it now.`;
 
-// Long enough that the second stream append pushes the SDK buffer past
-// buffer_size (256), forcing the first visible flush via chat.startStream.
-const NATIVE_FINAL_TEXT =
-  "Deploy status: build is green. Canary rollout reached 50 percent with the error " +
-  "budget intact, latency holding steady at the p95 target, and no alerts firing " +
-  "across the fleet. Rolling out to production now and watching the dashboards for " +
-  "the next fifteen minutes before closing out the change.";
-
-// Below the SDK's buffer threshold: final delivery must explicitly flush it.
-const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
-
-const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
-const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
-const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
 const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
 const EXEC_FAILED_PROSE = "The directory is missing.";
 const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
@@ -231,37 +220,12 @@ const COMPACT_COMMENTARY_TEXT_UPDATED =
   "Checking the current Slack behavior and preparing the focused fix.";
 const COMPACT_FINAL_TEXT = "Compact Slack progress is ready.";
 
-const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
-// Portable presentation actions; slack renders them as Block Kit and must
-// synthesize accessible fallback text because blocks hide top-level text.
-const BLOCKS_FINAL_PRESENTATION = {
-  blocks: [
-    {
-      type: "buttons",
-      buttons: [
-        { label: "Approve release", action: { type: "callback", value: "approve-release" } },
-        { label: "Release notes", url: "https://docs.openclaw.ai/release" },
-      ],
-    },
-  ],
-};
-
 // Slack-specific scenario scripts; the runner only consumes `steps` and the
 // name (outside the shared scenario library) keys the golden filename.
-const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTraceStep[]> = {
-  "streaming-happy-native": [
-    { kind: "reply-start" },
-    // Native streaming has no partial preview (onPartialReply is undefined);
-    // the partial is recorded as IN-only script context.
-    { kind: "partial", text: "Deploy status:" },
-    { kind: "advance", ms: 300 },
-    // Default tool progress is a logical reply and must reach Slack before
-    // its delivery callback completes, even when the text is short.
-    { kind: "tool-progress", name: "deploy_checks", phase: "start" },
-    { kind: "advance", ms: 300 },
-    { kind: "final", text: NATIVE_FINAL_TEXT },
-    { kind: "idle" },
-  ],
+const slackTraceScenarios: Record<
+  Exclude<SlackTraceScenarioName, "streaming-happy-native">,
+  readonly DeliveryTraceStep[]
+> = {
   "short-final-native-rejection": [
     { kind: "reply-start" },
     { kind: "partial", text: "All checks passed." },
@@ -283,18 +247,6 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     // before the run is aborted.
     { kind: "advance", ms: 1100 },
     { kind: "cancel" },
-    { kind: "idle" },
-  ],
-  // Edit-preview tier: native transport ineligible → draft post + throttled
-  // chat.update, and the final promotes the draft in place. Custom identity uses
-  // a disposable app-authored draft plus a separate customized final instead.
-  "preview-edit-fallback": [
-    { kind: "reply-start" },
-    { kind: "partial", text: PREVIEW_PARTIAL_ONE },
-    { kind: "advance", ms: 300 },
-    { kind: "partial", text: PREVIEW_PARTIAL_TWO },
-    { kind: "advance", ms: 1100 },
-    { kind: "final", text: PREVIEW_FINAL_TEXT },
     { kind: "idle" },
   ],
   "progress-compact-commentary": [
@@ -565,12 +517,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     channelConfig: null,
     replyTarget: `channel:${CHANNEL_ID}`,
     ctxPayload: { SessionKey: "slack:channel:c0trace", ChatType: "channel" },
-    turn: { storePath: "/unused/slack-trace-sessions.json", record: {} },
+    turn: { record: {} },
     replyToMode: "all",
-    requireMention: true,
     isDirectMessage: false,
     isRoomish: true,
-    preview: "",
     ackReactionValue: "eyes",
     ackReactionPromise: null,
   };
@@ -726,20 +676,8 @@ async function setupSlackTrace(
 describe("slack delivery trace goldens", () => {
   it.each([
     {
-      name: "unset",
-      streaming: undefined,
-      typingReaction: undefined,
-      emoji: "hourglass_flowing_sand",
-    },
-    {
       name: "explicit progress mode",
       streaming: { mode: "progress" as const },
-      typingReaction: undefined,
-      emoji: "hourglass_flowing_sand",
-    },
-    {
-      name: "empty progress settings",
-      streaming: { progress: {} },
       typingReaction: undefined,
       emoji: "hourglass_flowing_sand",
     },
@@ -750,12 +688,13 @@ describe("slack delivery trace goldens", () => {
       emoji: "hourglass_flowing_sand",
     },
     {
-      name: "configured reaction",
-      streaming: undefined,
-      typingReaction: "hourglass",
-      emoji: "hourglass",
+      name: "empty card with hidden tool activity",
+      streaming: {
+        progress: { style: "card" as const, nativeTaskCards: false, toolProgress: false },
+      },
+      typingReaction: "",
+      emoji: undefined,
     },
-    { name: "disabled reaction", streaming: undefined, typingReaction: "", emoji: undefined },
   ])(
     "leaves only the final answer on a top-level turn with $name",
     async ({ streaming, typingReaction, emoji }) => {
@@ -782,49 +721,44 @@ describe("slack delivery trace goldens", () => {
     },
   );
 
-  it.each(["root", "account"] as const)(
-    "shows top-level commentary with only %s commentary opted in",
-    async (source) => {
-      const events = await runDeliveryTraceScenario({
-        scenario: {
-          name: "explicit-top-level-commentary",
-          steps: slackTraceScenarios["progress-compact-commentary"],
-        },
-        setup: (recorder) =>
-          setupSlackTrace(recorder, "progress-compact-commentary", (prepared) => {
-            prepared.replyToMode = "off";
-            prepared.ctx.cfg.channels = {
-              slack: {
-                streaming: { progress: source === "root" ? { commentary: true } : {} },
-                accounts: {
-                  default: {
-                    streaming: {
-                      progress:
-                        source === "account" ? { commentary: true } : { nativeTaskCards: true },
-                    },
+  it("shows top-level commentary with only root commentary opted in", async () => {
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "explicit-top-level-commentary",
+        steps: slackTraceScenarios["progress-compact-commentary"],
+      },
+      setup: (recorder) =>
+        setupSlackTrace(recorder, "progress-compact-commentary", (prepared) => {
+          prepared.replyToMode = "off";
+          prepared.ctx.cfg.channels = {
+            slack: {
+              streaming: { progress: { commentary: true } },
+              accounts: {
+                default: {
+                  streaming: {
+                    progress: { nativeTaskCards: true },
                   },
                 },
               },
-            };
-            prepared.account.config = mergeSlackAccountConfig(prepared.ctx.cfg, "default");
-          }),
-      });
-      expect(traceState.turn?.replyOptions).toMatchObject({
-        commentaryProgressEnabled: true,
-        commentaryPayloadsEnabled: true,
-      });
-      const wireTexts = collectSlackWireTexts(events);
-      expect(wireTexts.some((text) => text.includes(COMPACT_COMMENTARY_TEXT_UPDATED))).toBe(true);
-      expect(wireTexts.filter((text) => text === COMPACT_FINAL_TEXT)).toHaveLength(1);
-      expect(events.some((event) => event.kind.startsWith("reactions."))).toBe(false);
-      expect(traceRuntimeError).not.toHaveBeenCalled();
-    },
-  );
+            },
+          };
+          prepared.account.config = mergeSlackAccountConfig(prepared.ctx.cfg, "default");
+        }),
+    });
+    expect(traceState.turn?.replyOptions).toMatchObject({
+      commentaryProgressEnabled: true,
+      commentaryPayloadsEnabled: true,
+    });
+    const wireTexts = collectSlackWireTexts(events);
+    expect(wireTexts.some((text) => text.includes(COMPACT_COMMENTARY_TEXT_UPDATED))).toBe(true);
+    expect(wireTexts.filter((text) => text === COMPACT_FINAL_TEXT)).toHaveLength(1);
+    expect(events.some((event) => event.kind.startsWith("reactions."))).toBe(false);
+    expect(traceRuntimeError).not.toHaveBeenCalled();
+  });
 
   it.each([
-    { name: "success", isError: false, title: "✅ *Done*", label: undefined },
-    { name: "error", isError: true, title: "❌ *Failed*", label: undefined },
-    { name: "explicit title only", isError: false, title: "✅ *Review*", label: "Review" },
+    { name: "error", isError: true, title: "Failed", label: undefined },
+    { name: "explicit title only", isError: false, title: "Review", label: "Review" },
   ])(
     "keeps an explicit top-level card with the $name terminal title",
     async ({ isError, title, label }) => {
@@ -843,23 +777,21 @@ describe("slack delivery trace goldens", () => {
           setupSlackTrace(recorder, "progress-session-card", (prepared) => {
             prepared.replyToMode = "off";
             prepared.account.config = {
-              streaming: { progress: label ? { label } : { style: "card" } },
+              streaming: { progress: { style: "card", toolProgress: true, label } },
             };
           }),
       });
       const posts = events.filter((event) => event.kind === "chat.postMessage");
       expect(posts).toHaveLength(2);
       expect(posts[0]?.data).toMatchObject({
-        payload: { blocks: [{ type: "section", text: { text: `🔄 *${label ?? "Working"}*` } }] },
+        payload: {
+          text: `${label ? `${label}\n\n` : ""}Read — running\n\n1 tool · 2s`,
+        },
       });
       expect(posts[1]?.data).toMatchObject({ payload: { text: "The answer." } });
-      const terminal = events.findLast((event) => event.kind === "chat.update");
-      expect(terminal?.data).toMatchObject({
+      expect(events.findLast((event) => event.kind === "chat.update")?.data).toMatchObject({
         payload: {
-          text: `${title}\n\nOpen in OpenClaw`,
-          blocks: expect.arrayContaining([
-            { type: "section", text: { type: "mrkdwn", text: title } },
-          ]),
+          text: `${title ? `${title}\n\n` : ""}Read — running\n\nOpen in OpenClaw`,
         },
       });
       expect(
@@ -879,8 +811,6 @@ describe("slack delivery trace goldens", () => {
       sessionKey: `agent:trace-agent:slack:channel:c0trace:thread:${INBOUND_TS}`,
       path: "/slack/channel/c0trace/thread/1767225600%2E000100",
     },
-    { surface: "native", sessionKey: "agent:trace-agent:inbox", path: "" },
-    { surface: "card", sessionKey: "agent:trace-agent:inbox", path: "" },
   ])(
     "links the dispatched $sessionKey from the $surface surface",
     async ({ surface, sessionKey, path }) => {
@@ -896,10 +826,9 @@ describe("slack delivery trace goldens", () => {
             prepared.replyToMode = "off";
             prepared.ctxPayload.SessionKey = sessionKey;
             prepared.ctx.cfg.session = { mainKey: "inbox" };
-            prepared.account.config =
-              surface === "native"
-                ? {}
-                : { streaming: { progress: { style: "card", nativeTaskCards: false } } };
+            if (surface === "native") {
+              prepared.account.config = {};
+            }
           }),
       });
       const out = events.filter((event) => event.dir === "out");
@@ -950,7 +879,15 @@ describe("slack delivery trace goldens", () => {
   );
 
   const headSha = process.env.OPENCLAW_DELIVERY_PROOF_SHA ?? "";
-  for (const scenarioName of Object.keys(slackTraceScenarios) as SlackTraceScenarioName[]) {
+  for (const scenarioName of [
+    "short-final-native-rejection",
+    "final-blocks-and-text",
+    "cancel-mid-stream",
+    "progress-compact-commentary",
+    "progress-native-unified",
+    "native-prose-then-exec-failed",
+    "preview-exec-failed-then-prose",
+  ] as const) {
     it(`records ${scenarioName}`, async () => {
       const events = await runDeliveryTraceScenario({
         scenario: { name: scenarioName, steps: slackTraceScenarios[scenarioName] },
@@ -1025,6 +962,19 @@ describe("slack delivery trace goldens", () => {
     expect(traceRuntimeError).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "keeps top-level native output below later ingress (Slack Stop: %s)",
+    async (stoppedBySlack) =>
+      assertSlackSteeringTransportTrace({
+        stoppedBySlack,
+        channelId: CHANNEL_ID,
+        inboundTs: INBOUND_TS,
+        setup: (recorder) => setupSlackTrace(recorder, "streaming-happy-native"),
+        getClient: () => traceState.client as unknown as WebClient,
+        assertNoRuntimeError: () => expect(traceRuntimeError).not.toHaveBeenCalled(),
+      }),
+  );
+
   it("removes a progress card detached by a later human message", async () => {
     let progressEvents = 0;
     const events = await runDeliveryTraceScenario({
@@ -1065,7 +1015,7 @@ describe("slack delivery trace goldens", () => {
 
     const workingPosts = events.filter(
       (event) =>
-        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes("🔄 *Working*"),
+        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes('"blocks"'),
     );
     expect(workingPosts).toHaveLength(2);
     const firstCardId = (workingPosts[0]?.data as { result?: { ts?: string } } | undefined)?.result
@@ -1086,7 +1036,7 @@ describe("slack delivery trace goldens", () => {
         (event) =>
           event.kind === "chat.update" &&
           (event.data as { target?: string } | undefined)?.target === secondCardId &&
-          JSON.stringify(event.data).includes("✅ *Done*"),
+          JSON.stringify(event.data).includes("Open in OpenClaw"),
       ),
     ).toBe(true);
   });

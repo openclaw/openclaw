@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
 import { runSecurityAuditCore } from "./audit.js";
@@ -20,14 +20,12 @@ function createMcporterAuditOptions(stateDir: string): Parameters<typeof runSecu
   return {
     config: {
       agents: {
-        list: [
-          {
-            id: "asset-agent",
-            default: true,
+        entries: {
+          "asset-agent": {
             skills: ["asset-lifecycle-tracking"],
             tools: { exec: { host: "gateway", mode: "full" } },
           },
-        ],
+        },
       },
     },
     sourceConfig: {},
@@ -39,10 +37,10 @@ function createMcporterAuditOptions(stateDir: string): Parameters<typeof runSecu
 }
 
 function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
@@ -88,7 +86,7 @@ describe("security audit config basics", () => {
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
     const findings = await collectSecurityAuditFindings({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       tools: {
         elevated: {
           allowFrom: { whatsapp: ["*"] },
@@ -194,7 +192,7 @@ describe("security audit config basics", () => {
     );
 
     const report = await runSecurityAuditCore({
-      config: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { entries: { main: {} } } },
       sourceConfig: {},
       env: { OPENCLAW_STATE_DIR: stateDir },
       stateDir,
@@ -288,7 +286,7 @@ describe("security audit config basics", () => {
         },
         agents: {
           defaults: { skills: ["docs-search"] },
-          entries: { "docs-agent": { default: true, tools: { exec: { mode: "deny" } } } },
+          entries: { "docs-agent": { tools: { exec: { mode: "deny" } } } },
         },
         tools: { exec: { mode: "deny" } },
       },
@@ -304,7 +302,7 @@ describe("security audit config basics", () => {
     );
   });
 
-  it("audits inherited defaults independently of the default agent override", async () => {
+  it("audits inherited defaults independently of an agent override", async () => {
     const stateDir = tempDirs.make("openclaw-audit-mcp-defaults-");
     const report = await runSecurityAuditCore({
       config: {
@@ -316,15 +314,13 @@ describe("security audit config basics", () => {
         tools: { exec: { host: "gateway", security: "full", ask: "off" } },
         agents: {
           defaults: { skills: ["docs-search"] },
-          list: [
-            {
-              id: "safe-default",
-              default: true,
+          entries: {
+            "safe-default": {
               skills: ["safe-only"],
               tools: { exec: { security: "deny" } },
             },
-            { id: "inheritor" },
-          ],
+            inheritor: {},
+          },
         },
       },
       sourceConfig: {},
@@ -345,7 +341,7 @@ describe("security audit config basics", () => {
   it("suppresses configured accepted findings from the active audit report", async () => {
     const report = await runSecurityAuditCore({
       config: {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         security: {
           audit: {
             suppressions: [
@@ -387,7 +383,7 @@ describe("security audit config basics", () => {
   it("keeps unrelated dangerous flags active when one dangerous flag is suppressed", async () => {
     const report = await runSecurityAuditCore({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         hooks: { gmail: { allowUnsafeExternalContent: true } },
         tools: {
           exec: {
@@ -438,7 +434,7 @@ describe("security audit config basics", () => {
     let report: Awaited<ReturnType<typeof runSecurityAuditCore>>;
     try {
       report = await runSecurityAuditCore({
-        config: { agents: { entries: { main: { default: true } } } },
+        config: { agents: { entries: { main: {} } } },
         sourceConfig: {},
         env: {},
         includeFilesystem: false,

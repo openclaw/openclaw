@@ -32,7 +32,6 @@ type ProviderAttributionHook =
   | "user-agent-extra"
   | "custom-user-agent";
 
-/** Product attribution policy emitted for verified provider hooks. */
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
@@ -45,12 +44,9 @@ export type ProviderAttributionPolicy = {
   headers?: Record<string, string>;
 };
 
-/** Transport family used when resolving provider-specific request policy. */
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
-/** Capability family used when endpoint rules differ by media or LLM request type. */
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
 
-/** Normalized endpoint class used by provider policy and SSRF/attribution decisions. */
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
@@ -71,6 +67,7 @@ export type ProviderEndpointClass =
   | "opencode-go-native"
   | "azure-openai"
   | "openrouter"
+  | "vercel-ai-gateway"
   | "xai-native"
   | "xiaomi-native"
   | "zai-native"
@@ -80,14 +77,12 @@ export type ProviderEndpointClass =
   | "custom"
   | "invalid";
 
-/** Parsed endpoint facts derived from provider id and base URL. */
 export type ProviderEndpointResolution = {
   endpointClass: ProviderEndpointClass;
   hostname?: string;
   googleVertexRegion?: string;
 };
 
-/** Raw model/provider fields accepted by policy resolution. */
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
   api?: string | null;
@@ -113,16 +108,13 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
-/** Policy input plus model compatibility fields for feature-level capability resolution. */
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: unknown;
 };
 
-/** Known compatibility family that needs provider-specific request adjustments. */
 export type ProviderRequestCompatibilityFamily = "moonshot";
 
-/** Feature capability facts for one resolved provider/model request route. */
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
@@ -331,6 +323,25 @@ function resolveProviderAttributionPolicy(
           "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
         headers: { "x-goog-api-client": userAgent },
       };
+    case "vercel-ai-gateway":
+      return {
+        ...policy,
+        docsUrl: "https://vercel.com/docs/ai-gateway/ecosystem/app-attribution",
+        reviewNote:
+          'Vercel documents: "AI Gateway reads two request headers when present: http-referer … x-title". Applied on ai-gateway.vercel.sh regardless of configured provider id.',
+        headers: {
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-Title": policy.product,
+        },
+      };
+    case "perplexity":
+      return {
+        ...policy,
+        docsUrl: "https://docs.perplexity.ai/docs/getting-started/integrations/opencode",
+        reviewNote:
+          'Perplexity documents integrations identifying themselves with "X-Pplx-Integration": "<client>/<version>". Applied only on the direct Perplexity API.',
+        headers: { "X-Pplx-Integration": userAgent },
+      };
     case "openai":
     case "xai":
       return {
@@ -414,13 +425,25 @@ export function resolveProviderRequestPolicy(
     // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
     attributionProvider = "opencode-go";
   }
-  // OpenRouter attribution follows the endpoint, so custom provider ids pointed at
-  // openrouter.ai are attributed too; custom proxy baseUrls are withheld.
+  // OpenRouter and Vercel AI Gateway attribution follows the endpoint, so custom provider
+  // ids pointed at their hosts are attributed too; custom proxy baseUrls are withheld.
   if (
     !attributionProvider &&
     (endpointClass === "openrouter" || (provider === "openrouter" && endpointClass === "default"))
   ) {
     attributionProvider = "openrouter";
+  }
+  if (
+    !attributionProvider &&
+    (endpointClass === "vercel-ai-gateway" ||
+      (provider === "vercel-ai-gateway" && endpointClass === "default"))
+  ) {
+    attributionProvider = "vercel-ai-gateway";
+  }
+  // Perplexity's API is only reached through its own plugin, which resolves the direct
+  // host as the provider default; any configured baseUrl is a proxy.
+  if (!attributionProvider && provider === "perplexity" && endpointClass === "default") {
+    attributionProvider = "perplexity";
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
@@ -562,7 +585,7 @@ export function resolveProviderRequestCapabilities(
 
 function describeProviderRequestRoutingPolicy(
   policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "sdk-hook-only" | "none" {
+): "hidden" | "documented" | "none" {
   if (!policy.attributionProvider) {
     return "none";
   }
@@ -571,8 +594,6 @@ function describeProviderRequestRoutingPolicy(
       return "hidden";
     case "vendor-documented":
       return "documented";
-    case "vendor-sdk-hook-only":
-      return "sdk-hook-only";
     default:
       return "none";
   }

@@ -188,6 +188,10 @@ describe("OpenAI embedding provider HTTP contract", () => {
           await expect(result).resolves.toMatchObject({
             client: { headers: { Authorization: "Bearer fixture-embedding-api-key" } },
           });
+        } else if (additional === "codex") {
+          await expect(result).resolves.toMatchObject({
+            client: { headers: { Authorization: "Bearer fixture-codex-access" } },
+          });
         } else if (server && additional === "token") {
           const { provider } = await result;
           await expect(provider.embed("hello")).resolves.toEqual([5, 1]);
@@ -233,7 +237,7 @@ describe("OpenAI embedding provider HTTP contract", () => {
     });
 
     await expect(provider.embedBatch(["first", "second"])).rejects.toThrow(
-      "fixture embeddings failed: malformed JSON response",
+      "fixture embeddings failed (model: fixture-model, batch size: 2): expected 2 vectors, got 1",
     );
     expect(server.requests).toHaveLength(1);
     expect(server.requests[0]?.body).toEqual({
@@ -449,7 +453,11 @@ describe("OpenAI embedding provider HTTP contract", () => {
         if (mode === "first request failure") {
           server.requests[0]?.response.writeHead(503).end("fixture rejected");
           await expect(outcome).resolves.toMatchObject({
-            error: { message: expect.stringContaining("openai embeddings failed (503)") },
+            error: {
+              message: expect.stringContaining(
+                "openai embeddings failed (model: text-embedding-3-small, batch size: 1) (503)",
+              ),
+            },
           });
           // Promise.all rejects early; it must not cancel the still-running sibling.
           expect(server.requests[1]?.closed).toBe(false);

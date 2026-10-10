@@ -16,15 +16,14 @@ struct DebugSettings: View {
     @State private var sessionStorePath: String = SessionLoader.defaultStorePath
     @State private var sessionStoreSaveError: String?
     @State private var debugSendInFlight = false
-    @State private var debugSendStatus: String?
-    @State private var debugSendError: String?
+    @State private var debugSendResult: Result<String, DebugActionError>?
     @State private var testNotificationOutcome: TestNotificationOutcome?
     @State private var portCheckInFlight = false
-    @State private var portReports: [DebugActions.PortReport] = []
+    @State private var portReports: [PortGuardian.PortReport] = []
     @State private var portKillStatus: String?
     @State private var tunnelResetInFlight = false
     @State private var tunnelResetStatus: String?
-    @State private var pendingKill: DebugActions.PortListener?
+    @State private var pendingKill: PortGuardian.ReportListener?
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
 
@@ -131,6 +130,15 @@ struct DebugSettings: View {
             .frame(width: self.labelColumnWidth, alignment: .leading)
     }
 
+    private func pathLabel(_ path: String) -> some View {
+        Text(path)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
     private var appInfoSection: some View {
         Section("App") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
@@ -158,12 +166,7 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("Binary path")
-                    Text(Bundle.main.bundlePath)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.pathLabel(Bundle.main.bundlePath)
                 }
             }
         }
@@ -187,12 +190,7 @@ struct DebugSettings: View {
                     Text("Key")
                         .foregroundStyle(.secondary)
                         .frame(width: self.labelColumnWidth, alignment: .leading)
-                    Text(key)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.pathLabel(key)
                     Button("Copy") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(key, forType: .string)
@@ -251,12 +249,7 @@ struct DebugSettings: View {
                         HStack(spacing: 8) {
                             Button("Open") { DebugActions.openLog() }
                                 .buttonStyle(.bordered)
-                            Text(DebugActions.pinoLogPath())
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            self.pathLabel(DebugActions.pinoLogPath())
                         }
                     }
                 }
@@ -281,7 +274,7 @@ struct DebugSettings: View {
 
                         HStack(spacing: 8) {
                             Button("Open folder") {
-                                NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())
+                                AppActivation.shared.open(DiagnosticsFileLog.logDirectoryURL())
                             }
                             .buttonStyle(.bordered)
                             Button("Clear") {
@@ -289,12 +282,7 @@ struct DebugSettings: View {
                             }
                             .buttonStyle(.bordered)
                         }
-                        Text(DiagnosticsFileLog.logFileURL().path)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        self.pathLabel(DiagnosticsFileLog.logFileURL().path)
                     }
                 }
             }
@@ -488,12 +476,12 @@ struct DebugSettings: View {
                     .disabled(self.debugSendInFlight)
 
                     if !self.debugSendInFlight {
-                        if let debugSendStatus {
-                            Text(debugSendStatus)
+                        if case let .success(message) = self.debugSendResult {
+                            Text(message)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        } else if let debugSendError {
-                            Text(debugSendError)
+                        } else if case let .failure(error) = self.debugSendResult {
+                            Text(error.localizedDescription)
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         } else {
@@ -533,7 +521,7 @@ struct DebugSettings: View {
                 HStack(spacing: 8) {
                     Button("Restart app") { DebugActions.restartApp() }
                     Button("Restart onboarding") { DebugActions.restartOnboarding() }
-                    Button("Reveal app in Finder") { self.revealApp() }
+                    Button("Reveal app in Finder") { AppActivation.shared.revealFiles([Bundle.main.bundleURL]) }
                     Spacer(minLength: 0)
                 }
                 .buttonStyle(.bordered)
@@ -564,7 +552,7 @@ struct DebugSettings: View {
                     }
                     .buttonStyle(.bordered)
                     Button("Write sample page") {
-                        Task { await self.canvasWriteSamplePage() }
+                        Task { await self.canvasPresent(writeSample: true) }
                     }
                     .buttonStyle(.bordered)
                     Spacer(minLength: 0)
@@ -615,8 +603,7 @@ struct DebugSettings: View {
     private func runPortCheck() async {
         self.portCheckInFlight = true
         self.portKillStatus = nil
-        let reports = await DebugActions.checkGatewayPorts()
-        self.portReports = reports
+        self.portReports = await DebugActions.checkGatewayPorts()
         self.portCheckInFlight = false
     }
 
@@ -624,19 +611,18 @@ struct DebugSettings: View {
     private func resetGatewayTunnel() async {
         self.tunnelResetInFlight = true
         self.tunnelResetStatus = nil
-        let result = await DebugActions.resetGatewayTunnel()
-        switch result {
+        self.tunnelResetStatus = switch await DebugActions.resetGatewayTunnel() {
         case let .success(message):
-            self.tunnelResetStatus = message
+            message
         case let .failure(err):
-            self.tunnelResetStatus = err.localizedDescription
+            err.localizedDescription
         }
         await self.runPortCheck()
         self.tunnelResetInFlight = false
     }
 
     @MainActor
-    private func requestKill(_ listener: DebugActions.PortListener) {
+    private func requestKill(_ listener: PortGuardian.ReportListener) {
         if listener.expected {
             self.pendingKill = listener
         } else {
@@ -657,37 +643,20 @@ struct DebugSettings: View {
     }
 
     private func sendVoiceDebug() async {
-        await MainActor.run {
-            self.debugSendInFlight = true
-            self.debugSendError = nil
-            self.debugSendStatus = nil
-        }
+        self.debugSendInFlight = true
+        self.debugSendResult = nil
 
         let result = await DebugActions.sendDebugVoice()
 
-        await MainActor.run {
-            self.debugSendInFlight = false
-            switch result {
-            case let .success(message):
-                self.debugSendStatus = message
-                self.debugSendError = nil
-            case let .failure(error):
-                self.debugSendStatus = nil
-                self.debugSendError = error.localizedDescription
-            }
-        }
+        self.debugSendInFlight = false
+        self.debugSendResult = result
     }
 
     @MainActor
     private func sendTestNotification() async {
         guard self.testNotificationOutcome != .pending else { return }
         self.testNotificationOutcome = .pending
-        self.testNotificationOutcome = await DebugActions.sendTestNotification()
-    }
-
-    private func revealApp() {
-        let url = Bundle.main.bundleURL
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        self.testNotificationOutcome = await TestNotificationAction.send()
     }
 
     private func saveRelayRoot() {
@@ -695,15 +664,8 @@ struct DebugSettings: View {
     }
 
     private func loadSessionStorePath() {
-        let parsed = OpenClawConfigFile.loadDict()
-        guard
-            let session = parsed["session"] as? [String: Any],
-            let path = session["store"] as? String
-        else {
-            self.sessionStorePath = SessionLoader.defaultStorePath
-            return
-        }
-        self.sessionStorePath = path
+        let session = OpenClawConfigFile.loadDict()["session"] as? [String: Any]
+        self.sessionStorePath = session?["store"] as? String ?? SessionLoader.defaultStorePath
     }
 
     private func saveSessionStorePath() {
@@ -744,23 +706,15 @@ extension DebugSettings {
     // MARK: - Canvas debug actions
 
     @MainActor
-    private func canvasPresent() async {
+    private func canvasPresent(writeSample: Bool = false) async {
         self.canvasError = nil
         let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let dir = try CanvasManager.shared.show(sessionKey: session.isEmpty ? "main" : session, path: "/")
-            self.canvasStatus = "dir: \(dir)"
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasWriteSamplePage() async {
-        self.canvasError = nil
-        let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            let dir = try CanvasManager.shared.show(sessionKey: session.isEmpty ? "main" : session, path: "/")
+            guard writeSample else {
+                self.canvasStatus = "dir: \(dir)"
+                return
+            }
             let url = URL(fileURLWithPath: dir).appendingPathComponent("index.html", isDirectory: false)
             let now = ISO8601DateFormatter().string(from: Date())
             let html = """

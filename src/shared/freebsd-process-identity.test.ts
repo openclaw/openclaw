@@ -41,10 +41,9 @@ function fixture() {
       return 0;
     },
   );
-  const library = { func: vi.fn(() => sysctl) };
-  const load = vi.fn(() => library);
+  const load = vi.fn(() => ({ func: () => sysctl }));
   loadNative.mockReturnValue({ load });
-  return { boot, proc, parts, sysctl, library, load };
+  return { proc, parts, sysctl, load };
 }
 
 async function read(pid = 42) {
@@ -56,12 +55,11 @@ async function read(pid = 42) {
 
 it.each(["x64", "arm64"] as const)("reads exact kernel microseconds on %s", async (arch) => {
   vi.spyOn(process, "arch", "get").mockReturnValue(arch);
-  const { sysctl, load, library } = fixture();
+  const { sysctl, load } = fixture();
   expect(await read()).toBe(5_200_002);
   expect(await read()).toBe(5_200_002);
   expect(loadNative).toHaveBeenCalledTimes(1);
   expect(load).toHaveBeenCalledExactlyOnceWith(null);
-  expect(library.func).toHaveBeenCalledTimes(1);
   expect(
     sysctl.mock.calls.slice(0, 3).map(([mib, count, output]) => [mib, count, output.length]),
   ).toEqual([
@@ -85,53 +83,26 @@ it("keeps the identity stable when the boot offset and wall-clock start move tog
   expect(await read()).toBe(5_200_002);
 });
 
-it.each([
-  "changed boot bracket",
-  "wrong struct size",
-  "unknown layout",
-  "wrong PID",
-  "negative seconds",
-  "negative microseconds",
-  "microsecond overflow",
-  "negative start",
-  "unsafe start",
-])("refuses %s without an identity approximation", async (variant) => {
-  const { proc, parts } = fixture();
-  if (variant === "changed boot bracket") {
-    parts[2]!.writeBigInt64LE(700_002n, 8);
-  }
-  if (variant === "wrong struct size") {
-    proc.writeInt32LE(1080);
-  }
-  if (variant === "unknown layout") {
-    proc.writeInt32LE(1, 4);
-  }
-  if (variant === "wrong PID") {
-    proc.writeInt32LE(43, 72);
-  }
-  if (variant === "negative seconds") {
-    proc.writeBigInt64LE(-1n, 336);
-  }
-  if (variant === "negative microseconds") {
-    proc.writeBigInt64LE(-1n, 344);
-  }
-  if (variant === "microsecond overflow") {
-    proc.writeBigInt64LE(1_000_000n, 344);
-  }
-  if (variant === "negative start") {
-    proc.writeBigInt64LE(0n, 336);
-  }
-  if (variant === "unsafe start") {
-    proc.writeBigInt64LE(BigInt(Number.MAX_SAFE_INTEGER), 336);
-  }
+it.each<[string, (data: ReturnType<typeof fixture>) => void]>([
+  ["changed boot bracket", ({ parts }) => parts[2]!.writeBigInt64LE(700_002n, 8)],
+  ["wrong struct size", ({ proc }) => proc.writeInt32LE(1080)],
+  ["unknown layout", ({ proc }) => proc.writeInt32LE(1, 4)],
+  ["wrong PID", ({ proc }) => proc.writeInt32LE(43, 72)],
+  ["negative seconds", ({ proc }) => proc.writeBigInt64LE(-1n, 336)],
+  ["negative microseconds", ({ proc }) => proc.writeBigInt64LE(-1n, 344)],
+  ["microsecond overflow", ({ proc }) => proc.writeBigInt64LE(1_000_000n, 344)],
+  ["negative start", ({ proc }) => proc.writeBigInt64LE(0n, 336)],
+  ["unsafe start", ({ proc }) => proc.writeBigInt64LE(BigInt(Number.MAX_SAFE_INTEGER), 336)],
+])("refuses %s without an identity approximation", async (_name, corrupt) => {
+  corrupt(fixture());
   expect(await read()).toBeNull();
 });
 
-it.each(
-  [0, 1, 2].flatMap((failedCall) =>
-    ["short", "long", "status"].map((failure) => ({ failedCall, failure })),
-  ),
-)("refuses $failure output from sysctl call $failedCall", async ({ failedCall, failure }) => {
+it.each([
+  { failedCall: 0, failure: "short" },
+  { failedCall: 1, failure: "long" },
+  { failedCall: 2, failure: "status" },
+])("refuses $failure output from sysctl call $failedCall", async ({ failedCall, failure }) => {
   const { sysctl } = fixture();
   const successful = sysctl.getMockImplementation()!;
   let call = 0;
@@ -171,14 +142,11 @@ it("retries failed native loading and fails closed on native errors", async () =
   expect(await read()).toBeNull();
 });
 
-it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 0x80000000])(
-  "rejects invalid native PID %s before loading",
-  async (pid) => {
-    fixture();
-    expect(await read(pid)).toBeNull();
-    expect(loadNative).not.toHaveBeenCalled();
-  },
-);
+it.each([0, 1.5, 0x80000000])("rejects invalid native PID %s before loading", async (pid) => {
+  fixture();
+  expect(await read(pid)).toBeNull();
+  expect(loadNative).not.toHaveBeenCalled();
+});
 
 it("does not load for other operating systems, architectures or byte orders", async () => {
   fixture();

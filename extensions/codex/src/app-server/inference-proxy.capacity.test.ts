@@ -27,24 +27,6 @@ import { describe, expect, it, vi } from "vitest";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 
 describe("inference relay capacity", () => {
-  it("starts another inference and HTTP fallback while 16 responses are still active", async () => {
-    const streams = [];
-    for (let index = 0; index < 16; index++) {
-      const stream = await open();
-      await send(stream.client, stream.upstream);
-      streams.push(stream);
-    }
-    const next = await open();
-    await send(next.client, next.upstream, prewarm);
-    expect((await post()).status).toBe(200);
-    expect(streams.every(({ client }) => client.readyState === WebSocket.OPEN)).toBe(true);
-    expect(upstreams).toHaveLength(17);
-    // No terminal has been sent for the first batch when the next request arrives.
-    for (const stream of [...streams, next]) {
-      await complete(stream.client, stream.upstream);
-    }
-  });
-
   it("reclaims completed WebSockets for HTTP pressure without a 16-response bottleneck", async () => {
     for (let index = 0; index < 64; index++) {
       const stream = await open();

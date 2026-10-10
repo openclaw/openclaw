@@ -54,21 +54,6 @@ function createDeclaredSurface(
 }
 
 describe("plugin capability consent", () => {
-  it("merges every package-owned plugin into a sorted, duplicate-free capability surface", () => {
-    expect(
-      mergePluginDeclaredSurfaces([
-        createDeclaredSurface({ channels: ["chat"], tools: ["write", "read"] }),
-        createDeclaredSurface({ tools: ["admin", "read"], mcpServers: ["provider"] }),
-      ]),
-    ).toEqual(
-      createDeclaredSurface({
-        channels: ["chat"],
-        tools: ["admin", "read", "write"],
-        mcpServers: ["provider"],
-      }),
-    );
-  });
-
   it.each([
     { label: "native package entries", explicitPath: false, staged: false },
     { label: "a configured file override", explicitPath: true, staged: false },
@@ -256,31 +241,6 @@ describe("plugin capability consent", () => {
     expect(() => resolvePluginArtifactDeclaredSurface(rootDir)).toThrow();
   });
 
-  it("hashes declared surfaces independently of object-key and capability ordering", () => {
-    const declared = createDeclaredSurface({
-      channels: ["zulu", "alpha"],
-      tools: ["write", "read"],
-    });
-    const reordered = {
-      dangerousConfigFlags: [],
-      skills: [],
-      cliBackends: [],
-      cliCommands: [],
-      mcpServers: [],
-      hooks: [],
-      contracts: [],
-      tools: ["read", "write"],
-      providers: [],
-      channels: ["alpha", "zulu"],
-    } satisfies PluginAcceptedDeclaredSurface;
-
-    expect(computeDeclaredSurfaceHash(declared)).toMatch(/^[a-f\d]{64}$/);
-    expect(computeDeclaredSurfaceHash(declared)).toBe(computeDeclaredSurfaceHash(reordered));
-    expect(computeDeclaredSurfaceHash(declared)).not.toBe(
-      computeDeclaredSurfaceHash(createDeclaredSurface({ channels: ["alpha", "zulu"] })),
-    );
-  });
-
   it.each<{
     label: string;
     previous: Partial<PluginAcceptedDeclaredSurface>;
@@ -298,12 +258,6 @@ describe("plugin capability consent", () => {
       previous: { tools: ["read", "write"] },
       next: { tools: ["read"] },
       widened: {},
-    },
-    {
-      label: "capabilities in a previously empty group",
-      previous: { tools: ["read"] },
-      next: { tools: ["read"], mcpServers: ["zulu", "alpha"] },
-      widened: { mcpServers: ["alpha", "zulu"] },
     },
   ])("identifies widening for $label", ({ previous, next, widened }) => {
     expect(

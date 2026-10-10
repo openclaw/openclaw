@@ -54,7 +54,6 @@ vi.mock("./audit.nondeep.runtime.js", () => ({
   collectHooksHardeningFindings: collectNoFindings,
   collectLikelyMultiUserSetupFindings: collectNoFindings,
   collectMinimalProfileOverrideFindings: collectNoFindings,
-  collectModelHygieneFindings: collectNoFindings,
   collectNodeDangerousAllowCommandFindings: collectNoFindings,
   collectNodeDenyCommandPatternFindings: collectNoFindings,
   collectSandboxDangerousConfigFindings: collectNoFindings,
@@ -97,7 +96,7 @@ describe("security audit channel read-only setup fallback", () => {
       },
     } satisfies ChannelPlugin;
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { dmScope: "main" },
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;

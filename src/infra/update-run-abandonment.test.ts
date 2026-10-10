@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
 import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
-  finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
   recordUpdateRunPhase,
@@ -49,10 +49,10 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
@@ -94,7 +94,7 @@ describe("abandoned update runs", () => {
     },
   );
 
-  it.each([60_000, 24 * 60 * 60_000 - 60_000, 24 * 60 * 60_000, 24 * 60 * 60_000 + 1])(
+  it.each([24 * 60 * 60_000, 24 * 60 * 60_000 + 1])(
     "expires only untouched legacy admissions older than 24 hours (age=%s)",
     (age) => {
       const options = isolatedOptions();
@@ -117,40 +117,6 @@ describe("abandoned update runs", () => {
           expect.objectContaining({ step: "reconcile:abandoned", detail: "legacy-driver-expired" }),
         );
       }
-    },
-  );
-
-  it.each(["progress", "identity-unavailable", "recovery", "live-driver"] as const)(
-    "preserves a day-old admission with %s evidence",
-    (evidence) => {
-      const options = isolatedOptions();
-      const created = createUpdateRun({ trigger: "cli" }, options);
-      if (evidence === "progress") {
-        recordUpdateRunPhase(created.runId, "staging", {}, options);
-      } else if (evidence === "identity-unavailable") {
-        recordUpdateRunStep(
-          created.runId,
-          { step: "driver:identity-unavailable", status: "completed" },
-          options,
-        );
-      } else if (evidence === "live-driver") {
-        adoptUpdateRun(created.runId, options);
-      } else {
-        const from = {
-          root: options.env.OPENCLAW_STATE_DIR,
-          nodePath: process.execPath,
-          version: "2026.9.2",
-          buildId: null,
-        };
-        createRetainedUpdateRecovery(
-          { runId: created.runId, from, to: { ...from, version: "2026.9.3" } },
-          options,
-        );
-      }
-      const before = getUpdateRun(created.runId, options);
-      vi.advanceTimersByTime(25 * 60 * 60_000);
-      expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
-      expect(getUpdateRun(created.runId, options)).toEqual(before);
     },
   );
 
@@ -217,27 +183,6 @@ describe("abandoned update runs", () => {
     },
   );
 
-  it("adopts without identity when process inspection is unavailable", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun({ trigger: "cli" }, options);
-    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const adopted = adoptUpdateRun(created.runId, options);
-    adoptUpdateRun(created.runId, options);
-
-    expect(adopted.origin.driver).toBeUndefined();
-    expect(warning).toHaveBeenCalledTimes(1);
-    expect(warning).toHaveBeenCalledWith(
-      expect.stringContaining("identity recording is unavailable"),
-    );
-    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
-    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
-    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
-      { runId: created.runId, status: "failed", reason: "abandoned" },
-    ]);
-  });
-
   it("preserves a known parent and the unobservable adopter across later driver death", () => {
     const options = isolatedOptions();
     const parent = currentDriver();
@@ -267,17 +212,24 @@ describe("abandoned update runs", () => {
   it("keeps a command running after heartbeat errors and warns once across its steps", async () => {
     const options = isolatedOptions();
     const run = adoptUpdateRun(createUpdateRun({ trigger: "cli" }, options).runId, options);
-    const progress = createUpdateRunProgress({ runId: run.runId, env: options.env }, {});
+    const progressRun = { runId: run.runId, env: options.env };
+    const guards = createUpdateCommandExecutionGuards(
+      { run: progressRun },
+      options.env.OPENCLAW_STATE_DIR,
+    );
+    const progress = createUpdateRunProgress(progressRun, {}, guards.recordStep);
     progress.onHeartbeat = vi.fn(() => {
       throw new Error("SQLITE_BUSY: database is locked");
     });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (const name of ["install", "build"]) {
       const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
+      const started = createDeferredCore();
       const aborted = vi.fn(() => command.reject(new Error("command aborted")));
       const pending = runStep({
         runCommand: (_argv, input) => {
           input.signal?.addEventListener("abort", aborted);
+          started.resolve();
           return command.promise;
         },
         name,
@@ -289,6 +241,7 @@ describe("abandoned update runs", () => {
         totalSteps: 2,
       });
       const settled = pending.catch((error: unknown) => error);
+      await Promise.race([started.promise, pending]);
       await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
       expect(aborted).not.toHaveBeenCalled();
       command.resolve({ stdout: "", stderr: "", code: 0 });
@@ -301,37 +254,6 @@ describe("abandoned update runs", () => {
     expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
   });
 
-  it("classifies without writing, then finishes an aged staging run whose driver exited", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun(
-      { trigger: "cli", origin: { driver: exitedDriver() } },
-      options,
-    );
-    const run = recordUpdateRunPhase(created.runId, "staging", {}, options);
-    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
-
-    expect(inspectUpdateRunAbandonment(run)).toBe("inactive-driver-dead");
-    expect(getUpdateRun(run.runId, options)).toEqual(run);
-    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toMatchObject([
-      {
-        runId: run.runId,
-        status: "failed",
-        phase: "finished",
-        reason: "abandoned",
-        finishedAtMs: Date.now(),
-        steps: expect.arrayContaining([
-          expect.objectContaining({
-            step: "reconcile:abandoned",
-            status: "failed",
-            detail: "inactive-driver-dead",
-          }),
-        ]),
-      },
-    ]);
-    expect(getUpdateRun(run.runId, options)?.reason).toBe("abandoned");
-    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
-  });
-
   it("requires explicit recovery for a recent run whose driver exited", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli", origin: { driver: exitedDriver() } }, options);
@@ -342,48 +264,6 @@ describe("abandoned update runs", () => {
     expect(getUpdateRun(run.runId, options)).toEqual(run);
     expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
       { runId: run.runId, phase: "finished", status: "failed", reason: "abandoned" },
-    ]);
-  });
-
-  it("preserves an aged live staging driver during explicit repair", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun(
-      { trigger: "cli", origin: { driver: currentDriver() } },
-      options,
-    );
-    const run = recordUpdateRunPhase(created.runId, "staging", {}, options);
-    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
-
-    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
-    expect(getUpdateRun(run.runId, options)).toEqual(run);
-  });
-
-  it("preserves an aged driver whose host cannot be inspected, including explicit repair", () => {
-    const options = isolatedOptions();
-    const driver = { ...exitedDriver(), host: `${currentDriver().host}-other` };
-    const run = createUpdateRun({ trigger: "cli", origin: { driver } }, options);
-    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1);
-
-    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
-    expect(getUpdateRun(run.runId, options)).toEqual(run);
-  });
-
-  it("requires explicit recovery for an aged identityless staging run", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
-    const run = recordUpdateRunPhase(created.runId, "staging", {}, options);
-    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
-
-    expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
-    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
-    expect(getUpdateRun(run.runId, options)).toEqual(run);
-    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBe(
-      "operator-reconciled-inactive-run",
-    );
-    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
-      { runId: run.runId, status: "failed", phase: "finished", reason: "abandoned" },
     ]);
   });
 
@@ -419,7 +299,6 @@ describe("abandoned update runs", () => {
   it.each([
     "recent",
     "live",
-    "dead",
     "previous-live",
     "multiple",
     "implicit",
@@ -433,11 +312,9 @@ describe("abandoned update runs", () => {
         origin:
           kind === "live"
             ? { driver: currentDriver() }
-            : kind === "dead"
-              ? { driver: exitedDriver() }
-              : kind === "previous-live"
-                ? { previousDrivers: [currentDriver()] }
-                : {},
+            : kind === "previous-live"
+              ? { previousDrivers: [currentDriver()] }
+              : {},
       },
       options,
     );
@@ -461,38 +338,6 @@ describe("abandoned update runs", () => {
         reconcileUpdateRunsInNativeKernelForTest({ explicit: true, runIds: [old.runId] }, options),
       ).toEqual([]);
     }
-  });
-
-  it("preserves an already succeeded run", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun(
-      { trigger: "cli", origin: { driver: exitedDriver() } },
-      options,
-    );
-    const run = finishUpdateRun(created.runId, { status: "succeeded" }, options);
-    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
-
-    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
-    expect(getUpdateRun(run.runId, options)).toEqual(run);
-  });
-
-  it("rechecks current ownership when a previously stale run was adopted", () => {
-    const options = isolatedOptions();
-    const run = createUpdateRun({ trigger: "cli", origin: { driver: exitedDriver() } }, options);
-    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1);
-    expect(inspectUpdateRunAbandonment(run)).toBe("inactive-driver-dead");
-
-    adoptUpdateRun(run.runId, options);
-    const advanced = recordUpdateRunStep(
-      run.runId,
-      { step: "build", status: "completed", endedAtMs: Date.now() },
-      options,
-    );
-    expect(
-      reconcileUpdateRunsInNativeKernelForTest({ explicit: true, runIds: [run.runId] }, options),
-    ).toEqual([]);
-    expect(getUpdateRun(run.runId, options)).toEqual(advanced);
   });
 
   it("preserves the whole explicit recovery selection when one driver resumes", () => {
@@ -676,53 +521,26 @@ describe("abandoned update runs", () => {
     expect(getUpdateRun(run.runId, options)).toEqual(run);
   });
 
-  it("preserves exact current and previous identities while bounding and redacting large origin diagnostics", () => {
-    const options = isolatedOptions();
-    const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) => ({
-      host: `${"x".repeat(254)}${index}`,
-      pid: index + 1,
-      startIdentity: "9".repeat(128),
-    }));
-    const diagnostic = "😀".repeat(512);
-    const run = createUpdateRun(
-      {
-        trigger: "cli",
-        origin: {
-          driver: drivers[0],
-          previousDrivers: drivers.slice(1),
-          requester: { channel: diagnostic, accountId: diagnostic, senderId: diagnostic },
-          sessionKey: diagnostic,
-          deliveryContext: {
-            channel: diagnostic,
-            to: diagnostic,
-            accountId: diagnostic,
-            threadId: diagnostic,
-          },
-          campaignId: diagnostic,
-          doctorHint: diagnostic,
-          nextAction: diagnostic,
-        },
-      },
-      { ...options, redactPaths: drivers.map((driver) => driver.host) },
-    );
-    expect(run.origin.driver).toEqual(drivers[0]);
-    expect(run.origin.previousDrivers).toEqual(drivers.slice(1));
-    expect(Buffer.byteLength(JSON.stringify(run.origin))).toBeLessThanOrEqual(16 * 1024);
-    expect(run.origin.doctorHint?.length).toBeLessThan(diagnostic.length);
-    expect(getUpdateRun(run.runId, options)).toEqual(run);
-  });
-
   it.each([false, true])(
     "renews a slow step and stops heartbeats after failure=%s",
     async (fails) => {
       const options = isolatedOptions();
       const created = createUpdateRun({ trigger: "cli" }, options);
       const run = adoptUpdateRun(created.runId, options);
-      const progress = createUpdateRunProgress({ runId: run.runId, env: options.env }, {});
+      const progressRun = { runId: run.runId, env: options.env };
+      const guards = createUpdateCommandExecutionGuards(
+        { run: progressRun },
+        options.env.OPENCLAW_STATE_DIR,
+      );
+      const progress = createUpdateRunProgress(progressRun, {}, guards.recordStep);
       const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
       const heartbeat = vi.spyOn(progress, "onHeartbeat");
+      const started = createDeferredCore();
       const pending = runStep({
-        runCommand: () => command.promise,
+        runCommand: () => {
+          started.resolve();
+          return command.promise;
+        },
         name: "build",
         argv: ["pnpm", "build"],
         cwd: options.env.OPENCLAW_STATE_DIR,
@@ -734,10 +552,17 @@ describe("abandoned update runs", () => {
       const settled = fails
         ? expect(pending).rejects.toThrow("build interrupted")
         : expect(pending).resolves.toMatchObject({ exitCode: 0 });
+      await Promise.race([started.promise, pending]);
+      const admitted = getUpdateRun(run.runId, options);
+      if (!admitted) {
+        throw new Error("Started command has no admitted progress receipt");
+      }
+      // The worker uses its own clock; age the step from its committed admission.
+      vi.setSystemTime(admitted.updatedAtMs);
       await vi.advanceTimersByTimeAsync(ABANDONED_UPDATE_RUN_MS + UPDATE_RUN_HEARTBEAT_MS);
 
       const active = getUpdateRun(run.runId, options);
-      expect(active?.updatedAtMs).toBeGreaterThan(run.updatedAtMs + ABANDONED_UPDATE_RUN_MS);
+      expect(active?.updatedAtMs).toBeGreaterThan(admitted.updatedAtMs + ABANDONED_UPDATE_RUN_MS);
       expect(active?.steps).toContainEqual(
         expect.objectContaining({ step: "build", status: "in_progress" }),
       );

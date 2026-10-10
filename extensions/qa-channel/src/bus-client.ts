@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -22,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+export { normalizeOptionalString as normalizeQaTarget } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export { buildQaTarget, parseQaTarget };
 
@@ -96,6 +98,17 @@ async function postJson<T>(
   body: unknown,
   options: QaBusPostOptions = {},
 ): Promise<T> {
+  return captureEffectAuthority().initiate(() =>
+    initiateQaBusPost<T>(baseUrl, path, body, options),
+  );
+}
+
+async function initiateQaBusPost<T>(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  options: QaBusPostOptions,
+): Promise<T> {
   const url = buildQaBusUrl(baseUrl, path);
   const payload = JSON.stringify(body);
   const client = url.protocol === "https:" ? https : http;
@@ -140,14 +153,6 @@ async function postJson<T>(
     request.on("error", reject);
     request.end(payload);
   });
-}
-
-export function normalizeQaTarget(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed;
 }
 
 export function resolveQaTargetThread(params: {

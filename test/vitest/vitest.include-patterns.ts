@@ -2,6 +2,26 @@ import path from "node:path";
 
 type GlobMatcher = (value: string, pattern: string) => boolean;
 
+export const nonBrowserTestBasenamePattern = "!(*.browser.test.ts|!(*.test.ts))";
+export const nonBrowserTsxTestBasenamePattern = "!(*.browser.test.tsx|!(*.test.tsx))";
+
+export function resolveNonBrowserTestPattern(pattern: string): string | null {
+  const basename = [nonBrowserTestBasenamePattern, nonBrowserTsxTestBasenamePattern].find(
+    (candidate) => pattern.endsWith(candidate),
+  );
+  if (!basename) {
+    return null;
+  }
+  const prefix = pattern.slice(0, -basename.length);
+  if (prefix && !prefix.endsWith("/") && !prefix.endsWith("\\")) {
+    return null;
+  }
+  return (
+    prefix +
+    (basename === nonBrowserTestBasenamePattern ? "!(*.browser).test.ts" : "!(*.browser).test.tsx")
+  );
+}
+
 export function filterFilesByPatterns(
   files: readonly string[],
   include: readonly string[],
@@ -62,18 +82,28 @@ export function narrowIncludePatterns(
     return null;
   }
 
-  // Vitest applies CLI filters after discovery. Prefix overlap cannot prove glob
-  // containment, so retain the owner's patterns unless selecting an owned literal file.
+  // Prefix overlap alone cannot prove containment. Only narrow literal files
+  // and plain directory test patterns; preserve more complex owner globs.
   const narrowed = new Set<string>();
   for (const candidate of candidatePatterns) {
     const isLiteral = !/[?*[\]{}]/u.test(candidate);
     for (const laneScope of includePatterns) {
+      const directoryCandidate = candidate.replace(
+        /\.test\.\*$/u,
+        laneScope.endsWith(".tsx") ? ".test.tsx" : ".test.ts",
+      );
+      const candidateRoot = directoryTestPatternRoot(directoryCandidate);
       if (isLiteral) {
         if (matchesGlob(candidate, laneScope)) {
           narrowed.add(candidate);
         }
       } else if (patternsCouldOverlap(candidate, laneScope, matchesGlob)) {
-        narrowed.add(laneScope);
+        const ownerRoot = directoryTestPatternRoot(laneScope);
+        narrowed.add(
+          candidateRoot !== null && ownerRoot !== null && isAtOrUnder(candidateRoot, ownerRoot)
+            ? directoryCandidate
+            : laneScope,
+        );
       }
     }
   }
@@ -89,15 +119,12 @@ export function isPlainRepoRelativePath(value: string): boolean {
 
 function directoryTestPatternRoot(value: string): string | null {
   const normalized = value.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
-  if (normalized === "**/*.test.ts") {
-    return "";
-  }
-  const suffix = "/**/*.test.ts";
-  if (!normalized.endsWith(suffix)) {
+  const match = /^(?:(.+)\/)?\*\*\/\*\.test\.tsx?$/u.exec(normalized);
+  if (!match) {
     return null;
   }
-  const root = normalized.slice(0, -suffix.length);
-  return isPlainRepoRelativePath(root) ? root : null;
+  const root = match[1] ?? "";
+  return root === "" || isPlainRepoRelativePath(root) ? root : null;
 }
 
 function isAtOrUnder(value: string, root: string): boolean {
@@ -106,10 +133,11 @@ function isAtOrUnder(value: string, root: string): boolean {
 
 function patternIsFullyUnderDirectory(pattern: string, root: string): boolean {
   const normalized = pattern.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
-  if (!normalized.endsWith(".test.ts")) {
+  const testPattern = resolveNonBrowserTestPattern(normalized) ?? normalized;
+  if (!/\.test\.tsx?$/u.test(testPattern)) {
     return false;
   }
-  const literalPrefix = literalPrefixForGlobPattern(normalized).replace(/\/+$/u, "");
+  const literalPrefix = literalPrefixForGlobPattern(testPattern).replace(/\/+$/u, "");
   return isAtOrUnder(literalPrefix, root);
 }
 
@@ -118,9 +146,16 @@ function intersectDirectoryTestPattern(
   candidatePattern: string,
   matchesGlob: GlobMatcher,
 ): string[] | null {
+  const candidateExtension = /\.test\.(tsx?)$/u.exec(candidatePattern)?.[1];
+  const compatiblePatterns = includePatterns.filter((pattern) => {
+    const extension = /\.test\.(tsx?)$/u.exec(
+      resolveNonBrowserTestPattern(pattern) ?? pattern,
+    )?.[1];
+    return !candidateExtension || !extension || candidateExtension === extension;
+  });
   const candidateRoot = directoryTestPatternRoot(candidatePattern);
   if (candidateRoot === null) {
-    return includePatterns.some((pattern) => {
+    return compatiblePatterns.some((pattern) => {
       const includeRoot = directoryTestPatternRoot(pattern);
       return includeRoot !== null && patternIsFullyUnderDirectory(candidatePattern, includeRoot);
     })
@@ -130,7 +165,7 @@ function intersectDirectoryTestPattern(
 
   const result: string[] = [];
   let hasAmbiguousOverlap = false;
-  for (const includePattern of includePatterns) {
+  for (const includePattern of compatiblePatterns) {
     const includeRoot = directoryTestPatternRoot(includePattern);
     if (includeRoot !== null && isAtOrUnder(candidateRoot, includeRoot)) {
       return [candidatePattern];

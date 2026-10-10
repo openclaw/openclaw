@@ -1,4 +1,3 @@
-// Plugin and hook-pack update selectors for id and npm-spec command inputs.
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -84,7 +83,7 @@ export function resolvePluginUpdateSelection(params: {
   rejectedPluginIds?: ReadonlyMap<string, string>;
   rawIds: readonly string[];
   all?: boolean;
-}): Omit<TrackedUpdateSelection, "ids"> & { pluginIds: string[] } {
+}) {
   const { ids, ...selection } = resolveTrackedUpdateSelection({
     ...params,
     packageName: (install) =>
@@ -98,7 +97,7 @@ export function resolveHookPackUpdateSelection(params: {
   installs: Record<string, HookInstallRecord>;
   rawIds: readonly string[];
   all?: boolean;
-}): Omit<TrackedUpdateSelection, "ids"> & { hookIds: string[] } {
+}) {
   const { ids, ...selection } = resolveTrackedUpdateSelection({
     ...params,
     packageName: installedNpmPackageName,

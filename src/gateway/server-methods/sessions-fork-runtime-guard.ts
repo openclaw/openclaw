@@ -1,19 +1,20 @@
-import { isDeepStrictEqual } from "node:util";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import {
-  readSessionUpstreamLink,
-  type SessionUpstreamLink,
-} from "../../sessions/session-upstream-links.js";
+  readCurrentSessionUpstreamLink,
+  type SessionUpstreamLinkReadSource,
+} from "../../sessions/session-upstream-links-runtime.js";
+import type { SessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { sessionUpstreamLinkSourceMatches } from "../../sessions/session-upstream-links.kernel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-export type UpstreamForkHarness = {
+type UpstreamForkHarness = {
   harness: AgentHarness;
 } & (
   | {
@@ -25,11 +26,6 @@ export type UpstreamForkHarness = {
       sessionFork: NonNullable<AgentHarness["sessionForkV2"]>;
     }
 );
-
-export type UpstreamForkCurrentGuard = {
-  assertCurrent: () => void;
-  assertRollbackCurrent: () => void;
-};
 
 export function resolveUpstreamForkHarness(
   link: SessionUpstreamLink,
@@ -57,12 +53,18 @@ export function createUpstreamForkCurrentGuard(params: {
   sessionKey: string;
   source: ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>;
   targetKey: string;
-}): UpstreamForkCurrentGuard {
+  upstreamContext: SessionUpstreamLinkReadSource;
+}) {
   const expectedEntry = params.source.entry;
   if (!expectedEntry) {
     throw new Error(`Session ${params.sessionKey} changed during fork initialization`);
   }
+  const upstreamSource = params.upstreamContext;
+  const { context } = upstreamSource;
+  const expectedLink = structuredClone(params.link);
+  let inSourceTransaction = false;
   const readCurrent = () => {
+    upstreamSource.assertCurrent();
     params.commitGuard();
     const currentConfig = params.context.getRuntimeConfig();
     const source = loadAccessorSessionEntryForGatewayTarget({
@@ -72,7 +74,9 @@ export function createUpstreamForkCurrentGuard(params: {
     });
     const sourceEntry = source.entry;
     const currentLink = sourceEntry
-      ? readSessionUpstreamLink(source.canonicalKey, source.target.agentId)
+      ? inSourceTransaction
+        ? expectedLink
+        : readCurrentSessionUpstreamLink(upstreamSource, source.canonicalKey, source.target.agentId)
       : undefined;
     const currentForkHarness = currentLink ? resolveUpstreamForkHarness(currentLink) : undefined;
     if (
@@ -83,12 +87,7 @@ export function createUpstreamForkCurrentGuard(params: {
       source.target.agentId !== params.source.target.agentId ||
       source.canonicalKey !== params.source.canonicalKey ||
       source.storePath !== params.source.storePath ||
-      !currentLink ||
-      currentLink.catalogId !== params.link.catalogId ||
-      currentLink.hostId !== params.link.hostId ||
-      currentLink.threadId !== params.link.threadId ||
-      currentLink.upstreamKind !== params.link.upstreamKind ||
-      !isDeepStrictEqual(currentLink.upstreamRef, params.link.upstreamRef) ||
+      !sessionUpstreamLinkSourceMatches(currentLink, expectedLink) ||
       !currentForkHarness ||
       currentForkHarness.harness !== params.forkHarness.harness ||
       currentForkHarness.contract !== params.forkHarness.contract ||
@@ -144,6 +143,20 @@ export function createUpstreamForkCurrentGuard(params: {
     }
   };
   return {
+    upstreamLinkCurrent: {
+      context,
+      expected: expectedLink,
+      withCurrent<T>(run: () => T): T {
+        // The shared writer has checked this exact source inside its transaction.
+        const previous = inSourceTransaction;
+        inSourceTransaction = true;
+        try {
+          return run();
+        } finally {
+          inSourceTransaction = previous;
+        }
+      },
+    },
     assertCurrent,
     // After capture, the child initializer and plugin own rollback independently;
     // their target, registry, binding, and thread fences replace forward authority.

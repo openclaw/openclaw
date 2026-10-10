@@ -28,6 +28,13 @@ const superseded: ErrorShape = {
   retryable: true,
   retryAfterMs: 0,
 };
+const agentStarting: ErrorShape = {
+  code: "UNAVAILABLE",
+  message: "Agent main has not completed startup inspection and preparation.",
+  details: { code: "agent-database-inspection-pending", agentId: "main" },
+  retryable: true,
+  retryAfterMs: 250,
+};
 
 afterEach(() => vi.useRealTimers());
 
@@ -121,6 +128,57 @@ it("returns the second catalog rejection without starting a third attempt", asyn
     await result;
   }
 });
+
+it.each(["ready", "silent read", "failed", "disconnected"] as const)(
+  "waits through prolonged agent startup, then handles %s",
+  async (outcome) => {
+    vi.useFakeTimers();
+    const fixture = protocolFixture();
+    let settled = false;
+    const result = loadModelCatalog(fixture.client, { ...scope, timeoutMs: 100 })
+      .catch((error: unknown) => error)
+      .finally(() => (settled = true));
+    try {
+      for (const [index, delay] of [500, 1_000, 2_000, 4_000, 5_000].entries()) {
+        fixture.fail(index, agentStarting);
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(settled).toBe(false);
+        expect(fixture.sent).toHaveLength(index + 1);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(fixture.sent).toHaveLength(6);
+      if (outcome === "ready") {
+        fixture.respond(5, fresh);
+        expect(await result).toEqual(fresh);
+        expect(peekModelCatalog(fixture.client, scope)).toEqual(fresh);
+      } else if (outcome === "silent read") {
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await result).toMatchObject({
+          name: GatewayProtocolRequestTimeoutError.name,
+          timeoutMs: 100,
+          requestSent: true,
+        });
+      } else if (outcome === "failed") {
+        fixture.fail(5, {
+          ...agentStarting,
+          details: { code: "agent-database-inspection-failed", agentId: "main" },
+          retryable: false,
+        });
+        expect(await result).toMatchObject({ retryable: false });
+      } else {
+        fixture.fail(5, agentStarting);
+        await vi.advanceTimersByTimeAsync(0);
+        clearModelCatalogCache(fixture.client);
+        expect(await result).toHaveProperty("name", "AbortError");
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fixture.sent).toHaveLength(6);
+    } finally {
+      fixture.close();
+      await result;
+    }
+  },
+);
 
 it.each([
   { label: "non-retryable response", code: "UNAVAILABLE", retryable: false, correlated: true },

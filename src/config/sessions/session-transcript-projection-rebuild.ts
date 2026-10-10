@@ -25,6 +25,7 @@ import {
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
@@ -117,10 +118,6 @@ function readCanonicalEventId(event: unknown): string | null {
   return event.id.trim() || null;
 }
 
-function changesPriorProjectionVisibility(event: unknown): boolean {
-  return isCanonicalSessionTranscriptEntry(event) && event.type === "reset";
-}
-
 /** Streams projection payloads; only navigation metadata is retained for branch resolution. */
 export function visitSessionTranscriptProjection(
   db: DatabaseSync,
@@ -197,24 +194,10 @@ function visitProjectionSource(
       for (const row of source.rows(true)) {
         sourceIndexedSeq = row.seq;
         const event: unknown = JSON.parse(row.event_json);
-        const navigation: Record<string, unknown> & { seq: number } = { seq: row.seq };
-        if (isRecord(event)) {
-          // Preserve own-property presence, including malformed controls, without retaining
-          // message/tool/compaction payloads in the ancestry graph.
-          for (const key of [
-            "type",
-            "id",
-            "parentId",
-            "targetId",
-            "appendParentId",
-            "appendMode",
-          ]) {
-            if (Object.hasOwn(event, key)) {
-              navigation[key] = event[key];
-            }
-          }
-        }
-        yield navigation;
+        yield {
+          seq: row.seq,
+          ...(isRecord(event) ? projectTranscriptNavigationFields(event) : {}),
+        };
       }
     })(),
   );
@@ -553,7 +536,7 @@ function prepareProjectionTailCatchUp(
   };
   for (const row of rows) {
     const event: unknown = JSON.parse(row.event_json);
-    if (changesPriorProjectionVisibility(event)) {
+    if (isCanonicalSessionTranscriptEntry(event) && event.type === "reset") {
       return undefined;
     }
     const append = prepareSessionTranscriptProjectionAppend({

@@ -28,7 +28,6 @@ import { getMediaDir } from "../../../media/store.js";
 import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
-import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   createSandboxBridgeReadFile,
@@ -39,7 +38,7 @@ import { sanitizeImageBlocks } from "../../tool-images.js";
 import { getAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import {
-  collectMediaImageRefs,
+  mediaFactToImageRef,
   isOpenClawCliImageCachePath,
   resolveMediaFactLocalRef,
   type MediaFileRef,
@@ -54,20 +53,7 @@ import {
 
 export { hasHydratableMediaImages } from "./images.media-refs.js";
 
-const IMAGE_EXTENSION_NAMES = [
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "bmp",
-  "tiff",
-  "tif",
-  "heic",
-  "heif",
-] as const;
-const IMAGE_EXTENSIONS = new Set<string>(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
-const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
+const IMAGE_EXTENSION_PATTERN = "png|jpg|jpeg|gif|webp|bmp|tiff|tif|heic|heif";
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
 const WINDOWS_DRIVE_PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])([A-Za-z]:[\\\\/][^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
@@ -78,10 +64,6 @@ const WINDOWS_DRIVE_PATH_PATTERN = new RegExp(WINDOWS_DRIVE_PATH_REGEX_SOURCE, "
 const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 const LEGACY_ATTACHMENT_MARKER_PATTERN =
   /\[(?:media attached(?:\s+\d+\/\d+)?:|Image:\s*source:)\s*[^\]]+\]/gi;
-
-function isImageExtension(filePath: string): boolean {
-  return IMAGE_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(filePath)));
-}
 
 function normalizeRefForDedupe(raw: string): string {
   const projected =
@@ -96,31 +78,6 @@ type PromptImageEntry = {
   factIndex: ImageFactIndex;
 };
 
-async function sanitizeImageEntriesWithLog(
-  entries: PromptImageEntry[],
-  label: string,
-  imageSanitization?: ImageSanitizationLimits,
-): Promise<{ entries: PromptImageEntry[]; failedMediaCount: number }> {
-  const sanitized: PromptImageEntry[] = [];
-  let dropped = 0;
-  let failedMediaCount = 0;
-  for (const entry of entries) {
-    const result = await sanitizeImageBlocks([entry.image], label, imageSanitization);
-    const image = result.images[0];
-    if (image) {
-      sanitized.push({ image, factIndex: entry.factIndex });
-    }
-    dropped += result.dropped;
-    if (result.dropped > 0 && entry.factIndex !== null) {
-      failedMediaCount++;
-    }
-  }
-  if (dropped > 0) {
-    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
-  }
-  return { entries: sanitized, failedMediaCount };
-}
-
 /** Detects explicit local image paths and file URLs in user prompt text. */
 export function detectImageReferences(prompt: string): MediaFileRef[] {
   const refs: MediaFileRef[] = [];
@@ -129,24 +86,29 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
     " ".repeat(marker.length),
   );
 
-  const addPathRef = (raw: string) => {
+  const addPathRef = (raw: string, fileUrl: boolean) => {
     const trimmed = raw.trim();
     const dedupeKey = normalizeRefForDedupe(trimmed);
     if (!trimmed || seen.has(dedupeKey)) {
       return;
     }
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    // An extension-only basename is a dotfile even though the regex accepts it.
+    if (!fileUrl && !path.extname(trimmed)) {
       return;
     }
-    if (!isImageExtension(trimmed)) {
-      return;
-    }
+    let resolved = trimmed;
     try {
-      assertNoWindowsNetworkPath(trimmed, "Image path");
+      if (fileUrl) {
+        resolved = safeFileURLToPath(trimmed);
+      } else {
+        assertNoWindowsNetworkPath(trimmed, "Image path");
+      }
     } catch {
       return;
     }
-    const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
+    if (!fileUrl && trimmed.startsWith("~")) {
+      resolved = resolveUserPath(trimmed);
+    }
     if (isOpenClawCliImageCachePath(resolved)) {
       return;
     }
@@ -154,33 +116,16 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
-  FILE_URL_PATTERN.lastIndex = 0;
-  WINDOWS_DRIVE_PATH_PATTERN.lastIndex = 0;
-  PATH_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = FILE_URL_PATTERN.exec(pathPrompt)) !== null) {
-    const raw = match[0];
-    const dedupeKey = normalizeRefForDedupe(raw);
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    try {
-      const resolved = safeFileURLToPath(raw);
-      if (isOpenClawCliImageCachePath(resolved)) {
-        continue;
-      }
-      seen.add(dedupeKey);
-      refs.push({ raw, type: "path", resolved });
-    } catch {
-      continue;
-    }
-  }
-
-  for (const pattern of [WINDOWS_DRIVE_PATH_PATTERN, PATH_PATTERN]) {
+  for (const [pattern, group, fileUrl] of [
+    [FILE_URL_PATTERN, 0, true],
+    [WINDOWS_DRIVE_PATH_PATTERN, 1, false],
+    [PATH_PATTERN, 1, false],
+  ] as const) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
     while ((match = pattern.exec(pathPrompt)) !== null) {
-      if (match[1]) {
-        addPathRef(match[1]);
+      if (match[group]) {
+        addPathRef(match[group], fileUrl);
       }
     }
   }
@@ -205,32 +150,39 @@ function rawAliasDedupeKey(alias: string): string | undefined {
 }
 
 async function loadMediaFromRef(
-  ref: MediaFileRef,
-  workspaceDir: string,
-  options?: {
-    label?: string;
-    maxBytes?: number;
-    signal?: AbortSignal;
-    workspaceOnly?: boolean;
-    localRoots?: readonly string[];
-    sandbox?: { root: string; bridge: SandboxFsBridge };
-  },
+  ref: MediaFileRef & { workspaceDir?: string },
+  options: PromptMediaOptions,
+  label: string,
+  attachment = false,
 ): Promise<WebMediaResult | null> {
-  options?.signal?.throwIfAborted();
+  options.signal?.throwIfAborted();
+  // Remote workspaces keep admitted attachment originals on Gateway for hydration.
+  // Prompt-discovered workspace references still use the sandbox boundary.
+  const gatewayAttachment =
+    attachment &&
+    Boolean(
+      getAgentWorkspaceAccess(
+        options.agentWorkspaceDir ?? options.workspaceDir,
+        "prepareTurnAttachments",
+      )?.prepareTurnAttachments,
+    );
+  const sandbox = gatewayAttachment ? undefined : options.sandbox;
+  const localRoots = gatewayAttachment
+    ? [getMediaDir()]
+    : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined));
   const redactedRef = redactSensitiveText(ref.raw || ref.resolved);
   try {
     let targetPath = ref.resolved;
 
-    if (!options?.sandbox) {
+    if (!sandbox) {
       targetPath = await resolveMediaReferenceLocalPath(targetPath);
     }
 
-    if (options?.sandbox) {
+    if (sandbox) {
       try {
         const resolved = await resolveSandboxedBridgeMediaPath({
           sandbox: {
-            root: options.sandbox.root,
-            bridge: options.sandbox.bridge,
+            ...sandbox,
             workspaceOnly: options.workspaceOnly,
           },
           mediaPath: targetPath,
@@ -239,33 +191,31 @@ async function loadMediaFromRef(
         targetPath = resolved.resolved;
       } catch (err) {
         log.warn(
-          `${options?.label ?? "Native media"}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
+          `${label}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
         );
         return null;
       }
     } else if (!path.isAbsolute(targetPath)) {
-      targetPath = path.resolve(workspaceDir, targetPath);
+      targetPath = path.resolve(ref.workspaceDir ?? options.workspaceDir, targetPath);
     }
 
-    const media = options?.sandbox
+    const media = sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
-          readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
+          readFile: createSandboxBridgeReadFile({ sandbox }),
         })
       : await loadWebMedia(
           targetPath,
-          options?.workspaceOnly || options?.localRoots
-            ? { maxBytes: options.maxBytes, localRoots: options.localRoots ?? [workspaceDir] }
-            : options?.maxBytes,
+          localRoots ? { maxBytes: options.maxBytes, localRoots } : options.maxBytes,
         );
 
-    options?.signal?.throwIfAborted();
+    options.signal?.throwIfAborted();
     return media;
   } catch (err) {
-    options?.signal?.throwIfAborted();
+    options.signal?.throwIfAborted();
     log.warn(
-      `${options?.label ?? "Native media"}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
+      `${label}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
     );
     return null;
   }
@@ -289,14 +239,13 @@ export async function detectAndLoadPromptImages(
   loadedCount: number;
   skippedCount: number;
 }> {
+  const counts = { failedMediaCount: 0, loadedCount: 0, skippedCount: 0 };
   if (!params.model.input?.includes("image")) {
     return {
       images: [],
       imageFactIndexes: [],
       detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 0,
-      skippedCount: 0,
+      ...counts,
     };
   }
   // Deferred transcript preparation can carry fresher facts than the recorder's
@@ -314,8 +263,8 @@ export async function detectAndLoadPromptImages(
   const imageFactIndexes = media.flatMap((fact, factIndex) =>
     isImageMediaFact(fact) && !suppressed.has(factIndex) ? [factIndex] : [],
   );
-  const refs = collectMediaImageRefs(media);
-  const refsByFact = new Map(refs.flatMap((ref) => (ref ? [[ref.factIndex, ref] as const] : [])));
+  const refs = media.map(mediaFactToImageRef).filter((ref): ref is MediaImageRef => Boolean(ref));
+  const refsByFact = new Map(refs.map((ref) => [ref.factIndex, ref]));
   const inferredSlots = (() => {
     if (params.imageOrder?.length === imageFactIndexes.length) {
       return params.imageOrder.map((kind, index) => ({
@@ -367,10 +316,7 @@ export async function detectAndLoadPromptImages(
     factIndex: number | undefined,
     allowUnowned: boolean,
   ): PromptImageEntry | undefined => {
-    const exact =
-      factIndex === undefined
-        ? -1
-        : unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
+    const exact = unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
     const index =
       exact >= 0
         ? exact
@@ -379,7 +325,6 @@ export async function detectAndLoadPromptImages(
           : -1;
     return index >= 0 ? unusedExisting.splice(index, 1)[0] : undefined;
   };
-  const availableRefs = refs.filter((ref): ref is MediaImageRef => Boolean(ref));
   const attachmentRefs = slots.flatMap((slot) =>
     slot.kind === "offloaded" && slot.factIndex !== undefined
       ? (refsByFact.get(slot.factIndex) ?? [])
@@ -397,7 +342,7 @@ export async function detectAndLoadPromptImages(
       !attachmentKeys.has(refDedupeKey(ref, params.workspaceDir)),
   );
   const detectedRefs = [
-    ...availableRefs.flatMap(({ detect, hydrate, raw, type, resolved }) =>
+    ...refs.flatMap(({ detect, hydrate, raw, type, resolved }) =>
       detect !== false &&
       (hydrate || (!resolved.startsWith("http://") && !resolved.startsWith("https://")))
         ? [{ raw, type, resolved }]
@@ -405,31 +350,15 @@ export async function detectAndLoadPromptImages(
     ),
     ...promptRefs,
   ];
-  let loadedCount = 0;
-  let failedMediaCount = 0;
-  let skippedCount = 0;
   const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }, attachment = false) => {
-    // Remote workspaces keep admitted attachment originals on Gateway for hydration.
-    // Prompt-discovered workspace references still use the sandbox boundary.
-    const gatewayAttachment =
-      attachment &&
-      Boolean(
-        getAgentWorkspaceAccess(
-          params.agentWorkspaceDir ?? params.workspaceDir,
-          "prepareTurnAttachments",
-        )?.prepareTurnAttachments,
-      );
-    const loadedMedia = await loadMediaFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
-      label: "Native image",
-      maxBytes: params.maxBytes,
-      workspaceOnly: params.workspaceOnly,
-      localRoots: gatewayAttachment
-        ? [getMediaDir()]
-        : (params.localRoots ?? (params.workspaceOnly ? [params.workspaceDir] : undefined)),
-      sandbox: gatewayAttachment ? undefined : params.sandbox,
-    });
+    const loadedMedia = await loadMediaFromRef(
+      ref,
+      { ...params, signal: undefined },
+      "Native image",
+      attachment,
+    );
     if (!loadedMedia || loadedMedia.kind !== "image") {
-      skippedCount++;
+      counts.skippedCount++;
       return null;
     }
     const image: ImageContent = {
@@ -437,7 +366,7 @@ export async function detectAndLoadPromptImages(
       data: loadedMedia.buffer.toString("base64"),
       mimeType: loadedMedia.contentType ?? "image/jpeg",
     };
-    loadedCount++;
+    counts.loadedCount++;
     log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     return image;
   };
@@ -453,7 +382,7 @@ export async function detectAndLoadPromptImages(
     const ref = slot.factIndex === undefined ? undefined : refsByFact.get(slot.factIndex);
     const image = ref?.hydrate ? await loadRef(ref, true) : null;
     if ((ref?.hydrate || slot.kind === "inline") && !image) {
-      failedMediaCount++;
+      counts.failedMediaCount++;
     }
     if (image) {
       promptImages.push({ image, factIndex: ref?.factIndex ?? null });
@@ -466,18 +395,32 @@ export async function detectAndLoadPromptImages(
       promptImages.push({ image, factIndex: null });
     }
   }
-  const sanitizedPromptImages = await sanitizeImageEntriesWithLog(promptImages, "prompt:images", {
+  const imageSanitization = {
     maxBytes: params.maxBytes,
     maxDimensionPx: params.maxDimensionPx,
-  });
-  const finalized = finalizeRuntimePromptImages(sanitizedPromptImages.entries);
+    verifyDecodability: true,
+  };
+  const sanitized: PromptImageEntry[] = [];
+  let dropped = 0;
+  for (const entry of promptImages) {
+    const result = await sanitizeImageBlocks([entry.image], "prompt:images", imageSanitization);
+    const image = result.images[0];
+    if (image) {
+      sanitized.push({ image, factIndex: entry.factIndex });
+    }
+    dropped += result.dropped;
+    if (result.dropped > 0 && entry.factIndex !== null) {
+      counts.failedMediaCount++;
+    }
+  }
+  if (dropped > 0) {
+    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (prompt:images).`);
+  }
 
   return {
-    ...finalized,
+    ...finalizeRuntimePromptImages(sanitized),
     detectedRefs,
-    failedMediaCount: failedMediaCount + sanitizedPromptImages.failedMediaCount,
-    loadedCount,
-    skippedCount,
+    ...counts,
   };
 }
 
@@ -516,23 +459,13 @@ async function materializeVideoFact(
     return { type: "text", text: VIDEO_OMISSION.limit };
   }
   const ref = resolveMediaFactLocalRef(fact);
-  const gatewayAttachment = Boolean(
-    getAgentWorkspaceAccess(
-      options.agentWorkspaceDir ?? options.workspaceDir,
-      "prepareTurnAttachments",
-    )?.prepareTurnAttachments,
-  );
   const loaded = ref
-    ? await loadMediaFromRef(ref, fact.workspaceDir ?? options.workspaceDir, {
-        label: "Native video",
-        maxBytes: budget.remaining,
-        signal: options.signal,
-        workspaceOnly: options.workspaceOnly,
-        localRoots: gatewayAttachment
-          ? [getMediaDir()]
-          : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined)),
-        sandbox: gatewayAttachment ? undefined : options.sandbox,
-      })
+    ? await loadMediaFromRef(
+        { ...ref, workspaceDir: fact.workspaceDir },
+        { ...options, maxBytes: budget.remaining },
+        "Native video",
+        true,
+      )
     : null;
   if (!loaded) {
     return { type: "text", text: VIDEO_OMISSION.unavailable };
@@ -614,19 +547,12 @@ async function materializePromptMediaMessages(
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
     const result = await detectAndLoadPromptImages({
+      ...options,
       prompt: "",
       media: resolvedMedia,
-      workspaceDir: options.workspaceDir,
-      agentWorkspaceDir: options.agentWorkspaceDir,
-      model: options.model,
       existingImages,
       existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
       mediaImageLayout,
-      maxBytes: options.maxBytes,
-      maxDimensionPx: options.maxDimensionPx,
-      workspaceOnly: options.workspaceOnly,
-      localRoots: options.localRoots,
-      sandbox: options.sandbox,
     });
     const projectedContent = await projectOrderedPromptMedia({
       content,
@@ -698,15 +624,9 @@ export async function materializeProviderContext(
   },
 ): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
+    ...params,
     model: { input: ["text", "image"] },
-    workspaceOnly: params.workspaceOnly,
-    localRoots: params.localRoots,
-    sandbox: params.sandbox,
     provider: true,
-    signal: params.signal,
-    onCurrentTurnImageFailure: params.onCurrentTurnImageFailure,
   });
   params.signal?.throwIfAborted();
   return messages === params.context.messages

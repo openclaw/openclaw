@@ -1,4 +1,3 @@
-// FFmpeg exec helpers run ffmpeg and ffprobe with normalized errors.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { runExec, type RunExecOptions } from "../process/exec.js";

@@ -42,14 +42,23 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
 
+export function isPreAdoptionState<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): boolean {
+  return (
+    (state.phase === "dispatching" || state.phase === "deferred") &&
+    !state.guillotined &&
+    !state.superseded
+  );
+}
+
 export function createIngressSettleOwner<TPayload, TMetadata>(
   state: ActiveHandlerState<TPayload, TMetadata>,
   removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,
 ): (fn: () => Promise<void>) => Promise<void> {
   let settlePromise: Promise<void> | undefined;
-  let settled = false;
   return async (fn) => {
-    if (settled) {
+    if (state.phase === "settled") {
       return;
     }
     if (settlePromise) {
@@ -65,7 +74,6 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
         // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
         await fn();
         state.settlementFailure = undefined;
-        settled = true;
         state.phase = "settled";
         removeActive(state);
       } catch (error) {
