@@ -420,12 +420,11 @@ OpenClaw reads the reply after tool hooks and result middleware run, so
 middleware can rewrite or withdraw it. Only the tool author can grant the
 capability: `canDeliverSourceReply` lives on the tool definition, never in a
 result. A call made from inside a Code Mode program returns to that program and
-is never delivered as a reply. On the Codex harness, only calls the model makes
-directly in the `direct-only` catalog can deliver, so declare
-`catalogMode: "direct-only"` as in the example; otherwise the model restates the
-result as usual. A direct-only tool is not available inside a Code Mode
-program; a capable tool exposed in the ordinary catalog can still return data
-to that program, but cannot use the direct-reply fast path there.
+is never delivered as a reply. On the Codex harness, declare
+`catalogMode: "direct-only"` as in the example. Catalog selection alone does not
+grant delivery: the tool call must appear directly in the native model response,
+not only as execution nested inside a program. A nested call remains ordinary
+program data even if native execution reports the direct catalog namespace.
 
 Use this capability for complete reports, confirmations, receipts, or other
 user-ready results. Leave it off for search hits, raw database rows, or
