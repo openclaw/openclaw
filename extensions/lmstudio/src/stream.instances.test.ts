@@ -137,6 +137,8 @@ it.each([
             reason: "error",
             error: expect.objectContaining({
               model: key,
+              errorCode: "model_load_failed",
+              errorBody: JSON.stringify({ requestedContextLength: 16384 }),
               errorMessage: expect.stringContaining(
                 `LM Studio could not load "${key}" with 16384 context tokens`,
               ),

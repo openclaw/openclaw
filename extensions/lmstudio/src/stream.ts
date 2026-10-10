@@ -250,6 +250,8 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                 usage: createEmptyTransportUsage(),
               }),
               errorMessage: error.message,
+              errorCode: "model_load_failed",
+              errorBody: JSON.stringify({ requestedContextLength: error.requiredContextLength }),
             },
           });
           stream.end();
