@@ -3,20 +3,23 @@
 import { TaskStatus } from "@lit/task";
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { nothing } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
-import { clawhubVerdictKey } from "../lib/skills/index.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
 import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
 import type { ModelProvidersRouteData } from "./model-providers/route.ts";
 import type { SessionDeleteRow } from "./sessions/selection.ts";
-import type { SkillsRouteData } from "./skills/skills-page.ts";
+import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
 import { cacheSnapshot } from "./usage/usage-page.test-support.ts";
@@ -26,7 +29,6 @@ import "./debug/debug-page.ts";
 import "./logs/logs-page.ts";
 import "./model-providers/model-providers-page.ts";
 import "./sessions/sessions-page.ts";
-import "./skills/skills-page.ts";
 import "./usage/usage-page.ts";
 
 // Mirrors the module-private default usage TTL asserted below.
@@ -229,8 +231,66 @@ function usageRouteData(
   };
 }
 
+function skillsRouteData(
+  context: ApplicationContext,
+  report: SkillsRouteData["report"],
+  gatewaySnapshot = context.gateway.snapshot,
+): SkillsRouteData {
+  return {
+    gateway: context.gateway,
+    gatewaySnapshot,
+    agents: context.agents,
+    selectedAgentId: context.settingsAgentSelection.state.selectedId,
+    selectionIntentRevision: context.settingsAgentSelection.intentRevision,
+    report,
+    error: null,
+  };
+}
+
+function skillReport(name: string): NonNullable<SkillsRouteData["report"]> {
+  return {
+    workspaceDir: "/tmp/workspace",
+    managedSkillsDir: "/tmp/skills",
+    skills: [createSkill({ name, skillKey: name })],
+  };
+}
+
+function mountSkillsPage(context: ApplicationContext, initialRoute?: SkillsRouteData) {
+  const provider = createSolidApplicationContextProvider(context);
+  const [routeData, setRouteData] = createSignal(initialRoute, { ownedWrite: true });
+  const mounted = mountSolid(
+    () =>
+      createComponent(SkillsPage, {
+        get routeData() {
+          return routeData();
+        },
+        surface: "settings",
+      }),
+    { wrapper: provider.wrapper },
+  );
+  let currentContext = context;
+  flush();
+  return {
+    get page() {
+      return mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
+    },
+    setRouteData,
+    replaceContext(next: ApplicationContext) {
+      const previous = currentContext.gateway.snapshot;
+      createGatewayMetadataObserver(() => true).synchronize(previous, {
+        ...previous,
+        phase: "stopped",
+      });
+      currentContext = next;
+      provider.setContext(next);
+      flush();
+    },
+  };
+}
+
 function linkedSkillReport() {
   return {
+    ...skillReport("Repo Skill"),
     skills: [
       createSkill({
         clawhub: {
@@ -488,32 +548,16 @@ describe("gateway source replacement across reconnect with a reused client", () 
   it("preserves matching skills route data while loading the viewer library", async () => {
     const request = vi.fn(async () => emptySkillLibrary);
     const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
     const context = contextWithClient(client, {
       connected: true,
-      agentsList,
+      agentsList: { defaultId: "main", agents: [{ id: "main" }] },
       selectedAgentId: "main",
     });
-    const report = { skills: [{ skillKey: "old" }] } as unknown as SkillsRouteData["report"];
-    const routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      agents: context.agents,
-      agentsList,
-      selectedAgentId: "main",
-      selectionIntentRevision: context.settingsAgentSelection.intentRevision,
-      report,
-      error: null,
-    } as unknown as SkillsRouteData;
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      routeData: SkillsRouteData;
-      skillsReport: SkillsRouteData["report"];
-    };
-    document.body.append(page);
-    page.routeData = routeData;
-    await page.updateComplete;
-
-    expect(page.skillsReport).toBe(report);
+    const mounted = mountSkillsPage(
+      context,
+      skillsRouteData(context, skillReport("Accepted route skill")),
+    );
+    await waitForSolid(() => expect(mounted.page.textContent).toContain("Accepted route skill"));
     expect(request).toHaveBeenCalledExactlyOnceWith("skills.library.list", { scope: "all" });
   });
 
@@ -537,46 +581,19 @@ describe("gateway source replacement across reconnect with a reused client", () 
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
     const context = contextWithClient(client, {
       connected: true,
-      agentsList,
+      agentsList: { defaultId: "main", agents: [{ id: "main" }] },
       selectedAgentId: "main",
     });
-    const report = linkedSkillReport();
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      routeData: SkillsRouteData;
-      skillsReport: SkillsRouteData["report"];
-      clawhubVerdicts: Record<string, unknown>;
-    };
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      agents: context.agents,
-      agentsList,
-      selectedAgentId: "main",
-      selectionIntentRevision: context.settingsAgentSelection.intentRevision,
-      report,
-      error: null,
-    } as SkillsRouteData;
-
-    document.body.append(page);
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" }),
+    const mounted = mountSkillsPage(context, skillsRouteData(context, linkedSkillReport()));
+    await waitForSolid(() =>
+      expect(mounted.page.querySelector(".plugins-item")?.textContent).toContain("Clean"),
     );
-
+    expect(mounted.page.textContent).toContain("Repo Skill");
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("skills.library.list", { scope: "all" });
-    expect(page.skillsReport).toBe(report);
-    expect(
-      page.clawhubVerdicts[
-        clawhubVerdictKey({
-          registry: "https://clawhub.ai",
-          slug: "agentreceipt",
-          version: "1.2.3",
-        })
-      ],
-    ).toEqual(verdict);
+    expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" });
   });
 
   it("discards pending route verdicts when the connected gateway lifecycle ends", async () => {
@@ -591,28 +608,17 @@ describe("gateway source replacement across reconnect with a reused client", () 
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
-    const harness = contextWithMutableGateway(client, { agentsList, selectedAgentId: "main" });
-    const report = linkedSkillReport();
-    const page = createPage("openclaw-skills-page", harness.context) as TestPage & {
-      routeData: SkillsRouteData;
-      clawhubVerdicts: Record<string, unknown>;
-      clawhubVerdictsLoading: boolean;
-      clawhubVerdictsError: string | null;
-    };
-    page.routeData = {
-      gateway: harness.context.gateway,
-      gatewaySnapshot: harness.context.gateway.snapshot,
-      agents: harness.context.agents,
-      agentsList,
+    const harness = contextWithMutableGateway(client, {
+      agentsList: { defaultId: "main", agents: [{ id: "main" }] },
       selectedAgentId: "main",
-      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
-      report,
-      error: null,
-    } as SkillsRouteData;
-
-    document.body.append(page);
-    await waitForFast(() => expect(page.clawhubVerdictsLoading).toBe(true));
+    });
+    const mounted = mountSkillsPage(
+      harness.context,
+      skillsRouteData(harness.context, linkedSkillReport()),
+    );
+    await waitForSolid(() =>
+      expect(mounted.page.querySelector(".plugins-item")?.textContent).toContain("Refreshing"),
+    );
     harness.emitConnected(false);
     pending.resolve({
       schema: "openclaw.skills.security-verdicts.v1",
@@ -628,11 +634,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
       ],
     });
     await pending.promise;
-    await page.updateComplete;
-
-    expect(page.clawhubVerdicts).toEqual({});
-    expect(page.clawhubVerdictsLoading).toBe(false);
-    expect(page.clawhubVerdictsError).toBeNull();
+    await waitForSolid(() => expect(mounted.page.querySelector(".plugins-item")).toBeNull());
+    expect(mounted.page.textContent).not.toContain("Clean");
+    expect(mounted.page.textContent).not.toContain("Refreshing");
+    expect(mounted.page.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("skills.library.list", { scope: "all" });
     expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" });
@@ -649,42 +654,29 @@ describe("gateway source replacement across reconnect with a reused client", () 
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global" as const,
-      agents: [{ id: "main" }, { id: "research" }],
-    };
     const context = contextWithClient(client, {
       connected: true,
-      agentsList,
+      agentsList: {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "main" }, { id: "research" }],
+      },
       selectedAgentId: "main",
     });
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      routeData: SkillsRouteData;
-    };
-
-    document.body.append(page);
-    await page.updateComplete;
-    expect(request).toHaveBeenCalledExactlyOnceWith("skills.library.list", { scope: "all" });
-
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: { ...context.gateway.snapshot },
-      agents: context.agents,
-      selectedAgentId: "main",
-      selectionIntentRevision: context.settingsAgentSelection.intentRevision,
-      report: null,
-      error: null,
-    };
-    await waitForFast(() =>
+    const mounted = mountSkillsPage(context);
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledExactlyOnceWith("skills.library.list", { scope: "all" }),
+    );
+    mounted.setRouteData(skillsRouteData(context, null, { ...context.gateway.snapshot }));
+    await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" }),
     );
     expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("rejects skills route data from an earlier same-client gateway epoch", async () => {
-    const freshReport = { skills: [{ skillKey: "fresh" }] } as unknown as SkillsRouteData["report"];
+    const freshReport = skillReport("Fresh skill");
     const request = vi.fn(async (method: string) => {
       if (method === "skills.library.list") {
         return emptySkillLibrary;
@@ -695,33 +687,17 @@ describe("gateway source replacement across reconnect with a reused client", () 
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
     const context = contextWithClient(client, {
       connected: true,
-      agentsList,
+      agentsList: { defaultId: "main", agents: [{ id: "main" }] },
       selectedAgentId: "main",
     });
-    const staleReport = { skills: [{ skillKey: "stale" }] } as unknown as SkillsRouteData["report"];
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      routeData: SkillsRouteData;
-      skillsReport: SkillsRouteData["report"];
-    };
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: { ...context.gateway.snapshot },
-      agents: context.agents,
-      agentsList,
-      selectedAgentId: "main",
-      selectionIntentRevision: context.settingsAgentSelection.intentRevision,
-      report: staleReport,
-      error: null,
-    } as unknown as SkillsRouteData;
-
-    document.body.append(page);
-    await page.updateComplete;
-    await waitForFast(() => expect(page.skillsReport).toBe(freshReport));
-
-    expect(page.skillsReport).not.toBe(staleReport);
+    const mounted = mountSkillsPage(
+      context,
+      skillsRouteData(context, skillReport("Stale skill"), { ...context.gateway.snapshot }),
+    );
+    await waitForSolid(() => expect(mounted.page.textContent).toContain("Fresh skill"));
+    expect(mounted.page.textContent).not.toContain("Stale skill");
   });
 
   it("clears sessions loaded by the previous provider", async () => {
@@ -788,53 +764,88 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.usageSelectedSessions).toEqual([]);
   });
 
-  it("clears skills loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-skills-page", contextWithClient(client)) as TestPage & {
-      skillsReport: unknown;
-      skillCardContents: Record<string, string>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.skillsReport = { skills: [{ key: "old" }] };
-    page.skillCardContents = { old: "stale" };
-
-    await replaceContext(page, client);
-
-    expect(page.skillsReport).toBeNull();
-    expect(page.skillCardContents).toEqual({});
+  it("clears skills and cached cards loaded by the previous provider", async () => {
+    const report = skillReport("Old provider skill");
+    report.skills[0]!.skillCard = { present: true, path: "/tmp/skill-card.md", sizeBytes: 20 };
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.list") {
+        return emptySkillLibrary;
+      }
+      if (method === "skills.skillCard") {
+        return { skillKey: "Old provider skill", content: "# Previous provider card" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client, {
+      connected: true,
+      agentsList: { defaultId: "main", agents: [{ id: "main" }] },
+      selectedAgentId: "main",
+    });
+    const mounted = mountSkillsPage(context, skillsRouteData(context, report));
+    await waitForSolid(() =>
+      expect(
+        mounted.page.querySelector('[aria-label="Open Old provider skill details"]'),
+      ).not.toBeNull(),
+    );
+    mounted.page
+      .querySelector<HTMLButtonElement>('[aria-label="Open Old provider skill details"]')!
+      .click();
+    await waitForSolid(() =>
+      expect(mounted.page.querySelector("#skill-detail-tab-card")).not.toBeNull(),
+    );
+    mounted.page.querySelector<HTMLButtonElement>("#skill-detail-tab-card")!.click();
+    await waitForSolid(() => expect(mounted.page.textContent).toContain("Previous provider card"));
+    mounted.replaceContext(contextWithClient(client));
+    await waitForSolid(() => expect(mounted.page.textContent).not.toContain("Old provider skill"));
+    expect(mounted.page.textContent).not.toContain("Previous provider card");
+    expect(mounted.page.querySelector("#skill-detail-panel")).toBeNull();
   });
 
   it("discards an agent list from a replaced skills source that reuses its client", async () => {
     const pending = deferred<AgentsListResult | null>();
     const ensureList = vi.fn(() => pending.promise);
-    const request = vi.fn(async () => emptySkillLibrary);
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.list") {
+        return emptySkillLibrary;
+      }
+      if (method === "skills.status") {
+        return skillReport("Replacement agent skill");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true, ensureList });
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      loadAgents: () => Promise<void>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    const load = page.loadAgents();
-    await waitForFast(() => expect(ensureList).toHaveBeenCalled());
+    const mounted = mountSkillsPage(
+      context,
+      skillsRouteData(context, null, { ...context.gateway.snapshot }),
+    );
+    await waitForSolid(() => expect(ensureList).toHaveBeenCalled());
     const replacementAgents = {
       defaultId: "fresh",
       mainKey: "agent:fresh:main",
       scope: "all",
       agents: [{ id: "fresh" }],
-    } as unknown as AgentsListResult;
-    await replaceContext(page, client, { connected: true, agentsList: replacementAgents });
-
+    };
+    mounted.replaceContext(
+      contextWithClient(client, {
+        connected: true,
+        agentsList: replacementAgents,
+        selectedAgentId: "fresh",
+      }),
+    );
+    await waitForSolid(() => expect(mounted.page.textContent).toContain("Replacement agent skill"));
     pending.resolve({
       defaultId: "stale",
       mainKey: "agent:stale:main",
       scope: "all",
       agents: [{ id: "stale" }],
     } as unknown as AgentsListResult);
-    await load;
-
-    expect(page.context.agents.state.agentsList).toBe(replacementAgents);
+    await pending.promise;
+    flush();
+    expect(mounted.page.textContent).toContain("Replacement agent skill");
+    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "fresh" });
+    expect(request).not.toHaveBeenCalledWith("skills.status", { agentId: "stale" });
   });
 
   it("clears logs loaded by the previous provider", async () => {

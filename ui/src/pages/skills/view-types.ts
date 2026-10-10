@@ -1,4 +1,4 @@
-import type { TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillsState } from "../../lib/skills/index.ts";
 
@@ -10,7 +10,7 @@ export type SkillsProps = {
   surface?: "discovery" | "settings";
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
-  library?: TemplateResult;
+  library?: JSX.Element;
   showInventory?: boolean;
   canUpdate: boolean;
   canInstall: boolean;

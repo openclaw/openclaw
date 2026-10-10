@@ -4,9 +4,9 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-cont
 import { createContext } from "../custodian/custodian-page.test-harness.ts";
 import { currentPluginHelpReference, takePluginHelpDraft } from "../custodian/plugin-help.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import type { PluginsPageViewModel } from "./plugins-page-view.ts";
+import type { PluginsPageViewModel } from "./plugins-page-view.tsx";
 import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-page.test-support.ts";
-import type { PluginSettingsField } from "./settings-editor.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 
 function createController() {
   return new PluginHelpController({

@@ -1,0 +1,44 @@
+import { render as mountSolid } from "@solidjs/testing-library";
+import { html } from "lit";
+import { AsyncDirective } from "lit/async-directive.js";
+import { directive } from "lit/directive.js";
+import { createSignal, flush } from "solid-js";
+import { expect, it, vi } from "vitest";
+import { LitContent } from "./lit-content.tsx";
+
+it("retains a Lit island's nodes and disconnects its directives on Solid disposal", () => {
+  const disconnected = vi.fn();
+  class Lifetime extends AsyncDirective {
+    render(label: string) {
+      return html`<input aria-label="Island field" .value=${label} />`;
+    }
+    override disconnected() {
+      disconnected();
+    }
+  }
+  const lifetime = directive(Lifetime);
+  const [label, setLabel] = createSignal("First");
+  const clicked = vi.fn();
+  const view = mountSolid(() => (
+    <LitContent tag="article" class="sidebar-markdown" onClick={clicked}>
+      {html`<p>${lifetime(label())}</p>`}
+    </LitContent>
+  ));
+  try {
+    flush();
+    const article = view.container.querySelector("article.sidebar-markdown")!;
+    const field = article.querySelector<HTMLInputElement>("p > input")!;
+    expect(field.value).toBe("First");
+    article.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(clicked).toHaveBeenCalledOnce();
+    setLabel("Second");
+    flush();
+    expect(article.querySelector("p > input")).toBe(field);
+    expect(field.value).toBe("Second");
+    expect(disconnected).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+  }
+  expect(disconnected).toHaveBeenCalledOnce();
+  expect(view.container.childNodes).toHaveLength(0);
+});

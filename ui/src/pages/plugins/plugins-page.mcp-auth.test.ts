@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createClient,
   createContext,
@@ -48,7 +48,9 @@ describe("plugin MCP sign-in", () => {
     );
     const context = createContext(harness.gateway);
     const mounted = await mountPage(context, route, "settings");
-    await waitForFast(() => expect(mounted.page.detail?.inspection).toBeTruthy());
+    await waitForSolid(() =>
+      expect(mounted.page.querySelector(".plugin-capabilities")).not.toBeNull(),
+    );
     await mounted.page.updateComplete;
     return { ...mounted, ...harness, client, request, route, context };
   }
@@ -107,21 +109,21 @@ describe("plugin MCP sign-in", () => {
       throw new Error(`Unexpected method ${method}`);
     });
     page.querySelector<HTMLButtonElement>('[aria-label="Connect workboard-mcp"]')!.click();
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith(
         "mcp.authLogin",
         { serverName: "workboard-mcp", sessionId: expect.any(String) },
         { timeoutMs: null },
       ),
     );
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2),
     );
     expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).not.toBeNull();
     refreshed.resolve(
       createInspectResult({ mcpAuth: [{ serverName: "workboard-mcp", state: "authorized" }] }),
     );
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).toBeNull(),
     );
     expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
@@ -177,7 +179,7 @@ describe("plugin MCP sign-in", () => {
         emit(client, false);
         emit(client, true);
       }
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request).toHaveBeenCalledWith(
           "wizard.cancel",
           { sessionId: (start[1] as { sessionId: string }).sessionId, closeInput: true },
@@ -185,7 +187,7 @@ describe("plugin MCP sign-in", () => {
         ),
       );
       admission.resolve({ done: false, status: "running" });
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toHaveLength(2),
       );
       expect(request.mock.calls.some(([method]) => method === "wizard.next")).toBe(false);

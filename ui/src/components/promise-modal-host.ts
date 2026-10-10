@@ -1,17 +1,18 @@
 import { nothing, render } from "lit";
 import "./modal-dialog.ts";
 
-type PromiseModalHost<T> = {
+type PromiseModalHost<T, Content> = {
   host: HTMLDivElement;
   finish: (value: T) => void;
-  render: (content: () => unknown) => void;
+  render: (content: () => Content) => void;
   readonly settled: boolean;
 };
 
 /** Owns one imperative modal host; dismissal and reentrancy stay with its dialog. */
-export function withPromiseModalHost<T>(
+export function withPromiseModalHost<T, Content = unknown>(
   abort: { signal?: AbortSignal; value: T } | undefined,
-  initialize: (modal: PromiseModalHost<T>) => void,
+  initialize: (modal: PromiseModalHost<T, Content>) => void,
+  mountContent?: (content: () => Content, host: HTMLDivElement) => () => void,
 ): Promise<T> {
   if (abort?.signal?.aborted) {
     return Promise.resolve(abort.value);
@@ -19,12 +20,18 @@ export function withPromiseModalHost<T>(
   const host = document.createElement("div");
   document.body.append(host);
   return new Promise((resolve) => {
+    let disposeContent: (() => void) | undefined;
     const modal = {
       host,
       settled: false,
-      render(content: () => unknown) {
+      render(content: () => Content) {
         if (!modal.settled) {
-          render(content(), host);
+          if (mountContent) {
+            disposeContent?.();
+            disposeContent = mountContent(content, host);
+          } else {
+            render(content(), host);
+          }
         }
       },
       finish(value: T) {
@@ -33,7 +40,10 @@ export function withPromiseModalHost<T>(
         }
         modal.settled = true;
         abort?.signal?.removeEventListener("abort", handleAbort);
-        render(nothing, host);
+        disposeContent?.();
+        if (!mountContent) {
+          render(nothing, host);
+        }
         host.remove();
         resolve(value);
       },

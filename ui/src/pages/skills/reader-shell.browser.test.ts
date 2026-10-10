@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
+import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createSkill } from "./view.test-support.ts";
-import { renderSkills } from "./view.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLElement | undefined;
 
 afterEach(() => {
+  cleanupSkillsViews();
   if (container) {
     render(nothing, container);
     container.remove();
@@ -52,21 +53,20 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const canonicalChrome = readChrome(
       container.querySelector<HTMLElement>(".exec-approval-card")!,
     );
+    render(nothing, container);
     const showContent = (content: string) => {
-      render(
-        renderSkills(
-          createProps(
-            variant === "error"
-              ? { clawhubDetailRef: "example-skill", clawhubDetailError: content }
-              : {
-                  detailKey: "repo-skill",
-                  report: {
-                    workspaceDir: "/fixture/workspace",
-                    managedSkillsDir: "/fixture/skills",
-                    skills: [createSkill({ description: content, primaryEnv: undefined })],
-                  },
+      renderSkills(
+        createProps(
+          variant === "error"
+            ? { clawhubDetailRef: "example-skill", clawhubDetailError: content }
+            : {
+                detailKey: "repo-skill",
+                report: {
+                  workspaceDir: "/fixture/workspace",
+                  managedSkillsDir: "/fixture/skills",
+                  skills: [createSkill({ description: content, primaryEnv: undefined })],
                 },
-          ),
+              },
         ),
         container!,
       );

@@ -8,7 +8,7 @@ import type {
   PluginDiscoveryEntry,
   PluginDiscoveryResult,
 } from "../../lib/plugins/index.ts";
-import type { PluginDiscoveryIntent } from "./catalog-results.ts";
+import type { PluginDiscoveryIntent } from "./catalog-results.tsx";
 
 const CATALOG_PAGE_SIZE = 100;
 const CATALOG_SECTION_SIZE = 8;
