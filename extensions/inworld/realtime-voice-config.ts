@@ -199,8 +199,9 @@ function asEnumValue<T extends string>(
     return undefined;
   }
   const candidate = options.uppercase ? normalized.toUpperCase() : normalized.toLowerCase();
-  if (allowed.includes(candidate as T)) {
-    return candidate as T;
+  const match = allowed.find((entry) => entry === candidate);
+  if (match !== undefined) {
+    return match;
   }
   throw new Error(`Inworld realtime voice ${label} must be one of ${allowed.join(", ")}`);
 }
@@ -220,7 +221,7 @@ function normalizeInworldRealtimeProviderData(
     }
   }
   const unknownKeys = Object.keys(raw).filter(
-    (key) => !(INWORLD_REALTIME_PROVIDER_DATA_SECTIONS as readonly string[]).includes(key),
+    (key) => !INWORLD_REALTIME_PROVIDER_DATA_SECTIONS.some((section) => section === key),
   );
   if (unknownKeys.length > 0) {
     throw new Error(

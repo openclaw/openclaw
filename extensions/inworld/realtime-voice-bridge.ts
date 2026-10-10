@@ -108,7 +108,7 @@ export class InworldRealtimeVoiceBridge
       try {
         serialized = serializeInworldRealtimeToolResult(result);
       } catch (error) {
-        this.config.onError?.(error as Error);
+        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
         throw error;
       }
       if (this.pendingToolResults.length >= INWORLD_REALTIME_MAX_PENDING_TOOL_RESULTS) {
@@ -218,6 +218,7 @@ export class InworldRealtimeVoiceBridge
         }
         this.captureEvent(url, { direction: "inbound", kind: "ws-frame", payload: data });
         try {
+          // SAFETY: frames on this authenticated Inworld socket are realtime events; handleEvent dispatches on event.type and this try routes malformed frames to the error path.
           const event = JSON.parse(data.toString()) as InworldRealtimeEvent;
           if (event.type === "error" && !attempt.ready) {
             rejectStartup(new Error(readInworldRealtimeErrorDetail(event.error)));
@@ -364,10 +365,7 @@ export class InworldRealtimeVoiceBridge
     if (ws?.readyState !== WebSocket.OPEN) {
       return;
     }
-    const type =
-      event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
-        ? (event as { type: string }).type
-        : "unknown";
+    const type = readOutboundEventType(event);
     const payload = JSON.stringify(event);
     this.captureEvent(this.connectionUrl, { direction: "outbound", kind: "ws-frame", payload });
     ws.send(payload);
@@ -441,4 +439,11 @@ export class InworldRealtimeVoiceBridge
     this.conversationId = null;
     this.resetRealtimeSessionState();
   }
+}
+
+function readOutboundEventType(event: unknown): string {
+  if (!event || typeof event !== "object" || !("type" in event)) {
+    return "unknown";
+  }
+  return typeof event.type === "string" ? event.type : "unknown";
 }
