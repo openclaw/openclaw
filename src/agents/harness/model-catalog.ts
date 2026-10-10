@@ -365,9 +365,11 @@ export function isPreparedNativeModelCatalogReady(params: {
         const runtime = entry.nativeRuntime;
         return (
           !runtime ||
-          snapshot.nativeProviderOutcomes?.[runtime]?.some(
-            (outcome) => outcome.provider === entry.provider && outcome.status !== "ready",
-          ) ||
+          (snapshot.nativeProviderOutcomes &&
+            Object.hasOwn(snapshot.nativeProviderOutcomes, runtime) &&
+            snapshot.nativeProviderOutcomes[runtime]?.some(
+              (outcome) => outcome.provider === entry.provider && outcome.status !== "ready",
+            )) ||
           isPreparedNativeModelCatalogReady({
             ...params,
             selection: { provider: entry.provider, modelId: entry.id, runtime },

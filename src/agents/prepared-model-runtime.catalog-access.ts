@@ -484,8 +484,7 @@ export async function createFullModelCatalogAccess(
             nativeScope.has(normalizeProvider(provider)),
           )
         : auth;
-      const acquiredNative =
-        latest.nativeCatalogAcquired || (!selection && (!providerIds || completed));
+      const acquiredNative = latest.nativeCatalogAcquired || (!selection && !providerIds);
       const nextInventory =
         completed || failures.length
           ? {

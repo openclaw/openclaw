@@ -240,9 +240,14 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
   },
 );
 
-it.each([false, true])(
-  "reacquires a retired healthy runtime after a sibling failure (shared provider: %s)",
-  async (sharedProvider) => {
+it.each([
+  { sharedProvider: false, runtime: "native-test" },
+  { sharedProvider: true, runtime: "native-test" },
+  { sharedProvider: true, runtime: "constructor" },
+  { sharedProvider: true, runtime: "__proto__" },
+])(
+  "reacquires a retired $runtime after a sibling failure (shared provider: $sharedProvider)",
+  async ({ sharedProvider, runtime }) => {
     const config: OpenClawConfig = {
       agents: {
         entries: { pro: {} },
@@ -250,7 +255,7 @@ it.each([false, true])(
           model: "demo/native-model",
           models: {
             "demo/native-model": {
-              agentRuntime: { id: "native-test" },
+              agentRuntime: { id: runtime },
               ...(sharedProvider ? { pickerRuntimes: ["failed-native"] } : {}),
             },
           },
@@ -263,7 +268,7 @@ it.each([false, true])(
       provider: "demo",
       id: "native-model",
       name: "Native model",
-      nativeRuntime: "native-test",
+      nativeRuntime: runtime,
     };
     let healthyReady = false;
     let failedReady = sharedProvider;
@@ -280,7 +285,7 @@ it.each([false, true])(
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
       const registry = createEmptyPluginRegistry();
       for (const [id, loadModelCatalog, isReady] of [
-        ["native-test", loadHealthy, () => healthyReady],
+        [runtime, loadHealthy, () => healthyReady],
         ["failed-native", loadFailed, () => failedReady],
       ] as const) {
         registry.agentHarnesses.push({
@@ -333,3 +338,74 @@ it.each([false, true])(
     expect(loadFailed).toHaveBeenCalledTimes(acquisitions + 1);
   },
 );
+
+it("acquires remaining native runtimes after an initial provider-scoped refresh", async () => {
+  const config: OpenClawConfig = {
+    agents: {
+      entries: { pro: {} },
+      defaults: {
+        model: "first/native-model",
+        models: {
+          "first/native-model": { agentRuntime: { id: "native-first" } },
+          "second/configured-hint": { pickerRuntimes: ["native-second"] },
+        },
+      },
+    },
+  };
+  mocks.configuredAgentIds = ["pro"];
+  mocks.resolveNativeModelPrimary.mockReturnValue("first/native-model");
+  const first = {
+    provider: "first",
+    id: "native-model",
+    name: "First",
+    nativeRuntime: "native-first",
+  };
+  const second = {
+    provider: "second",
+    id: "discovered-model",
+    name: "Second",
+    nativeRuntime: "native-second",
+  };
+  const loadFirst = vi.fn(async () => [first]);
+  const loadSecond = vi.fn(async () => [second]);
+  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+    const registry = createEmptyPluginRegistry();
+    for (const [row, loadModelCatalog] of [
+      [first, loadFirst],
+      [second, loadSecond],
+    ] as const) {
+      registry.agentHarnesses.push({
+        pluginId: row.nativeRuntime,
+        source: "fixture",
+        harness: {
+          id: row.nativeRuntime,
+          label: row.name,
+          authBootstrap: "harness",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          loadModelCatalog,
+        },
+      });
+    }
+    return registry;
+  });
+  await refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+  });
+  const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config))!;
+  await owner.loadFullModelCatalog!({ providerIds: ["first"], refresh: true, wait: true });
+  expect(loadFirst).toHaveBeenCalledOnce();
+  expect(loadSecond).not.toHaveBeenCalled();
+  const respond = await createPicker(config)();
+  expect(loadSecond).toHaveBeenCalledOnce();
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    true,
+    expect.objectContaining({
+      models: expect.arrayContaining([
+        expect.objectContaining({ provider: second.provider, id: second.id }),
+      ]),
+    }),
+    undefined,
+  );
+});
