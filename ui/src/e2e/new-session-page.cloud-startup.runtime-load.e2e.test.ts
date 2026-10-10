@@ -6,7 +6,6 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
-import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
@@ -306,7 +305,7 @@ suite.define(() => {
             await page.locator(".sidebar-brand__new-thread").click();
             const privacy = page.getByRole("switch", { name: "Incognito" });
             await privacy.waitFor();
-            if ((await privacy.getAttribute("aria-checked")) !== "true") {
+            if (!(await privacy.isChecked())) {
               await privacy.click();
             }
             await page.locator(".new-session-page__message").fill(separateDraft);
@@ -383,8 +382,6 @@ suite.define(() => {
           params: { key: sessionKey, message, idempotencyKey: messageId },
         });
         if (escape === "toast") {
-          // Startup replay can send before the reloaded shell publishes its readiness hook.
-          await waitForControlUiInitialRoster(page);
           await navigateToControlUiSession(page, sessionKey);
         }
         await expect

@@ -632,7 +632,9 @@ describe("ConfigPage Updates integration", () => {
     expect(container.querySelector(".settings-status")?.textContent).toContain(
       "Checking for updates…",
     );
-    expect(container.querySelector("wa-radio-group")?.hasAttribute("disabled")).toBe(true);
+    expect(container.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
+      true,
+    );
     state.context.overlays.snapshot.updateStatusRefreshing = false;
     state.context.overlays.snapshot.updateStatusCheckBanner = {
       mode: "manual",
@@ -660,17 +662,18 @@ describe("ConfigPage Updates integration", () => {
     );
     expect(runUpdate).not.toHaveBeenCalled();
 
-    const channel = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
+    const channel = container.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="beta"]',
+    );
     if (!channel) {
       throw new Error("Missing update channel control");
     }
-    channel.value = "beta";
-    channel.dispatchEvent(new Event("change"));
+    channel.click();
     const policySwitches = [
-      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
+      ...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input"),
     ];
     const checks = policySwitches.find(
-      (control) => control.textContent?.trim() === "Check for updates",
+      (control) => control.closest(".settings-toggle")?.textContent?.trim() === "Check for updates",
     );
     if (!checks) {
       throw new Error("Missing update checks control");
@@ -678,7 +681,7 @@ describe("ConfigPage Updates integration", () => {
     checks.checked = false;
     checks.dispatchEvent(new Event("change"));
     const automatic = policySwitches.find(
-      (control) => control.textContent?.trim() === "Automatic updates",
+      (control) => control.closest(".settings-toggle")?.textContent?.trim() === "Automatic updates",
     );
     if (!automatic) {
       throw new Error("Missing automatic update control");
