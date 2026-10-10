@@ -13,7 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { ExecApprovalManager, type ExecApprovalRecord } from "../exec-approval-manager.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
   bindApprovalReviewerDeviceIds,
@@ -21,8 +21,13 @@ import {
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
-import { handleApprovalResolve } from "./approval.test-support.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import {
+  createApprovalClient,
+  createApprovalClientLookup,
+  handleApprovalResolve,
+  requestedEvent,
+} from "./approval.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -34,50 +39,6 @@ vi.mock("../../infra/approval-turn-source.js", () => ({
 vi.mock("../approval-channel-custody.js", () => ({
   prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
-
-function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
-  return {
-    id: record.id,
-    request: record.request,
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-  };
-}
-
-type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
-
-function createApprovalClient(params: {
-  connId: string;
-  clientId: string;
-  deviceId?: string;
-  scopes?: string[];
-  approvalRuntime?: boolean;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: params.clientId },
-      device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: params.scopes ?? ["operator.approvals"],
-    },
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
-  } as GatewayClient;
-}
-
-function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
-  return (opts = {}) =>
-    new Set(
-      clients
-        .filter((client) => {
-          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
-            return false;
-          }
-          return opts.filter?.(client, opts.record) ?? true;
-        })
-        .map((client) => client.connId)
-        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
-    );
-}
 
 describe("handlePendingApprovalRequest", () => {
   afterEach(() => {
@@ -1263,12 +1224,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     await manager.register(record, 60_000);
     const respond = vi.fn();
-    const event = {
-      id: record.id,
-      request: record.request,
-      createdAtMs: record.createdAtMs,
-      expiresAtMs: record.expiresAtMs,
-    };
+    const event = requestedEvent(record);
 
     await handlePendingApprovalRequest({
       manager,
