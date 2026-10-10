@@ -351,21 +351,11 @@
 }
 
 .chat-pane__header-leading,
-.chat-pane__header-center,
 .chat-pane__header-trailing {
   display: flex;
   min-width: 0;
   align-items: center;
-}
-
-.chat-pane__header-leading,
-.chat-pane__header-trailing {
   gap: 8px;
-}
-
-.chat-pane__header-center {
-  position: relative;
-  justify-self: center;
 }
 
 .chat-pane__header-trailing {

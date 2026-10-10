@@ -1,3 +1,4 @@
+import path from "node:path";
 import * as agentHarnessToolRuntime from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -22,7 +23,7 @@ import {
   setNoAbort,
 } from "../../auto-reply/reply/dispatch-from-config.test-harness.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
-import { buildDirectChatContext } from "../../auto-reply/reply/groups.js";
+import { buildSourceConversationContext } from "../../auto-reply/reply/groups.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   bindSourceReplyDeliveryRuntime,
@@ -91,6 +92,10 @@ describe("prepared harness source delivery", () => {
     const loaded = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "prepared-source-delivery" });
+    // The real runner must not borrow the dispatch mock’s shared /tmp database.
+    sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(
+      path.join(state.stateDir, "mock-sessions.json"),
+    );
     return loaded;
   }
   afterEach(async () => {
@@ -399,11 +404,11 @@ describe("prepared harness source delivery", () => {
       followupRun.run.sessionFile = followupRun.run.sessionId;
       followupRun.run.sourceReplyDeliveryMode = runtimeOpts.sourceReplyDeliveryMode;
       const extraSystemPromptBySourceReplyDeliveryMode = {
-        automatic: buildDirectChatContext({
+        automatic: buildSourceConversationContext({
           sessionCtx: { Provider: "discord", ChatType: "direct" },
           sourceReplyDeliveryMode: "automatic",
         }),
-        message_tool_only: buildDirectChatContext({
+        message_tool_only: buildSourceConversationContext({
           sessionCtx: { Provider: "discord", ChatType: "direct" },
           sourceReplyDeliveryMode: "message_tool_only",
         }),

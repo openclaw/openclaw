@@ -192,7 +192,10 @@ it("rechecks prepared durable maintenance facts after the final replacement gran
       expect(finalGrant).toBe(true);
       expect(error).toMatchObject({
         code: "outcome-unknown",
-        cause: { message: "Session subagent facts changed before commit" },
+        cause: {
+          name: "SqliteSessionMutationConflictError",
+          operationLabel: "session maintenance",
+        },
       });
       expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("before");
     } finally {

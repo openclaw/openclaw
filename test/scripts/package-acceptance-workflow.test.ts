@@ -2927,6 +2927,7 @@ function createReleasePublishFixture(
     join(helperDir, "release-beta-verifier.ts"),
     "file",
   );
+  symlinkSync(resolve("scripts/tsx.mjs"), join(helperDir, "../tsx.mjs"), "file");
   writeFileSync(eventsPath, "");
   writeFileSync(githubEventPath, JSON.stringify({ inputs }));
   writeFileSync(outputPath, "");
@@ -3002,6 +3003,7 @@ ${functions}
           PATH: process.env.PATH,
           GITHUB_WORKSPACE: root,
           RUNNER_TEMP: root,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
           GITHUB_OUTPUT: outputPath,
           GITHUB_STEP_SUMMARY: join(root, "summary"),
           GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -6928,7 +6930,7 @@ if (args[0] === "view") {
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     const diagnosticPath = join(fixture.root, "evidence/release-postpublish-diagnostics.json");
     const imported = fixture.run({
-      run: `node --import tsx --input-type=module -e 'await import("./.release-harness/scripts/lib/release-beta-verifier.ts")' diagnostic-import initialize`,
+      run: `node --import ./.release-harness/scripts/tsx.mjs --input-type=module -e 'await import("./.release-harness/scripts/lib/release-beta-verifier.ts")' diagnostic-import initialize`,
     });
     expect(imported.status, imported.stderr).toBe(0);
     expect(imported.stderr).toBe("");

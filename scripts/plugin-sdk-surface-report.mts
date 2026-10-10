@@ -213,9 +213,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: required session cleanup failure preserves native ownership before host reset.
       // +2: approved async upstream-link writes with released sync compatibility.
       // -8: retired Skill Workshop proposal hook types.
+      // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
       // +1: requester-bound transport effects for owner-routed plugin commands.
-      3646,
+      3649,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -228,16 +229,18 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
       // +1: resolve the controller from the current invocation registry.
       // +2: approved async upstream-link writes with released sync compatibility.
+      // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
-      2116,
+      2119,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // Remove deprecated sync channel envelope helpers and their compat records at the next Plugin SDK major.
       // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
-      147,
+      // +1: synchronous session entry getter remains until the next Plugin SDK major.
+      148,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

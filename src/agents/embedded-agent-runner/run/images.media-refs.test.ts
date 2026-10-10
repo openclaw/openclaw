@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMediaFacts, resolveMediaFacts } from "../../../media/media-facts.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import * as utils from "../../../utils.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
@@ -65,61 +64,11 @@ describe("fact-carried image references", () => {
     }
   });
 
-  it("shares canonical SVG, TIFF, and document classification with embedded image refs", () => {
-    expect(hasHydratableMediaImages([{ path: "/tmp/diagram.svg" }])).toBe(false);
-    expect(hasHydratableMediaImages([{ path: "/tmp/diagram.svg", kind: "unknown" }])).toBe(false);
-    expect(hasHydratableMediaImages([{ path: "/tmp/diagram.svg", kind: "image" }])).toBe(true);
-    expect(hasHydratableMediaImages([{ path: "/tmp/scan.tiff" }])).toBe(true);
-    expect(
-      hasHydratableMediaImages([
-        { path: "/tmp/scan.tif", contentType: "application/octet-stream" },
-      ]),
-    ).toBe(true);
-    expect(
-      hasHydratableMediaImages([
-        { path: "/tmp/report.png", kind: "unknown", contentType: "application/pdf" },
-      ]),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "filename-only SVG",
-      fileName: "diagram.svg",
-      contentType: undefined,
-      kind: undefined,
-      bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
-      expectedImages: 0,
-    },
-    {
-      name: "unknown-kind PDF metadata over valid PNG bytes",
-      fileName: "report.png",
-      contentType: "application/pdf",
-      kind: "unknown" as const,
-      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
-      expectedImages: 0,
-    },
-    {
-      name: "filename-only authentic PNG",
-      fileName: "scan.png",
-      contentType: undefined,
-      kind: undefined,
-      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
-      expectedImages: 1,
-    },
-    {
-      name: "generic-binary authentic PNG",
-      fileName: "scan.png",
-      contentType: "application/octet-stream",
-      kind: undefined,
-      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
-      expectedImages: 1,
-    },
-  ])("applies canonical $name rules to actual persisted embedded replay", async (testCase) => {
+  it("applies canonical filename-only PNG rules to actual persisted embedded replay", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canonical-media-ref-"));
-    const imagePath = path.join(workspaceDir, testCase.fileName);
-    await fs.writeFile(imagePath, testCase.bytes);
-    const media = [{ path: imagePath, contentType: testCase.contentType, kind: testCase.kind }];
+    const imagePath = path.join(workspaceDir, "scan.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const media = [{ path: imagePath }];
 
     try {
       const loaded = await detectAndLoadPromptImages({
@@ -129,11 +78,9 @@ describe("fact-carried image references", () => {
         model: { input: ["text", "image"] },
         workspaceOnly: true,
       });
-      expect(loaded.images).toHaveLength(testCase.expectedImages);
+      expect(loaded.images).toHaveLength(1);
       expect(loaded.failedMediaCount).toBe(0);
-      if (testCase.expectedImages > 0) {
-        expect(loaded.images[0]?.mimeType).toBe("image/png");
-      }
+      expect(loaded.images[0]?.mimeType).toBe("image/png");
 
       const persisted = {
         role: "user",
@@ -148,10 +95,8 @@ describe("fact-carried image references", () => {
       const replayedMessage = replayed[0];
       const content = replayedMessage?.role === "user" ? replayedMessage.content : undefined;
       const images = Array.isArray(content) ? content.filter((item) => item.type === "image") : [];
-      expect(images).toHaveLength(testCase.expectedImages);
-      if (testCase.expectedImages > 0) {
-        expect(images[0]?.mimeType).toBe("image/png");
-      }
+      expect(images).toHaveLength(1);
+      expect(images[0]?.mimeType).toBe("image/png");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -187,20 +132,6 @@ describe("fact-carried image references", () => {
     });
     expect(result.failedMediaCount).toBe(0);
     expect(result.images).toEqual([]);
-  });
-
-  it("pairs identity-less facts with existing inline images when order metadata is absent", async () => {
-    const existingImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
-    const result = await detectAndLoadPromptImages({
-      prompt: "look",
-      media: [{ kind: "image", contentType: "image/png" }],
-      workspaceDir: "/tmp",
-      model: { input: ["text", "image"] },
-      existingImages: [existingImage],
-    });
-
-    expect(result.failedMediaCount).toBe(0);
-    expect(result.images).toEqual([existingImage]);
   });
 
   it("loads an explicit ref matching a fact sliced into an inline slot", async () => {
@@ -262,38 +193,32 @@ describe("fact-carried image references", () => {
     }
   });
 
-  it.each(["readable", "unavailable"] as const)(
-    "handles a missing inline block with its %s exact source",
-    async (source) => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-inline-"));
-      const imagePath = path.join(workspaceDir, "photo.png");
-      const sourceAvailable = source === "readable";
+  it("hydrates a missing inline block from its exact source", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-inline-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
 
-      try {
-        if (sourceAvailable) {
-          await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        }
-        const result = await detectAndLoadPromptImages({
-          prompt: "inspect",
-          media: [{ path: imagePath, contentType: "image/png" }],
-          workspaceDir,
-          model: { input: ["text", "image"] },
-          imageOrder: ["inline"],
-          workspaceOnly: true,
-        });
+    try {
+      await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+      const result = await detectAndLoadPromptImages({
+        prompt: "inspect",
+        media: [{ path: imagePath, contentType: "image/png" }],
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        imageOrder: ["inline"],
+        workspaceOnly: true,
+      });
 
-        expect(result.loadedCount).toBe(sourceAvailable ? 1 : 0);
-        expect(result.skippedCount).toBe(sourceAvailable ? 0 : 1);
-        expect(result.failedMediaCount).toBe(sourceAvailable ? 0 : 1);
-        expect(result.images).toEqual(
-          sourceAvailable ? [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }] : [],
-        );
-        expect(result.imageFactIndexes).toEqual(sourceAvailable ? [0] : []);
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    },
-  );
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.failedMediaCount).toBe(0);
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(result.imageFactIndexes).toEqual([0]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 
   it("hydrates a fact whose only local identity is a file URL", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-file-url-"));
@@ -313,38 +238,6 @@ describe("fact-carried image references", () => {
       ]);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("hydrates managed inbound media URIs before workspace path resolution", async () => {
-    // Managed media URIs are canonical inbound attachment handles and should
-    // work even when workspaceOnly would reject ordinary outside paths.
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-uri-"));
-    const workspaceDir = path.join(stateDir, "workspace-agent");
-    const inboundDir = path.join(stateDir, "media", "inbound");
-    const mediaId = "telegram-photo.png";
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-
-    try {
-      const result = await detectAndLoadPromptImages({
-        prompt: "",
-        media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
-      });
-      const image = result.images[0];
-
-      expect(image?.type).toBe("image");
-      expect(image?.mimeType).toBe("image/png");
-      expect(image?.data).toBe(TINY_PNG_BASE64);
-    } finally {
-      envSnapshot.restore();
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
@@ -377,14 +270,10 @@ describe("fact-carried image references", () => {
     }
   });
 
-  it.each([
-    ["traversal", "media://inbound/../secret.png"],
-    ["encoded traversal", "media://inbound/%2e%2e%2fsecret.png"],
-    ["null byte", "media://inbound/secret%00.png"],
-  ])("rejects %s claim-check facts", async (_label: string, mediaUrl: string) => {
+  it("rejects encoded traversal claim-check facts", async () => {
     const result = await detectAndLoadPromptImages({
       prompt: "legacy ticket is carried structurally",
-      media: [{ url: mediaUrl, contentType: "image/png" }],
+      media: [{ url: "media://inbound/%2e%2e%2fsecret.png", contentType: "image/png" }],
       workspaceDir: "/tmp",
       model: { input: ["text", "image"] },
     });

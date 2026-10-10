@@ -79,6 +79,12 @@ const SPAWN_OPERATIONS = {
   "workspace.reconcile.preflight": "workspace.manifest",
 } satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
 
+function trackPending<T>(pending: Set<Promise<T>>, operation: Promise<T>): void {
+  pending.add(operation);
+  const settled = () => pending.delete(operation);
+  void operation.then(settled, settled);
+}
+
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
     Symbol.for("openclaw.gitOperations"),
@@ -203,11 +209,7 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
   });
-  state.pending.add(operation);
-  void operation.then(
-    () => state.pending.delete(operation),
-    () => state.pending.delete(operation),
-  );
+  trackPending(state.pending, operation);
   // SAFETY: Private typed workers bind the operation discriminant to this result contract.
   return operation as Promise<GitWorkerOperations[Command["type"]]["output"]>;
 }
@@ -423,11 +425,7 @@ async function executeOperation(
           transferList: [...new Set(replies.flatMap((response) => response.transferList ?? []))],
           timeoutMs: WORKER_PHASE_TIMEOUT_MS,
         }));
-        hostWork.add(pending);
-        void pending.then(
-          () => hostWork.delete(pending),
-          () => hostWork.delete(pending),
-        );
+        trackPending(hostWork, pending);
         return pending;
       },
     });

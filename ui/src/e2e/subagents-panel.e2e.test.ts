@@ -195,7 +195,7 @@ suite.define(() => {
     });
   });
 
-  it("opens ordinary subagents beside the parent and keeps activity, drafts and Stop scoped", async () => {
+  it("opens subagents including swarm workers beside the parent and keeps activity, drafts and Stop scoped", async () => {
     const viewport = { width: 1440, height: 900 };
     await suite.withPage(
       {
@@ -246,6 +246,9 @@ suite.define(() => {
             [finished.key]: {
               messages: [{ role: "assistant", content: "The regression is traced." }],
             },
+            [swarm.key]: {
+              messages: [{ role: "assistant", content: "Comparing concurrent task results." }],
+            },
           },
         });
         await seedRecoverableDraft(page);
@@ -277,12 +280,15 @@ suite.define(() => {
         const panel = parentPane.locator("openclaw-chat-subagents-panel");
         const row = panel.locator(`[data-session-key="${child.key}"]`);
         await row.getByRole("button", { name: child.label, exact: true }).waitFor();
-        await expect.poll(() => panel.locator(".chat-subagents__item").count()).toBe(4);
+        await expect.poll(() => panel.locator(".chat-subagents__item").count()).toBe(5);
         await panel
           .locator(`.chat-subagents__running [data-session-key="${queued.key}"]`)
           .getByText("Queued", { exact: true })
           .waitFor();
-        expect(await panel.getByText(swarm.label, { exact: true }).count()).toBe(0);
+        await panel
+          .locator(".chat-subagents__running")
+          .getByText(swarm.label, { exact: true })
+          .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
         await expect
           .poll(() => row.locator(".chat-subagents__calls").textContent())
@@ -326,9 +332,17 @@ suite.define(() => {
         expect(await otherRow.locator(".chat-subagents__activity").textContent()).not.toBe("");
         expect(await row.locator("svg").count()).toBe(1);
         if (capture) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "subagent-list.png") });
+          const frame = await takeControlUiScreenshotFrame(page, panel, [row, otherRow], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, "subagent-list.png"), frame.png);
         }
 
+        await panel.getByRole("button", { name: swarm.label, exact: true }).click();
+        await panel.getByText("Comparing concurrent task results.", { exact: true }).waitFor();
+        expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+        expect(await draft.inputValue()).toBe("Keep this parent draft");
+        await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
         await row.getByRole("button", { name: child.label, exact: true }).click();
         const detail = panel.locator(".chat-subagent-detail");
         await detail.getByText("Inspecting the notice component.", { exact: true }).waitFor();

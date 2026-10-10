@@ -517,42 +517,8 @@ function collectSqliteSchemaContract(database: DatabaseSync): SqliteSchemaContra
     return new Map();
   }
   const facts = collectSqliteSchemaFacts(database);
-  if (!facts) {
-    return new Map(
-      rows.map((table) => [
-        table.name,
-        collectSqliteTableContractFromRow(database, table.name, table),
-      ]),
-    );
-  }
   return new Map(
-    rows.map((table) => {
-      const tableList = facts.tableOptions.find(
-        (entry) => entry.schema === "main" && entry.name === table.name,
-      );
-      if (!tableList) {
-        throw new Error(`Could not inspect SQLite table options for ${table.name}.`);
-      }
-      const termsByIndex = groupCanonicalRows(
-        facts.terms.get(table.name) ?? [],
-        (term) => term.index_seq,
-      );
-      const indexes = (facts.indexes.get(table.name) ?? [])
-        .map((index) =>
-          createSqliteIndexContract(index, index.sql, termsByIndex.get(index.index_seq) ?? []),
-        )
-        .toSorted(compareJson);
-      return [
-        table.name,
-        createSqliteTableContract(
-          table.name,
-          table,
-          tableList,
-          indexes,
-          facts.triggers.get(table.name) ?? [],
-        ),
-      ];
-    }),
+    rows.map((table) => [table.name, collectSqliteTableContractFromRow(database, table, facts)]),
   );
 }
 
@@ -579,32 +545,48 @@ function readCanonicalIndexDefinition(index: SqliteIndexContract): string {
 
 function collectSqliteTableContractFromRow(
   database: DatabaseSync,
-  tableName: string,
   table: SqliteSchemaRow,
+  facts: ReturnType<typeof collectSqliteSchemaFacts>,
 ): SqliteTableContract {
-  const quotedTable = quoteSqliteIdentifier(tableName);
-  const tableList = (
-    database.prepare(`PRAGMA main.table_list(${quotedTable})`).all() as SqliteTableListRow[]
-  ).find((entry) => entry.schema === "main" && entry.name === tableName);
+  const tableName = table.name;
+  const quotedTable = facts ? undefined : quoteSqliteIdentifier(tableName);
+  const tableOptions =
+    facts?.tableOptions ??
+    (database.prepare(`PRAGMA main.table_list(${quotedTable})`).all() as SqliteTableListRow[]);
+  const tableList = tableOptions.find(
+    (entry) => entry.schema === "main" && entry.name === tableName,
+  );
   if (!tableList) {
     throw new Error(`Could not inspect SQLite table options for ${tableName}.`);
   }
-  const indexes = (
-    database.prepare(`PRAGMA main.index_list(${quotedTable})`).all() as SqliteIndexListRow[]
-  )
-    .map((index) => collectSqliteIndexContract(database, index))
-    .toSorted(compareJson);
-  const triggers = executeWithCachedStatement(
-    database,
-    `
+  let indexes: SqliteIndexContract[];
+  if (facts) {
+    const termsByIndex = groupCanonicalRows(
+      facts.terms.get(tableName) ?? [],
+      (term) => term.index_seq,
+    );
+    indexes = (facts.indexes.get(tableName) ?? []).map((index) =>
+      createSqliteIndexContract(index, index.sql, termsByIndex.get(index.index_seq) ?? []),
+    );
+  } else {
+    indexes = (
+      database.prepare(`PRAGMA main.index_list(${quotedTable})`).all() as SqliteIndexListRow[]
+    ).map((index) => collectSqliteIndexContract(database, index));
+  }
+  indexes = indexes.toSorted(compareJson);
+  const triggers = facts
+    ? (facts.triggers.get(tableName) ?? [])
+    : (executeWithCachedStatement(
+        database,
+        `
           SELECT name, sql
           FROM main.sqlite_schema
           WHERE type = 'trigger' AND tbl_name = ?
           ORDER BY name
         `,
-    [tableName],
-    (statement) => statement.all(tableName),
-  ) as SqliteSchemaRow[];
+        [tableName],
+        (statement) => statement.all(tableName),
+      ) as SqliteSchemaRow[]);
   return createSqliteTableContract(tableName, table, tableList, indexes, triggers);
 }
 

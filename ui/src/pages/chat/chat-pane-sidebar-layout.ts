@@ -210,13 +210,6 @@ export function renderSidebarRegion(params: {
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
-  const activePanelId = params.layout.columns[0]?.activePanelId;
-  const activePanelSlot = params.layout.columns[0]?.panels.find(
-    (panel) => panel.id === activePanelId,
-  )?.slot;
-  const regionLoading = panelDefinitions.find(
-    (definition) => definition.slot === activePanelSlot,
-  )?.loading;
   return html`<div
     class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
       params.layout.expanded ? "sidebar-region--expanded" : ""
@@ -230,7 +223,19 @@ export function renderSidebarRegion(params: {
     ${
       regionError !== undefined
         ? regionError === null
-          ? (regionLoading ?? null)
+          ? column?.panels
+              .filter(
+                (panel) =>
+                  panel.slot !== "conversation" && isSidebarSlotVisible(params.layout, panel.slot),
+              )
+              .map(
+                (panel) => html`<div
+                  class="side-panel__panel"
+                  data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
+                >
+                  ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
+                </div>`,
+              )
           : null
         : html`<openclaw-chat-sidebar-region
             .panelIdPrefix=${panelIdPrefix}

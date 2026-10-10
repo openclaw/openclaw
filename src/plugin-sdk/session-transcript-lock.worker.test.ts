@@ -228,6 +228,17 @@ it.each(["physical", "logical"] as const)(
           sessionKey: scope.sessionKey,
         });
       });
+      let retainedFacts: SessionTranscriptWriteLockContext["readMessageFacts"] | undefined;
+      await withSessionTranscriptWrite(scope, async (transcript) => {
+        retainedFacts = transcript.readMessageFacts;
+        const facts = await transcript.readMessageFacts(query);
+        expect([...facts.existingIdempotencyKeys]).toEqual(["captured"]);
+        expect(facts.messagesByIdempotencyKey.get("captured")).toMatchObject({
+          content: "captured target",
+        });
+      });
+      assert(retainedFacts);
+      await expect(retainedFacts(query)).rejects.toThrow("Transcript write context is closed");
     });
   },
 );

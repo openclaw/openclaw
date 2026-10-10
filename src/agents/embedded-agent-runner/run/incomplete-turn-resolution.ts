@@ -16,6 +16,7 @@ import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
+import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
@@ -77,7 +78,14 @@ export function resolveIncompleteTurnPayloadText(params: {
 }): string | null {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant;
-  const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
+  const completionAttempt = {
+    ...params.attempt,
+    messagingToolSourceReplyPayloads: params.attempt.messagingToolSourceReplyPayloads?.filter(
+      (payload) =>
+        !payload.toolAuthored || isToolAuthoredSourceReplyForAssistant(payload, assistant),
+    ),
+  };
+  const hasTerminalOutput = hasAttemptTerminalState(completionAttempt);
   // Tool-use expects a post-tool continuation, so partial visible text completes
   // nothing. A length stop that did produce visible text is a partial answer and
   // is delivered with a truncation notice instead. (#76477)
@@ -107,9 +115,9 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.lastToolError ||
     params.hasIntentionalTerminalCompletion ||
     params.attempt.hasToolMediaBlockReply ||
-    resolveSourceReplyDelivery(params.attempt) !== "missing" ||
-    // A tool-authored final reply awaits host delivery, so its delivery state is still missing.
-    params.attempt.messagingToolSourceReplyPayloads?.some(
+    resolveSourceReplyDelivery(completionAttempt) !== "missing" ||
+    // Authored replies await host delivery, but only this input can complete here.
+    completionAttempt.messagingToolSourceReplyPayloads?.some(
       (payload) => payload.toolAuthored === true,
     ) ||
     hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)
@@ -190,7 +198,12 @@ export function resolveIncompleteTurnPayloadText(params: {
       }),
     });
   }
-  return promptFailureText ?? "⚠️ Agent couldn't generate a response. Please try again.";
+  return (
+    promptFailureText ??
+    (stopReason === "length"
+      ? "⚠️ The model reached its output token limit before generating an answer. Please try again."
+      : "⚠️ Agent couldn't generate a response. Please try again.")
+  );
 }
 
 /**

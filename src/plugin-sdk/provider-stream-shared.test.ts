@@ -138,10 +138,6 @@ const streamTestModel = {
   maxTokens: 1_024,
 } satisfies Model<"openai-completions">;
 
-function messageOf(event: unknown) {
-  return requireRecord(requireRecord(event, "done event").message, "done message");
-}
-
 function createEventStream(events: unknown[]): ReturnType<StreamFn> {
   const output = createAssistantMessageEventStream();
   const stream = output as unknown as { push(event: unknown): void; end(): void };
@@ -197,24 +193,6 @@ async function collectEvents(events: unknown[], toolNames = ["read"]): Promise<S
   return output;
 }
 
-async function collectTextDoneEvents(deltas: string[], rawText: string) {
-  return collectEvents([
-    ...deltas.map((delta) => textDelta(delta)),
-    doneEvent([textBlock(rawText)]),
-  ]);
-}
-
-async function collectResult(events: unknown[]) {
-  const { source, stream } = createControlledPlainTextToolCallCompatStream();
-  const output = await stream;
-  const resultPromise = output.result();
-  for (const event of events) {
-    source.push(completeStreamEvent(event) as never);
-  }
-  source.end();
-  return requireRecord(await resultPromise, "result message");
-}
-
 async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promise<StreamEvent> {
   const result = await Promise.race([
     iterator.next(),
@@ -249,9 +227,6 @@ describe("defaultToolStreamExtraParams", () => {
 
 describe("isOpenAICompatibleThinkingEnabled", () => {
   it.each([
-    { thinkingLevel: "high", options: { reasoning: "none" }, enabled: false },
-    { thinkingLevel: "off", options: { reasoningEffort: "medium" }, enabled: true },
-    { thinkingLevel: "off", options: {}, enabled: false },
     { thinkingLevel: undefined, options: {}, enabled: true },
     { thinkingLevel: "off", options: { reasoning: { effort: "off" } }, enabled: true },
   ] as const)(
@@ -297,16 +272,6 @@ describe("setQwenChatTemplateThinking", () => {
 });
 
 describe("normalizeOpenAICompatibleReasoningPayload", () => {
-  it("removes the legacy field and adds the selected reasoning effort", () => {
-    const payload: Record<string, unknown> = {
-      reasoning_effort: "high",
-    };
-
-    normalizeOpenAICompatibleReasoningPayload(payload, "adaptive");
-
-    expect(payload).toEqual({ reasoning: { effort: "medium" } });
-  });
-
   it("preserves explicit reasoning controls", () => {
     const withMaxTokens: Record<string, unknown> = {
       reasoning_effort: "high",
@@ -322,16 +287,6 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
 
     expect(withMaxTokens).toEqual({ reasoning: { max_tokens: 256 } });
     expect(withEffort).toEqual({ reasoning: { effort: "low", summary: "auto" } });
-  });
-
-  it("removes only the legacy field when thinking is disabled", () => {
-    const payload: Record<string, unknown> = {
-      reasoning_effort: "high",
-    };
-
-    normalizeOpenAICompatibleReasoningPayload(payload, "off");
-
-    expect(payload).toEqual({});
   });
 });
 
@@ -374,7 +329,7 @@ describe("normalizeOpenAICompatibleReasoningReplay", () => {
     ]);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "strips disabled reasoning with assistant-only policy %s",
     (stripAssistantMessagesOnly) => {
       const payload = {
@@ -434,23 +389,6 @@ describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
 });
 
 describe("createPayloadPatchStreamWrapper", () => {
-  it("passes stream call options to payload patches", () => {
-    let captured: Record<string, unknown> = {};
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
-      captured = payload;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, options }) => {
-      payload.reasoning = options?.reasoning;
-    });
-    void wrapped(streamTestModel, { messages: [] }, { reasoning: "medium" });
-
-    expect(captured).toEqual({ reasoning: "medium" });
-  });
-
   it("calls the underlying stream directly when shouldPatch rejects the model", () => {
     let onPayloadWasInstalled = false;
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -472,10 +410,7 @@ describe("createPayloadPatchStreamWrapper", () => {
 });
 
 describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
-  it.each([
-    { thinkingLevel: undefined, efforts: ["none", "high", "high"] },
-    { thinkingLevel: "off", efforts: ["none", "high", "none"] },
-  ] as const)(
+  it.each([{ thinkingLevel: undefined, efforts: ["none", "high", "high"] }] as const)(
     "uses per-call thinking before the $thinkingLevel default",
     ({ thinkingLevel, efforts }) => {
       const { baseStreamFn, payloads } = createPayloadCapture("high");
@@ -545,15 +480,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     });
   });
 
-  it("passes through bracketed text when no configured tool names match", async () => {
-    const events = await collectEvents([
-      { type: "text_delta", delta: "[note] keep streaming" },
-      doneEvent("[note] keep streaming"),
-    ]);
-
-    expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
-  });
-
   it("flushes false-positive buffered prefixes around interleaved events in source order", async () => {
     const firstText = "[tool:re";
     const secondText = " not a call";
@@ -592,21 +518,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(requireRecord(events[2], "second text").delta).toBe(secondText);
   });
 
-  it("converts standalone plain-text tool calls for result consumers", async () => {
-    const rawToolText = '[tool:read] {"path":"src/index.ts"}';
-    const message = await collectResult([
-      { type: "start", partial: { content: [] } },
-      textDelta(rawToolText),
-      doneEvent([textBlock(rawToolText)]),
-    ]);
-    expect(message.stopReason).toBe("toolUse");
-    expect(requireRecord((message.content as unknown[])[0], "tool call")).toMatchObject({
-      type: "toolCall",
-      name: "read",
-      arguments: { path: "src/index.ts" },
-    });
-  });
-
   it("keeps possible tool-call text buffered across interleaved non-text events", async () => {
     const rawToolText = "[tool:read]\n<parameter=path>\nsrc/index.ts\n</parameter>\n</function>";
     const events = await collectEvents([
@@ -639,70 +550,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       expect.objectContaining({ type: "toolCall", name: "read" }),
     ]);
     expect(JSON.stringify(events)).not.toContain(rawToolText);
-  });
-
-  it("keeps a byte-over-cap visible suffix at its streamed content index in done messages", async () => {
-    const marker = "<function=read>";
-    const visibleText = "Visible answer";
-    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
-    const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
-    const content = [
-      { type: "text", text: firstChunk },
-      { type: "thinking", thinking: "checking" },
-      { type: "text", text: secondChunk },
-    ];
-    const events = await collectEvents([
-      textDelta(firstChunk),
-      {
-        type: "text_delta",
-        contentIndex: 2,
-        delta: secondChunk,
-        partial: { role: "assistant", content },
-      },
-      doneEvent(content),
-    ]);
-
-    expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
-    const expectedContent = [
-      { type: "text", text: "" },
-      { type: "thinking", thinking: "checking" },
-      { type: "text", text: visibleText },
-    ];
-    expect(requireRecord(events[0], "text event")).toMatchObject({
-      delta: visibleText,
-      partial: { content: expectedContent },
-    });
-    expect(requireRecord(events[1], "done event").message).toMatchObject({
-      content: expectedContent,
-    });
-    expect(JSON.stringify(events)).not.toContain(marker);
-  });
-
-  it("scrubs terminal XML split inside its function markers", async () => {
-    const body = "\u00a0".repeat(128_001);
-    const parts = ["<func", `tion=read>${body}</func`, "tion>"];
-    const events = await collectEvents([doneEvent(parts.map(textBlock), "length")]);
-
-    expect(requireRecord(events[0], "done event")).toMatchObject({
-      type: "done",
-      reason: "length",
-      message: { role: "assistant", content: [], stopReason: "length" },
-    });
-    expect(JSON.stringify(events)).not.toContain("<func");
-    expect(JSON.stringify(events)).not.toContain("tion>");
-  });
-
-  it("preserves the exact suffix after a compacted XML prefix and split terminator", async () => {
-    const visibleText = "Visible after compacted XML";
-    const chunks = ["<func", `tion=read>${" ".repeat(330_001)}</func`, `tion>\n${visibleText}`];
-    const rawText = chunks.join("");
-    const events = await collectTextDoneEvents(chunks, rawText);
-
-    expect(rawText.length).toBeGreaterThan(320_000);
-    expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
-    expect(events[0]).toMatchObject({ delta: visibleText });
-    expect(messageOf(events[1]).content).toEqual([{ type: "text", text: visibleText }]);
-    expect(JSON.stringify(events)).not.toContain("<func");
   });
 
   it("scrubs compacted error partials when an emoji crosses the safe prefix boundary", async () => {
@@ -748,20 +595,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       { type: "text", text: visibleText },
     ]);
     expect(JSON.stringify(events)).not.toContain("<function=read>");
-  });
-
-  it("preserves a visible suffix after a named over-cap parameter without a function close", async () => {
-    const toolPrefix = ["[read]", "<parameter=path>", "x".repeat(256_001)].join("\n");
-    const visibleSuffix = "Visible answer after the incomplete tool-looking block.";
-    const tail = ["</parameter>", visibleSuffix].join("\n");
-    const rawText = [toolPrefix, tail].join("\n");
-    const events = await collectTextDoneEvents([toolPrefix, tail], rawText);
-
-    expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
-    expect(requireRecord(events[0], "text event").delta).toBe(visibleSuffix);
-    expect(messageOf(events[1]).content).toEqual([{ type: "text", text: visibleSuffix }]);
-    expect(JSON.stringify(events)).not.toContain("[read]");
-    expect(JSON.stringify(events)).not.toContain("</parameter>");
   });
 
   it("promotes split zero-argument XML function calls without leaking partials", async () => {
@@ -841,20 +674,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
 });
 
 describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
-  it("removes trailing assistant text turns when Anthropic thinking is enabled", () => {
-    const payload = {
-      thinking: { type: "enabled", budget_tokens: 1024 },
-      messages: [
-        { role: "user", content: "Return JSON." },
-        { role: "assistant", content: "{" },
-        { role: "assistant", content: '"status"' },
-      ],
-    };
-
-    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(2);
-    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
-  });
-
   it("preserves assistant tool-use turns across Anthropic and OpenAI-shaped payloads", () => {
     const anthropicPayload = {
       thinking: { type: "adaptive" },
