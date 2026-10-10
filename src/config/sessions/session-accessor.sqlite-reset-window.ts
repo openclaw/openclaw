@@ -183,22 +183,30 @@ function readLatestActiveBoundaryMetadataByType(
   beforeRawSeq?: number,
 ) {
   const db = getActiveTranscriptKysely(projection.database);
-  const indexed = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
-      )
-      .select(["active.active_position", "identity.event_type", "identity.seq"])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_type", "=", eventType)
-      .$if(beforeRawSeq !== undefined, (query) => query.where("identity.seq", "<", beforeRawSeq!))
-      .orderBy("identity.seq", "desc")
-      .limit(1),
-  );
+  const preparedReset = projection.latestIndexedReset;
+  const indexed =
+    eventType === "reset" &&
+    preparedReset !== undefined &&
+    (!preparedReset || beforeRawSeq === undefined || preparedReset.seq < beforeRawSeq)
+      ? (preparedReset ?? undefined)
+      : executeSqliteQueryTakeFirstSync(
+          projection.database.db,
+          db
+            .selectFrom("session_transcript_active_events as active")
+            .innerJoin("transcript_event_identities as identity", (join) =>
+              join
+                .onRef("identity.session_id", "=", "active.session_id")
+                .onRef("identity.seq", "=", "active.event_seq"),
+            )
+            .select(["active.active_position", "identity.event_type", "identity.seq"])
+            .where("active.session_id", "=", projection.resolved.sessionId)
+            .where("identity.event_type", "=", eventType)
+            .$if(beforeRawSeq !== undefined, (query) =>
+              query.where("identity.seq", "<", beforeRawSeq!),
+            )
+            .orderBy("identity.seq", "desc")
+            .limit(1),
+        );
   let unindexed: UnindexedActiveTranscriptNavigation | undefined;
   for (const row of readUnindexedHistoryControls(projection, beforeRawSeq)) {
     if (
@@ -560,7 +568,6 @@ export function* iterateVisibleMessageRange(
         ? iterateSqliteQuerySync(
             projection.database.db,
             selectMessagePayload(
-              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, range),
             ),
           )
@@ -634,6 +641,7 @@ export function* iterateVisibleMessageMetadata(
   endExclusive: number,
   direction: "asc" | "desc" = "asc",
 ): IterableIterator<{
+  event_seq: number;
   message_position: number;
   serialized_bytes: number;
   logicalPosition: number;
@@ -659,6 +667,7 @@ export function* iterateVisibleMessageMetadata(
           });
     for (const row of rows) {
       yield {
+        event_seq: row.event_seq,
         message_position: row.message_position,
         serialized_bytes: row.serialized_bytes,
         // Position-based mapping preserves logical holes if a joined row is absent.

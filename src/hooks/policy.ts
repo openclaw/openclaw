@@ -1,10 +1,8 @@
 import type { HookConfig } from "../config/types.hooks.js";
-// Hook policy helpers decide when hooks may run for a configured event.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookPolicyEntry, HookSource } from "./types.js";
 
-/** Human-readable reason for disabling a hook at policy resolution time. */
 export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
 
 type HookEnableState = {
@@ -64,7 +62,6 @@ export function resolveHookEnableState(params: {
   return { enabled: true };
 }
 
-/** Merge hook entries by name using source precedence and override policy. */
 export function resolveHookEntries<T extends HookPolicyEntry>(
   entries: T[],
   opts?: {

@@ -136,7 +136,7 @@ export function compileResourceField(
         (!Array.isArray(accept) ||
           accept.length > 32 ||
           !accept.every(
-            (entry) =>
+            (entry): entry is string =>
               typeof entry === "string" &&
               entry.length <= 128 &&
               /^(?:\.[a-z0-9.+_-]+|[a-z0-9!#$&^_.+-]+\/(?:[a-z0-9!#$&^_.+-]+|\*))$/iu.test(entry),
@@ -149,9 +149,7 @@ export function compileResourceField(
     }
     upload = {
       kind,
-      ...(Array.isArray(accept)
-        ? { accept: accept.filter((entry): entry is string => typeof entry === "string") }
-        : {}),
+      ...(accept ? { accept: [...accept] } : {}),
     };
   }
   const resources = ownArray(input, "options", 64);

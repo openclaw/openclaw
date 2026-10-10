@@ -1,4 +1,3 @@
-// Attribution row for forwarded agent and automation messages.
 import { html, nothing } from "lit";
 import "./chat-attribution.css";
 import { pathForRoute } from "../../../app-route-paths.ts";
@@ -8,6 +7,7 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { renderForwardedAvatar } from "../chat-avatar.ts";
+import { readAutomationRun } from "../chat-turn-boundary.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -27,14 +27,16 @@ type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] &
  * sessions keep their session identity instead of presenting as another agent.
  */
 export function renderForwardedAttribution(
-  group: Pick<MessageGroup, "senderSession">,
+  group: Pick<MessageGroup, "senderSession"> & Partial<Pick<MessageGroup, "messages">>,
   opts: ForwardedAttributionOptions,
 ) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const sourceParsed = sourceSessionKey ? parseAgentSessionKey(sourceSessionKey) : null;
   const sourceCronRun = /^cron:([^:]+):run:([^:]+)$/u.exec(sourceParsed?.rest ?? "");
-  const cronJobId = sourceCronRun?.[1];
-  const cronRunSessionId = sourceCronRun?.[2];
+  // Session-bound jobs use a conversation key; the recorded run owns navigation.
+  const automation = readAutomationRun(group.messages?.[0]?.message);
+  const cronJobId = automation?.jobId ?? sourceCronRun?.[1];
+  const cronRunSessionId = automation?.runId ?? sourceCronRun?.[2];
   const sourceIsSubagent = isSubagentSessionKey(sourceSessionKey);
   const sourceIsOtherAgent =
     !sourceIsSubagent &&
@@ -55,7 +57,7 @@ export function renderForwardedAttribution(
   );
   const sourceLabel =
     group.senderSession?.label ??
-    (sourceCronRun
+    (cronJobId
       ? t("chat.messages.forwardedAutomation")
       : sourceIsMainSession
         ? sourceAgentDisplayName
@@ -131,8 +133,8 @@ export function renderForwardedAttribution(
             ? html`<span>${from}</span>
                 ${sourceAgentPrefix ? html`<span>${sourceAgentPrefix} ·</span>` : nothing}
                 <span
-                  ?data-session-title-only=${Boolean(sourceParsed)}
-                  data-session-key=${sourceParsed ? sourceSessionKey : nothing}
+                  ?data-session-title-only=${Boolean(sourceParsed) && !cronJobId}
+                  data-session-key=${sourceParsed && !cronJobId ? sourceSessionKey : nothing}
                   class=${sourceLabel ? "markdown-session-link--titled" : nothing}
                   ><span
                     class="session-label"

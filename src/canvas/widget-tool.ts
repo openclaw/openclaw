@@ -1,4 +1,3 @@
-/** Agent-facing inline chat widget tool. */
 import { createHash } from "node:crypto";
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -273,7 +272,6 @@ function assertPinnedWidgetDocumentSize(html: string): void {
   }
 }
 
-/** Creates a self-contained widget hosted by OpenClaw core. */
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
   const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
   const pinnedOnly = options.pinnedOnly === true;

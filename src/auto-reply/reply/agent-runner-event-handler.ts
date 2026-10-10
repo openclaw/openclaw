@@ -24,11 +24,6 @@ export type MessageToolDeliveryState = {
   completed: boolean;
 };
 
-function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
-  return value === "turn" || value === "session" ? value : undefined;
-}
-
-/** Bridges embedded-agent events into channel progress and compaction notices. */
 export function createAgentRunEventHandler(params: {
   turn: AgentTurnParams;
   lifecycleBackstop: AgentLifecycleTerminalBackstop;
@@ -169,6 +164,7 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "approval" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const scope = evt.data.scope;
       await params.turn.opts?.onApprovalEvent?.({
         phase: readStringValue(evt.data.phase),
         kind: readStringValue(evt.data.kind),
@@ -181,17 +177,20 @@ export function createAgentRunEventHandler(params: {
         command: readStringValue(evt.data.command),
         host: readStringValue(evt.data.host),
         reason: readStringValue(evt.data.reason),
-        scope: readApprovalScopeValue(evt.data.scope),
+        scope: scope === "turn" || scope === "session" ? scope : undefined,
         message: readStringValue(evt.data.message),
       });
     }
+    const readToolEventIdentity = () => ({
+      itemId: readStringValue(evt.data.itemId),
+      phase: readStringValue(evt.data.phase),
+      title: readStringValue(evt.data.title),
+      toolCallId: readStringValue(evt.data.toolCallId),
+      name: readStringValue(evt.data.name),
+    });
     if (evt.stream === "command_output" && !shouldSuppressProgressAfterMessageToolDelivery()) {
       await params.turn.opts?.onCommandOutput?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
+        ...readToolEventIdentity(),
         output: readStringValue(evt.data.output),
         status: readStringValue(evt.data.status),
         exitCode:
@@ -203,21 +202,15 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "patch" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const readPaths = (value: unknown) =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string")
+          : undefined;
       await params.turn.opts?.onPatchSummary?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
-        added: Array.isArray(evt.data.added)
-          ? evt.data.added.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        modified: Array.isArray(evt.data.modified)
-          ? evt.data.modified.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        deleted: Array.isArray(evt.data.deleted)
-          ? evt.data.deleted.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
+        ...readToolEventIdentity(),
+        added: readPaths(evt.data.added),
+        modified: readPaths(evt.data.modified),
+        deleted: readPaths(evt.data.deleted),
         summary: readStringValue(evt.data.summary),
       });
     }

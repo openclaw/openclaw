@@ -1,6 +1,7 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  asOptionalObjectRecord,
   asOptionalRecord as asRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -30,6 +31,10 @@ const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from th
 const SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX = "A ping wasn't received from the server";
 const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
   /^The logLevel given to .+ was ignored as you also gave logger$/;
+// Socket Mode subscribes to undici's process-wide ping/pong diagnostics channels and warns on
+// every frame from a WebSocket built by another undici copy, such as core's.
+const SLACK_SOCKET_FOREIGN_DIAGNOSTICS_WARNING_RE =
+  /^Received unexpected (?:ping|pong) diagnostics message format$/;
 
 export type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
@@ -37,9 +42,6 @@ export type SlackBoltResolvedExports = {
   SocketModeReceiver: SlackSocketModeReceiverConstructor;
 };
 
-type SlackSocketShutdownClient = {
-  shuttingDown?: boolean;
-};
 type Constructor = abstract new (...args: never[]) => unknown;
 type SlackSelfFilterArgs = {
   body?: unknown;
@@ -63,11 +65,8 @@ function isConstructorFunction<
 }
 
 function installSlackNativeReconnectFailureObserver(receiver: unknown) {
-  if (!receiver || typeof receiver !== "object") {
-    return;
-  }
-  const client = Reflect.get(receiver, "client");
-  if (!client || typeof client !== "object") {
+  const client = asOptionalObjectRecord(asOptionalObjectRecord(receiver)?.client);
+  if (!client) {
     return;
   }
   if (Reflect.get(client, OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY)) {
@@ -160,22 +159,11 @@ export function resolveSlackBoltInterop(params: {
   namespaceImport: unknown;
 }): SlackBoltResolvedExports {
   const { defaultImport, namespaceImport } = params;
-  const nestedDefault =
-    defaultImport && typeof defaultImport === "object"
-      ? Reflect.get(defaultImport, "default")
-      : undefined;
-  const namespaceDefault =
-    namespaceImport && typeof namespaceImport === "object"
-      ? Reflect.get(namespaceImport, "default")
-      : undefined;
-  const namespaceReceiver =
-    namespaceImport && typeof namespaceImport === "object"
-      ? Reflect.get(namespaceImport, "HTTPReceiver")
-      : undefined;
-  const namespaceSocketModeReceiver =
-    namespaceImport && typeof namespaceImport === "object"
-      ? Reflect.get(namespaceImport, "SocketModeReceiver")
-      : undefined;
+  const nestedDefault = asOptionalObjectRecord(defaultImport)?.default;
+  const namespace = asOptionalObjectRecord(namespaceImport);
+  const namespaceDefault = namespace?.default;
+  const namespaceReceiver = namespace?.HTTPReceiver;
+  const namespaceSocketModeReceiver = namespace?.SocketModeReceiver;
   const directModule =
     resolveSlackBoltModule(defaultImport) ??
     resolveSlackBoltModule(nestedDefault) ??
@@ -244,16 +232,15 @@ export function publishSlackDisconnectedStatus(
   });
 }
 
-function isSlackSocketHeartbeatTimeoutWarning(args: readonly unknown[]) {
+function isSlackSocketNoiseWarning(args: readonly unknown[]) {
+  const message = args[0];
   return (
-    typeof args[0] === "string" &&
-    (args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX) ||
-      args[0].startsWith(SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX))
+    typeof message === "string" &&
+    (message.startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX) ||
+      message.startsWith(SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX) ||
+      SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(message) ||
+      SLACK_SOCKET_FOREIGN_DIAGNOSTICS_WARNING_RE.test(message))
   );
-}
-
-function isSlackSocketSelfInflictedLoggerWarning(args: readonly unknown[]) {
-  return typeof args[0] === "string" && SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(args[0]);
 }
 
 function formatSlackSdkLogArgs(args: readonly unknown[]) {
@@ -278,10 +265,7 @@ function createSlackSocketModeLogger(): SlackSocketModeLogger {
     debug: () => {},
     info: () => {},
     warn: (...args: unknown[]) => {
-      if (
-        isSlackSocketHeartbeatTimeoutWarning(args) ||
-        isSlackSocketSelfInflictedLoggerWarning(args)
-      ) {
+      if (isSlackSocketNoiseWarning(args)) {
         return;
       }
       remember(args);
@@ -455,23 +439,9 @@ function isMissingSocketStartErrorDetail(err: unknown): boolean {
   );
 }
 
-function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClient | undefined {
-  if (!app || typeof app !== "object") {
-    return undefined;
-  }
-  const receiver = Reflect.get(app, "receiver");
-  if (!receiver || typeof receiver !== "object") {
-    return undefined;
-  }
-  const client = Reflect.get(receiver, "client");
-  if (!client || typeof client !== "object") {
-    return undefined;
-  }
-  return client as SlackSocketShutdownClient;
-}
-
 export async function gracefulStopSlackApp(app: { stop: () => unknown }) {
-  const socketClient = resolveSlackSocketShutdownClient(app);
+  const receiver = asOptionalObjectRecord(asOptionalObjectRecord(app)?.receiver);
+  const socketClient = asOptionalObjectRecord(receiver?.client);
   if (socketClient) {
     // Fence ping-timeout reconnects before Bolt begins asynchronous shutdown (#56508).
     socketClient.shuttingDown = true;

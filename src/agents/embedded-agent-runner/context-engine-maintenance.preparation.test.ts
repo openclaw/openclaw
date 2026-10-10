@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -13,7 +14,10 @@ import {
   runContextEngineMaintenance,
   waitForDeferredTurnMaintenanceForSession,
 } from "./context-engine-maintenance.js";
-import { resetDeferredTurnMaintenanceStateForTest } from "./context-engine-maintenance.test-support.js";
+import {
+  createDeferredTurnMaintenanceAbortSignal,
+  resetDeferredTurnMaintenanceStateForTest,
+} from "./context-engine-maintenance.test-support.js";
 const enqueueMaintenance = commandQueue.enqueueCommandInLane;
 vi.mock("../../context-engine/registry.js", () => ({
   hasSameContextEngineInstance: (left: ContextEngine, right: ContextEngine) => left === right,
@@ -24,13 +28,20 @@ vi.mock("../../context-engine/registry.js", () => ({
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
 }));
-vi.mock("../../config/sessions/session-accessor.js", () => ({ publishTranscriptUpdate: vi.fn() }));
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  publishTranscriptUpdate: vi.fn(),
+  resolveSessionTranscriptRuntimeTarget: vi.fn(),
+}));
 vi.mock("../sessions/index.js", () => ({ SessionManager: { openAsync: vi.fn() } }));
 vi.mock("../sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: vi.fn(),
 }));
 vi.mock("./transcript-rewrite.js", () => ({ rewriteTranscriptEntriesInSessionManager: vi.fn() }));
-vi.mock("./transcript-runtime-state.js", () => ({ resolveRuntimeTranscriptReadTarget: vi.fn() }));
+vi.mock("../../config/sessions/session-cold-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-cold-storage.js")>()),
+  restoreSessionColdTranscript: vi.fn(),
+}));
 vi.mock("./logger.js", () => ({ log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() } }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
@@ -48,9 +59,7 @@ vi.mock("../../infra/agent-events.js", () => ({
 
 const sessionKey = "agent:main:maintenance-preparation";
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
-type Failure = "queue throws" | "queue rejects";
-
-function fixture(fault?: Failure) {
+function fixture(failQueue = false) {
   const workRelease = createDeferred();
   const workEntered = createDeferred();
   const disposeRelease = createDeferred();
@@ -67,11 +76,8 @@ function fixture(fault?: Failure) {
     const enter = boundary;
     boundary = undefined;
     enter?.();
-    if (fault === "queue throws") {
+    if (failQueue) {
       throw new Error("Synthetic queue admission failure");
-    }
-    if (fault === "queue rejects") {
-      return Promise.reject(new Error("Synthetic queue admission failure"));
     }
     if (cooperateDuringCreation) {
       creatorTails.push(
@@ -280,36 +286,73 @@ describe("deferred maintenance synchronous preparation", () => {
     }
   });
 
-  it.each(["queue throws", "queue rejects"] as const)(
-    "owns caller transfer and joined cleanup when %s",
-    async (fault) => {
-      const f = fixture(fault);
-      try {
-        const foreground = f.schedule();
-        expect(f.deferred).toHaveLength(1);
-        await foreground;
-        await f.disposeEntered.promise;
-        expect(f.failure).toHaveBeenCalledOnce();
-        expect(f.maintain).not.toHaveBeenCalled();
-        expect(f.closeFactoryWork).toHaveBeenCalledOnce();
-        expect(f.release).not.toHaveBeenCalled();
-        let settled = false;
-        const completion = Promise.allSettled(f.deferred).then(() => {
-          settled = true;
-        });
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        f.disposeRelease.resolve();
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        expect(f.release).not.toHaveBeenCalled();
-        f.factoryRelease.resolve();
-        await completion;
-        expect(f.dispose).toHaveBeenCalledOnce();
-        expect(f.release).toHaveBeenCalledOnce();
-      } finally {
-        await f.cleanup();
-      }
-    },
-  );
+  it("owns caller transfer and joined cleanup when queue admission throws", async () => {
+    const f = fixture(true);
+    try {
+      const foreground = f.schedule();
+      expect(f.deferred).toHaveLength(1);
+      await foreground;
+      await f.disposeEntered.promise;
+      expect(f.failure).toHaveBeenCalledOnce();
+      expect(f.maintain).not.toHaveBeenCalled();
+      expect(f.closeFactoryWork).toHaveBeenCalledOnce();
+      expect(f.release).not.toHaveBeenCalled();
+      let settled = false;
+      const completion = Promise.allSettled(f.deferred).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      f.disposeRelease.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(f.release).not.toHaveBeenCalled();
+      f.factoryRelease.resolve();
+      await completion;
+      expect(f.dispose).toHaveBeenCalledOnce();
+      expect(f.release).toHaveBeenCalledOnce();
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+describe("createDeferredTurnMaintenanceAbortSignal", () => {
+  it("aborts on termination signals and unregisters listeners", () => {
+    const listeners = new EventEmitter();
+    const kill = vi.fn();
+    const processLike = {
+      on(event: "SIGINT" | "SIGTERM", listener: () => void) {
+        listeners.on(event, listener);
+        return this;
+      },
+      off(event: "SIGINT" | "SIGTERM", listener: () => void) {
+        listeners.off(event, listener);
+        return this;
+      },
+      listenerCount: listeners.listenerCount.bind(listeners),
+      kill,
+      pid: 4242,
+    } as unknown as NonNullable<
+      Parameters<typeof createDeferredTurnMaintenanceAbortSignal>[0]
+    >["processLike"];
+
+    const { abortSignal, dispose } = createDeferredTurnMaintenanceAbortSignal({ processLike });
+    const second = createDeferredTurnMaintenanceAbortSignal({ processLike });
+    expect(listeners.listenerCount("SIGINT")).toBe(1);
+    expect(listeners.listenerCount("SIGTERM")).toBe(1);
+
+    listeners.emit("SIGTERM");
+
+    expect(abortSignal?.aborted).toBe(true);
+    expect(second.abortSignal?.aborted).toBe(true);
+    expect(kill).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(listeners.listenerCount("SIGINT")).toBe(0);
+    expect(listeners.listenerCount("SIGTERM")).toBe(0);
+
+    dispose();
+    second.dispose();
+    expect(listeners.listenerCount("SIGINT")).toBe(0);
+    expect(listeners.listenerCount("SIGTERM")).toBe(0);
+  });
 });

@@ -255,6 +255,13 @@ export function intersectWorkboardWorkspaceAccess(
   };
 }
 
+export class WorkboardWorkspaceOutsideRootsError extends Error {
+  constructor() {
+    super("workspace path is outside the caller's allowed workspaces.");
+    this.name = "WorkboardWorkspaceOutsideRootsError";
+  }
+}
+
 async function assertCanonicalWorkboardPathAccess(
   candidate: string,
   access: WorkboardWorkspaceAccess,
@@ -268,7 +275,7 @@ async function assertCanonicalWorkboardPathAccess(
       return candidate;
     }
   }
-  throw new Error("workspace path is outside the caller's allowed workspaces.");
+  throw new WorkboardWorkspaceOutsideRootsError();
 }
 
 export async function assertCanonicalWorkboardRootAccess(
@@ -310,20 +317,28 @@ async function assertWorkspaceAllowed(
   await assertPathAllowed(workspace.sourcePath, access);
 }
 
-export function containsWorkboardWorkspaceMutation(value: unknown): boolean {
+function* workspaceMutationRecords(value: unknown): Generator<Record<string, unknown>> {
   const record = asOptionalRecord(value);
   if (!record) {
-    return false;
+    return;
   }
-  if (Object.hasOwn(record, "workspace") || Object.hasOwn(record, "defaultWorkspace")) {
-    return true;
+  yield record;
+  yield* workspaceMutationRecords(record.patch);
+  yield* workspaceMutationRecords(asOptionalRecord(record.metadata)?.automation);
+  if (Array.isArray(record.children)) {
+    for (const child of record.children) {
+      yield* workspaceMutationRecords(child);
+    }
   }
-  return (
-    containsWorkboardWorkspaceMutation(record.patch) ||
-    containsWorkboardWorkspaceMutation(asOptionalRecord(record.metadata)?.automation) ||
-    (Array.isArray(record.children) &&
-      record.children.some((child) => containsWorkboardWorkspaceMutation(child)))
-  );
+}
+
+export function containsWorkboardWorkspaceMutation(value: unknown): boolean {
+  for (const record of workspaceMutationRecords(value)) {
+    if (Object.hasOwn(record, "workspace") || Object.hasOwn(record, "defaultWorkspace")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function withWorkboardWorkspaceAccess(
@@ -361,28 +376,11 @@ export async function assertWorkboardWorkspaceMutationAccess(
   if (access.unrestricted) {
     return;
   }
-  const record = asOptionalRecord(value);
-  if (!record) {
-    return;
-  }
   // Card creation and decomposition persist only explicit workspace fields;
   // board defaults and parent workspaces are metadata, not inherited inputs.
-  await assertWorkspaceAllowed(record.workspace, access);
-  await assertWorkspaceAllowed(record.defaultWorkspace, access);
-
-  const patch = asOptionalRecord(record.patch);
-  if (patch) {
-    await assertWorkboardWorkspaceMutationAccess(patch, access);
-  }
-  const metadata = asOptionalRecord(record.metadata);
-  const automation = asOptionalRecord(metadata?.automation);
-  if (automation) {
-    await assertWorkboardWorkspaceMutationAccess(automation, access);
-  }
-  if (Array.isArray(record.children)) {
-    for (const child of record.children) {
-      await assertWorkboardWorkspaceMutationAccess(child, access);
-    }
+  for (const record of workspaceMutationRecords(value)) {
+    await assertWorkspaceAllowed(record.workspace, access);
+    await assertWorkspaceAllowed(record.defaultWorkspace, access);
   }
 }
 

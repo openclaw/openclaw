@@ -14,6 +14,7 @@ import { createPatternFileHelper } from "../helpers/pattern-file.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
@@ -257,7 +258,7 @@ syncFixtureBuiltinExports();\n`,
       [
         "run",
         "--config",
-        "test/vitest/vitest.tooling.config.ts",
+        "test/vitest/vitest.infra.config.ts",
         "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
       ],
       "private-qa",
@@ -1243,9 +1244,10 @@ function createPreparationGate<T>(prepare: typeof commands.prepare) {
 
 describe("test-projects build admission", () => {
   const toolingConfig = "test/vitest/vitest.tooling.config.ts";
+  const infraConfig = "test/vitest/vitest.infra.config.ts";
   const ordinaryTooling = "test/scripts/run-vitest-state-cleanup.test.ts";
   const runtimeTooling = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
-  const privateQaTooling = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
+  const privateQaInfra = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
   const uiConfig = "test/vitest/vitest.ui-e2e.config.ts";
   const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
@@ -1431,9 +1433,9 @@ describe("test-projects build admission", () => {
       build: true,
     },
     {
-      name: "borrowed private-QA tooling",
-      args: [toolingConfig],
-      include: [privateQaTooling],
+      name: "borrowed private-QA infra",
+      args: [infraConfig],
+      include: [privateQaInfra],
       build: true,
     },
     { name: "borrowed empty selection", args: [toolingConfig], include: [], build: false },
@@ -1451,7 +1453,19 @@ describe("test-projects build admission", () => {
       build: true,
     },
     { name: "owned runtime over borrowed empty", args: [runtimeTooling], include: [], build: true },
-  ])("prepares only the effective tooling selection: $name", async ({ args, include, build }) => {
+  ])("prepares only the effective config selection: $name", async ({ args, include, build }) => {
+    commands.prepare.mockResolvedValue(0);
+    const workerCompiler =
+      args[0] === infraConfig
+        ? createControlledWorkerCompiler(tempDirs.make("private-qa-worker-"), process.env)
+        : undefined;
+    if (workerCompiler) {
+      commands.prepare.mockImplementation((command) =>
+        path.basename(command.args[0]) === "vitest-worker-compiler.mts"
+          ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
+          : Promise.resolve(0),
+      );
+    }
     const borrowed = include ? patternFiles.writePatternFile("borrowed.json", include) : undefined;
     const original = borrowed
       ? { bytes: fs.readFileSync(borrowed), stat: fs.statSync(borrowed) }
@@ -1459,7 +1473,6 @@ describe("test-projects build admission", () => {
     if (borrowed) {
       vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", borrowed);
     }
-    commands.prepare.mockResolvedValue(0);
     const selected: unknown[] = [];
     commands.reader.mockImplementation(({ env, pnpmArgs }) => {
       const wrapperArgv = process.argv;
@@ -1469,7 +1482,9 @@ describe("test-projects build admission", () => {
         ...pnpmArgs.slice(pnpmArgs.indexOf(resolveVitestCliEntry())),
       ];
       try {
-        selected.push(createToolingVitestConfig(env).test?.include);
+        const createConfig =
+          args[0] === infraConfig ? createInfraVitestConfig : createToolingVitestConfig;
+        selected.push(createConfig(env).test?.include);
       } finally {
         process.argv = wrapperArgv;
       }
@@ -1480,14 +1495,23 @@ describe("test-projects build admission", () => {
     });
 
     await start(args);
-    expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
-    expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
+    const outcome = await terminal.promise;
+    if (outcome instanceof Error) {
+      throw outcome;
+    }
+    expect(outcome).toMatch(/^\[test\] passed 1 Vitest shard/u);
+    expect(commands.prepare).toHaveBeenCalledTimes((build ? 1 : 0) + (workerCompiler ? 1 : 0));
+    if (workerCompiler) {
+      expect(workerCompiler.read()).toHaveLength(1);
+    }
     expect(commands.prepareE2e).not.toHaveBeenCalled();
     expect(commands.reader).toHaveBeenCalledOnce();
     expect(selected).toEqual([
-      args[0] === toolingConfig
-        ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
-        : args,
+      args[0] === infraConfig
+        ? include
+        : args[0] === toolingConfig
+          ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
+          : args,
     ]);
     if (borrowed && original) {
       expect(fs.readFileSync(borrowed)).toEqual(original.bytes);
@@ -1496,7 +1520,7 @@ describe("test-projects build admission", () => {
         mtimeMs: original.stat.mtimeMs,
       });
       const readerInclude = commands.reader.mock.calls[0]![0].env.OPENCLAW_VITEST_INCLUDE_FILE;
-      if (args[0] === toolingConfig) {
+      if (args[0] === toolingConfig || args[0] === infraConfig) {
         expect(readerInclude).toBe(borrowed);
       } else {
         expect(readerInclude).not.toBe(borrowed);
@@ -1770,7 +1794,12 @@ describe("plugin batch build admission", () => {
 
   it.each([
     { name: "full QA", ids: ["qa-lab"], build: true, configs: [databaseConfig, qaConfig] },
-    { name: "shared config, channel only", ids: ["qa-channel"], build: false, configs: [qaConfig] },
+    {
+      name: "shared config, channel only",
+      ids: ["qa-channel"],
+      build: false,
+      configs: [databaseConfig, qaConfig],
+    },
     {
       name: "unrelated plugin",
       ids: ["firecrawl"],
@@ -1867,7 +1896,7 @@ describe("plugin batch build admission", () => {
       ids: ["qa-channel"],
       include: [lifecycle],
       build: false,
-      configs: [qaConfig],
+      configs: [databaseConfig, qaConfig],
     },
     {
       name: "cross-root CLI with include",
@@ -1875,7 +1904,7 @@ describe("plugin batch build admission", () => {
       args: [lifecycle],
       include: [lifecycle],
       build: true,
-      configs: [qaConfig],
+      configs: [combinedConfig],
     },
     {
       name: "include outside explicit target",

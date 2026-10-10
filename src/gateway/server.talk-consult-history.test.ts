@@ -1,7 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
@@ -33,11 +43,14 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-to
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
@@ -83,6 +96,9 @@ let releaseModel = createDeferred();
 let unsubscribe: (() => void) | undefined;
 let publications: Promise<void>[] = [];
 let publicationErrors: unknown[] = [];
+let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
+let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
+let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -91,11 +107,17 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  requestExecution = await observeGatewayRunExecution();
+  lifecycleWrites = createPreparedLifecycleWriteTracker();
+  const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
+  lifecyclePersistence = vi
+    .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+    .mockImplementation((params) => lifecycleWrites.track(prepareLifecycle(params)));
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
   // Voice transcripts use the canonical agent store, not a custom chat-store locator.
-  storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   testState.sessionStorePath = storePath;
   await writeSessionStore({
     entries: { main: { sessionId, updatedAt: Date.now(), status: "done" } },
@@ -167,7 +189,7 @@ beforeEach(async () => {
       }),
     );
   });
-  voiceSessionId = createOrResumeClientVoiceSession({
+  voiceSessionId = await createOrResumeClientVoiceSession({
     agentId: "main",
     sessionKey,
     origin: "client",
@@ -177,22 +199,36 @@ beforeEach(async () => {
 afterEach(async () => {
   releaseModel.resolve();
   try {
-    await waitForDispatchEnd();
-    if (voiceSessionId) {
-      await rpc("talk.client.close", { sessionKey, voiceSessionId });
+    try {
+      await waitForDispatchEnd();
+      if (voiceSessionId) {
+        await rpc("talk.client.close", { sessionKey, voiceSessionId });
+      }
+    } finally {
+      // The suite server can retain preparation after the direct request releases its session.
+      await requestExecution.waitForCompletion();
+      try {
+        await lifecycleWrites.drain();
+      } finally {
+        await drainPublications();
+      }
     }
-    await drainPublications();
   } finally {
-    unsubscribe?.();
-    getSessionRowProjection(context)?.dispose();
-    unsubscribe = undefined;
-    voiceSessionId = undefined;
-    clientVoiceSessionTesting.reset();
-    resetClientVoiceConfirmationStateForTest();
-    testState.sessionStorePath = undefined;
-    gatewayReplyMock.mockReset();
-    runEmbeddedAgent.mockReset();
-    clearConfigCache();
+    try {
+      await requestExecution.restore();
+    } finally {
+      lifecyclePersistence.mockRestore();
+      unsubscribe?.();
+      getSessionRowProjection(context)?.dispose();
+      unsubscribe = undefined;
+      voiceSessionId = undefined;
+      clientVoiceSessionTesting.reset();
+      resetClientVoiceConfirmationStateForTest();
+      testState.sessionStorePath = undefined;
+      gatewayReplyMock.mockReset();
+      runEmbeddedAgent.mockReset();
+      clearConfigCache();
+    }
   }
 });
 
@@ -330,7 +366,11 @@ describe("Browser Talk consult target handoff", () => {
           session: entry.global ? { scope: "global" } : {},
         },
       });
-      voiceSessionId = createOrResumeClientVoiceSession({ agentId, sessionKey, origin: "client" });
+      voiceSessionId = await createOrResumeClientVoiceSession({
+        agentId,
+        sessionKey,
+        origin: "client",
+      });
       if (!entry.fresh) {
         await rpc("talk.client.transcript", {
           sessionKey,

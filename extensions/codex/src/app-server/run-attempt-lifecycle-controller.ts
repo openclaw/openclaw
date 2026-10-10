@@ -8,12 +8,12 @@ import {
   resolveFastModeForElapsed,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexNotificationItem, readRawResponseToolCallId } from "./attempt-notifications.js";
-import {
-  resolveTerminalDynamicToolBatchAction,
-  shouldReleaseTurnAfterTerminalDynamicTool,
-} from "./dynamic-tool-execution.js";
 import { itemName } from "./event-projector-items.js";
-import { isJsonObject, type CodexServerNotification } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  isJsonObject,
+  type CodexServerNotification,
+} from "./protocol.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -36,7 +36,7 @@ export function createCodexAttemptLifecycleController(
   type TerminalToolRelease = NonNullable<typeof state.pendingTerminalDynamicToolRelease>;
   type ModelResponse = {
     closed: boolean;
-    calls: Map<string, TerminalToolRelease | undefined>;
+    calls: Map<string, { direct: boolean; result?: TerminalToolRelease }>;
   };
   // Raw model-call receipts precede dispatch; item/started and request registration
   // can lag. Only rawResponse/completed closes the model's call inventory.
@@ -47,7 +47,7 @@ export function createCodexAttemptLifecycleController(
       return undefined;
     }
     const results: TerminalToolRelease[] = [];
-    for (const result of modelResponse.calls.values()) {
+    for (const { result } of modelResponse.calls.values()) {
       if (!result?.response.success || result.response.terminate !== true) {
         return undefined;
       }
@@ -58,51 +58,6 @@ export function createCodexAttemptLifecycleController(
     );
     const value = results[0];
     return value && payloads.length > 0 ? { value, payloads } : undefined;
-  };
-  const releaseTurnAfterTerminalDynamicTool = (
-    value: TerminalToolRelease,
-    payloads: NonNullable<TerminalToolRelease["response"]["toolAuthoredSourceReply"]>[] = [],
-  ) => {
-    if (
-      !shouldReleaseTurnAfterTerminalDynamicTool({
-        completed: state.completed,
-        aborted: runAbortController.signal.aborted,
-        responseSuccess: value.response.success,
-        currentTurnHadNonTerminalDynamicToolResult:
-          payloads.length > 0 ? false : state.currentTurnHadNonTerminalDynamicToolResult,
-        activeAppServerTurnRequests: state.activeAppServerTurnRequests,
-        activeTurnItemIdsCount: activeTurnItemIds.size,
-        pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
-      })
-    ) {
-      return;
-    }
-    state.pendingTerminalDynamicToolRelease = undefined;
-    modelResponse = undefined;
-    if (payloads.length > 0) {
-      prompt.context.attemptTools.toolBridge.telemetry.messagingToolSourceReplyPayloads.push(
-        ...payloads,
-      );
-    }
-    trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
-      threadId: value.call.threadId,
-      turnId: value.call.turnId,
-      toolCallId: value.call.callId,
-      name: value.call.tool,
-      durationMs: value.durationMs,
-    });
-    embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
-      threadId: value.call.threadId,
-      turnId: value.call.turnId,
-      toolCallId: value.call.callId,
-      tool: value.call.tool,
-      durationMs: value.durationMs,
-    });
-    // Interrupt drops accepted pending input. Reject unconsumed steering first so
-    // completion delivery can use its fallback path instead of reporting success.
-    turnRuntime.steeringQueueRef.current?.cancel();
-    void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
-    turnRuntime.completeTurn();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (
@@ -117,12 +72,18 @@ export function createCodexAttemptLifecycleController(
     state.terminalDynamicToolReleaseCheckScheduled = true;
     const immediate = setImmediate(() => {
       state.terminalDynamicToolReleaseCheckScheduled = false;
-      const authored = resolveAuthoredResponse();
-      if (authored) {
-        releaseTurnAfterTerminalDynamicTool(authored.value, authored.payloads);
+      // An idle gap cannot finish an open inventory or skip a direct call whose
+      // request has not registered yet: either may still contribute an authored reply.
+      if (
+        modelResponse &&
+        (!modelResponse.closed ||
+          [...modelResponse.calls.values()].some((call) => call.direct && !call.result))
+      ) {
         return;
       }
+      const authored = resolveAuthoredResponse();
       if (
+        !authored &&
         state.pendingTerminalDynamicToolRelease?.response.success === true &&
         !state.currentTurnHadNonTerminalDynamicToolResult &&
         state.activeAppServerTurnRequests === 0 &&
@@ -132,39 +93,80 @@ export function createCodexAttemptLifecycleController(
         // Fence steering now; active Codex items may delay the actual interrupt.
         turnRuntime.steeringQueueRef.current?.cancel();
       }
-      const action = resolveTerminalDynamicToolBatchAction({
-        activeAppServerTurnRequests: state.activeAppServerTurnRequests,
-        activeTurnItemIdsCount: activeTurnItemIds.size,
-        pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
-        currentTurnHadNonTerminalDynamicToolResult:
-          state.currentTurnHadNonTerminalDynamicToolResult,
-        hasPendingTerminalDynamicToolRelease: state.pendingTerminalDynamicToolRelease !== undefined,
-      });
-      if (action === "release-pending-terminal" && state.pendingTerminalDynamicToolRelease) {
-        releaseTurnAfterTerminalDynamicTool(state.pendingTerminalDynamicToolRelease);
-      } else if (action === "clear-nonterminal-batch") {
+      if (
+        state.activeAppServerTurnRequests > 0 ||
+        activeTurnItemIds.size > 0 ||
+        pendingOpenClawDynamicToolCompletionIds.size > 0
+      ) {
+        return;
+      }
+      if (!authored && state.currentTurnHadNonTerminalDynamicToolResult) {
         state.pendingTerminalDynamicToolRelease = undefined;
         state.currentTurnHadNonTerminalDynamicToolResult = false;
+        return;
       }
+      const value = authored?.value ?? state.pendingTerminalDynamicToolRelease;
+      if (
+        !value ||
+        state.completed ||
+        runAbortController.signal.aborted ||
+        !value.response.success
+      ) {
+        return;
+      }
+      state.pendingTerminalDynamicToolRelease = undefined;
+      modelResponse = undefined;
+      if (authored) {
+        prompt.context.attemptTools.toolBridge.telemetry.messagingToolSourceReplyPayloads.push(
+          ...authored.payloads,
+        );
+      }
+      trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
+        threadId: value.call.threadId,
+        turnId: value.call.turnId,
+        toolCallId: value.call.callId,
+        name: value.call.tool,
+        durationMs: value.durationMs,
+      });
+      embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
+        threadId: value.call.threadId,
+        turnId: value.call.turnId,
+        toolCallId: value.call.callId,
+        tool: value.call.tool,
+        durationMs: value.durationMs,
+      });
+      // Interrupt drops accepted pending input. Reject unconsumed steering first so
+      // completion delivery can use its fallback path instead of reporting success.
+      turnRuntime.steeringQueueRef.current?.cancel();
+      void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
+      turnRuntime.completeTurn();
     });
     immediate.unref?.();
   };
-  const scheduleTurnReleaseAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
-    state.pendingTerminalDynamicToolRelease = value;
-    scheduleTerminalDynamicToolReleaseCheck();
-  };
-  /** Classifies one settled dynamic tool result into the current batch's release state. */
   const recordDynamicToolResult = (value: TerminalToolRelease) => {
-    if (modelResponse?.calls.has(value.call.callId)) {
-      modelResponse.calls.set(value.call.callId, value);
+    const modelCall = modelResponse?.calls.get(value.call.callId);
+    if (modelCall) {
+      modelCall.result = value;
     }
     if (value.response.toolAuthoredSourceReply) {
+      // Once this raw batch has an authored candidate, only whole-batch admission
+      // can finish it. An ordinary sibling cannot leave a fallback that drops it.
+      if (modelCall) {
+        state.pendingTerminalDynamicToolRelease = undefined;
+      }
       // A nested or unobserved call cannot borrow the outer model call's authority.
       scheduleTerminalDynamicToolReleaseCheck();
       return;
     }
     if (value.response.terminate === true && value.response.success) {
-      scheduleTurnReleaseAfterTerminalDynamicTool(value);
+      if (
+        ![...(modelResponse?.calls.values() ?? [])].some(
+          (call) => call.result?.response.toolAuthoredSourceReply,
+        )
+      ) {
+        state.pendingTerminalDynamicToolRelease = value;
+      }
+      scheduleTerminalDynamicToolReleaseCheck();
     } else if (value.response.success && value.response.asyncStarted === true) {
       scheduleTerminalDynamicToolReleaseCheck();
     } else {
@@ -211,7 +213,9 @@ export function createCodexAttemptLifecycleController(
       modelResponse = { closed: false, calls: new Map() };
     }
     if (callId && !modelResponse.calls.has(callId)) {
-      modelResponse.calls.set(callId, undefined);
+      modelResponse.calls.set(callId, {
+        direct: item.namespace === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+      });
     }
   };
   const { emitLifecycleStart, emitLifecycleTerminal, emitExecutionPhaseOnce } =
@@ -246,10 +250,10 @@ export function createCodexAttemptLifecycleController(
       emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
       return;
     }
-    const item = readCodexNotificationItem(notification.params);
     if (notification.method !== "item/started") {
       return;
     }
+    const item = readCodexNotificationItem(notification.params);
     const tool = item ? itemName(item) : undefined;
     if (item && tool) {
       emitExecutionPhaseOnce(`tool:${item.id}`, {
@@ -322,7 +326,6 @@ export function createCodexAttemptLifecycleController(
     recordModelResponseNotification,
     recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
-    scheduleTurnReleaseAfterTerminalDynamicTool,
     emitLifecycleStart,
     emitLifecycleTerminal,
     buildLifecycleTerminalMeta,

@@ -1,4 +1,3 @@
-/** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -14,16 +13,16 @@ import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
-  mergeExecApprovalsSocketDefaults,
   minSecurity,
   maxAsk,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   redactExecApprovals,
   resolveAllowAlwaysPatternCoverage,
   resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecAsk,
+  type ExecCommandSegment,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
   type ExecSecurity,
@@ -43,6 +42,7 @@ import {
 import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createNodeInvokeResponder,
   type NodeHostClient,
@@ -92,31 +92,18 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerComputer?: NodeWorkerComputer;
 };
 
-type SystemWhichParams = {
-  bins: string[];
-};
-
-type McpToolsCallParams = {
-  server: string;
-  tool: string;
-  arguments?: Record<string, unknown>;
-};
+type McpToolsCallParams = ReturnType<typeof decodeMcpToolsCallParams>;
 
 type SystemExecApprovalsSetParams = {
   file: ExecApprovalsFile;
   baseHash?: string | null;
 };
 
-type SystemRunPrepareParams = {
+type SystemRunPrepareParams = Parameters<typeof buildSystemRunApprovalPlan>[0] & {
   security?: ExecSecurity;
   ask?: ExecAsk;
-  command?: unknown;
-  rawCommand?: unknown;
-  cwd?: unknown;
   env?: Record<string, string> | null;
   executionContext?: unknown;
-  agentId?: unknown;
-  sessionKey?: unknown;
   strictInlineEval?: unknown;
 };
 
@@ -139,6 +126,8 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
 }) {
   const cwd = params.cwd ?? undefined;
   const shellWrapper = extractShellWrapperCommand(params.argv, params.rawCommand);
+  let segments: ExecCommandSegment[];
+  let complete = true;
   if (shellWrapper.isWrapper) {
     if (!shellWrapper.command) {
       return { complete: false, patterns: [] };
@@ -153,32 +142,25 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
       return { complete: false, patterns: [] };
     }
     const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
-    const reusableSegments = candidates
+    segments = candidates
       .filter((candidate) => candidate.allowAlways)
       .map((candidate) => candidate.sourceSegment);
-    const coverage = resolveAllowAlwaysPatternCoverage({
-      segments: reusableSegments,
-      cwd,
-      env: params.env,
-      platform: process.platform,
-      strictInlineEval: params.strictInlineEval,
-    });
-    return {
-      ...coverage,
-      complete: coverage.complete && reusableSegments.length === candidates.length,
-    };
+    complete = segments.length === candidates.length;
+  } else {
+    const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
+    if (!analysis.ok) {
+      return { complete: false, patterns: [] };
+    }
+    segments = analysis.segments;
   }
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
-  if (!analysis.ok) {
-    return { complete: false, patterns: [] };
-  }
-  return resolveAllowAlwaysPatternCoverage({
-    segments: analysis.segments,
+  const coverage = resolveAllowAlwaysPatternCoverage({
+    segments,
     cwd,
     env: params.env,
     platform: process.platform,
     strictInlineEval: params.strictInlineEval,
   });
+  return { ...coverage, complete: coverage.complete && complete };
 }
 
 export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
@@ -213,11 +195,6 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-function resolveEnvPath(env?: Record<string, string>): string[] {
-  const raw = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
-  return raw.split(path.delimiter).filter(Boolean);
-}
-
 function resolveExecutable(bin: string, env?: Record<string, string>) {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
@@ -235,7 +212,9 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
-  for (const dir of resolveEnvPath(env)) {
+  const envPath =
+    env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
+  for (const dir of envPath.split(path.delimiter).filter(Boolean)) {
     for (const ext of extensions) {
       const candidate = path.join(dir, bin + ext);
       if (fs.existsSync(candidate)) {
@@ -246,8 +225,8 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
   return null;
 }
 
-async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = normalizeStringEntries(params.bins);
+async function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
+  const bins = normalizeStringEntries(rawBins);
   const found: Record<string, string> = {};
   for (const bin of bins) {
     const pathLocal = resolveExecutable(bin, env);
@@ -293,7 +272,6 @@ function createNodeHostInvocationClient(
   };
 }
 
-/** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
@@ -353,21 +331,17 @@ async function dispatchInvoke(
     gatewayCloudflareAccess: runtime.gatewayCloudflareAccess,
     signal: runtime.signal,
   });
-  if (workerSupervisorResult.handled) {
-    if (workerSupervisorResult.ok) {
-      await response.json(workerSupervisorResult.payload);
-    } else {
-      await response.error(workerSupervisorResult.code, workerSupervisorResult.message);
-    }
-    return;
-  }
-  if (command === NODE_DEVICE_APPS_COMMAND) {
-    const result = await invokeDeviceApps({
-      paramsJSON: frame.paramsJSON,
-      sharingEnabled: runtime.installedAppsSharingEnabled === true,
-      ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
-      ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
-    });
+  const result = workerSupervisorResult.handled
+    ? workerSupervisorResult
+    : command === NODE_DEVICE_APPS_COMMAND
+      ? await invokeDeviceApps({
+          paramsJSON: frame.paramsJSON,
+          sharingEnabled: runtime.installedAppsSharingEnabled === true,
+          ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
+          ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
+        })
+      : undefined;
+  if (result) {
     if (result.ok) {
       await response.json(result.payload);
     } else {
@@ -414,7 +388,7 @@ async function dispatchInvoke(
       return;
     }
     try {
-      const snapshot = await ensureExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot(() => runtime.signal?.throwIfAborted());
       const payload = {
         ...redactExecApprovals(snapshot),
         ...(includeResolvedDefaults
@@ -429,6 +403,7 @@ async function dispatchInvoke(
   }
 
   if (command === "system.execApprovals.set") {
+    const assertCurrent = () => runtime.signal?.throwIfAborted();
     let params: SystemExecApprovalsSetParams;
     let normalized: ExecApprovalsFile;
     try {
@@ -443,9 +418,12 @@ async function dispatchInvoke(
     }
 
     let snapshot: ExecApprovalsSnapshot;
+    let context: ReturnType<typeof captureOpenClawStateWorkerContext>;
     try {
       // A stale save must not initialize state before its base hash is checked.
-      snapshot = readExecApprovalsSnapshot();
+      context = captureOpenClawStateWorkerContext();
+      snapshot = await readExecApprovalsSnapshotAsync(context);
+      assertCurrent();
     } catch (err) {
       await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
@@ -460,10 +438,14 @@ async function dispatchInvoke(
 
     let nextSnapshot: ExecApprovalsSnapshot | null;
     try {
-      nextSnapshot = await updateExecApprovals({
-        baseHash: snapshot.hash,
-        update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
-      });
+      nextSnapshot = await updateExecApprovals(
+        {
+          baseHash: snapshot.hash,
+          assertCurrent,
+          update: { kind: "replace", file: normalized, preserveSocket: true },
+        },
+        context,
+      );
     } catch (err) {
       await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
@@ -477,29 +459,27 @@ async function dispatchInvoke(
       return;
     }
 
+    context.admission.assertCurrent();
+    assertCurrent();
     await response.json(redactExecApprovals(nextSnapshot));
     return;
   }
 
-  if (command === "system.which") {
-    try {
-      const params = decodeParams<SystemWhichParams>(frame.paramsJSON);
-      if (!Array.isArray(params.bins)) {
-        throw new Error("INVALID_REQUEST: bins required");
-      }
-      const env = sanitizeHostExecEnv({ blockPathOverrides: true });
-      const payload = await handleSystemWhich(params, env);
-      await response.json(payload);
-    } catch (err) {
-      await response.invalid(err);
-    }
-    return;
-  }
-
-  if (command === NODE_FS_LIST_DIR_COMMAND || command === NODE_TERMINAL_UPLOAD_COMMAND) {
+  if (
+    command === "system.which" ||
+    command === NODE_FS_LIST_DIR_COMMAND ||
+    command === NODE_TERMINAL_UPLOAD_COMMAND
+  ) {
     try {
       const params = decodeParams<Record<string, unknown>>(frame.paramsJSON);
-      if (command === NODE_FS_LIST_DIR_COMMAND) {
+      if (command === "system.which") {
+        if (!Array.isArray(params.bins)) {
+          throw new Error("INVALID_REQUEST: bins required");
+        }
+        const env = sanitizeHostExecEnv({ blockPathOverrides: true });
+        const payload = await handleSystemWhich(params.bins, env);
+        await response.json(payload);
+      } else if (command === NODE_FS_LIST_DIR_COMMAND) {
         if (params.path !== undefined && typeof params.path !== "string") {
           throw new Error("INVALID_REQUEST: path must be a string");
         }
@@ -668,7 +648,7 @@ async function dispatchInvoke(
   });
 }
 
-function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
+function decodeMcpToolsCallParams(raw?: string | null) {
   const value = decodeParams<unknown>(raw);
   if (!isRecord(value)) {
     throw new Error("INVALID_REQUEST: MCP tool params must be an object");

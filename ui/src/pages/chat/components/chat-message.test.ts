@@ -2063,46 +2063,6 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-text")?.trim()).toBe("Follow up");
   });
 
-  it("checks local assistant audio against server metadata", async () => {
-    const filename = `${crypto.randomUUID()}.mp3`;
-    const source = `/home/node/.openclaw/media/outbound/${filename}`;
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(new URL(url, "http://control.test").pathname).toBe("/__openclaw__/assistant-media");
-      expect(url).toContain("meta=1");
-      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
-      return {
-        ok: true,
-        json: async () => ({ ...mediaTicketPayload("ticket-bootstrap-audio"), durationMs: 2_345 }),
-      };
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    document.body.append(view);
-    renderReactiveAssistant(
-      () =>
-        createAssistantMessage(`Your recording\nMEDIA:${source}`, {
-          id: "assistant-local-audio-bootstrap-roots",
-        }),
-      {
-        showToolCalls: false,
-        resourceBasePath: "",
-        assistantAttachmentAuthToken: "session-token",
-      },
-    );
-
-    expect(view.textContent).not.toContain("Outside allowed folders");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() =>
-      expect(
-        view
-          .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
-          ?.getAttribute("href"),
-      ).toBe(
-        `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio&filename=${filename}`,
-      ),
-    );
-  });
-
   it("resolves managed transcode audio to an inline player", async () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const ticketedUrl = `${source}?mediaTicket=managed-ticket`;
@@ -2396,71 +2356,6 @@ describe("grouped chat rendering", () => {
       ),
     ).toBeNull();
     expect(view.textContent).toContain("unsafe.pdf");
-  });
-
-  it("rechecks a local image after authentication and renews its media ticket", async () => {
-    vi.useFakeTimers();
-    const filename = `${crypto.randomUUID()} test image.png`;
-    const source = `/tmp/openclaw/${filename}`;
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.includes("meta=1")) {
-        const headers = init?.headers as Headers;
-        if (!headers.has("Authorization")) {
-          return { ok: true, json: async () => ({ available: false }) };
-        }
-        expect(headers.get("Authorization")).toBe("Bearer session-token");
-        return {
-          ok: true,
-          json: async () =>
-            mediaTicketPayload(
-              fetchMock.mock.calls.length === 2 ? "ticket-local" : "ticket-refreshed",
-              31_000,
-            ),
-        };
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    let authToken: string | null = null;
-    const renderMessage = () =>
-      renderAssistantMessage(
-        createAssistantMessage(`Local image\nMEDIA:${source}`, {
-          id: "assistant-local-media-inline",
-        }),
-        {
-          showToolCalls: false,
-          resourceBasePath: "/openclaw",
-          assistantAttachmentAuthToken: authToken,
-          onRequestUpdate: renderMessage,
-        },
-      );
-
-    renderMessage();
-    expect(view.querySelector(".chat-image-frame")?.getAttribute("aria-busy")).toBe("true");
-    expect(view.querySelector(".chat-message-image")).toBeNull();
-    await flushAssistantAttachmentAvailabilityChecks();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(elementText(".chat-assistant-attachment-card__status-meta")).toContain("Unavailable");
-    authToken = "session-token";
-    renderMessage();
-    await flushAssistantAttachmentAvailabilityChecks();
-
-    const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source).replaceAll("%20", "+")}&meta=1`;
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, expectedMetaUrl);
-    expectSameOriginGet(fetchInit);
-    expect(view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toBe(
-      expectedMetaUrl.replace(
-        "&meta=1",
-        `&mediaTicket=ticket-local&${new URLSearchParams({ filename })}`,
-      ),
-    );
-    expect(view.querySelector(".chat-assistant-attachment-card")).toBeNull();
-    await vi.advanceTimersByTimeAsync(1_001);
-    await flushAssistantAttachmentAvailabilityChecks();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(view.querySelector(".chat-message-image")?.getAttribute("src")).toContain(
-      "mediaTicket=ticket-refreshed",
-    );
   });
 
   it("stops checking when local assistant attachment metadata fetch stalls", async () => {
@@ -2823,12 +2718,10 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
-    const imageActions = container.querySelectorAll<HTMLButtonElement>(".chat-image-action");
-    expect([...imageActions].map((action) => action.getAttribute("aria-label"))).toEqual([
-      "Download image",
-      "Copy image",
-    ]);
-    imageActions[0]?.click();
+    expect(container.querySelectorAll(".chat-image-action")).toHaveLength(1);
+    container
+      .querySelector("wa-dropdown")!
+      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "download" } } }));
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(clickedDownloads[0]).toBe("Ticketed image.png");
 

@@ -372,6 +372,7 @@ async function fixture(
     selection?: Record<string, unknown> | null;
     sameSha?: boolean;
     qualification?: "valid" | "wrong-input" | "wrong-archive" | "expired";
+    legacyGhArchive?: boolean;
     toolingFullRef?: string;
     androidPin?: string;
     legacyPlatforms?: "absent-helper" | "dormant-helper";
@@ -866,6 +867,10 @@ if (${Boolean(options.qualification)}) {
   const endpoint = args.find(arg => arg.startsWith("repos/"));
   fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + "\\n");
   if (endpoint === "repos/openclaw/openclaw/actions/artifacts/70/zip") {
+    if (${Boolean(options.legacyGhArchive)} && args.includes("--allow-escape-sequences")) {
+      fs.writeSync(2, "unknown flag: --allow-escape-sequences\\n\\nUsage: gh api <endpoint> [flags]\\n");
+      process.exit(1);
+    }
     process.stdout.write(fs.readFileSync(${JSON.stringify(join(temporary, "qualification.zip"))}));
     process.exit(0);
   }
@@ -1886,6 +1891,25 @@ describe("FRV observation worker boundary", () => {
 });
 
 describe("FRV publication source admission", () => {
+  publicationIt.concurrent(
+    "falls back when the runner gh lacks binary-output sanitization",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          qualification: "valid",
+          legacyGhArchive: true,
+          registry: "healthy",
+        });
+        check(result.status, result.stderr).toBe(0);
+        const archiveRequests = result.requests.filter((args) =>
+          args.includes("repos/openclaw/openclaw/actions/artifacts/70/zip"),
+        );
+        check(archiveRequests).toHaveLength(2);
+        check(archiveRequests[0]).toContain("--allow-escape-sequences");
+        check(archiveRequests[1]).not.toContain("--allow-escape-sequences");
+      }),
+  );
+
   publicationIt.concurrent.for(["valid", "wrong-input", "wrong-archive", "expired"] as const)(
     "executes admitted candidate-owned inventory end to end (%s)",
     async (qualification, { command: processFixture, expect: check }) =>

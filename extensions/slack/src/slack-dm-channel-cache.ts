@@ -1,6 +1,6 @@
 import type { WebClient } from "@slack/web-api";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createSlackTokenCacheKey } from "./client.js";
+import { writeLruMapEntry } from "./monitor/lru-map-cache.js";
 
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const slackDmChannelCaches = new WeakMap<WebClient, Map<string, string>>();
@@ -45,7 +45,5 @@ export function cacheSlackDmChannelId(
 ): void {
   const cache = getSlackDmChannelCache(params.cacheOwner);
   const key = createSlackDmCacheKey(params);
-  cache.delete(key);
-  cache.set(key, channelId);
-  pruneMapToMaxSize(cache, SLACK_DM_CHANNEL_CACHE_MAX);
+  writeLruMapEntry(cache, key, channelId, SLACK_DM_CHANNEL_CACHE_MAX);
 }

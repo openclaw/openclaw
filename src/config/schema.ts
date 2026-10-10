@@ -1,4 +1,3 @@
-// Builds and validates the canonical OpenClaw configuration schema.
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -389,11 +388,6 @@ function buildMergedSchemaCacheKey(params: {
   return hash.digest("hex");
 }
 
-function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
-  pruneMapToMaxSize(mergedSchemaCache, MERGED_SCHEMA_CACHE_MAX - 1);
-  mergedSchemaCache.set(key, value);
-}
-
 function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
   return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => {
     const metadata: ChannelUiMetadata = Object.assign(
@@ -498,7 +492,8 @@ export function buildConfigSchemaCore(params?: {
     uiHints: resolveMergedUiHints(mergedSchema, mergedHints, changedRoots),
   };
   if (cacheKey) {
-    setMergedSchemaCache(cacheKey, merged);
+    pruneMapToMaxSize(mergedSchemaCache, MERGED_SCHEMA_CACHE_MAX - 1);
+    mergedSchemaCache.set(cacheKey, merged);
   }
   return merged;
 }

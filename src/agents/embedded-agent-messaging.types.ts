@@ -38,6 +38,6 @@ export type MessagingToolSourceReplyPayload = Pick<
   toolAuthored?: true;
   /** Exact originating direct call; prevents suppression of another input's answer. */
   toolAuthoredForToolCallId?: string;
-  /** Native harness turn identity when its assistant projection has no tool-call blocks. */
+  /** Canonical assistant response/turn identity, or the native harness turn identity. */
   toolAuthoredForTurnId?: string;
 };

@@ -47,3 +47,7 @@ export const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./ht
 export const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
   () => import("./server/plugin-route-runtime-scopes.js"),
 );
+
+export const getNativeHookRelayModule = createLazyRuntimeModule(
+  () => import("./native-hook-relay-http.js"),
+);

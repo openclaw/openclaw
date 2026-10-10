@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { replaceNamedIndexesWithNoncanonicalIndexes } from "./sqlite-schema-shape.test-support.js";
 
 export function createUnsafeIndexDrift(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
@@ -126,5 +127,35 @@ export function createTranscriptIdempotencyIndexDrift(
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally {
     database.close();
+  }
+}
+
+export function createCanonicalAgentIndexDrift(databasePath: string): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const drifted = new DatabaseSync(databasePath);
+  try {
+    drifted.exec(`
+      DROP INDEX idx_agent_session_windows_session_key;
+      DROP INDEX idx_agent_transcript_event_identity_sequence;
+    `);
+    expect(replaceNamedIndexesWithNoncanonicalIndexes(drifted).length).toBeGreaterThan(25);
+    drifted.exec(`
+      DROP INDEX idx_agent_trajectory_runtime_run;
+      CREATE INDEX idx_agent_trajectory_runtime_run
+        ON trajectory_runtime_events(session_id, run_id, seq) WHERE run_id IS NOT NULL;
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:worker-1:trajectory', 'trajectory-session', '{}', 1);
+      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+        VALUES ('trajectory-session', 'agent:worker-1:trajectory', 1, 1);
+      INSERT INTO trajectory_runtime_events (session_id, seq, run_id, event_json, created_at)
+        VALUES ('trajectory-session', 0, NULL, '{"type":"unassigned"}', 1),
+               ('trajectory-session', 1, 'run-1', '{"type":"named"}', 2);
+    `);
+    expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(drifted.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    drifted.close();
   }
 }

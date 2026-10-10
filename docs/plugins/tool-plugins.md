@@ -203,6 +203,15 @@ context whenever tools are assembled. Argument preparation and execution use the
 same instance. Retained tools stop working when their owning plugin registry is
 retired.
 
+Set `async: false` on a concrete tool the model uses to wait, as
+`sessions_yield` does. On GPT-6 Astra requests that use
+[async function calls](/providers/openai/models), OpenClaw marks other direct
+function tools async but keeps this one synchronous, so the response pauses at
+the call and the next request delivers earlier async results first. Other
+providers, Code Mode, and calls through the Tool Search catalog are unchanged;
+declare `catalogMode: "direct-only"` to keep the tool directly visible. Omitting
+the property keeps the default behavior.
+
 ### Owner-authorized continuations
 
 To participate when the exact parent resumes after an explicit `sessions_yield`,

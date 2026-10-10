@@ -1,4 +1,5 @@
 /** Capture of replies authored by `canDeliverSourceReply` tools. */
+import { resolveAgentAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { extractToolAuthoredSourceReplyPayload } from "./embedded-agent-messaging-extraction.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
@@ -15,7 +16,7 @@ export function captureToolAuthoredSourceReply(params: {
   /** Effective tool result after hooks and middleware; only `details.sourceReply` is read. */
   result: unknown;
   toolCallId: string;
-  /** Stable scope for the idempotency key: the run id, or the harness turn id without one. */
+  /** Stable scope: the issuing assistant turn, else the run id or harness turn id. */
   idempotencyScope: string;
 }): MessagingToolSourceReplyPayload | undefined {
   const extracted = extractToolAuthoredSourceReplyPayload(params.result);
@@ -44,10 +45,11 @@ export function isToolAuthoredSourceReplyForAssistant(
       assistant &&
       assistant.stopReason !== "error" &&
       assistant.stopReason !== "aborted" &&
-      ((payload.toolAuthoredForTurnId && payload.toolAuthoredForTurnId === assistant.turnId) ||
-        assistant.content.some(
-          (block) => block.type === "toolCall" && block.id === payload.toolAuthoredForToolCallId,
-        )),
+      (payload.toolAuthoredForTurnId
+        ? payload.toolAuthoredForTurnId === resolveAgentAssistantTurnId(assistant)
+        : assistant.content.some(
+            (block) => block.type === "toolCall" && block.id === payload.toolAuthoredForToolCallId,
+          )),
     )
   );
 }

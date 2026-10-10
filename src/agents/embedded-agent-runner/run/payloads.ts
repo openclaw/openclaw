@@ -65,6 +65,7 @@ import { buildFailureWarning } from "./tool-error-warning.js";
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   answerSegments?: EmbeddedAgentSubscribeState["answerSegments"];
+  keptAnswer?: EmbeddedAgentSubscribeState["keptAnswer"];
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
@@ -110,13 +111,9 @@ export function buildEmbeddedRunPayloads(params: {
   // tool-authored batch replaces the model answer in either delivery mode.
   const sourceReplyStateFor = (payloads: MessagingToolSourceReplyPayload[]) =>
     buildSourceReplyPayloadState({
+      ...params,
       payloads,
       sentTargets: params.messagingToolSentTargets,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
-      runId: params.runId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
     });
   const sourceReplies = params.messagingToolSourceReplyPayloads ?? [];
   const ordinarySourceReplies = sourceReplyStateFor(
@@ -151,10 +148,11 @@ export function buildEmbeddedRunPayloads(params: {
     assistantTexts,
     lastAssistant,
     currentAssistant,
-    assistantMessageIndex,
+    assistantMessageIndex: terminalMessageIndex,
+    keptAnswer,
   }: Pick<
     typeof params,
-    "assistantTexts" | "lastAssistant" | "currentAssistant" | "assistantMessageIndex"
+    "assistantTexts" | "lastAssistant" | "currentAssistant" | "assistantMessageIndex" | "keptAnswer"
   >) => {
     // Silence belongs to this input's answer. An earlier steered input must not
     // hide a later input that actually failed without producing an answer.
@@ -175,8 +173,12 @@ export function buildEmbeddedRunPayloads(params: {
     const nonEmptyAssistantTexts = assistantTexts
       .map((text) => sanitizeAssistantVisibleStreamText(text))
       .filter((text) => text.trim().length > 0);
-    const assistantForPayload =
+    const terminalAssistant =
       currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : lastAssistant);
+    // The subscriber decides when an earlier completed answer stays the reply. Only the answer
+    // lane is restored; its reasoning was emitted at its own message_end.
+    const assistantForPayload = keptAnswer?.assistant ?? terminalAssistant;
+    const assistantMessageIndex = keptAnswer?.messageIndex ?? terminalMessageIndex;
     // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
     // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
     const storedDelivery = assistantForPayload?.openclawDelivery;
@@ -245,8 +247,8 @@ export function buildEmbeddedRunPayloads(params: {
     const reasoningText =
       suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
         ? ""
-        : assistantForPayload && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-          ? extractAssistantThinking(assistantForPayload)
+        : terminalAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
+          ? extractAssistantThinking(terminalAssistant)
           : "";
     if (reasoningText) {
       replyItems.push({ text: reasoningText, isReasoning: true });
@@ -297,30 +299,16 @@ export function buildEmbeddedRunPayloads(params: {
             fallbackAnswerDirectiveState.mediaUrls?.length)) ||
         storedDelivery?.tts?.text?.trim(),
       );
-      const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
-      const answerTexts =
+      const answerDirectives =
         shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText
-          ? [fallbackAnswerSourceText]
-          : hasAssistantTextPayload
-            ? nonEmptyAssistantTexts
-            : fallbackAnswerText
-              ? [fallbackAnswerText]
+          ? [fallbackAnswerDirectiveState ?? parseReplyDirectives(fallbackAnswerSourceText)]
+          : nonEmptyAssistantTexts.length > 0
+            ? nonEmptyAssistantTexts.map((text) => parseReplyDirectives(text))
+            : fallbackAnswerDirectiveState
+              ? [fallbackAnswerDirectiveState]
               : [];
-      const preparedAnswerDirectives =
-        shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
-          ? fallbackAnswerDirectiveState
-          : null;
-      for (const text of answerTexts) {
-        const {
-          text: cleanedText,
-          mediaUrls,
-          mediaFailures,
-          audioAsVoice,
-          replyToId,
-          replyToTag,
-          replyToCurrent,
-          isSilent,
-        } = preparedAnswerDirectives ?? parseReplyDirectives(text);
+      for (const directives of answerDirectives) {
+        const { text: cleanedText, mediaUrls, mediaFailures, isSilent } = directives;
         hasIntentionalSilentFinal = isSilent;
         const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
         const delivery = shouldUseCanonicalFinalAnswer
@@ -330,7 +318,7 @@ export function buildEmbeddedRunPayloads(params: {
               replyToId: storedDelivery?.replyToId,
               replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
             }
-          : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+          : directives;
         if (
           !cleanedText &&
           (!mediaUrls || mediaUrls.length === 0) &&
@@ -369,18 +357,14 @@ export function buildEmbeddedRunPayloads(params: {
       lastAssistant: segment.lastAssistant,
       currentAssistant: segment.lastAssistant,
       assistantMessageIndex: segment.messageEnd,
+      keptAnswer: segment.keptAnswer,
     });
     for (const reply of replyItems.slice(replyStart)) {
       setReplyPayloadMetadata(reply, { precedingInputAnswer: true });
     }
     textStart = segment.textEnd;
   }
-  appendSegmentAnswer({
-    assistantTexts: params.assistantTexts.slice(textStart),
-    lastAssistant: params.lastAssistant,
-    currentAssistant: params.currentAssistant,
-    assistantMessageIndex: params.assistantMessageIndex,
-  });
+  appendSegmentAnswer({ ...params, assistantTexts: params.assistantTexts.slice(textStart) });
   // Native projections with no assistant text still deliver their committed reply.
   replyItems.push(...sourceReplyStateFor([...pendingAuthoredReplies]).replyItems);
   // A conversational NO_REPLY is an authored outcome, not a missing answer.

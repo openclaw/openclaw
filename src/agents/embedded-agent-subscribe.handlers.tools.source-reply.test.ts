@@ -2,7 +2,7 @@
 // The subscription must deliver exactly those bytes and make the same completion decision.
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import {
   createTestContext,
   endTool,

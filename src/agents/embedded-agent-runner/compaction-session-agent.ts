@@ -35,22 +35,16 @@ export async function prepareCompactionSessionAgent(params: {
 }) {
   const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
+        ...params,
         provider: params.effectiveModel.provider,
-        resolvedApiKey: params.resolvedApiKey,
-        authStorage: params.authStorage,
       })
     : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStream({
-    llmRuntime: params.llmRuntime,
+    ...params,
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session }),
-    providerStreamFn: params.providerStreamFn,
-    sessionId: params.sessionId,
-    signal: params.signal,
     model: params.effectiveModel,
-    resolvedApiKey: params.resolvedApiKey,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
-    authStorage: params.authStorage,
   }).streamFn;
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,

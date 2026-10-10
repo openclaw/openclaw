@@ -421,7 +421,12 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
-  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
+  // nice execs Git in the same child; retain its family and operation attribution.
+  const diagnosticCommand =
+    argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git"
+      ? "git"
+      : invocation.command;
+  recordChildProcessSpawn(diagnosticCommand, child.nodeChildProcess);
   if (scope) {
     retainCommandProcess(scope, child, reservation);
   }

@@ -29,6 +29,7 @@ export const runtimeProcessEntrypoints = {
   fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
   attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
   gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
+  gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
   fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
   sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
   authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
@@ -42,11 +43,15 @@ export const runtimeProcessEntrypoints = {
   progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
   sessionForkDomain: runtimeProcessEntrypoint("config/sessions/session-fork-domain.worker"),
+  sessionGoalOperations: runtimeProcessEntrypoint("config/sessions/goals-operations.worker"),
   sessionLifecyclePlanningDomain: runtimeProcessEntrypoint(
     "config/sessions/session-lifecycle-projection.worker",
   ),
   sessionMessageRewriteDomain: runtimeProcessEntrypoint(
     "config/sessions/session-message-rewrite.worker",
+  ),
+  sessionTranscriptStats: runtimeProcessEntrypoint(
+    "config/sessions/session-transcript-stats.worker",
   ),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
   acpParentStreamStore: runtimeProcessEntrypoint(

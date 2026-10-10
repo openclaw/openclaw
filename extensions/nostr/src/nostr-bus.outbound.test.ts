@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getPublicKey } from "nostr-tools";
+import { getPublicKey, SimplePool } from "nostr-tools";
 import { decrypt } from "nostr-tools/nip04";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -14,7 +14,9 @@ import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { nostrPlugin } from "./channel.js";
 import { getActiveNostrBuses } from "./gateway.js";
 import { startNostrBus } from "./nostr-bus.js";
@@ -26,6 +28,18 @@ import {
   buildResolvedNostrAccount,
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
+
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+  };
+});
 
 // Keep existing state persistence isolation; transport, signatures and NIP-04 are real.
 vi.mock("./nostr-state-store.js", () => ({
@@ -116,6 +130,7 @@ describe("Nostr outbound relay failover", () => {
   });
 
   afterEach(async () => {
+    effectInput.current = undefined;
     for (const entry of relays) {
       entry.releaseUpgrades();
     }
@@ -137,6 +152,86 @@ describe("Nostr outbound relay failover", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it.each([false, true])(
+    "prepares relay publication without retrying refusal (allowed=%s)",
+    async (allowed) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const received = createDeferred<void>();
+      const first = await relay({
+        holdAcknowledgements: true,
+        onEvent: () => received.resolve(),
+      });
+      const second = await relay();
+      const bus = await startBus([first.url, second.url]);
+      const refusal = new Error("message use refused");
+      let handedOff = false;
+      let publicationsAtHandoff = 0;
+      const connections = vi.spyOn(SimplePool.prototype, "ensureRelay");
+      let publish:
+        | MockInstance<Awaited<ReturnType<SimplePool["ensureRelay"]>>["publish"]>
+        | undefined;
+      let initiations = 0;
+      const initiate = async <T>(effect: () => T | Promise<T>): Promise<T> => {
+        initiations++;
+        preparing.resolve();
+        await prepared.promise;
+        if (!allowed) {
+          throw refusal;
+        }
+        try {
+          const result = effect();
+          publicationsAtHandoff = publish?.mock.calls.length ?? 0;
+          return result;
+        } finally {
+          handedOff = true;
+        }
+      };
+      effectInput.current = { active: true, run: (run) => run(), initiate };
+      const completion = bus.sendDm(RECIPIENT_PUBKEY, "prepared relay publish");
+      try {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          Promise.race([completion, received.promise]),
+          "Relay skipped preparation",
+        );
+        const connectionIndex = connections.mock.calls.findLastIndex(
+          ([url]) => new URL(url).href === new URL(first.url).href,
+        );
+        const connection = connections.mock.results[connectionIndex];
+        if (connection?.type !== "return") {
+          throw new Error("No Nostr relay connection was prepared");
+        }
+        publish = vi.spyOn(await connection.value, "publish");
+        expect(first.events).toEqual([]);
+        expect(publish).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!allowed) {
+          await expect(completion).rejects.toBe(refusal);
+          expect(first.events).toEqual([]);
+        } else {
+          await awaitGateBeforeSettlement(received.promise, completion, "Relay did not publish");
+          expect(handedOff).toBe(true);
+          expect(first.acknowledgements).toEqual([]);
+          first.acknowledgeAll();
+          await expect(completion).resolves.toBe(first.events[0]!.id);
+        }
+        expect(initiations).toBe(1);
+        expect(publicationsAtHandoff).toBe(allowed ? 1 : 0);
+        expect(publish).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(first.events).toHaveLength(allowed ? 1 : 0);
+        expect(second.events).toEqual([]);
+      } finally {
+        prepared.resolve();
+        first.acknowledgeAll();
+        await first.close();
+        await completion.catch(() => {});
+        publish?.mockRestore();
+        connections.mockRestore();
+      }
+    },
+  );
 
   it("accepts a real positive OK even when its reason starts with connection failure", async () => {
     const first = await relay({ reason: PREFIX_ACK_REASON });

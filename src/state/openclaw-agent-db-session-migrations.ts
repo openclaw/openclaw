@@ -13,8 +13,6 @@ import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
 import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
 import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
-type MigratedConversationEntry = Record<string, unknown>;
-
 export function assertSupportedAgentMigrationSchemas(
   db: DatabaseSync,
   pathname: string,
@@ -94,19 +92,15 @@ export function migrateSessionTranscriptActiveProjection(
   `);
 }
 
-function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
-  return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
-}
-
 function inferMigratedChatType(params: {
-  entry: MigratedConversationEntry;
+  entry: Record<string, unknown>;
   persistedChatType?: string;
   sessionKey?: string;
   deliveryTarget?: string;
 }): ChatType {
   const explicit =
     normalizeChatType(normalizeOptionalString(params.entry.chatType)) ??
-    normalizeChatType(normalizeOptionalString(params.persistedChatType));
+    normalizeChatType(params.persistedChatType);
   if (explicit) {
     return explicit;
   }
@@ -128,7 +122,7 @@ function inferMigratedChatType(params: {
 }
 
 function migratedConversation(
-  entry: MigratedConversationEntry,
+  entry: Record<string, unknown>,
   persistedChatType?: string,
   sessionKey?: string,
 ) {
@@ -137,14 +131,14 @@ function migratedConversation(
     asOptionalRecord(canonicalDelivery?.context) ?? asOptionalRecord(entry.deliveryContext);
   const origin = asOptionalRecord(canonicalDelivery?.origin) ?? asOptionalRecord(entry.origin);
   const deliveryRouteTarget = normalizeOptionalString(delivery?.to);
+  const originTarget = normalizeOptionalString(origin?.from);
   const kind = inferMigratedChatType({
     entry,
     persistedChatType,
     sessionKey,
-    deliveryTarget: deliveryRouteTarget ?? normalizeOptionalString(origin?.from),
+    deliveryTarget: deliveryRouteTarget ?? originTarget,
   });
-  const deliveryTarget =
-    deliveryRouteTarget ?? (kind === "direct" ? normalizeOptionalString(origin?.from) : undefined);
+  const deliveryTarget = deliveryRouteTarget ?? (kind === "direct" ? originTarget : undefined);
   if (!deliveryTarget) {
     return undefined;
   }
@@ -297,7 +291,8 @@ export function backfillSessionConversations(db: DatabaseSync): void {
   }
   for (const row of rows) {
     const sessionId = normalizeOptionalString(row.session_id);
-    const entry = parseConversationEntry(row.entry_json);
+    const entry =
+      typeof row.entry_json === "string" ? safeParseJsonRecord(row.entry_json) : undefined;
     const updatedAt = typeof row.updated_at === "number" ? row.updated_at : Date.now();
     const conversation = entry
       ? migratedConversation(
@@ -411,23 +406,6 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
       "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
     );
   }
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
-    AFTER INSERT ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
-    AFTER UPDATE OF entry_json ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
-    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-  `);
   const selectPending = db.prepare(
     "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
   );

@@ -108,6 +108,7 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 | `twitch`                 | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `twitch.svg`         |
 | `vault`                  | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `vault.svg`          |
 | `whatsapp`               | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `whatsapp.svg`       |
+| `x`                      | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `x.svg`              |
 | `zalo`                   | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `zalo.svg`           |
 | `zalouser`               | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `zalo.svg`           |
 

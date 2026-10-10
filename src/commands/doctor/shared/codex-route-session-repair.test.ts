@@ -41,7 +41,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
     });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual(["main"]);
     expect(getSession(store, "main").updatedAt).toBe(123);
     expect(getSession(store, "main").modelProvider).toBe("openai");
     expect(getSession(store, "main").model).toBe("gpt-5.5");
@@ -85,10 +85,9 @@ describe("repairCodexSessionStoreRoutes", () => {
     };
     const authProfileIdMap = new Map([["openai-codex:default", "openai:chatgpt-default"]]);
 
-    expect(repairCodexSessionStoreRoutes({ store, now: 123, authProfileIdMap })).toEqual({
-      changed: true,
-      sessionKeys: ["selected"],
-    });
+    expect(repairCodexSessionStoreRoutes({ store, now: 123, authProfileIdMap })).toEqual([
+      "selected",
+    ]);
     expect(store.selected).toMatchObject({
       updatedAt: 123,
       authProfileOverride: "openai:chatgpt-default",
@@ -103,10 +102,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       updatedAt: 3,
       authProfileOverride: "openai:default",
     });
-    expect(repairCodexSessionStoreRoutes({ store, now: 456, authProfileIdMap })).toEqual({
-      changed: false,
-      sessionKeys: [],
-    });
+    expect(repairCodexSessionStoreRoutes({ store, now: 456, authProfileIdMap })).toEqual([]);
     expect(store.selected?.updatedAt).toBe(123);
   });
 
@@ -132,7 +128,7 @@ describe("repairCodexSessionStoreRoutes", () => {
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual(["main"]);
     expect(store.main).toMatchObject({
       modelProvider: "openai",
       model: "gpt-5.6-sol",
@@ -166,7 +162,7 @@ describe("repairCodexSessionStoreRoutes", () => {
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["legacy"] });
+    expect(result).toEqual(["legacy"]);
     expect(store.custom).toMatchObject({
       modelProvider: "custom",
       model: "codex/foo",
@@ -212,7 +208,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       blockedModelIdentities: new Set([blockedNamespace]),
     });
 
-    expect(result).toEqual({ changed: false, sessionKeys: [] });
+    expect(result).toEqual([]);
     expect(store.blocked).toMatchObject({
       modelProvider: "codex",
       model: "gpt-5.6-sol",
@@ -266,7 +262,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       blockedModelIdentities: new Set([blockedIdentity]),
     });
 
-    expect(result).toEqual({ changed: false, sessionKeys: [] });
+    expect(result).toEqual([]);
     expect(store.main).toMatchObject({
       updatedAt: 1,
       fallbackNotice: {
@@ -296,7 +292,7 @@ describe("repairCodexSessionStoreRoutes", () => {
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual(["main"]);
     expect(store.main?.fallbackNotice).toBeUndefined();
     expect(store.main?.agentRuntimeOverride).toBeUndefined();
     expect(store.main?.agentHarnessId).toBeUndefined();
@@ -337,7 +333,7 @@ describe("repairCodexSessionStoreRoutes", () => {
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["ordinary"] });
+    expect(result).toEqual(["ordinary"]);
     expect(store[supervisedKey]).toEqual(supervised);
     expect(store[ordinaryLockedKey]).toEqual(ordinaryLocked);
     expect(store.ordinary).toMatchObject({
@@ -368,7 +364,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       now: 123,
     });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual(["main"]);
     expect(getSession(store, "main").modelProvider).toBe("openai");
     expect(getSession(store, "main").model).toBe("gpt-5.5");
     expect(getSession(store, "main").providerOverride).toBe("openai");
@@ -419,7 +415,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
     });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual(["main"]);
     expect(getSession(store, "main").updatedAt).toBe(123);
     expect(getSession(store, "main").providerOverride).toBe("openai");
     expect(getSession(store, "main").modelOverride).toBe("gpt-5.5");
@@ -450,7 +446,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       now: 123,
     });
 
-    expect(result).toEqual({ changed: false, sessionKeys: [] });
+    expect(result).toEqual([]);
     expect(getSession(store, "main").updatedAt).toBe(1);
     expect(getSession(store, "main").providerOverride).toBeUndefined();
     expect(getSession(store, "main").modelOverride).toBe("gpt-5.5");

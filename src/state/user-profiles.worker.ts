@@ -16,14 +16,13 @@ import {
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
-  readUserModelAccountSummary,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync, readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -181,10 +180,6 @@ export const userProfileOperations = {
     input: Parameters<typeof listUserModelAccounts>[0],
     { stateOptions },
   ) => listUserModelAccounts(input, stateOptions()),
-  "userProfiles.modelAccount.summary": (
-    input: Parameters<typeof readUserModelAccountSummary>[0],
-    { stateOptions },
-  ) => readUserModelAccountSummary(input, stateOptions()),
   "userProfiles.modelAccount.selected": (
     input: { profileId: string; provider: string },
     { stateOptions },
@@ -194,9 +189,7 @@ export const userProfileOperations = {
     { open, stateOptions },
   ) => {
     const options = { ...stateOptions(), database: open() };
-    return input?.githubAccountIds === undefined
-      ? { profiles: listUserProfilesSync(options) }
-      : readUserProfileSnapshotSync(options, input.githubAccountIds);
+    return readUserProfileSnapshotSync(options, input?.githubAccountIds);
   },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();

@@ -23,7 +23,6 @@ import {
   dispatchChatSlashCommand,
   readChatResetTargetAccess,
   type ChatCommandTarget,
-  type ChatCommandResetOptions,
 } from "./chat-commands.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -59,8 +58,6 @@ export type QueuedChatSendOptions = PendingComposerSnapshot & {
   /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
   expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;
-  restoreAttachments?: boolean;
-  restoreDraft?: boolean;
   /** Recognized remote commands remain editable when the Gateway rejects them. */
   restoreOnTerminalFailure?: boolean;
   routingSessionKey?: string;
@@ -75,11 +72,6 @@ export type ChatOutboxDrainDependencies = {
     opts?: QueuedChatSendOptions,
     queuedSessionKey?: string,
   ) => Promise<QueuedChatSendResult>;
-  sendResetSlashCommand: (
-    host: ChatHost,
-    message: string,
-    opts: ChatCommandResetOptions,
-  ) => Promise<void>;
 };
 
 type StoredChatOutboxDrainLane = {
@@ -409,10 +401,6 @@ async function drainStoredChatOutbox(
           host,
           claimed.localCommandName ?? item.localCommandName,
           claimed.localCommandArgs ?? "",
-          {
-            sendResetMessage: (message, resetOpts) =>
-              dependencies.sendResetSlashCommand(host, message, resetOpts),
-          },
         );
         if (dispatchResult === "deferred") {
           setCommandState("waiting-idle");
@@ -526,9 +514,6 @@ async function drainStoredChatOutbox(
         lane.rerun = false;
       }
       return "blocked";
-    }
-    if (result === "failed") {
-      continue;
     }
   }
 }

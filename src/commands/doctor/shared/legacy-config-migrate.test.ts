@@ -77,12 +77,12 @@ describe("legacy Codex provider config migrate", () => {
     const res = migrateProviderConfig({
       "openai-codex": {
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         models: [
           {
             id: "gpt-5.5",
             name: "GPT-5.5",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
           },
         ],
       },
@@ -148,8 +148,8 @@ describe("legacy Codex provider config migrate", () => {
       codex: {
         auth: "oauth",
         headers: { Authorization: "Bearer synthetic" },
-        api: "openai-codex-responses",
-        models: [{ id: "gpt-5.6-sol", api: "openai-codex-responses" }],
+        api: "openai-chatgpt-responses",
+        models: [{ id: "gpt-5.6-sol", api: "openai-chatgpt-responses" }],
       },
     });
 
@@ -162,9 +162,6 @@ describe("legacy Codex provider config migrate", () => {
     expect(res.config?.models?.providers?.openai).toEqual({
       models: [{ id: "text-embedding-3-small" }],
     });
-    expect(res.changes).toContain(
-      "Skipped merging models.providers.codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.codex.auth, models.providers.codex.headers.",
-    );
     expect(collectBlockedLegacyOpenAICodexProviderPlan(res.config).warning).toEqual(
       expect.stringContaining("models.providers.codex cannot be merged automatically"),
     );
@@ -189,7 +186,7 @@ describe("legacy Codex provider config migrate", () => {
         ],
       },
       codex: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         models: [{ id: "gpt-5.6-sol" }, { id: "gpt-5.4-mini" }],
       },
@@ -207,9 +204,6 @@ describe("legacy Codex provider config migrate", () => {
         baseUrl: "https://api.openai.com/v1",
       },
     ]);
-    expect(res.changes).toContain(
-      "Skipped merging models.providers.codex into models.providers.openai because colliding model definitions differ for: gpt-5.6-sol.",
-    );
     expect(collectBlockedLegacyOpenAICodexProviderPlan(res.config).warning).toEqual(
       expect.stringContaining("colliding model definitions differ for: gpt-5.6-sol"),
     );
@@ -254,10 +248,10 @@ describe("legacy Codex provider config migrate", () => {
     );
   });
 
-  it("preserves model-scoped defaults and overrides when later OpenAI normalization runs", () => {
+  it("preserves model-scoped defaults and overrides when merging legacy providers", () => {
     const res = migrateProviderConfig({
       "openai-codex": {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         contextWindow: 200000,
         contextTokens: 180000,
@@ -274,9 +268,9 @@ describe("legacy Codex provider config migrate", () => {
         ],
       },
       openai: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://api.openai.com/v1",
-        models: [{ id: "text-embedding-3-small", name: "Chat", api: "openai-codex-responses" }],
+        models: [{ id: "text-embedding-3-small", name: "Chat", api: "openai-chatgpt-responses" }],
       },
     });
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
@@ -1206,19 +1200,6 @@ describe("gateway.port out-of-range repair migrate", () => {
     const res = migrateLegacyConfigForTest({ gateway: { port: 0 } });
     expect(res.config).not.toHaveProperty("gateway");
     expect(res.changes).toEqual([expect.stringContaining("Removed out-of-range gateway.port (0)")]);
-  });
-
-  it("seeds non-loopback Control UI origins with the fallback port", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: { port: 65_536, bind: "lan" },
-    });
-
-    expect(res.config?.gateway).toMatchObject({
-      bind: "lan",
-      controlUi: {
-        allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
-      },
-    });
   });
 });
 

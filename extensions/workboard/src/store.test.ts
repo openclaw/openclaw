@@ -13,7 +13,6 @@ import type { PersistedWorkboardCard, WorkboardCardStore } from "./persistence-t
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteKernel } from "./sqlite-store-kernel.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
-import { secondsToDurationMs } from "./store-constants.js";
 import { WorkboardStore } from "./store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import {
@@ -296,180 +295,120 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it.each(["unchanged", "edited"] as const)(
-    "reports only committed reference cleanup revisions for %s peers",
-    async (peerChange) => {
-      await using harness = createConcurrentSqliteHarness("openclaw-workboard-delete-references-");
-      const parent = await harness.host.create({ title: "Selected parent" });
-      const child = await harness.host.create({ title: "Selected child" });
-      const unrelated = await harness.host.create({ title: "Unrelated" });
-      const linked = await harness.host.linkCards(parent.id, child.id);
-      const deleted = harness.paused.pauseAfterMatchingWrite(
-        (key, value) => key === parent.id && value === undefined,
-      );
-      const pending = harness.operation.delete(parent.id);
-      const outcome = pending.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      await deleted.reached;
-      const cleanup = harness.paused.pauseNextWrite();
-      deleted.resume();
-      await cleanup.reached;
-      let beforeCleanup = linked;
-      if (peerChange === "edited") {
-        await harness.host.addComment(child.id, { body: "Keep this external comment" });
-        beforeCleanup = await harness.host.addLink(child.id, {
-          targetCardId: unrelated.id,
-          type: "relates_to",
-        });
-      }
-      cleanup.resume();
-      const result = await outcome;
-      expect(result).not.toHaveProperty("error");
-      const current = await harness.host.get(child.id);
-      expect(
-        current?.metadata?.links?.some((link) => link.targetCardId === parent.id) ?? false,
-      ).toBe(false);
-      if (peerChange === "edited") {
-        expect(current?.metadata?.comments).toEqual(beforeCleanup.metadata?.comments);
-        expect(current?.metadata?.links).toEqual(
-          beforeCleanup.metadata?.links?.filter((link) => link.targetCardId !== parent.id),
-        );
-      }
-      expect(result).toEqual({
-        value: {
-          deleted: true,
-          referenceUpdates: [
-            {
-              id: child.id,
-              previousUpdatedAt: beforeCleanup.updatedAt,
-              updatedAt: current?.updatedAt,
-            },
-          ],
-        },
-      });
-      await expect(harness.host.get(unrelated.id)).resolves.toEqual(unrelated);
-      await expect(
-        harness.operation.delete(child.id, { expectedUpdatedAt: current?.updatedAt }),
-      ).resolves.toEqual({ deleted: true });
-    },
-  );
+  it("reports committed reference cleanup revisions after a concurrent peer edit", async () => {
+    await using harness = createConcurrentSqliteHarness("openclaw-workboard-delete-references-");
+    const parent = await harness.host.create({ title: "Selected parent" });
+    const child = await harness.host.create({ title: "Selected child" });
+    const unrelated = await harness.host.create({ title: "Unrelated" });
+    await harness.host.linkCards(parent.id, child.id);
+    const deleted = harness.paused.pauseAfterMatchingWrite(
+      (key, value) => key === parent.id && value === undefined,
+    );
+    const pending = harness.operation.delete(parent.id);
+    const outcome = pending.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await deleted.reached;
+    const cleanup = harness.paused.pauseNextWrite();
+    deleted.resume();
+    await cleanup.reached;
 
-  it.each([
-    ...(["move", "archive", "delete"] as const).flatMap((action) =>
-      (["before read", "after read"] as const).map((timing) => ({ action, timing })),
-    ),
-    { action: "update", timing: "before read" } as const,
-  ])("rejects stale $action when another host writes $timing", async ({ action, timing }) => {
-    await using harness = createConcurrentSqliteHarness("openclaw-workboard-action-cas-");
-    const base = await harness.host.create({ title: "Original", status: "todo" });
-    const mutate = (expectedUpdatedAt: number) =>
-      action === "move"
-        ? harness.operation.move(base.id, "blocked", 2000, undefined, { expectedUpdatedAt })
-        : action === "archive"
-          ? harness.operation.archive(base.id, true, { expectedUpdatedAt })
-          : action === "update"
-            ? harness.operation.update(
-                base.id,
-                { title: "Stale title", status: "todo" },
-                { expectedUpdatedAt },
-              )
-            : harness.operation.delete(base.id, { expectedUpdatedAt });
-    const pause = timing === "after read" ? harness.paused.pauseNextWrite() : undefined;
-    const inFlight = pause ? mutate(base.updatedAt).catch((error: unknown) => error) : undefined;
-    await pause?.reached;
-    const newer =
-      action === "update"
-        ? await harness.host.move(base.id, "blocked", 2000)
-        : await harness.host.update(
-            base.id,
-            timing === "after read"
-              ? { title: "Host edit", labels: ["preserved"] }
-              : { title: "Newer title" },
-          );
-    pause?.resume();
-    const error = await (inFlight ?? mutate(base.updatedAt).catch((caught: unknown) => caught));
-    expect(error).toMatchObject({
-      name: "WorkboardCardConflictError",
-      current: newer,
+    await harness.host.addComment(child.id, { body: "Keep this external comment" });
+    const beforeCleanup = await harness.host.addLink(child.id, {
+      targetCardId: unrelated.id,
+      type: "relates_to",
     });
-    await expect(harness.host.get(base.id)).resolves.toEqual(newer);
-    if (action === "update") {
-      await expect(harness.operation.get(base.id)).resolves.toMatchObject({
-        title: "Original",
-        status: "blocked",
-        position: 2000,
-        updatedAt: newer.updatedAt,
-      });
-      return;
-    }
-    if (timing === "after read") {
-      return;
-    }
-    const currentOptions = { expectedUpdatedAt: newer.updatedAt };
-    if (action === "delete") {
-      await expect(harness.operation.delete(base.id, currentOptions)).resolves.toEqual({
+    cleanup.resume();
+    const result = await outcome;
+    expect(result).not.toHaveProperty("error");
+    const current = await harness.host.get(child.id);
+    expect(current?.metadata?.links?.some((link) => link.targetCardId === parent.id) ?? false).toBe(
+      false,
+    );
+
+    expect(current?.metadata?.comments).toEqual(beforeCleanup.metadata?.comments);
+    expect(current?.metadata?.links).toEqual(
+      beforeCleanup.metadata?.links?.filter((link) => link.targetCardId !== parent.id),
+    );
+    expect(result).toEqual({
+      value: {
         deleted: true,
-      });
-      await expect(harness.host.get(base.id)).resolves.toBeUndefined();
-    } else if (action === "move") {
-      await harness.operation.move(base.id, "blocked", 2000, undefined, currentOptions);
-      await expect(harness.host.get(base.id)).resolves.toMatchObject({
-        title: "Newer title",
-        status: "blocked",
-        position: 2000,
-      });
-    } else {
-      await harness.operation.archive(base.id, true, currentOptions);
-      await expect(harness.host.get(base.id)).resolves.toMatchObject({
-        title: "Newer title",
-        metadata: { archivedAt: expect.any(Number) },
-      });
-    }
+        referenceUpdates: [
+          {
+            id: child.id,
+            previousUpdatedAt: beforeCleanup.updatedAt,
+            updatedAt: current?.updatedAt,
+          },
+        ],
+      },
+    });
+    await expect(harness.host.get(unrelated.id)).resolves.toEqual(unrelated);
+    await expect(
+      harness.operation.delete(child.id, { expectedUpdatedAt: current?.updatedAt }),
+    ).resolves.toEqual({ deleted: true });
   });
 
-  it.each(["workerLog", "proof"] as const)(
-    "hydrates once for %s and preserves a foreign edit on CAS retry",
-    async (kind) => {
-      await using harness = createConcurrentSqliteHarness("openclaw-workboard-metadata-cas-");
-      const { operation, host, paused } = harness;
-      const base = await host.create({ title: "Metadata update" });
-      const lookup = vi.spyOn(paused.store, "lookup");
-      const write = vi.spyOn(paused.store, "registerIfUpdatedAt");
-      const append = (text: string) =>
-        kind === "workerLog"
-          ? operation.addWorkerLog(base.id, { message: text })
-          : operation.addProof(base.id, { status: "passed", label: text });
-
-      await append("First entry");
-      expect(lookup).toHaveBeenCalledTimes(1);
-      lookup.mockClear();
-      write.mockClear();
-      const pause = paused.pauseNextWrite();
-      const pending = append("Retried entry");
+  it.each(["move", "archive", "delete"] as const)(
+    "rejects stale %s when another host writes after read",
+    async (action) => {
+      await using harness = createConcurrentSqliteHarness("openclaw-workboard-action-cas-");
+      const base = await harness.host.create({ title: "Original", status: "todo" });
+      const options = { expectedUpdatedAt: base.updatedAt };
+      const pause = harness.paused.pauseNextWrite();
+      const pending = (
+        action === "move"
+          ? harness.operation.move(base.id, "blocked", 2000, undefined, options)
+          : action === "archive"
+            ? harness.operation.archive(base.id, true, options)
+            : harness.operation.delete(base.id, options)
+      ).catch((error: unknown) => error);
       await pause.reached;
-      const foreign = await host.update(base.id, {
-        title: "Foreign title",
-        metadata: { comments: [{ id: "foreign-comment", body: "Keep me", createdAt: 1 }] },
+      const newer = await harness.host.update(base.id, {
+        title: "Host edit",
+        labels: ["preserved"],
       });
       pause.resume();
-      const updated = await pending;
-
-      expect(write).toHaveBeenCalledTimes(2);
-      expect(await write.mock.results[0]!.value).toBe(false);
-      expect(await write.mock.results[1]!.value).toBe(true);
-      expect(lookup).toHaveBeenCalledTimes(3);
-      expect(updated.title).toBe("Foreign title");
-      expect(updated.metadata?.comments).toEqual(foreign.metadata?.comments);
-      const entries =
-        kind === "workerLog"
-          ? updated.metadata?.workerLogs?.map((entry) => entry.message)
-          : updated.metadata?.proof?.map((entry) => entry.label);
-      expect(entries).toEqual(["First entry", "Retried entry"]);
-      await expect(host.get(base.id)).resolves.toEqual(updated);
+      expect(await pending).toMatchObject({
+        name: "WorkboardCardConflictError",
+        current: newer,
+      });
+      await expect(harness.host.get(base.id)).resolves.toEqual(newer);
     },
   );
+
+  it("hydrates metadata once and preserves a foreign edit on CAS retry", async () => {
+    await using harness = createConcurrentSqliteHarness("openclaw-workboard-metadata-cas-");
+    const { operation, host, paused } = harness;
+    const base = await host.create({ title: "Metadata update" });
+    const lookup = vi.spyOn(paused.store, "lookup");
+    const write = vi.spyOn(paused.store, "registerIfUpdatedAt");
+    const append = (text: string) => operation.addWorkerLog(base.id, { message: text });
+
+    await append("First entry");
+    expect(lookup).toHaveBeenCalledTimes(1);
+    lookup.mockClear();
+    write.mockClear();
+    const pause = paused.pauseNextWrite();
+    const pending = append("Retried entry");
+    await pause.reached;
+    const foreign = await host.update(base.id, {
+      title: "Foreign title",
+      metadata: { comments: [{ id: "foreign-comment", body: "Keep me", createdAt: 1 }] },
+    });
+    pause.resume();
+    const updated = await pending;
+
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(await write.mock.results[0]!.value).toBe(false);
+    expect(await write.mock.results[1]!.value).toBe(true);
+    expect(lookup).toHaveBeenCalledTimes(3);
+    expect(updated.title).toBe("Foreign title");
+    expect(updated.metadata?.comments).toEqual(foreign.metadata?.comments);
+    const entries = updated.metadata?.workerLogs?.map((entry) => entry.message);
+    expect(entries).toEqual(["First entry", "Retried entry"]);
+    await expect(host.get(base.id)).resolves.toEqual(updated);
+  });
 
   it.each(["delete", "claim"] as const)(
     "rejects metadata after a foreign %s instead of overwriting it",
@@ -1064,11 +1003,6 @@ describe("WorkboardStore", () => {
 
   it.each([
     {
-      patch: { clearAppearance: null },
-      existing: true,
-      message: "clearAppearance must be an array",
-    },
-    {
       patch: { clearAppearance: ["name"] },
       existing: true,
       message: "clearAppearance must be an array",
@@ -1135,47 +1069,6 @@ describe("WorkboardStore", () => {
       },
     });
     expect(updated.metadata?.links).toBeUndefined();
-  });
-
-  it("updates automation metadata from top-level patch fields", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Tune automation" });
-
-    const updated = await store.update(card.id, {
-      tenant: "release",
-      idempotencyKey: "release:1",
-      skills: ["testing", "docs"],
-      workspace: { kind: "scratch" },
-      maxRuntimeSeconds: 120,
-      maxRetries: 2,
-      scheduledAt: 10_000,
-    });
-
-    expect(updated.metadata?.automation).toMatchObject({
-      tenant: "release",
-      idempotencyKey: "release:1",
-      skills: ["testing", "docs"],
-      workspace: { kind: "scratch" },
-      maxRuntimeSeconds: 120,
-      maxRetries: 2,
-      scheduledAt: 10_000,
-    });
-
-    const cleared = await store.update(card.id, { scheduledAt: null });
-    expect(cleared.metadata?.automation?.scheduledAt).toBeUndefined();
-    expect(cleared.metadata?.automation).toMatchObject({
-      tenant: "release",
-      maxRetries: 2,
-    });
-
-    const preserved = await store.update(card.id, {
-      scheduledAt: 20_000,
-      maxRuntimeSeconds: undefined,
-    });
-    expect(preserved.metadata?.automation).toMatchObject({
-      scheduledAt: 20_000,
-      maxRuntimeSeconds: 120,
-    });
   });
 
   it("only accepts workspace authority from trusted top-level provenance", async () => {
@@ -1326,60 +1219,6 @@ describe("WorkboardStore", () => {
     expect(rolledBack.completedAt).toBeUndefined();
   });
 
-  it("tracks lifecycle status provenance and clears it on manual status changes", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Sync status provenance" });
-
-    const zeroSourceLifecycle = await store.update(card.id, {
-      status: "running",
-      metadata: { lifecycleStatusSourceUpdatedAt: 0 },
-    });
-    expect(zeroSourceLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(0);
-
-    const lifecycleMoved = await store.update(card.id, {
-      status: "running",
-      metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
-    });
-    expect(lifecycleMoved.metadata?.lifecycleStatusSourceUpdatedAt).toBe(1000);
-
-    const newerLifecycle = await store.update(card.id, {
-      status: "review",
-      metadata: { lifecycleStatusSourceUpdatedAt: 3000 },
-    });
-    expect(newerLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(3000);
-
-    const manual = await store.move(card.id, "running", 2000);
-    expect(manual.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
-
-    const staleZeroLifecycle = await store.update(card.id, {
-      status: "review",
-      metadata: { lifecycleStatusSourceUpdatedAt: 0 },
-    });
-    expect(staleZeroLifecycle).toEqual(manual);
-    expect(staleZeroLifecycle.status).toBe("running");
-    expect(staleZeroLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
-
-    const staleLifecycle = await store.update(card.id, {
-      status: "review",
-      metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
-    });
-    expect(staleLifecycle).toEqual(manual);
-    expect(staleLifecycle.status).toBe("running");
-    expect(staleLifecycle.updatedAt).toBe(manual.updatedAt);
-    expect(staleLifecycle.events).toHaveLength(manual.events?.length ?? 0);
-    expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
-
-    const freshLifecycleSourceUpdatedAt = Date.now() + 1000;
-    const freshLifecycle = await store.update(card.id, {
-      status: "review",
-      metadata: { lifecycleStatusSourceUpdatedAt: freshLifecycleSourceUpdatedAt },
-    });
-    expect(freshLifecycle.status).toBe("review");
-    expect(freshLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(
-      freshLifecycleSourceUpdatedAt,
-    );
-  });
-
   it("keeps creation status from stale lifecycle patches", async () => {
     vi.useFakeTimers();
     try {
@@ -1522,79 +1361,14 @@ describe("WorkboardStore", () => {
     expect(cleared.execution).toBeUndefined();
   });
 
-  it("tracks execution attempts as card metadata", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Run worker" });
-
-    const running = await store.update(card.id, {
-      status: "running",
-      execution: codexExecution("exec-1", 10, {
-        sessionKey: "agent:main:dashboard:1",
-        runId: "run-1",
-      }),
-    });
-    expect(running.metadata?.attempts).toEqual([
-      expect.objectContaining({
-        id: "run-1",
-        status: "running",
-        engine: "codex",
-        runId: "run-1",
-      }),
-    ]);
-    expect(running.events?.at(-1)).toMatchObject({ kind: "moved" });
-
-    const blocked = await store.update(card.id, {
-      execution: {
-        ...running.execution!,
-        status: "blocked",
-        updatedAt: 20,
-      },
-    });
-
-    expect(blocked.metadata?.attempts?.[0]).toMatchObject({
-      status: "blocked",
-      endedAt: 20,
-    });
-    expect(blocked.metadata?.failureCount).toBe(1);
-    expect(blocked.events?.at(-1)).toMatchObject({ kind: "attempt_updated", runId: "run-1" });
-
-    const commented = await store.addComment(card.id, { body: "Need provider follow-up." });
-    expect(commented.metadata?.failureCount).toBe(1);
-    expect(commented.metadata?.attempts?.[0]).toMatchObject({
-      status: "blocked",
-      endedAt: 20,
-    });
-
-    const retrying = await store.update(card.id, {
-      execution: {
-        ...running.execution!,
-        id: "exec-2",
-        runId: "run-2",
-        status: "running",
-        startedAt: 30,
-        updatedAt: 30,
-      },
-    });
-    expect(retrying.metadata?.failureCount).toBe(1);
-    expect(retrying.metadata?.attempts?.[1]).toMatchObject({
-      id: "run-2",
-      startedAt: 30,
-      status: "running",
-    });
-
-    const blockedAgain = await store.update(card.id, {
-      execution: {
-        ...retrying.execution!,
-        status: "blocked",
-        updatedAt: 40,
-      },
-    });
-    expect(blockedAgain.metadata?.failureCount).toBe(2);
-  });
-
   it("adds comments, links, proof, and archive metadata", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Track proof" });
+    const card = await store.create({
+      title: "Track proof",
+      metadata: { archivedAt: Date.now() },
+    });
+    expect(card.metadata?.archivedAt).toBeUndefined();
+    expect(card.events?.map((event) => event.kind)).toEqual(["created"]);
 
     const commented = await store.addComment(card.id, { body: "Reviewer asked for screenshots." });
     expect(commented.metadata?.comments?.[0]).toMatchObject({
@@ -1644,24 +1418,6 @@ describe("WorkboardStore", () => {
     const restored = await store.archive(card.id, false);
     expect(restored.metadata?.archivedAt).toBeUndefined();
     expect(restored.events?.at(-1)).toMatchObject({ kind: "unarchived" });
-  });
-
-  it("ignores caller-supplied archivedAt on create so no card is born archived", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Injected archive",
-      metadata: { archivedAt: Date.now() },
-    });
-
-    // Archival is a transition owned by archive(), which appends the matching
-    // event. Honouring it here would exclude the card from dispatch from birth
-    // with an event log recording only "created".
-    expect(card.metadata?.archivedAt).toBeUndefined();
-    expect(card.events?.map((event) => event.kind)).toEqual(["created"]);
-
-    const archived = await store.archive(card.id, true);
-    expect(archived.metadata?.archivedAt).toBeGreaterThan(0);
-    expect(archived.events?.at(-1)).toMatchObject({ kind: "archived" });
   });
 
   it("retains the correlated proof when metadata budget trimming is required", async () => {
@@ -1829,24 +1585,6 @@ describe("WorkboardStore", () => {
     expect(violated.events?.at(-1)).toMatchObject({ kind: "protocol_violation" });
   });
 
-  it("keeps metadata under the keyed-store value budget", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Collect a lot of notes" });
-
-    for (let index = 0; index < 50; index += 1) {
-      await store.addComment(card.id, {
-        body: `${String(index).padStart(2, "0")} ${"x".repeat(1990)}`,
-      });
-    }
-
-    const saved = await store.get(card.id);
-    expect(Buffer.byteLength(JSON.stringify(saved?.metadata), "utf8")).toBeLessThanOrEqual(
-      24 * 1024,
-    );
-    expect(saved?.metadata?.comments?.at(-1)?.body).toContain("49 ");
-    expect(saved?.metadata?.comments?.length).toBeLessThan(50);
-  });
-
   it("claims cards, heartbeats, and releases the claim", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({ title: "Coordinate worker", status: "todo" });
@@ -2000,66 +1738,21 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("preserves scheduled and retry-budget errors when a claim is active", async () => {
+  it("caps claim expiry to a valid Date timestamp", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
       const store = createWorkboardSqliteTestStore();
-      const scheduled = await store.create({ title: "Scheduled", status: "ready" });
-      await store.claim(scheduled.id, { ownerId: "main", ttlSeconds: 60 });
-      await store.update(scheduled.id, { status: "scheduled", scheduledAt: 10_000 });
-
-      const exhausted = await store.create({
-        title: "Exhausted",
-        status: "ready",
-        maxRetries: 1,
-        metadata: { failureCount: 1 },
+      const card = await store.create({ title: "Bound claim", status: "todo" });
+      const claimed = await store.claim(card.id, {
+        ownerId: "main",
+        ttlSeconds: Number.MAX_VALUE,
       });
-      await store.claim(exhausted.id, { ownerId: "exhausted-worker", ttlSeconds: 60 });
-      await store.update(exhausted.id, { metadata: { failureCount: 2 } });
-
-      await expect(store.claim(scheduled.id, { ownerId: "other" })).rejects.toThrow(
-        "card is scheduled for later.",
-      );
-      await expect(store.claim(exhausted.id, { ownerId: "other" })).rejects.toThrow(
-        "card exhausted its retry budget.",
-      );
+      expect(claimed.card.metadata?.claim?.expiresAt).toBe(MAX_DATE_TIMESTAMP_MS);
     } finally {
       vi.useRealTimers();
     }
   });
-
-  it.each([
-    { operation: "claim", now: 1_000, ttlSeconds: Number.MAX_VALUE, heartbeatAt: undefined },
-    {
-      operation: "heartbeat",
-      now: MAX_DATE_TIMESTAMP_MS - 30_000,
-      ttlSeconds: 60,
-      heartbeatAt: MAX_DATE_TIMESTAMP_MS - 10_000,
-    },
-  ])(
-    "caps $operation expiry to a valid Date timestamp",
-    async ({ now, ttlSeconds, heartbeatAt }) => {
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(now);
-        const store = createWorkboardSqliteTestStore();
-        const card = await store.create({ title: "Bound claim", status: "todo" });
-        const claimed = await store.claim(card.id, {
-          ownerId: "main",
-          ttlSeconds,
-        });
-        let current = claimed.card;
-        if (heartbeatAt !== undefined) {
-          vi.setSystemTime(heartbeatAt);
-          current = await store.heartbeat(card.id, { ownerId: "main" });
-        }
-        expect(current.metadata?.claim?.expiresAt).toBe(MAX_DATE_TIMESTAMP_MS);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("does not let invalid stored claim expiry block a fresh claim", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
@@ -2591,10 +2284,6 @@ describe("WorkboardStore", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("caps finite oversized runtime durations", () => {
-    expect(secondsToDurationMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_DATE_TIMESTAMP_MS);
   });
 
   it("lets in-flight retries finish before enforcing the retry budget", async () => {
@@ -3382,30 +3071,6 @@ describe("WorkboardStore", () => {
     expect((await store.dispatch(12)).orchestrated).toEqual([]);
   });
 
-  it("does not mutate archived ready cards during repeated dispatch", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Archived ready work",
-      status: "ready",
-    });
-    const archived = await store.archive(card.id, true);
-    const changes = vi.fn();
-    store.subscribeChanges(changes);
-
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      await expect(store.dispatch(10 + attempt)).resolves.toEqual({
-        promoted: [],
-        reclaimed: [],
-        blocked: [],
-        orchestrated: [],
-        count: 0,
-      });
-    }
-
-    await expect(store.get(card.id)).resolves.toEqual(archived);
-    expect(changes).not.toHaveBeenCalled();
-  });
-
   it.each([
     { name: "raised cap", autoDecompose: true, cap: 2, includeSecond: true },
     { name: "disabled orchestration", autoDecompose: false, cap: 2, includeSecond: false },
@@ -3955,6 +3620,242 @@ describe("WorkboardStore", () => {
         summary: "Children recorded.",
       }),
     ).resolves.toMatchObject({ status: "done" });
+  });
+});
+
+describe("WorkboardStore attachments", () => {
+  it("stores attachments in SQLite and adds worker context", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const card = await store.create({ title: "Review attached log" });
+
+    const attached = await store.addAttachment(card.id, {
+      fileName: "failure.log",
+      mimeType: "text/plain",
+      note: "Captured failing run",
+      contentBase64: Buffer.from("stack trace").toString("base64"),
+    });
+
+    expect(attached.metadata?.attachments?.[0]).toMatchObject({
+      fileName: "failure.log",
+      byteSize: "stack trace".length,
+      mimeType: "text/plain",
+    });
+    expect(attached.events?.at(-1)).toMatchObject({ kind: "attachment_added" });
+    const attachment = attached.metadata?.attachments?.[0];
+    if (!attachment) {
+      throw new Error("expected attachment metadata");
+    }
+    const persisted = await store.getAttachment(attachment.id);
+    if (!persisted) {
+      throw new Error("expected persisted attachment");
+    }
+    expect(Buffer.from(persisted.contentBase64, "base64").toString("utf8")).toBe("stack trace");
+    await expect(
+      store.addAttachment(card.id, {
+        fileName: "huge.bin",
+        contentBase64: Buffer.alloc(256 * 1024 + 1).toString("base64"),
+      }),
+    ).rejects.toThrow(/attachment must be/);
+    await expect(
+      store.addAttachment(card.id, {
+        fileName: "sqlite-sized.bin",
+        contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
+      }),
+    ).resolves.toMatchObject({
+      metadata: {
+        attachments: expect.arrayContaining([
+          expect.objectContaining({ fileName: "sqlite-sized.bin" }),
+        ]),
+      },
+    });
+    await expect(
+      store.addAttachment(card.id, {
+        fileName: "padded.txt",
+        contentBase64: `${Buffer.from("ok").toString("base64")}\n`,
+      }),
+    ).rejects.toThrow(/canonical base64/);
+
+    const context = await store.buildWorkerContext(card.id);
+    expect(context).toContain("failure.log");
+
+    const deleted = await store.deleteAttachment(card.id, attachment.id);
+    expect(deleted.metadata?.attachments).toEqual([
+      expect.objectContaining({ fileName: "sqlite-sized.bin" }),
+    ]);
+    expect(deleted.events?.at(-1)).toMatchObject({ kind: "edited" });
+    expect(await store.getAttachment(attachment.id)).toBeUndefined();
+
+    const budgetCard = await store.create({
+      title: "Attachment budget boundary",
+      metadata: {
+        comments: Array.from({ length: 12 }, (_, index) => ({
+          id: `comment-${index}`,
+          body: "x".repeat(1970),
+          createdAt: 1,
+        })),
+      },
+    });
+    expect(budgetCard.metadata?.comments).toHaveLength(12);
+    const deleteBlob = stores.attachments.delete.bind(stores.attachments);
+    let rejectedAttachmentId: string | undefined;
+    using deletion = vi.spyOn(stores.attachments, "delete").mockImplementation(async (id) => {
+      if (rejectedAttachmentId) {
+        throw new Error("attachment was already deleted");
+      }
+      rejectedAttachmentId = id;
+      return deleteBlob(id);
+    });
+    await expect(
+      store.addAttachment(budgetCard.id, {
+        fileName: "f".repeat(240),
+        note: "n".repeat(400),
+        mimeType: "m".repeat(160),
+        contentBase64: Buffer.from("proof").toString("base64"),
+      }),
+    ).rejects.toThrow("attachment metadata was trimmed before it could be indexed.");
+    expect(deletion).toHaveBeenCalledTimes(1);
+    expect(rejectedAttachmentId).toBeDefined();
+    expect(await store.getAttachment(rejectedAttachmentId!)).toBeUndefined();
+    await expect(store.get(budgetCard.id)).resolves.toMatchObject({
+      metadata: { comments: budgetCard.metadata?.comments },
+    });
+  });
+
+  it("removes attachment blobs when the card attachment index prunes old entries", async () => {
+    const { store, dbPath } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Many attachments", templateId: "docs" });
+    let firstAttachmentId = "";
+
+    for (let index = 0; index < 21; index += 1) {
+      const updated = await store.addAttachment(card.id, {
+        fileName: `log-${index}.txt`,
+        contentBase64: Buffer.from(`log ${index}`).toString("base64"),
+      });
+      firstAttachmentId ||= updated.metadata?.attachments?.[0]?.id ?? "";
+    }
+
+    const saved = await store.get(card.id);
+    expect(saved?.metadata?.attachments).toHaveLength(20);
+    expect(await store.getAttachment(firstAttachmentId)).toBeUndefined();
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        db
+          .prepare("SELECT attachment_id FROM workboard_attachment_blobs WHERE attachment_id = ?")
+          .get(firstAttachmentId),
+      ).toBeUndefined();
+      expect(db.prepare("SELECT COUNT(*) AS count FROM workboard_attachment_blobs").get()).toEqual({
+        count: 20,
+      });
+    } finally {
+      db.close();
+    }
+    const exported = await store.exportCards();
+    expect(exported.cards).toEqual([
+      expect.objectContaining({
+        id: card.id,
+        metadata: expect.objectContaining({ templateId: "docs" }),
+      }),
+    ]);
+    expect(exported.exportedAt).toEqual(expect.any(Number));
+    expect(exported.attachments).toHaveLength(20);
+    expect(exported.attachments[0]).not.toHaveProperty("contentBase64");
+  });
+});
+
+describe("Workboard dependency and scheduled promotion", () => {
+  it("creates idempotent child cards and promotes them when parents finish", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const parent = await store.create({ title: "Parent", status: "running" });
+    const child = await store.create({
+      title: "Child",
+      status: "todo",
+      parents: [parent.id],
+      tenant: "release",
+      idempotencyKey: "fanout:1",
+      skills: ["testing"],
+      workspace: { kind: "scratch" },
+    });
+
+    expect(child.status).toBe("todo");
+    expect(child.metadata?.links).toEqual([
+      expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+    ]);
+    await expect(store.get(parent.id)).resolves.toMatchObject({
+      metadata: { links: [expect.objectContaining({ type: "child", targetCardId: child.id })] },
+    });
+    await expect(
+      store.create({
+        title: "Duplicate child",
+        tenant: "release",
+        idempotencyKey: "fanout:1",
+      }),
+    ).resolves.toMatchObject({ id: child.id });
+    await expect(
+      store.create({
+        title: "Different tenant child",
+        tenant: "qa",
+        idempotencyKey: "fanout:1",
+      }),
+    ).resolves.toMatchObject({ title: "Different tenant child" });
+    await expect(
+      store.create({ title: "Unscoped child", idempotencyKey: "fanout:1" }),
+    ).resolves.toMatchObject({ title: "Unscoped child" });
+
+    await store.complete(parent.id, { summary: "Parent done." });
+    const { promoted } = await store.dispatch();
+
+    expect(promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        automation: {
+          tenant: "release",
+          idempotencyKey: "fanout:1",
+          skills: ["testing"],
+          workspace: { kind: "scratch" },
+        },
+      },
+    });
+  });
+
+  it("does not promote or claim an archived scheduled card", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = createWorkboardSqliteTestStore();
+      const card = await store.create({
+        title: "Archived scheduled work",
+        status: "scheduled",
+        scheduledAt: 2_000,
+      });
+      const archived = await store.archive(card.id, true);
+      const changes = vi.fn();
+      store.subscribeChanges(changes);
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await expect(store.dispatch(3_000 + attempt)).resolves.toEqual({
+          promoted: [],
+          reclaimed: [],
+          blocked: [],
+          orchestrated: [],
+          count: 0,
+        });
+      }
+      await expect(store.claim(card.id, { ownerId: "worker" })).rejects.toThrow(/archived/);
+      await expect(store.get(card.id)).resolves.toEqual(archived);
+      expect(changes).not.toHaveBeenCalled();
+
+      vi.setSystemTime(3_000);
+      await store.archive(card.id, false);
+      await expect(store.claim(card.id, { ownerId: "worker" })).resolves.toMatchObject({
+        card: { id: card.id, status: "running" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

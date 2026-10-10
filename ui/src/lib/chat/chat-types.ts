@@ -1,9 +1,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
-/**
- * Chat message types for the UI layer.
- */
 import type {
   AgentActivityItem,
   ChatSendIntent,
@@ -207,7 +204,6 @@ export type ChatQueueItem = {
   sender?: SenderIdentity;
 };
 
-/** Union type for items in the chat thread */
 export type ChatItem =
   | {
       kind: "message";
@@ -229,7 +225,8 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
-      sessionsYield?: "waiting" | "resumed";
+      /** Structural only: separates a handed-off run from its resumption. Never rendered. */
+      handoffBoundary?: true;
     }
   | {
       kind: "divider";
@@ -256,7 +253,15 @@ export type ChatItem =
   | {
       kind: "reading-indicator";
       key: string;
+      /** When this status began on the browser clock; no later than `request.askedAt`. */
       startedAt: number;
+      /** The run handed off and is idle; its subagents are what is still working. */
+      waitingOn?: "subagents";
+      /**
+       * Set for a run that resumed a handoff: when its request was asked, on the
+       * transcript's clock, and the earlier runs of the same answer, oldest first.
+       */
+      request?: { askedAt: number; runIds: readonly string[] };
       runId?: string;
       boundaryId?: string;
     }
@@ -266,18 +271,8 @@ export type ChatStreamSegment = {
   text: string;
   ts: number;
   runId?: string;
-  /** Persisted user send that causally precedes this transient output. */
-  afterBoundaryRunId?: string;
-  /** Persisted user send that causally follows this transient output. */
-  boundaryRunId?: string;
-  /** Ordering-only boundary with no renderable assistant text. */
-  boundaryMarker?: true;
   /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
   persisted?: true;
-  /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
-  retiredItemId?: string;
-  /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
-  pendingCommentary?: { text: string; prefixLength: number };
   toolCallId?: string;
   itemId?: string;
 };
@@ -286,11 +281,8 @@ export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
   return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
 }
 
-export function streamSegmentUsesAccumulatedText(segment: {
-  itemId?: unknown;
-  boundaryMarker?: unknown;
-}): boolean {
-  return segment.boundaryMarker !== true && !streamSegmentHasItemId(segment);
+export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+  return !streamSegmentHasItemId(segment);
 }
 
 /** Advance the accumulated-text tracker only when the segment genuinely
@@ -373,7 +365,6 @@ export type MessageImageSource = {
   height?: number;
 };
 
-/** Content item types in a normalized message */
 export type MessageContentItem =
   | ClawHubRecommendation
   | {
@@ -432,7 +423,6 @@ export type MessageContentItem =
       rawText?: string | null;
     };
 
-/** Normalized message structure for rendering */
 export type NormalizedMessage = {
   role: string;
   content: MessageContentItem[];
@@ -462,7 +452,6 @@ export type ToolOutputMetadata = {
   captureTruncated?: true;
 };
 
-/** Tool card representation for inline tool call/result rendering */
 export type ToolCard = {
   id: string;
   callId?: string;

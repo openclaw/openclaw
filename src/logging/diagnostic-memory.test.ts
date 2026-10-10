@@ -93,7 +93,13 @@ describe("diagnostic memory", () => {
       const { emitDiagnosticMemorySample: sample } = await import("./diagnostic-memory.js");
       expect(getHeapStatistics).not.toHaveBeenCalled();
 
-      const options = { memoryUsage: memoryUsage({}), emitSample: false };
+      const options = {
+        memoryUsage: memoryUsage({}),
+        emitSample: false,
+        isBunRuntime: false,
+      };
+      sample({ ...options, isBunRuntime: true });
+      expect(getHeapStatistics).not.toHaveBeenCalled();
       for (const heapSizeLimitBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
         sample({ ...options, heapSizeLimitBytes });
       }
@@ -593,7 +599,7 @@ describe("diagnostic memory", () => {
       ])} thresholdBytes=3000`,
     );
     expect(records[0]?.message).toContain(
-      "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000.",
+      "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000.",
     );
   });
 

@@ -80,9 +80,8 @@ export function createSessionFileReadAuthority(
       return false;
     }
   };
-  const authorizeHostRead = () => (hostAdmission ??= prepareHostRead());
   return {
-    authorizeHostRead,
+    authorizeHostRead: () => (hostAdmission ??= prepareHostRead()),
     withCurrent: withHostAuthority,
     hasHostRead: () => usedHostRead,
     release: () => placement?.release(),

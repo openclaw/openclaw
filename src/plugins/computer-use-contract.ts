@@ -1,5 +1,4 @@
-import { type Static, type TProperties, type TSchema, Type } from "typebox";
-import { Compile } from "typebox/compile";
+import { type Static, type TProperties, Type } from "typebox";
 import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import { closedObject } from "../../packages/gateway-protocol/src/schema/closed-object.js";
 
@@ -416,14 +415,6 @@ export type ScreenSnapshotParams = Static<typeof ScreenSnapshotParamsSchema>;
 export type ScreenSnapshotResult = Static<typeof ScreenSnapshotResultSchema>;
 
 type ComputerUseValidator<Value> = (value: unknown) => value is Value;
-
-/** Compile one Computer Use wire schema into a reusable type-guard validator. */
-export function compileComputerUseValidator<const Schema extends TSchema>(
-  schema: Schema,
-): ComputerUseValidator<Static<Schema>> {
-  const validator = Compile(schema);
-  return (value: unknown): value is Static<Schema> => validator.Check(value);
-}
 
 const validateComputerActParams = lazyCompile(ComputerActParamsSchema);
 const validateComputerActResult = lazyCompile(ComputerActResultSchema);

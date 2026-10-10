@@ -151,7 +151,6 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
         current.sessionId !== params.entry.sessionId ||
         state?.cycleId !== params.observation.cycleId ||
         state.tombstone ||
-        current.status !== "running" ||
         current.abortedLastRun !== true
       ) {
         return "skipped";

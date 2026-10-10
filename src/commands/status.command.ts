@@ -14,7 +14,6 @@ import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
-import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
   reportStatusScanFailure,
   resolveStatusGatewayHealth,
@@ -37,27 +36,23 @@ function resolvePairingRecoveryContext(params: {
   remediationHint: string | null;
 } | null {
   const structured = readPairingConnectErrorDetails(params.details);
-  if (structured) {
-    return {
-      requestId: normalizePairingConnectRequestId(structured.requestId) ?? null,
-      reason: structured.reason ?? null,
-      remediationHint: structured.remediationHint
-        ? sanitizeTerminalText(structured.remediationHint)
-        : null,
-    };
-  }
   // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
-  const source = [params.error, params.closeReason]
-    .filter((part) => typeof part === "string" && part.trim().length > 0)
-    .join(" ");
-  const pairing = readConnectPairingRequiredMessage(source);
+  const pairing =
+    structured ??
+    readConnectPairingRequiredMessage(
+      [params.error, params.closeReason]
+        .filter((part) => typeof part === "string" && part.trim().length > 0)
+        .join(" "),
+    );
   if (!pairing) {
     return null;
   }
   return {
     requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
     reason: pairing.reason ?? null,
-    remediationHint: null,
+    remediationHint: structured?.remediationHint
+      ? sanitizeTerminalText(structured.remediationHint)
+      : null,
   };
 }
 
@@ -73,6 +68,14 @@ function resolveServiceWrapperContextHint(params: {
     return null;
   }
   return `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`;
+}
+
+function withStatusProgress<Input, Output>(
+  label: string,
+  resolve: (input: Input) => Promise<Output>,
+) {
+  return (input: Input) =>
+    withProgress({ label, indeterminate: true, enabled: true }, () => resolve(input));
 }
 
 export async function statusCommand(
@@ -107,13 +110,6 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts: { ...opts, ...probeBudget },
       runtime,
-      includeSecurityAudit: opts.all === true || opts.deep === true,
-      includePluginCompatibility: opts.all === true,
-      suppressHealthErrors: true,
-      scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
-        await import("./status.scan.fast-json.js").then(({ scanStatusJsonFast }) =>
-          scanStatusJsonFast(scanOpts, runtimeForScan),
-        ),
     });
     return;
   }
@@ -122,23 +118,8 @@ export async function statusCommand(
     .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
     .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
 
-  const {
-    cfg,
-    osSummary,
-    update,
-    gatewayProbe,
-    gatewayReachable,
-    channelIssues,
-    agentStatus,
-    channels,
-    summary,
-    configDiagnostics,
-    secretDiagnostics,
-    memory,
-    memoryPlugin,
-    pluginCompatibility,
-    env,
-  } = scan;
+  const { cfg, update, gatewayProbe, gatewayReachable, configDiagnostics, secretDiagnostics, env } =
+    scan;
 
   if (configDiagnostics) {
     const { formatStatusConfigDiagnosticEntries, theme } =
@@ -168,33 +149,9 @@ export async function statusCommand(
     ...(gatewayProbe?.startupPhase ? { gatewayStartupPhase: gatewayProbe.startupPhase } : {}),
     ...(gatewayProbe?.error ? { gatewayProbeError: gatewayProbe.error } : {}),
     includeSecurityAudit: opts.all === true || opts.deep === true,
-    resolveSecurityAudit: async (input) =>
-      await withProgress(
-        {
-          label: "Running security audit…",
-          indeterminate: true,
-          enabled: true,
-        },
-        async () => await resolveStatusSecurityAudit(input),
-      ),
-    resolveUsage: async (input) =>
-      await withProgress(
-        {
-          label: "Fetching usage snapshot…",
-          indeterminate: true,
-          enabled: opts.json !== true,
-        },
-        async () => await resolveStatusUsageSummary(input),
-      ),
-    resolveHealth: async (input) =>
-      await withProgress(
-        {
-          label: "Checking gateway health…",
-          indeterminate: true,
-          enabled: opts.json !== true,
-        },
-        async () => await resolveStatusGatewayHealth(input),
-      ),
+    resolveSecurityAudit: withStatusProgress("Running security audit…", resolveStatusSecurityAudit),
+    resolveUsage: withStatusProgress("Fetching usage snapshot…", resolveStatusUsageSummary),
+    resolveHealth: withStatusProgress("Checking gateway health…", resolveStatusGatewayHealth),
   });
 
   // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
@@ -261,12 +218,12 @@ export async function statusCommand(
   });
 
   const usageLines = usage ? formatUsageReportLines(usage) : undefined;
-  const overviewSurface = buildStatusOverviewSurfaceFromScan({
-    scan,
+  const overviewSurface = {
+    ...scan,
     gatewayService: daemon,
     nodeService: nodeDaemon,
     nodeOnlyGateway,
-  });
+  };
   const updateRows = await buildStatusUpdateRows(
     (await readRestartSentinelReadOnly().catch(() => null))?.payload,
     {
@@ -279,21 +236,14 @@ export async function statusCommand(
   );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
+      ...scan,
       env: env ?? {},
       opts,
       surface: overviewSurface,
-      osSummary,
-      summary,
       securityAudit,
       health,
       usageLines,
       lastHeartbeat,
-      agentStatus,
-      channels,
-      channelIssues,
-      memory,
-      memoryPlugin,
-      pluginCompatibility,
       pairingRecovery,
       tableWidth,
       updateValue: updateSurface.updateAvailable

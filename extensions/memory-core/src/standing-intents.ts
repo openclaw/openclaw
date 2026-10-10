@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentSqliteWorkerStore,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
@@ -40,17 +39,12 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
 ): Promise<StandingIntentOperations[Key]["output"]> {
   const assertCurrent = params.assertCurrent;
   assertCurrent?.();
-  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
-  const options = {
-    agentId: params.agentId,
-    env,
-    path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
-  };
+  const options = captureMemoryAgentDatabaseOptions(params.agentId);
   return runOpenClawAgentWriteAdmission(
     options,
     async (_identity, assertAdmission) =>
       // Caller expiry refuses its operation, never a coalesced physical open.
-      withOpenClawAgentDatabaseAsync(
+      withOpenClawAgentDatabaseRuntime(
         options,
         async ({ db }) => {
           assertCurrent?.();

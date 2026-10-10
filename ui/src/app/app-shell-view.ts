@@ -23,10 +23,7 @@ import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import {
-  renderLazyDevicePairSetup,
-  type DevicePairSetupHost,
-} from "./app-shell-device-pair-setup.ts";
+import { renderLazyDevicePairSetup } from "./app-shell-device-pair-setup.ts";
 import { renderShellDocks } from "./app-shell-docks.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-lazy-view.ts";
@@ -57,10 +54,9 @@ import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./sett
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
 import type { ShellLayoutController } from "./shell-layout-traits.ts";
 
-type SettingsSidebarHost = Parameters<typeof renderLazySettingsSidebar>[0];
-
-export interface ShellViewHost
-  extends DevicePairSetupHost, ShellLazyOverlayHost, SettingsSidebarHost {
+export interface ShellViewHost extends ShellLazyOverlayHost {
+  readonly devicePairSetup: Parameters<typeof renderLazyDevicePairSetup>[0];
+  readonly settingsSidebar: Parameters<typeof renderLazySettingsSidebar>[0];
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
@@ -132,7 +128,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
-  const watchUpdateProgress = callbacks.watchUpdateProgress;
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
@@ -236,7 +231,6 @@ export function renderApplicationShell(host: ShellViewHost) {
     params: {},
     sessionScope: true,
   });
-  const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
@@ -265,11 +259,11 @@ export function renderApplicationShell(host: ShellViewHost) {
       themeMode: context.theme.mode,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: config.devGitBranch,
-      watchUpdateProgress,
+      watchUpdateProgress: callbacks.watchUpdateProgress,
       onOpenPalette: host.openPalette,
       onRetryConnect: callbacks.retryGateway,
       onToggleSidebar: callbacks.toggleSidebar,
-      onOpenNewSession: openNewSession,
+      onOpenNewSession: callbacks.requestOpenNewSession,
       onUpdateSidebarEntries: callbacks.updateSidebarEntries,
       onPairMobile: callbacks.openDevicePairSetup,
       onNavigate: host.navigate,
@@ -283,7 +277,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const shellConnectionStatus =
     (navigationSurfaceHidden ||
       (settingsTakeover
-        ? host.settingsSidebarRenderer === null
+        ? host.settingsSidebar.renderer === null
         : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
     !nativeEmbed &&
     !onboarding &&
@@ -303,7 +297,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   };
   const navigationContent =
     settingsTakeover || embedNavigation
-      ? renderLazySettingsSidebar(host, {
+      ? renderLazySettingsSidebar(host.settingsSidebar, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
           basePath: context.basePath,
           activeRouteId: activeRoute,
@@ -447,7 +441,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   label: t("chat.runControls.newSession"),
                   showShortcut: true,
                   disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                  onOpen: openNewSession,
+                  onOpen: callbacks.requestOpenNewSession,
                 })}
                 <openclaw-tooltip
                   .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
@@ -602,7 +596,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-exec-approval>`
           : nothing
       }
-      ${renderLazyDevicePairSetup(host, {
+      ${renderLazyDevicePairSetup(host.devicePairSetup, {
         open: overlaySnapshot.devicePairSetupOpen,
         lifecycle: overlaySnapshot.devicePairSetupLifecycle,
         nowMs: Date.now(),

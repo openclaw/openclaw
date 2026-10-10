@@ -19,6 +19,7 @@ import {
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -39,6 +40,11 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import {
+  createGoalChatStartRequest,
+  readGoalChatUserMessages,
+  registerGoalChatRestartSettlementCase,
+} from "./server.chat-goal.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -144,30 +150,10 @@ function scope() {
   return { agentId: "main", sessionKey, sessionId, storePath };
 }
 
-function userMessages() {
-  const transcriptScope = {
-    ...scope(),
-    sessionId: loadSessionEntry(scope())?.sessionId ?? sessionId,
-  };
-  return loadTranscriptEventsSync(transcriptScope).flatMap((event) => {
-    if (!event || typeof event !== "object" || !("message" in event)) {
-      return [];
-    }
-    const message = event.message;
-    return message && typeof message === "object" && "role" in message && message.role === "user"
-      ? [message]
-      : [];
-  });
-}
+const userMessages = () => readGoalChatUserMessages(scope());
 
 function goalStart(message: string, idempotencyKey: string = randomUUID()) {
-  return {
-    sessionKey,
-    sessionId,
-    message,
-    idempotencyKey,
-    intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
-  };
+  return createGoalChatStartRequest(scope(), message, idempotencyKey);
 }
 
 function freshGoalStart(message: string, idempotencyKey?: string) {
@@ -261,6 +247,19 @@ async function waitForModelRun(count = 1) {
 }
 
 describe("Goal chat admission and continuation", () => {
+  registerGoalChatRestartSettlementCase({
+    scope,
+    createStorePath() {
+      storePath = path.join(
+        temporaryDirs.make("openclaw-fresh-goal-chat-"),
+        "openclaw-agent.sqlite",
+      );
+      testState.sessionStorePath = storePath;
+      return storePath;
+    },
+    send: (request) => rpc("chat.send", request),
+    assertNoModelRun: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+  });
   it("starts the first message as a Goal with an ACP-scoped hook and replays without a second session or run", async () => {
     await useFreshSessionStore();
     const acpDispatch = installReplyDispatchHook(["acp"]);
@@ -304,9 +303,11 @@ describe("Goal chat admission and continuation", () => {
       const acknowledgedEvents = await eventsAtAck;
       expect(entryAtAck, "fresh Goal commits its own local incarnation").toMatchObject({
         sessionId: expect.any(String),
-        status: "running",
+        restartRecoveryDeliveryRunId: request.idempotencyKey,
+        restartRecoveryDeliverySourceRunId: request.idempotencyKey,
         goal: { objective: request.message, status: "active" },
       });
+      expect(entryAtAck?.status).toBeUndefined();
       expect(signal.attempts()).toBe(2);
       expect(started.mock.calls).toEqual([
         [
@@ -493,26 +494,39 @@ describe("Goal chat admission and continuation", () => {
   });
 
   it.each([
-    { caseName: "the existing session is busy", entry: { status: "running" as const } },
+    { caseName: "the existing session is busy", busy: true, entry: {} },
     {
       caseName: "the session used the native Codex harness",
       entry: { agentHarnessId: "codex" },
     },
-  ])("leaves no Goal or turn when $caseName", async ({ entry }) => {
+  ])("leaves no Goal or turn when $caseName", async ({ entry, busy }) => {
     await patchSessionEntryCore(scope(), () => entry);
-    const result = await rpc("chat.send", goalStart("Finish the release checklist"));
-    expect(result).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message:
-          "Error: Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
-      }),
-    );
-    expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-    expect(userMessages()).toEqual([]);
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    const runId = "existing-goal-session-run";
+    if (busy) {
+      registerAgentRunContext(runId, {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        projectSessionActive: true,
+      });
+    }
+    try {
+      const result = await rpc("chat.send", goalStart("Finish the release checklist"));
+      expect(result).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message:
+            "Error: Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
+        }),
+      );
+      expect(loadSessionEntry(scope())?.goal).toBeUndefined();
+      expect(userMessages()).toEqual([]);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    } finally {
+      clearAgentRunContext(runId);
+    }
   });
 
   it.each(["objective", "issuedAtMs"] as const)(

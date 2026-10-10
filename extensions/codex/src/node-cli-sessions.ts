@@ -132,11 +132,30 @@ export async function listCodexCliSessionsOnNode(params: {
   filter?: string;
   limit?: number;
 }): Promise<{ node: CodexCliSessionNodeInfo; result: CodexCliSessionsListResult }> {
-  const node = await resolveCodexCliNode({
-    runtime: params.runtime,
-    requestedNode: params.requestedNode,
-    command: CODEX_CLI_SESSIONS_LIST_COMMAND,
-  });
+  const { runtime, requestedNode } = params;
+  const command = CODEX_CLI_SESSIONS_LIST_COMMAND;
+  const list = await runtime.nodes.list(requestedNode ? undefined : { connected: true });
+  const requested = requestedNode?.trim();
+  const candidates = list.nodes.filter((node) =>
+    requested
+      ? [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested)
+      : node.connected === true && node.commands?.includes(command),
+  );
+  if (candidates.length === 0) {
+    throw new Error(
+      requested
+        ? `Codex CLI node ${requested} was not found.`
+        : "No connected node exposes Codex CLI session commands.",
+    );
+  }
+  const usable = candidates.filter((node) => node.commands?.includes(command));
+  if (usable.length === 0) {
+    throw new Error(`Node ${requested ?? "candidate"} does not expose ${command}.`);
+  }
+  if (usable.length > 1) {
+    throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
+  }
+  const node = expectDefined(usable[0], "single usable Codex CLI node");
   const raw = await params.runtime.nodes.invoke({
     nodeId: readNodeId(node),
     command: CODEX_CLI_SESSIONS_LIST_COMMAND,
@@ -566,38 +585,6 @@ function readResponseItemMessageText(parsed: Record<string, unknown>): string | 
 function readSessionIdFromFilename(file: string): string | undefined {
   const match = path.basename(file).match(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
   return match?.[0];
-}
-
-async function resolveCodexCliNode(params: {
-  runtime: PluginRuntime;
-  requestedNode?: string;
-  command: string;
-}): Promise<CodexCliSessionNodeInfo> {
-  const list = await params.runtime.nodes.list(
-    params.requestedNode ? undefined : { connected: true },
-  );
-  const requested = params.requestedNode?.trim();
-  const candidates = list.nodes.filter((node) => {
-    if (requested) {
-      return [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested);
-    }
-    return node.connected === true && node.commands?.includes(params.command);
-  });
-  if (candidates.length === 0) {
-    throw new Error(
-      requested
-        ? `Codex CLI node ${requested} was not found.`
-        : "No connected node exposes Codex CLI session commands.",
-    );
-  }
-  const usable = candidates.filter((node) => node.commands?.includes(params.command));
-  if (usable.length === 0) {
-    throw new Error(`Node ${requested ?? "candidate"} does not expose ${params.command}.`);
-  }
-  if (usable.length > 1) {
-    throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
-  }
-  return expectDefined(usable[0], "single usable Codex CLI node");
 }
 
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {

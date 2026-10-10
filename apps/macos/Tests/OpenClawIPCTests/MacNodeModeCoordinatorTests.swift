@@ -622,9 +622,7 @@ struct MacNodeModeCoordinatorTests {
         do {
             try await gateway.connect(
                 url: #require(URL(string: "ws://first.example.invalid")),
-                token: nil,
-                bootstrapToken: nil,
-                password: nil,
+                credentials: .init(),
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: webSocketSession),
                 onConnected: {},
@@ -688,9 +686,7 @@ struct MacNodeModeCoordinatorTests {
                     onPendingSnapshot: { await drainSnapshot.recordCapture() })
                 try await gateway.connect(
                     url: successorURL,
-                    token: nil,
-                    bootstrapToken: nil,
-                    password: nil,
+                    credentials: .init(),
                     connectOptions: options,
                     sessionBox: WebSocketSessionBox(session: webSocketSession),
                     onConnected: { await lifecycle.recordSuccessorConnected() },
@@ -907,7 +903,7 @@ struct MacNodeModeCoordinatorTests {
             catalogAdvertised: false))
     }
 
-    @Test func `Codex supervision activation respects the plugin flag and global policy`() {
+    @Test func `Codex catalog activation respects the plugin flag and global policy`() {
         let enabled: [String: Any] = [
             "plugins": [
                 "entries": [
@@ -1003,17 +999,17 @@ struct MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: agentHome))
 
-        let supervisionDisabled: [String: Any] = [
+        let catalogDisabled: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["supervision": ["enabled": false]],
+                        "config": ["sessionCatalog": ["enabled": false], "supervision": ["enabled": true]],
                     ],
                 ],
             ],
         ]
-        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: supervisionDisabled))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: catalogDisabled))
 
         let pluginDisabled: [String: Any] = [
             "plugins": [

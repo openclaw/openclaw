@@ -25,7 +25,6 @@ import { resolveMemoryWikiConfig } from "./src/config.js";
 import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
-  readMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
 import {
   createMemoryWikiSourceSyncStateStore,
@@ -443,15 +442,11 @@ describe("memory-wiki Doctor state compatibility", () => {
       warnings: [],
     });
     const store = createMemoryWikiImportRunStateStore(params.context.openPluginStateKeyedStore);
-    await expect(
-      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-empty", store),
-    ).resolves.toMatchObject({
+    await expect(store.read(vaultRoot, "chatgpt-empty")).resolves.toMatchObject({
       createdPaths: [],
       updatedPaths: [],
     });
-    await expect(
-      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-alpha", store),
-    ).resolves.toMatchObject({
+    await expect(store.read(vaultRoot, "chatgpt-alpha")).resolves.toMatchObject({
       createdPaths: [{ path: "sources/legacy.md" }],
       updatedPaths: [{ path: "sources/existing.md", snapshotPath: "snapshots/alpha.md" }],
     });
@@ -474,9 +469,7 @@ describe("memory-wiki Doctor state compatibility", () => {
     ).resolves.toBe(legacyPageContent);
     await expect(fs.readFile(existingPagePath, "utf8")).resolves.toBe("previous page\n");
     await expect(fs.readFile(snapshotPath, "utf8")).resolves.toBe("previous page\n");
-    await expect(
-      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-alpha", store),
-    ).resolves.toMatchObject({
+    await expect(store.read(vaultRoot, "chatgpt-alpha")).resolves.toMatchObject({
       rollbackStartedAt: expect.any(String),
       rollbackTargetsFinalizedAt: expect.any(String),
       rolledBackAt: expect.any(String),

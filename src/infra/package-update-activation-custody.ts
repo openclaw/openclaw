@@ -3,14 +3,14 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { hasErrnoCode } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
   resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
   type PackageActivationJournal,
   type PackageActivationRecord,
-  type PackageActivationIntent,
 } from "./package-update-activation-journal.js";
 
 export function packageActivationIdentityOrAbsent(file: string, directory: boolean | "launcher") {
@@ -182,96 +182,50 @@ export async function completePackageActivationCustody(
   journal.transition(record, "prepared", null, assertCurrent);
 }
 
-export async function supersedePackageActivationCustody(
+/** Recognized obsolete custody closes before best-effort evidence maintenance. */
+export function settlePackageActivationCustody(params: {
+  anchor: string;
+  journal: PackageActivationJournal;
+  record: PackageActivationRecord;
+  settlement: Extract<NonNullable<PackageActivationRecord["intent"]>, { settled: boolean }>;
+  assertCurrent: () => void;
+  onSettled?: () => void;
+}) {
+  const { anchor, journal, settlement, assertCurrent } = params;
+  const record = journal.transition(
+    params.record,
+    "superseded",
+    { ...settlement, settled: true },
+    assertCurrent,
+  );
+  params.onSettled?.();
+  const warning = archivePackageActivationCustody(anchor, journal, record, assertCurrent);
+  return {
+    record,
+    warning: `${settlement.detail ?? settlement.kind}. ${warning ?? `Preserved at ${anchor}.superseded-${record.descriptor.operationId}`}`,
+    archiveWarning: warning,
+  };
+}
+
+/** Completed history is never a prerequisite for the next mutable update. */
+export function archivePackageActivationCustody(
   anchor: string,
   journal: PackageActivationJournal,
-  initial: PackageActivationRecord,
-  assertion: () => void,
-  reason: Extract<PackageActivationIntent, { replacementIdentity: string }>["kind"],
+  record: PackageActivationRecord,
+  assertCurrent: () => void,
 ) {
-  let record = initial;
-  const descriptor = record.descriptor;
-  const live = descriptor.authority.installKey;
-  const replacementIdentity = packageActivationIdentity(live, true);
-  if (
-    reason === "superseded-by-manual-install" &&
-    [descriptor.previous.identity, descriptor.candidate.identity].includes(replacementIdentity)
-  ) {
-    throw new Error("A recorded package generation still requires its original recovery.");
-  }
-  const retained = `${anchor}.superseded-${descriptor.operationId}`;
-  const assertSupersession = () => {
-    assertion();
-    journal.assertCurrent(record);
-    if (packageActivationIdentity(live, true) !== replacementIdentity) {
-      throw new Error("The installed package changed during recovery settlement.");
+  const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
+  try {
+    journal.archiveSettled(record, assertCurrent);
+  } catch (error) {
+    assertCurrent();
+    // Lost rename acknowledgements may leave only the archived journal. A still
+    // active journal must remain the exact closed record before warning instead.
+    if (fs.lstatSync(resolvePackageActivationJournalPath(anchor), { throwIfNoEntry: false })) {
+      journal.assertCurrent(record);
     }
-  };
-  const transfers = [
-    { source: anchor, target: retained, identity: descriptor.anchorIdentity, directory: true },
-    {
-      source: resolvePackageActivationHelper(anchor),
-      target: path.join(retained, "recovery.mjs"),
-      identity: descriptor.helperIdentity,
-      directory: false,
-    },
-  ];
-  const inspectTransfer = (entry: (typeof transfers)[number]) => {
-    assertSupersession();
-    const source = packageActivationIdentityOrAbsent(entry.source, entry.directory);
-    const target = packageActivationIdentityOrAbsent(entry.target, entry.directory);
-    if (source === null && target === entry.identity && record.phase === "superseded") {
-      return true;
-    }
-    if (source !== entry.identity || target !== null) {
-      throw new Error(
-        "Superseded package recovery artifacts changed or collide with the retained copy.",
-      );
-    }
-    return false;
-  };
-  for (const entry of transfers) {
-    inspectTransfer(entry);
+    return `Closed recovery evidence could not be fully archived at ${retained}: ${formatErrorMessage(error)}`;
   }
-  if (record.phase !== "superseded") {
-    // Disarm even an old sealed helper before moving evidence. No old package
-    // or launcher is restored over the operator's manual installation.
-    record = journal.transition(
-      record,
-      "superseded",
-      {
-        kind: reason,
-        replacementIdentity,
-        settled: false,
-      },
-      assertSupersession,
-    );
-  }
-  for (const entry of transfers) {
-    if (!inspectTransfer(entry)) {
-      await fsp.rename(entry.source, entry.target);
-    }
-    for (const directory of new Set([path.dirname(entry.source), path.dirname(entry.target)])) {
-      assertSupersession();
-      if (!inspectTransfer(entry)) {
-        throw new Error("Superseded package recovery transfer is incomplete.");
-      }
-      requireDirectorySync(await syncDirectory(directory), "Superseded package recovery");
-    }
-    assertSupersession();
-    inspectTransfer(entry);
-  }
-  if (
-    record.intent?.kind !== "superseded-by-manual-install" &&
-    record.intent?.kind !== "recovery-lease-identity-changed"
-  ) {
-    throw new Error("Package supersession fact is missing.");
-  }
-  record = journal.transition(
-    record,
-    "superseded",
-    { ...record.intent, settled: true },
-    assertSupersession,
-  );
-  return retained;
+  assertCurrent();
+  return undefined;
 }

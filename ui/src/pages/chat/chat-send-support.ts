@@ -39,6 +39,7 @@ import {
   prepareOutboxPayload,
 } from "./outbox-payloads.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export const UNCONFIRMED_CHAT_SEND_ERROR =
@@ -163,14 +164,14 @@ export function retireDeliveredQueuedUserTurn(
   const stored = readDeliveredQueuedChatSendForRun(host, runId, scope);
   if (options?.inputConsumed && runId) {
     const remembered = submissions.readDelivered(deliveryKey, owner);
-    if (remembered) {
+    if (remembered && !persistedSteerTargetRunId(remembered.message)) {
       remembered.pending = false;
     }
     if (
       visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
       (!stored?.sessionId || stored.sessionId === host.currentSessionId)
     ) {
-      retireChatSubmissionDisplay(host, new Set([runId]));
+      retireChatSubmissionDisplay(host, new Set([runId]), { awaitTranscriptReceipt: true });
     }
     return !stored || removeDeliveredQueuedChatSendForRun(host, runId, scope)
       ? "retired"
@@ -201,14 +202,12 @@ export function retireDeliveredQueuedUserTurn(
       // attempt still owns the row; an absent row must not swallow chat.final.
       return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
     }
-    if (!sameQueuedDeliveryVersion(current, stored)) {
-      return "stale";
-    }
-    if (!stored.sendRunId) {
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
       return "stale";
     }
     // Every pane receives the terminal. Retain complete message bytes before
     // the first pane removes the outbox item and releases its Blob/preview URLs.
+    const remembered = submissions.readDelivered(deliveryKey, owner);
     const submission = submissions.retain({
       kind: "delivered",
       deliveryKey,
@@ -217,7 +216,12 @@ export function retireDeliveredQueuedUserTurn(
       agentId: stored.agentId,
       sessionId: stored.sessionId,
       pendingRunId: stored.sendRunId,
-      message,
+      message:
+        remembered?.kind === "delivered" &&
+        remembered.pending &&
+        persistedSteerTargetRunId(remembered.message)
+          ? remembered.message
+          : message,
     });
     preserveDeliveredUserTurn(host, submission);
     const beforeRemoval = currentItem();

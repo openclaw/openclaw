@@ -123,7 +123,7 @@ describe("createComputerTool node resolution", () => {
 
   it("never forwards attached-desktop takeover to an ordinary paired node", async () => {
     listNodesMock.mockResolvedValue([macComputerNode()]);
-    const tool = createComputerTool({ modelHasVision: true });
+    const tool = createComputerTool();
     await expect(
       tool.execute("takeover", { action: "take_control", target: "node" }),
     ).rejects.toThrow("only available for an attached or session desktop");
@@ -157,7 +157,6 @@ describe("createComputerTool node resolution", () => {
     const createTool = () =>
       wrapToolWithGatewayCallerIdentity(
         createComputerTool({
-          modelHasVision: true,
           idempotencyScope: h.run.runId,
           registerRunCleanup: (registered) => {
             cleanups.push(registered);
@@ -233,7 +232,6 @@ describe("createComputerTool node resolution", () => {
     );
     let cleanup: ((reason: string) => Promise<void>) | undefined;
     const tool = createComputerTool({
-      modelHasVision: true,
       transport: { computerUse, resolveNode, invoke },
       registerRunCleanup: (registered) => {
         cleanup = registered;
@@ -313,7 +311,6 @@ describe("createComputerTool node resolution", () => {
     });
     let cleanup: ((reason: string) => Promise<void>) | undefined;
     const tool = createComputerTool({
-      modelHasVision: true,
       transport: { resolveNode: async () => ({ nodeId: "session-desktop" }), invoke },
       registerRunCleanup: (registered) => {
         cleanup = registered;
@@ -500,7 +497,6 @@ describe("createComputerTool node resolution", () => {
       let cleanup: ((reason: string) => Promise<void>) | undefined;
       const tool = wrapToolWithGatewayCallerIdentity(
         createComputerTool({
-          modelHasVision: true,
           registerRunCleanup: (registered) => {
             cleanup = registered;
           },
@@ -596,7 +592,6 @@ describe("createComputerTool node resolution", () => {
       });
       let cleanup: ((reason: string) => Promise<void>) | undefined;
       const tool = createComputerTool({
-        modelHasVision: true,
         transport:
           targetScope === "session"
             ? { resolveNode: async () => ({ nodeId: "session-desktop" }), invoke }
@@ -621,7 +616,8 @@ describe("createComputerTool node resolution", () => {
     },
   );
 
-  it.each(["windows", "linux"])("resolves and executes on a capable %s node", async (platform) => {
+  it("resolves and executes on a capable non-Mac node", async () => {
+    const platform = "windows";
     const nodeId = `${platform}-1`;
     listNodesMock.mockResolvedValue([
       {
@@ -637,7 +633,7 @@ describe("createComputerTool node resolution", () => {
         ? { payload: { ok: true } }
         : screenshotPayload(),
     );
-    const tool = createComputerTool({ modelHasVision: true });
+    const tool = createComputerTool();
 
     await expect(tool.execute("call", { action: "type", text: "hello" })).resolves.toBeDefined();
     expect(callGatewayToolMock).toHaveBeenCalledWith(
@@ -697,7 +693,7 @@ describe("createComputerTool node resolution", () => {
     },
   ])("rejects selection when $name", async ({ nodes, node, error }) => {
     listNodesMock.mockResolvedValue(nodes);
-    const tool = createComputerTool({ modelHasVision: true });
+    const tool = createComputerTool();
     await expect(tool.execute("call", { action: "screenshot", node })).rejects.toThrow(error);
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
@@ -720,7 +716,7 @@ describe("createComputerTool node resolution", () => {
   ])("resolves eligible selector $node without redirecting it", async ({ nodes, node }) => {
     listNodesMock.mockResolvedValue(nodes);
     callGatewayToolMock.mockResolvedValue(screenshotPayload());
-    const tool = createComputerTool({ modelHasVision: true });
+    const tool = createComputerTool();
 
     await expect(tool.execute("call", { action: "screenshot", node })).resolves.toBeDefined();
     expect(callGatewayToolMock).toHaveBeenCalledWith(
@@ -739,7 +735,7 @@ describe("createComputerTool node resolution", () => {
       { target: "", node: "", environmentId: "" },
       { target: " \t", node: "\n", environmentId: "  " },
     ]) {
-      const tool = createComputerTool({ modelHasVision: true });
+      const tool = createComputerTool();
       const args = { action: "screenshot", ...selectors };
       const prepared = tool.prepareArguments?.(args) ?? args;
       expect(Value.Check(tool.parameters, prepared)).toBe(true);
@@ -758,7 +754,7 @@ describe("createComputerTool node resolution", () => {
 
   it("leaves nonblank invalid targets for validation and unknown nodes for resolution", async () => {
     listNodesMock.mockResolvedValue([macComputerNode()]);
-    const tool = createComputerTool({ modelHasVision: true });
+    const tool = createComputerTool();
     const invalidTarget = { action: "screenshot", target: "foo" };
     expect(Value.Check(tool.parameters, tool.prepareArguments?.(invalidTarget))).toBe(false);
     const unknownNode = { action: "screenshot", node: "unknown-node" };

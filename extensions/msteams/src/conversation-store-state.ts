@@ -11,22 +11,13 @@ import type {
 } from "./conversation-store.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import {
-  resolveMSTeamsSqliteStateEnv,
-  toPluginJsonValue,
-  withMSTeamsSqliteMutationLock,
-  type MSTeamsSqliteStateOptions,
-} from "./sqlite-state.js";
+import { toPluginJsonValue, withMSTeamsSqliteMutationLock } from "./sqlite-state.js";
 
 const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
 const MSTEAMS_MAX_CONVERSATIONS = 1000;
 const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const CONVERSATION_MUTATION_KEY = "conversations";
-
-type MSTeamsConversationStoreStateOptions = MSTeamsSqliteStateOptions & {
-  ttlMs?: number;
-};
 
 function buildMSTeamsConversationStateKey(conversationId: string): string {
   return crypto.createHash("sha256").update(conversationId).digest("hex");
@@ -37,20 +28,16 @@ function getStoredConversationId(reference: StoredConversationReference): string
   return rawId ? normalizeMSTeamsConversationId(rawId) : null;
 }
 
-export function createMSTeamsConversationStoreState(
-  params?: MSTeamsConversationStoreStateOptions,
-): MSTeamsConversationStore {
-  const ttlMs = params?.ttlMs ?? MSTEAMS_CONVERSATION_TTL_MS;
+export function createMSTeamsConversationStoreState(): MSTeamsConversationStore {
   const conversationStore = getMSTeamsRuntime().state.openKeyedStore<StoredConversationReference>({
     namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
     maxEntries: MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
-    env: resolveMSTeamsSqliteStateEnv(params),
   });
 
   const isExpired = (reference: StoredConversationReference): boolean => {
     const lastSeenAt = parseDateStringTimestampMs(reference.lastSeenAt);
     // Preserve migrated legacy entries that have no lastSeenAt until they're seen again.
-    return lastSeenAt != null && Date.now() - lastSeenAt > ttlMs;
+    return lastSeenAt != null && Date.now() - lastSeenAt > MSTEAMS_CONVERSATION_TTL_MS;
   };
 
   const lookupStored = async (
@@ -122,7 +109,7 @@ export function createMSTeamsConversationStoreState(
     reference: StoredConversationReference,
   ): Promise<void> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
-    await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
+    await withMSTeamsSqliteMutationLock(CONVERSATION_MUTATION_KEY, async () => {
       const existing = await lookupStored(normalizedId);
       await register(
         normalizedId,
@@ -137,7 +124,7 @@ export function createMSTeamsConversationStoreState(
 
   const remove = async (conversationId: string): Promise<boolean> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
-    return await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
+    return await withMSTeamsSqliteMutationLock(CONVERSATION_MUTATION_KEY, async () => {
       return await conversationStore.delete(buildMSTeamsConversationStateKey(normalizedId));
     });
   };

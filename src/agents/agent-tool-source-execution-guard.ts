@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -67,13 +68,16 @@ export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): () =
   // neither diagnostic identity tokens nor their collection grant authority.
   const authority = getGatewayToolCallerIdentity()?.receiptAuthority;
   const assertBudgetCurrent = executionBudgetContext.getStore()?.assertCurrent;
-  return () => {
-    signal?.throwIfAborted();
-    assertBudgetCurrent?.();
+  const assertReceipt = Object.assign(() => {
     if (authority?.() === false) {
       throw new Error("tool invocation authority is no longer active");
     }
-  };
+  }, authority);
+  return composeSessionSourceAssertion([assertReceipt], (assertSource) => {
+    signal?.throwIfAborted();
+    assertBudgetCurrent?.();
+    assertSource();
+  });
 }
 
 const SOURCE_EXECUTION_GUARD = Symbol.for("openclaw.agentToolSourceExecutionGuard");

@@ -184,6 +184,23 @@ describe("session dispatch protocol schemas", () => {
     }
   });
 
+  it("exposes only canonical worker inference on active placement", () => {
+    const active = { state: "active", ...basePlacement, ...workerOwnedFields };
+    expect(Value.Check(SessionPlacementSchema, { ...active, inference: "worker" })).toBe(true);
+    for (const inference of ["gateway", "runtime-local", "unknown"]) {
+      expect(Value.Check(SessionPlacementSchema, { ...active, inference })).toBe(false);
+    }
+    for (const state of ["local", "requested", "draining", "reconciling", "reclaimed", "failed"]) {
+      const placement =
+        state === "local" || state === "requested"
+          ? { state, ...basePlacement }
+          : { ...active, state, ...(state === "failed" ? { recoveryError: "stopped" } : {}) };
+      expect(Value.Check(SessionPlacementSchema, { ...placement, inference: "worker" })).toBe(
+        false,
+      );
+    }
+  });
+
   it("keeps placement states closed", () => {
     for (const state of placementStates) {
       expect(Value.Check(SessionPlacementStateSchema, state)).toBe(true);

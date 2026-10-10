@@ -19,6 +19,7 @@ const suite = createControlUiE2eSuite({
 const DASHBOARD_REQUEST_PARAMS = {
   archived: "all",
   configuredAgentsOnly: true,
+  excludeDock: true,
   hasBoard: true,
   includeGlobal: true,
   includeUnknown: true,
@@ -166,6 +167,7 @@ suite.define(() => {
       const page = await context.newPage();
       try {
         const gateway = await installMockGateway(page, {
+          awaitInitialRoster: !suspending,
           gatewaySuspensionPhase: suspending ? "draining" : "accepting",
           methodResponses: {
             "sessions.list": {
@@ -280,6 +282,7 @@ suite.define(() => {
           expect(canonical.params).toEqual({
             agentId: "main",
             configuredAgentsOnly: true,
+            excludeDock: true,
             includeDerivedTitles: true,
             includeGlobal: true,
             includeLastMessage: true,

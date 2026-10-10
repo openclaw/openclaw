@@ -2,7 +2,11 @@ import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
-import type { JsonObject, CodexServerNotification } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type JsonObject,
+  type CodexServerNotification,
+} from "./protocol.js";
 import { createCodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { createCodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
@@ -31,6 +35,7 @@ function createTerminalReleaseHarness() {
     resolveCompletion,
   };
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
+  const activeTurnItemIds = new Set<string>();
   const client = {
     request,
     addNotificationHandler: (handler: (notification: unknown) => void) => {
@@ -66,7 +71,7 @@ function createTerminalReleaseHarness() {
     state,
     turnIdRef: { current: "turn-1" },
     noteProgress: vi.fn(),
-    activeTurnItemIds: new Set(),
+    activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
     steeringQueueRef: { current: { cancel } },
     interruptTurn: (turnId: string) =>
@@ -106,6 +111,7 @@ function createTerminalReleaseHarness() {
     }
   };
   return {
+    activeTurnItemIds,
     cancel,
     sourceReplies,
     completeTurn,
@@ -280,7 +286,7 @@ describe("Codex terminal dynamic-tool release", () => {
     try {
       route.armTurn();
       await route.bindTurn("turn-1");
-      controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      controller.recordDynamicToolResult(terminalYieldResult(true));
       await yieldImmediate();
       expect(runtime.state.completed).toBe(true);
       expect(interrupt).toHaveBeenCalledOnce();
@@ -326,7 +332,7 @@ describe("Codex terminal dynamic-tool release", () => {
     // the exact-value timeoutMs assertion stays on a single tick.
     const monotonic = vi.spyOn(performance, "now").mockReturnValue(1_000);
     try {
-      harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      harness.controller.recordDynamicToolResult(terminalYieldResult(true));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -342,7 +348,7 @@ describe("Codex terminal dynamic-tool release", () => {
       expect(harness.resolveCompletion).toHaveBeenCalledOnce();
 
       harness.completeTurn();
-      harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      harness.controller.recordDynamicToolResult(terminalYieldResult(true));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -357,10 +363,47 @@ describe("Codex terminal dynamic-tool release", () => {
     }
   });
 
+  it.each(["request", "native-item", "tool-response"] as const)(
+    "waits for a pending %s before releasing a terminal tool batch",
+    async (pending) => {
+      vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+      const harness = createTerminalReleaseHarness();
+      harness.state.activeAppServerTurnRequests = pending === "request" ? 1 : 0;
+      if (pending === "native-item") {
+        harness.activeTurnItemIds.add("native-item");
+      } else if (pending === "tool-response") {
+        harness.pendingOpenClawDynamicToolCompletionIds.add("tool-response");
+      }
+      try {
+        harness.controller.recordDynamicToolResult(terminalYieldResult(true));
+        await vi.runOnlyPendingTimersAsync();
+        expect(harness.request).not.toHaveBeenCalled();
+        expect(harness.state.completed).toBe(false);
+        // Native activity delays interruption, but the accepted terminal response
+        // already fenced steering once its own response and siblings settled.
+        expect(harness.cancel).toHaveBeenCalledTimes(pending === "native-item" ? 1 : 0);
+
+        harness.state.activeAppServerTurnRequests = 0;
+        harness.activeTurnItemIds.clear();
+        harness.pendingOpenClawDynamicToolCompletionIds.clear();
+        harness.controller.scheduleTerminalDynamicToolReleaseCheck();
+        await vi.runOnlyPendingTimersAsync();
+        expect(harness.request).toHaveBeenCalledOnce();
+        expect(harness.state.completed).toBe(true);
+        expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+      } finally {
+        harness.completeTurn();
+        await vi.runOnlyPendingTimersAsync();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps steering open when the yield result fails", async () => {
     const harness = createTerminalReleaseHarness();
 
-    harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(false));
+    harness.controller.recordDynamicToolResult(terminalYieldResult(false));
+    harness.controller.scheduleTerminalDynamicToolReleaseCheck();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -668,6 +711,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
       expect(releasedAfter.every((entry) => entry.endsWith(":open"))).toBe(true);
       expect(harness.request).not.toHaveBeenCalled();
       expect(harness.sourceReplies).toEqual([]);
+      expect(harness.state.currentTurnHadNonTerminalDynamicToolResult).toBe(false);
     },
   );
 });
@@ -679,6 +723,137 @@ describe("Codex authored model response boundary", () => {
       terminate: true,
       toolAuthoredSourceReply: { text: callId, toolAuthored: true, sourceReplyFinal: true },
     });
+
+  it.each([
+    { first: "reply", closed: false },
+    { first: "terminal", closed: false },
+    { first: "reply", closed: true },
+    { first: "terminal", closed: true },
+  ] as const)(
+    "retains the authored reply beside a terminal sibling ($first first, closed=$closed)",
+    async ({ first, closed }) => {
+      const h = createTerminalReleaseHarness();
+      const results = {
+        reply: authored("reply"),
+        terminal: dynamicToolResult("terminal", { success: true, terminate: true }),
+      };
+      try {
+        for (const callId of ["reply", "terminal"]) {
+          await h.notifyRawItem({
+            type: "function_call",
+            call_id: callId,
+            name: callId,
+            namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+            arguments: "{}",
+          });
+        }
+        if (closed) {
+          await h.finishResponse();
+        }
+        h.controller.recordDynamicToolResult(results[first]);
+        await yieldImmediate();
+        expect(h.state.completed).toBe(false);
+        expect(h.cancel).not.toHaveBeenCalled();
+        expect(h.sourceReplies).toEqual([]);
+
+        h.controller.recordDynamicToolResult(results[first === "reply" ? "terminal" : "reply"]);
+        await yieldImmediate();
+        if (!closed) {
+          expect(h.state.completed).toBe(false);
+          expect(h.cancel).not.toHaveBeenCalled();
+          expect(h.sourceReplies).toEqual([]);
+          await h.finishResponse();
+          await yieldImmediate();
+        }
+        expect(h.sourceReplies.map((reply) => reply.text)).toEqual(["reply"]);
+        expect(h.resolveCompletion).toHaveBeenCalledOnce();
+        expect(h.request).toHaveBeenCalledOnce();
+      } finally {
+        h.completeTurn();
+        await yieldImmediate();
+      }
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "waits for an unregistered authored sibling when response closes %s the ordinary result",
+    async (close) => {
+      const h = createTerminalReleaseHarness();
+      const replyCall = {
+        type: "function_call",
+        call_id: "reply",
+        name: "reply",
+        namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        arguments: "{}",
+      };
+      try {
+        await h.notifyRawCall("terminal");
+        if (close === "before") {
+          await h.notifyRawItem(replyCall);
+          await h.finishResponse();
+        }
+        h.controller.recordDynamicToolResult(
+          dynamicToolResult("terminal", { success: true, terminate: true }),
+        );
+        await yieldImmediate();
+        expect(h.state.completed).toBe(false);
+        expect(h.cancel).not.toHaveBeenCalled();
+        if (close === "after") {
+          // No candidate or raw sibling was known at the preceding idle gap.
+          await h.notifyRawItem(replyCall);
+          await h.finishResponse();
+          await yieldImmediate();
+        }
+        // The closed inventory, not request counters, owns this delayed call.
+        expect(h.state.completed).toBe(false);
+        expect(h.cancel).not.toHaveBeenCalled();
+        expect(h.sourceReplies).toEqual([]);
+        h.pendingOpenClawDynamicToolCompletionIds.add("reply");
+        h.controller.scheduleTerminalDynamicToolReleaseCheck();
+        await yieldImmediate();
+        expect(h.state.completed).toBe(false);
+        h.pendingOpenClawDynamicToolCompletionIds.delete("reply");
+        h.controller.recordDynamicToolResult(authored("reply"));
+        await yieldImmediate();
+        expect(h.sourceReplies.map((reply) => reply.text)).toEqual(["reply"]);
+        expect(h.resolveCompletion).toHaveBeenCalledOnce();
+        expect(h.request).toHaveBeenCalledOnce();
+      } finally {
+        h.completeTurn();
+        await yieldImmediate();
+      }
+    },
+  );
+
+  it.each(["native", "failed", "async"] as const)(
+    "does not let a terminal sibling discard an authored reply with a %s sibling",
+    async (sibling) => {
+      const h = createTerminalReleaseHarness();
+      try {
+        await h.observeResponse(["reply", "terminal", "sibling"]);
+        h.controller.recordDynamicToolResult(authored("reply"));
+        if (sibling !== "native") {
+          h.controller.recordDynamicToolResult(
+            dynamicToolResult("sibling", {
+              success: sibling === "async",
+              asyncStarted: sibling === "async",
+            }),
+          );
+        }
+        h.controller.recordDynamicToolResult(
+          dynamicToolResult("terminal", { success: true, terminate: true }),
+        );
+        await yieldImmediate();
+        expect(h.state.completed).toBe(false);
+        expect(h.cancel).not.toHaveBeenCalled();
+        expect(h.sourceReplies).toEqual([]);
+        expect(h.request).not.toHaveBeenCalled();
+      } finally {
+        h.completeTurn();
+        await yieldImmediate();
+      }
+    },
+  );
 
   it.each(["before", "after"] as const)(
     "waits for response close when authored result completes %s it",

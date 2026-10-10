@@ -11,6 +11,7 @@ import {
   assertStateDatabaseAccessAllowed,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
+import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import { prepareSqliteWorkerActorContext } from "./sqlite-worker-broker-admission.js";
 import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
@@ -19,7 +20,6 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
   type SqliteWorkerReply,
-  type SqliteWorkerCloseReceipt,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -255,15 +255,15 @@ function decodeSqliteWorkerReplyValue(
 }
 
 function decodeSqliteWorkerReplyError(
-  job: Job,
   error: Extract<SqliteWorkerReply, { ok: false }>["error"],
 ): Error {
   const failure = Object.assign(new Error(error.message), {
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),
   });
-  if (job.request.stateContext && error.code !== "outcome-unknown" && error.sharedState) {
+  if (error.code !== "outcome-unknown" && error.sharedState) {
     retainOpenClawStateWorkerErrorPayload(failure, error.sharedState);
+    return hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true });
   }
   return failure;
 }
@@ -288,13 +288,15 @@ export type SqliteWorkerReplyOwner = {
     error?: unknown,
     value?: unknown,
     settlement?: SqliteWorkerOperationSettlement,
-    closeReceipt?: SqliteWorkerCloseReceipt,
   ): void;
   dispatch(): void;
 };
 
 export function receiveSqliteWorkerReply(
-  slot: Pick<Slot, "current" | "failed"> & { worker: Pick<Slot["worker"], "postMessage"> },
+  slot: Pick<Slot, "current" | "failed"> & {
+    actors: ReadonlySet<Pick<Actor, "id" | "closeReceipt">>;
+    worker: Pick<Slot["worker"], "postMessage">;
+  },
   reply: SqliteWorkerReply,
   owner: SqliteWorkerReplyOwner,
 ): void {
@@ -310,7 +312,7 @@ export function receiveSqliteWorkerReply(
         admission?.failureSource === "domain" && !reply.admissionRefused
           ? undefined
           : admission?.failure;
-      const original = failure ?? decodeSqliteWorkerReplyError(job, reply.error);
+      const original = failure ?? decodeSqliteWorkerReplyError(reply.error);
       owner.fail(decodeSqliteWorkerCleanupError(reply.cleanupFailure), undefined, undefined, {
         error: original,
       });
@@ -319,7 +321,7 @@ export function receiveSqliteWorkerReply(
     if (reply.openNotEntered && job.request.type === "open" && job.dispatchState) {
       job.dispatchState.openNotEntered = true;
     }
-    const error = decodeSqliteWorkerReplyError(job, reply.error);
+    const error = decodeSqliteWorkerReplyError(reply.error);
     if (job.request.type === "open" && reply.openNotEntered && !reply.retire) {
       slot.current = undefined;
       const refusal = job.operationAdmission?.admission.failure ?? error;
@@ -370,9 +372,19 @@ export function receiveSqliteWorkerReply(
     );
     return;
   }
+  if (reply.nativeRuntimeAdmission !== undefined) {
+    // Completion can create a sibling immediately; publish only after the full reply settles.
+    installSqliteNativeRuntimeAdmission(reply.nativeRuntimeAdmission);
+  }
   slot.current = undefined;
   if (job.request.type === "close") {
-    owner.finish(job, undefined, value, undefined, reply.closeReceipt);
+    if (reply.closeReceipt) {
+      const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+      if (actor) {
+        actor.closeReceipt = reply.closeReceipt;
+      }
+    }
+    owner.finish(job, undefined, value);
   } else {
     // Domains own handled refusal results; physical and request authority still fence delivery.
     const admission = job.operationAdmission?.admission;

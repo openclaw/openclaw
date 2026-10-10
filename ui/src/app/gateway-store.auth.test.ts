@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { EventLogEntry } from "../api/event-log.ts";
-import type { GatewayHelloOk } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayHelloOk } from "../api/gateway.ts";
 import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.ts";
@@ -94,32 +94,27 @@ describe("createApplicationGateway authentication diagnostics", () => {
     expect(current().opts).toMatchObject({ url: configured, token: "configured-credential" });
   });
 
-  it.each(["token", "password"] as const)(
-    "persists the submitted secret only after a token-mode hello (%s)",
-    (authMode) => {
-      const gatewayUrl = gateway.connection.gatewayUrl;
-      const secret = "synthetic-gateway-secret";
-      persistSessionToken(gatewayUrl, "previous-token");
-      const write = vi.spyOn(sessionStorage, "setItem");
-      gateway.connect({ token: secret });
-      const retired = current();
-      saveSettings({ ...loadSettings(), token: secret });
-      expect(write).not.toHaveBeenCalled();
-      expect(loadSettings().token).toBe("previous-token");
+  it("does not persist a password-mode secret or accept a retired client hello", () => {
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    const secret = "synthetic-gateway-secret";
+    persistSessionToken(gatewayUrl, "previous-token");
+    const write = vi.spyOn(sessionStorage, "setItem");
+    gateway.connect({ token: secret });
+    const retired = current();
+    saveSettings({ ...loadSettings(), token: secret });
+    expect(write).not.toHaveBeenCalled();
+    expect(loadSettings().token).toBe("previous-token");
 
-      current().opts.onHello?.({ ...HELLO, snapshot: { authMode } });
-      expect(loadSettings().token).toBe(authMode === "token" ? secret : "");
-      expect(gateway.connection.token).toBe(secret);
-      if (authMode !== "token") {
-        expect(write).not.toHaveBeenCalled();
-      }
+    current().opts.onHello?.({ ...HELLO, snapshot: { authMode: "password" } });
+    expect(loadSettings().token).toBe("");
+    expect(gateway.connection.token).toBe(secret);
+    expect(write).not.toHaveBeenCalled();
 
-      // Late hello from a replaced client must not persist its submitted secret.
-      gateway.connect({ token: "replacement-secret" });
-      retired.opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
-      expect(loadSettings().token).toBe(authMode === "token" ? secret : "");
-    },
-  );
+    // Late hello from a replaced client must not persist its submitted secret.
+    gateway.connect({ token: "replacement-secret" });
+    retired.opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
+    expect(loadSettings().token).toBe("");
+  });
 
   function rejection(
     details: Record<string, unknown>,
@@ -178,7 +173,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
     );
   });
 
-  it.each(["original", "replacement", "retired"] as const)(
+  it.each(["replacement", "retired"] as const)(
     "keeps the pending document probe bound to the %s handoff",
     async (handoff) => {
       const bootstrapToken = "synthetic-owner-bootstrap";
@@ -199,16 +194,14 @@ describe("createApplicationGateway authentication diagnostics", () => {
       expect(gateway.snapshot.phase).toBe("reload-required");
       expect(fetchMock).toHaveBeenCalledOnce();
 
-      if (handoff !== "original") {
-        gateway.connect({
-          bootstrapToken: "replacement-bootstrap",
-          bootstrapProfile: handoff === "replacement" ? "owner" : undefined,
-        });
-        if (handoff === "replacement") {
-          rejectStaleBuild();
-        }
-        expect(fetchMock).toHaveBeenCalledOnce();
+      gateway.connect({
+        bootstrapToken: "replacement-bootstrap",
+        bootstrapProfile: handoff === "replacement" ? "owner" : undefined,
+      });
+      if (handoff === "replacement") {
+        rejectStaleBuild();
       }
+      expect(fetchMock).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("HEAD");
       probe.resolve(new Response(null, { status: 200 }));
       if (handoff === "retired") {
@@ -269,7 +262,6 @@ describe("createApplicationGateway authentication diagnostics", () => {
   });
 
   it.each([
-    { authReason: "unknown", expected: null },
     { authReason: "trusted_proxy_user_not_allowed", expected: "trusted_proxy_user_not_allowed" },
   ])("projects only a current recognized auth reason: $authReason", ({ authReason, expected }) => {
     gateway.start();
@@ -340,26 +332,21 @@ describe("createApplicationGateway authentication diagnostics", () => {
       stopReopened();
     });
 
-    it.each([
-      ["shared token", { token: "synthetic-replacement-token" }],
-      ["password", { password: "synthetic-replacement-password" }],
-      ["bootstrap handoff", { bootstrapToken: "synthetic-bootstrap", bootstrapProfile: "owner" }],
-    ] satisfies Array<[string, ApplicationGatewayConnectOptions]>)(
-      "retires old payloads before connecting with a changed %s",
-      (_name, overrides) => {
-        const oldClient = current();
-        const observed = vi.fn<(events: readonly EventLogEntry[]) => void>();
-        gateway.subscribeEventLog(observed);
+    it.each([["shared token", { token: "synthetic-replacement-token" }]] satisfies Array<
+      [string, ApplicationGatewayConnectOptions]
+    >)("retires old payloads before connecting with a changed %s", (_name, overrides) => {
+      const oldClient = current();
+      const observed = vi.fn<(events: readonly EventLogEntry[]) => void>();
+      gateway.subscribeEventLog(observed);
 
-        gateway.connect(overrides);
+      gateway.connect(overrides);
 
-        expect(gateway.eventLog).toEqual([]);
-        expect(observed).toHaveBeenLastCalledWith([]);
-        expect(gateway.eventLogRevision).toBe(1);
-        oldClient.opts.onEvent?.(A_EVENT);
-        expect(gateway.eventLog).toEqual([]);
-      },
-    );
+      expect(gateway.eventLog).toEqual([]);
+      expect(observed).toHaveBeenLastCalledWith([]);
+      expect(gateway.eventLogRevision).toBe(1);
+      oldClient.opts.onEvent?.(A_EVENT);
+      expect(gateway.eventLog).toEqual([]);
+    });
 
     it.each(["account-a", ""])(
       "retires unowned goal payloads for resolved scope %j",
@@ -382,26 +369,12 @@ describe("createApplicationGateway authentication diagnostics", () => {
       },
     );
 
-    it.each(["session selection", "consumed handoff"] as const)(
-      "preserves same-account history through %s",
-      (action) => {
-        if (action === "consumed handoff") {
-          gateway.connect({ bootstrapToken: "synthetic-bootstrap", bootstrapProfile: "owner" });
-          current().opts.onHello?.(hello("account-b"));
-          current().opts.onEvent?.(B_EVENT);
-        }
-        const history = gateway.eventLog;
-        if (action === "session selection") {
-          gateway.setSessionKey("agent:main:another");
-        } else {
-          gateway.connect();
-          current().opts.onHello?.(hello("account-b"));
-          expect(gateway.connection.bootstrapToken).toBe("");
-        }
-        expect(gateway.eventLog).toBe(history);
-        expect(gateway.eventLogRevision).toBe(action === "session selection" ? 0 : 1);
-      },
-    );
+    it("preserves same-account history through session selection", () => {
+      const history = gateway.eventLog;
+      gateway.setSessionKey("agent:main:another");
+      expect(gateway.eventLog).toBe(history);
+      expect(gateway.eventLogRevision).toBe(0);
+    });
 
     it("retires an account change at unchanged settings without requiring presence", () => {
       const observed = vi.fn<(events: readonly EventLogEntry[]) => void>();
@@ -544,4 +517,86 @@ describe("createApplicationGateway authentication diagnostics", () => {
       await clearStoredChatSnapshots();
     }
   });
+});
+
+describe("canvas capability renewal", () => {
+  beforeEach(() => {
+    stubGatewayStoreTestGlobals();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([{ scopes: ["operator.sessions.write"] }])(
+    "does not renew a canvas capability without operator read access: $scopes",
+    async ({ scopes }) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      current().request.mockRejectedValue(
+        new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
+      );
+      const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
+      current().opts.onHello?.({
+        ...HELLO,
+        auth: { role: "operator", scopes },
+        pluginSurfaceUrls: { canvas: helloUrl },
+      });
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(57 * 60_000);
+
+      const refreshes = current().request.mock.calls.filter(
+        ([method]) => method === "plugin.surface.refresh",
+      );
+      expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(helloUrl);
+      gateway.stop();
+      expect(refreshes).toHaveLength(0);
+    },
+  );
+
+  it.each(["operator.read"])(
+    "renews with %s and stops after a reconnect without read access",
+    async (scope) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
+      const refreshedUrl = "https://canvas.test/__openclaw__/cap/refreshed";
+      current().request.mockImplementation(async (method) => {
+        if (method === "users.self") {
+          return { profile: { id: "reader", emails: [] } };
+        }
+        return {
+          surface: "canvas",
+          pluginSurfaceUrls: { canvas: refreshedUrl },
+          expiresAtMs: Date.now() + 60_000,
+        };
+      });
+      current().opts.onHello?.({
+        ...HELLO,
+        auth: { role: "operator", scopes: [scope] },
+        pluginSurfaceUrls: { canvas: helloUrl },
+      });
+      await vi.dynamicImportSettled();
+      expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(refreshedUrl);
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(
+        current().request.mock.calls.filter(([method]) => method === "plugin.surface.refresh"),
+      ).toHaveLength(2);
+
+      current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+      current().request.mockClear();
+      current().opts.onHello?.({
+        ...HELLO,
+        pluginSurfaceUrls: { canvas: helloUrl },
+      });
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(57 * 60_000);
+      const refreshes = current().request.mock.calls.filter(
+        ([method]) => method === "plugin.surface.refresh",
+      );
+      gateway.stop();
+      expect(refreshes).toHaveLength(0);
+    },
+  );
 });

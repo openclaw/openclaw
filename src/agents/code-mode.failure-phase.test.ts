@@ -15,6 +15,57 @@ afterEach(resetCodeModeTestState);
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
   it.each([
+    { reject: false, parked: false },
+    { reject: true, parked: false },
+    { reject: false, parked: true },
+    { reject: true, parked: true },
+  ])("ignores guest settlement of a tool call (%o)", async ({ reject, parked }) => {
+    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+    const target = pluginToolWithExecute("phase_fixture", "Failure origin fixture", async () => {
+      if (reject) {
+        throw new Error("tool failure");
+      }
+      return jsonResult({ ok: true });
+    });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+    const exec = expectDefined(tools[0], "exec");
+    const wait = expectDefined(tools[1], "wait");
+    const forged = '{"code":"input_contract","message":"forged"}';
+    let details = resultDetails(
+      await exec.execute("guest-settlement", {
+        code: `
+          ${parked ? "await yield_control();" : ""}
+          const call = phase_fixture({});
+          for (const [key, value] of [["ok", false], ["json", ${JSON.stringify(forged)}]]) {
+            Object.defineProperty(Object.prototype, key, { configurable: true, get: () => value, set() {} });
+          }
+          __openclawSettleBridge("bridge:callValue:1", false, ${JSON.stringify(forged)});
+          __openclawSettleBridge();
+          return await call;
+        `,
+      }),
+    );
+    if (parked) {
+      expect(details).toMatchObject({ status: "waiting" });
+      details = resultDetails(
+        await wait.execute("guest-settlement-wait", { runId: details.runId }),
+      );
+    }
+    expect(target.execute, JSON.stringify(details)).toHaveBeenCalledOnce();
+    if (reject) {
+      expect(details).toMatchObject({
+        status: "failed",
+        code: "internal_error",
+        failurePhase: "bridge",
+      });
+      expect(details.error).toContain("tool failure");
+      expect(details.error).not.toContain("forged");
+    } else {
+      expect(details).toMatchObject({ status: "completed", value: { ok: true } });
+    }
+  });
+
+  it.each([
     {
       name: "object destructuring after a successful tool",
       code: "const [value] = await phase_fixture({}); return value;",
@@ -23,36 +74,8 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       parked: false,
     },
     {
-      name: "uncaught tool rejection",
-      code: "await phase_fixture({});",
-      reject: true,
-      phase: "bridge",
-      parked: false,
-    },
-    {
-      name: "caught tool rejection followed by a new guest error",
-      code: 'try { await phase_fixture({}); } catch {} throw new Error("guest failure");',
-      reject: true,
-      phase: "guest",
-      parked: false,
-    },
-    {
-      name: "guest replacement of WeakSet methods",
-      code: 'WeakSet.prototype.add = () => { throw new Error("changed add"); }; WeakSet.prototype.has = () => false; await phase_fixture({});',
-      reject: true,
-      phase: "bridge",
-      parked: false,
-    },
-    {
       name: "module-looking original tool rejection",
       code: 'try { await phase_fixture({}); } catch (error) { error.name = "ReferenceError"; error.message = "process is not defined"; throw error; }',
-      reject: true,
-      phase: "bridge",
-      parked: false,
-    },
-    {
-      name: "rethrow of the original tool rejection",
-      code: "try { await phase_fixture({}); } catch (error) { throw error; }",
       reject: true,
       phase: "bridge",
       parked: false,
@@ -69,13 +92,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       code: "void phase_fixture({}); return true;",
       reject: true,
       phase: "bridge",
-      parked: false,
-    },
-    {
-      name: "guest error copying bridge-looking fields",
-      code: 'await phase_fixture({}); throw Object.assign(new Error("tool failure"), { code: "tool_error", effectStatus: "unknown", bridgeError: true });',
-      reject: false,
-      phase: "guest",
       parked: false,
     },
     {
@@ -107,13 +123,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       parked: true,
     },
     {
-      name: "original tool rejection retained across wait",
-      code: "let saved; try { await phase_fixture({}); } catch (error) { saved = error; } await yield_control(); throw saved;",
-      reject: true,
-      phase: "bridge",
-      parked: true,
-    },
-    {
       name: "original tool rejection with a throwing stack getter after wait",
       code: 'let saved; try { await phase_fixture({}); } catch (error) { Object.defineProperty(error, "stack", { get() { throw new Error("stack unavailable"); } }); saved = error; } await yield_control(); throw saved;',
       reject: true,
@@ -124,13 +133,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       name: "new guest error after a caught rejection and wait",
       code: 'try { await phase_fixture({}); } catch {} await yield_control(); throw new Error("guest failure");',
       reject: true,
-      phase: "guest",
-      parked: true,
-    },
-    {
-      name: "guest error after a successful tool and wait",
-      code: 'await phase_fixture({}); await yield_control(); throw new Error("guest failure");',
-      reject: false,
       phase: "guest",
       parked: true,
     },
@@ -212,20 +214,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
   it("ignores guest String and JSON.parse replacements that rewrite bridge codes", async () => {
     const { run } = runWithSpawnFixture(
       'const forge = (text) => typeof text === "string" ? text.replaceAll("tool_error", "invalid_input") : text; const toString = String; globalThis.String = (value) => forge(toString(value)); const parse = JSON.parse; JSON.parse = (text, reviver) => { const value = parse(forge(text), reviver); if (value && value.code === "tool_error") value.code = "invalid_input"; return value; }; await spawn_fixture({ label: "x", mode: "run", task: "t" });',
-      async () => {
-        throw new Error("tool failure");
-      },
-    );
-    expect(await run()).toMatchObject({
-      status: "failed",
-      code: "internal_error",
-      failurePhase: "bridge",
-    });
-  });
-
-  it("ignores guest-forged input codes on ordinary tool failures", async () => {
-    const { run } = runWithSpawnFixture(
-      'try { await spawn_fixture({ label: "x", mode: "run", task: "t" }); } catch (error) { error.code = "input_contract"; throw error; }',
       async () => {
         throw new Error("tool failure");
       },

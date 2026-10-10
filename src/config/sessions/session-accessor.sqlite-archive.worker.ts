@@ -15,6 +15,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -30,6 +31,7 @@ import type {
   SqliteArchiveOneShotWorkerData,
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
+  SessionHistoryEvictionArchivePlan,
   SessionTranscriptMaintenanceSizingInput,
   TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
@@ -46,9 +48,11 @@ import type {
   SqliteCanonicalValidationWorkerTask,
 } from "./session-accessor.sqlite-canonical-worker-pool.js";
 import {
+  planSessionStateDeleteIfUnreferenced,
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-recency.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import type {
   SessionColdPreparationWorkerData,
@@ -184,6 +188,9 @@ export async function materializeTranscriptArchiveInWorker(
   plan: TranscriptArchiveWorkerPlan,
   env?: NodeJS.ProcessEnv,
 ): Promise<TranscriptArchiveWorkerResult> {
+  if ("historyEviction" in plan) {
+    return materializeHistoryEvictionArchiveInWorker(plan, env);
+  }
   if (plan.snapshot.lastSeq === null) {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
@@ -254,6 +261,75 @@ export async function materializeTranscriptArchiveInWorker(
   }
 }
 
+async function materializeHistoryEvictionArchiveInWorker(
+  input: SessionHistoryEvictionArchivePlan,
+  env?: NodeJS.ProcessEnv,
+): Promise<TranscriptArchiveWorkerResult> {
+  const assertSource = () =>
+    assertDatabasePathIdentity(input.databasePath, input.historyEviction.expectedIdentity);
+  assertSource();
+  const stagedPath = `${resolveSqliteTranscriptArchivePath({
+    archiveDirectory: input.archiveDirectory,
+    identityOwner: "registry",
+    reason: input.reason,
+    sessionId: input.sessionId,
+  })}.${randomUUID()}.jsonl-stage`;
+  try {
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(database.db, () => {
+          assertSource();
+          if (
+            isRecentHistoricalSessionId({
+              database,
+              sessionId: input.sessionId,
+              preserveRecentMs: input.historyEviction.preserveRecentMs,
+            })
+          ) {
+            return null;
+          }
+          const plan = planSessionStateDeleteIfUnreferenced({
+            ...input,
+            database,
+            referencedSessionIds: new Set(),
+          });
+          if (!plan) {
+            return null;
+          }
+          let rows = 0;
+          if (plan.snapshot.lastSeq !== null) {
+            fs.mkdirSync(input.archiveDirectory, { recursive: true, mode: 0o700 });
+            rows = stageTranscriptArchiveContent(database.db, input.sessionId, stagedPath);
+          }
+          return { plan, rows };
+        }),
+      { agentId: input.agentId, path: input.databasePath, env },
+    );
+    assertSource();
+    if (!opened.found) {
+      throw new Error(`Cannot archive SQLite transcript ${input.sessionId}: ${opened.reason}`);
+    }
+    if (!opened.value) {
+      return { archive: null, sessionId: input.sessionId, preparedPlan: null };
+    }
+    const { plan, rows } = opened.value;
+    const generation = plan.snapshot.generation;
+    if (rows > 0 && !generation) {
+      throw new Error(
+        `Cannot archive SQLite transcript without a generation for ${input.sessionId}`,
+      );
+    }
+    const archive =
+      rows > 0 && generation
+        ? await encodeStagedTranscriptArchive({ ...input, generation, stagedPath })
+        : null;
+    assertSource();
+    return { archive, sessionId: input.sessionId, preparedPlan: plan };
+  } finally {
+    fs.rmSync(stagedPath, { force: true });
+  }
+}
+
 export function publishTranscriptArchiveInWorker(
   plan: TranscriptArchivePublishPlan,
   env?: NodeJS.ProcessEnv,
@@ -302,33 +378,6 @@ export function publishTranscriptArchiveInWorker(
       sessionId: plan.sessionId,
     };
   }
-}
-
-async function runWorkerPort(
-  port: NonNullable<typeof parentPort>,
-  plans: readonly TranscriptArchiveWorkerPlan[],
-): Promise<void> {
-  let materializedBytes = 0;
-  for (const plan of plans) {
-    const result = await materializeTranscriptArchiveInWorker(plan);
-    materializedBytes += result.archive?.bytes.byteLength ?? 0;
-    if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
-      throw new Error(
-        `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
-      );
-    }
-    port.postMessage({ type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage);
-  }
-  port.close();
-}
-
-function runPublishWorkerPort(
-  port: NonNullable<typeof parentPort>,
-  plans: readonly TranscriptArchivePublishPlan[],
-): void {
-  const results = plans.map((plan) => publishTranscriptArchiveInWorker(plan));
-  port.postMessage({ type: "published", results } satisfies TranscriptArchivePublishWorkerMessage);
-  port.close();
 }
 
 async function runArchiveSession(
@@ -453,11 +502,30 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
       SqliteArchiveOneShotWorkerData,
       { operation: "materialize" }
     >;
-    await runWorkerPort(parentPort, data.plans);
+    let materializedBytes = 0;
+    for (const plan of data.plans) {
+      const result = await materializeTranscriptArchiveInWorker(plan);
+      materializedBytes += result.archive?.bytes.byteLength ?? 0;
+      if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+        throw new Error(
+          `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
+        );
+      }
+      parentPort.postMessage(
+        { type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage,
+        [],
+      );
+    }
+    parentPort.close();
   } else if (operation === "publish") {
     // SAFETY: the paired archive owner constructs this private typed boot payload.
     const data = workerData as Extract<SqliteArchiveOneShotWorkerData, { operation: "publish" }>;
-    runPublishWorkerPort(parentPort, data.plans);
+    const results = data.plans.map((plan) => publishTranscriptArchiveInWorker(plan));
+    parentPort.postMessage(
+      { type: "published", results } satisfies TranscriptArchivePublishWorkerMessage,
+      [],
+    );
+    parentPort.close();
   } else if (operation === "cold-prepare") {
     const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
     // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.

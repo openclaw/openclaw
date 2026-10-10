@@ -11,20 +11,19 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
+import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
 import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isRequesterCompletionCohortCurrent } from "../registry/subagent-requester-settle-identity.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
-  captureSubagentCompletionReplyUsing,
-  readLatestSubagentOutputWithRetryUsing,
-} from "./subagent-announce-capture.js";
-import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  SubagentAnnouncePreparationConflictError,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
 } from "./subagent-announce-result.js";
@@ -159,16 +158,39 @@ export async function readSubagentOutput(
   return undefined;
 }
 
+async function readOutputWithRetry(
+  maxWaitMs: number,
+  retryIntervalMs: number,
+  readOutput: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  const waitMs = Math.max(0, Math.min(maxWaitMs, 15_000));
+  if (!(waitMs > 0)) {
+    return undefined;
+  }
+  const deadlineAt = performance.now() + waitMs;
+  for (;;) {
+    const result = await readOutput();
+    if (result?.trim()) {
+      return result;
+    }
+    const remainingMs = deadlineAt - performance.now();
+    if (remainingMs <= 0) {
+      return result;
+    }
+    await sleep(Math.min(retryIntervalMs, remainingMs));
+  }
+}
+
 export async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
   outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
-  return await readLatestSubagentOutputWithRetryUsing({
-    ...params,
-    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput,
-  });
+  return await readOutputWithRetry(
+    params.maxWaitMs,
+    isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    () => readSubagentOutput(params.sessionKey, params.outcome),
+  );
 }
 
 export async function readSubagentTimeoutProgress(
@@ -191,16 +213,19 @@ export async function captureSubagentCompletionReply(
     sessionTarget?: SessionTranscriptRuntimeTarget;
   },
 ): Promise<string | undefined> {
-  return await captureSubagentCompletionReplyUsing({
-    sessionKey,
-    waitForReply: options?.waitForReply,
-    maxWaitMs: isFastTestRuntimeEnv() ? 50 : 1_500,
-    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput: async (nextSessionKey) =>
-      await readSubagentOutput(nextSessionKey, options?.outcome, {
-        sessionTarget: options?.sessionTarget,
-      }),
-  });
+  const waitForReply = options?.waitForReply;
+  const maxWaitMs = isFastTestRuntimeEnv() ? 50 : 1_500;
+  const retryIntervalMs = isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100;
+  const readOutput = () =>
+    readSubagentOutput(sessionKey, options?.outcome, { sessionTarget: options?.sessionTarget });
+  const immediate = await readOutput();
+  if (immediate?.trim()) {
+    return immediate;
+  }
+  if (waitForReply === false) {
+    return undefined;
+  }
+  return await readOutputWithRetry(maxWaitMs, retryIntervalMs, readOutput);
 }
 
 type AnnounceRunReader = (runId: string) => SubagentRunRecord | undefined;
@@ -240,14 +265,18 @@ export async function readChildCompletionFindings(
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
       if (!child || !prepared.isCurrent()) {
-        throw new Error("A child result changed while preparing the completion batch.");
+        throw new SubagentAnnouncePreparationConflictError(
+          "A child result changed while preparing the completion batch.",
+        );
       }
       return { child, ...prepared };
     }),
   );
   const isCurrent = () => results.every((result) => result.isCurrent());
   if (!isCurrent()) {
-    throw new Error("A child result changed while preparing the completion batch.");
+    throw new SubagentAnnouncePreparationConflictError(
+      "A child result changed while preparing the completion batch.",
+    );
   }
   return {
     text: buildChildCompletionFindings(
@@ -289,7 +318,10 @@ export function filterCurrentDirectChildCompletionRows<
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
-    getLatestSubagentRunByChildSessionKey: typeof getLatestSubagentRunByChildSessionKey;
+    getLatestSubagentRunByChildSessionKey: (
+      childSessionKey: string,
+      childAgentId?: string,
+    ) => SubagentRunReadRecord | null;
   },
 ): T[] {
   return children.filter((child) => {
@@ -306,6 +338,28 @@ export function filterCurrentDirectChildCompletionRows<
       (!params.requesterAgentId || latest.requesterAgentId === params.requesterAgentId)
     );
   });
+}
+
+export function selectCurrentRequesterCompletionRows(params: {
+  rows: SubagentRunRecord[];
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  frozenBatch: boolean;
+  latestForSession: Parameters<typeof isRequesterCompletionCohortCurrent>[1];
+}): SubagentRunRecord[] {
+  if (params.frozenBatch) {
+    return params.rows.filter((entry) =>
+      isRequesterCompletionCohortCurrent(entry, params.latestForSession),
+    );
+  }
+  return dedupeLatestChildCompletionRows(
+    filterCurrentDirectChildCompletionRows(params.rows, {
+      requesterSessionKey: params.requesterSessionKey,
+      requesterAgentId: params.requesterAgentId,
+      getLatestSubagentRunByChildSessionKey: (childSessionKey, childAgentId) =>
+        params.latestForSession(childSessionKey, undefined, childAgentId),
+    }),
+  );
 }
 
 function formatTokenCount(value?: number) {
@@ -336,9 +390,7 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestRuntimeEnv()) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 150);
-      });
+      await sleep(150);
     }
     entry = readSubagentSessionEntry(storePath, params.sessionKey);
   }

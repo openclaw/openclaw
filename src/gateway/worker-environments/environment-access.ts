@@ -1,6 +1,7 @@
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
@@ -9,6 +10,7 @@ import type { NodeWorkerProcessInput } from "../../worker/worker-process-observa
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -150,6 +152,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       : undefined;
     return {
       ...record,
+      ...workerInferenceMetadata(record),
       ...(record.preparation && preparedProject
         ? {
             preparation: {
@@ -582,11 +585,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       desktopEnabled = enabled;
       if (enabled) {
         desktopPolicy.abort();
+        materializeErrorStack(desktopPolicy.signal.reason);
         desktopPolicy = new AbortController();
       }
     }
     if (!enabled) {
       desktopPolicy.abort();
+      materializeErrorStack(desktopPolicy.signal.reason);
       // The registry also owns host and paired-node desktops; stop only worker sources.
       await joinWorkerTunnelStops([
         ...store.list().map((record) => tunnels?.desktop.stop(record.environmentId)),

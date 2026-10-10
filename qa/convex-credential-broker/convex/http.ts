@@ -2,7 +2,7 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { httpAction } from "./_generated/server";
+import { httpAction, type ActionCtx } from "./_generated/server";
 import { normalizeCredentialPayloadForKind } from "./payload_validation";
 
 type ActorRole = "ci" | "maintainer";
@@ -152,27 +152,16 @@ function requireObject(body: Record<string, unknown>, key: string) {
   return parsed;
 }
 
-function optionalPositiveInteger(body: Record<string, unknown>, key: string) {
+function optionalInteger(body: Record<string, unknown>, key: string, minimum: 0 | 1 = 1) {
   if (!(key in body) || body[key] === undefined || body[key] === null) {
     return undefined;
   }
   const raw = body[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw < 1) {
-    throw new BrokerHttpError(400, "INVALID_BODY", `Expected "${key}" to be a positive integer.`);
-  }
-  return raw;
-}
-
-function optionalNonnegativeInteger(body: Record<string, unknown>, key: string) {
-  if (!(key in body) || body[key] === undefined || body[key] === null) {
-    return undefined;
-  }
-  const raw = body[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw < 0) {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw < minimum) {
     throw new BrokerHttpError(
       400,
       "INVALID_BODY",
-      `Expected "${key}" to be a non-negative integer.`,
+      `Expected "${key}" to be a ${minimum === 0 ? "non-negative" : "positive"} integer.`,
     );
   }
   return raw;
@@ -240,11 +229,6 @@ function assertRoleAllowed(tokenRole: ActorRole, requestedRole: ActorRole) {
   }
 }
 
-function normalizeCredentialId(raw: string) {
-  // Convex Ids are opaque strings. We only enforce non-empty shape at HTTP boundary.
-  return raw;
-}
-
 function normalizeError(error: unknown) {
   if (error instanceof BrokerHttpError) {
     return {
@@ -256,223 +240,150 @@ function normalizeError(error: unknown) {
       },
     };
   }
-  if (error instanceof Error) {
-    return {
-      httpStatus: 500,
-      payload: {
-        status: "error",
-        code: "INTERNAL_ERROR",
-        message: error.message || "Internal credential broker error.",
-      },
-    };
-  }
+
   return {
     httpStatus: 500,
     payload: {
       status: "error",
       code: "INTERNAL_ERROR",
-      message: "Internal credential broker error.",
+      message:
+        error instanceof Error
+          ? error.message || "Internal credential broker error."
+          : "Internal credential broker error.",
     },
   };
 }
 
 const http = httpRouter();
 
-http.route({
-  path: "/qa-credentials/v1/acquire",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    try {
-      const tokenRole = resolveAuthRole(parseBearerToken(request));
-      const body = await parseJsonObject(request);
-      const actorRole = parseActorRole(body);
-      assertRoleAllowed(tokenRole, actorRole);
-      const kind = requireString(body, "kind");
-      const ownerId = requireString(body, "ownerId");
-      const prepared = await ctx.runQuery(internal.credentials.prepareLeaseAcquisition, {
-        kind,
-        leaseTtlMs: optionalPositiveInteger(body, "leaseTtlMs"),
-        heartbeatIntervalMs: optionalPositiveInteger(body, "heartbeatIntervalMs"),
-      });
-      if (prepared.status !== "ok") return jsonResponse(200, prepared);
-      for (const credentialId of prepared.credentialIds) {
-        const result = await ctx.runMutation(internal.credentials.tryAcquireLease, {
-          kind,
-          ownerId,
-          actorRole,
-          credentialId,
-          leaseTtlMs: prepared.leaseTtlMs,
-          heartbeatIntervalMs: prepared.heartbeatIntervalMs,
-        });
-        if (result.status === "ok") return jsonResponse(200, result);
+function registerPost<T>(
+  path: string,
+  parseRequest: (request: Request) => Promise<T>,
+  handle: (ctx: ActionCtx, input: T) => Promise<unknown>,
+) {
+  http.route({
+    path,
+    method: "POST",
+    handler: httpAction(async (ctx, request) => {
+      try {
+        return jsonResponse(200, await handle(ctx, await parseRequest(request)));
+      } catch (error) {
+        const normalized = normalizeError(error);
+        return jsonResponse(normalized.httpStatus, normalized.payload);
       }
-      const exhausted = await ctx.runMutation(internal.credentials.recordLeaseAcquisitionFailure, {
-        kind,
-        ownerId,
-        actorRole,
-      });
-      return jsonResponse(200, exhausted);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      return jsonResponse(normalized.httpStatus, normalized.payload);
-    }
-  }),
+    }),
+  });
+}
+
+async function parseLeaseRequest(request: Request) {
+  const tokenRole = resolveAuthRole(parseBearerToken(request));
+  const body = await parseJsonObject(request);
+  const actorRole = parseActorRole(body);
+  assertRoleAllowed(tokenRole, actorRole);
+  return { body, actorRole };
+}
+
+async function parseAdminRequest(request: Request) {
+  assertMaintainerAdminAuth(parseBearerToken(request));
+  return await parseJsonObject(request);
+}
+
+function readLeaseTarget(body: Record<string, unknown>, actorRole: ActorRole) {
+  return {
+    kind: requireString(body, "kind"),
+    ownerId: requireString(body, "ownerId"),
+    actorRole,
+    credentialId: requireString(body, "credentialId") as Id<"credential_sets">,
+    leaseToken: requireString(body, "leaseToken"),
+  };
+}
+
+registerPost("/qa-credentials/v1/acquire", parseLeaseRequest, async (ctx, { body, actorRole }) => {
+  const kind = requireString(body, "kind");
+  const ownerId = requireString(body, "ownerId");
+  const prepared = await ctx.runQuery(internal.credentials.prepareLeaseAcquisition, {
+    kind,
+    leaseTtlMs: optionalInteger(body, "leaseTtlMs"),
+    heartbeatIntervalMs: optionalInteger(body, "heartbeatIntervalMs"),
+  });
+  if (prepared.status !== "ok") return prepared;
+  for (const credentialId of prepared.credentialIds) {
+    const result = await ctx.runMutation(internal.credentials.tryAcquireLease, {
+      kind,
+      ownerId,
+      actorRole,
+      credentialId,
+      leaseTtlMs: prepared.leaseTtlMs,
+      heartbeatIntervalMs: prepared.heartbeatIntervalMs,
+    });
+    if (result.status === "ok") return result;
+  }
+  const exhausted = await ctx.runMutation(internal.credentials.recordLeaseAcquisitionFailure, {
+    kind,
+    ownerId,
+    actorRole,
+  });
+  return exhausted;
 });
 
-http.route({
-  path: "/qa-credentials/v1/heartbeat",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    try {
-      const tokenRole = resolveAuthRole(parseBearerToken(request));
-      const body = await parseJsonObject(request);
-      const actorRole = parseActorRole(body);
-      assertRoleAllowed(tokenRole, actorRole);
+registerPost(
+  "/qa-credentials/v1/heartbeat",
+  parseLeaseRequest,
+  async (ctx, { body, actorRole }) => {
+    return ctx.runMutation(internal.credentials.heartbeatLease, {
+      ...readLeaseTarget(body, actorRole),
+      leaseTtlMs: optionalInteger(body, "leaseTtlMs"),
+    });
+  },
+);
 
-      const result = await ctx.runMutation(internal.credentials.heartbeatLease, {
-        kind: requireString(body, "kind"),
-        ownerId: requireString(body, "ownerId"),
-        actorRole,
-        credentialId: normalizeCredentialId(
-          requireString(body, "credentialId"),
-        ) as Id<"credential_sets">,
-        leaseToken: requireString(body, "leaseToken"),
-        leaseTtlMs: optionalPositiveInteger(body, "leaseTtlMs"),
-      });
+registerPost(
+  "/qa-credentials/v1/payload-chunk",
+  parseLeaseRequest,
+  async (ctx, { body, actorRole }) => {
+    return ctx.runQuery(internal.credentials.getPayloadChunk, {
+      ...readLeaseTarget(body, actorRole),
+      index: optionalInteger(body, "index", 0) ?? 0,
+    });
+  },
+);
 
-      return jsonResponse(200, result);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      return jsonResponse(normalized.httpStatus, normalized.payload);
-    }
-  }),
+registerPost("/qa-credentials/v1/release", parseLeaseRequest, async (ctx, { body, actorRole }) => {
+  return ctx.runMutation(internal.credentials.releaseLease, {
+    ...readLeaseTarget(body, actorRole),
+  });
 });
 
-http.route({
-  path: "/qa-credentials/v1/payload-chunk",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    try {
-      const tokenRole = resolveAuthRole(parseBearerToken(request));
-      const body = await parseJsonObject(request);
-      const actorRole = parseActorRole(body);
-      assertRoleAllowed(tokenRole, actorRole);
-
-      const result = await ctx.runQuery(internal.credentials.getPayloadChunk, {
-        kind: requireString(body, "kind"),
-        ownerId: requireString(body, "ownerId"),
-        actorRole,
-        credentialId: normalizeCredentialId(
-          requireString(body, "credentialId"),
-        ) as Id<"credential_sets">,
-        leaseToken: requireString(body, "leaseToken"),
-        index: optionalNonnegativeInteger(body, "index") ?? 0,
-      });
-
-      return jsonResponse(200, result);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      return jsonResponse(normalized.httpStatus, normalized.payload);
-    }
-  }),
+registerPost("/qa-credentials/v1/admin/add", parseAdminRequest, async (ctx, body) => {
+  const kind = requireString(body, "kind");
+  const payload = normalizeCredentialPayloadForKind(
+    kind,
+    requireObject(body, "payload"),
+    (httpStatus, code, message) => new BrokerHttpError(httpStatus, code, message),
+  );
+  return ctx.runMutation(internal.credentials.addCredentialSet, {
+    kind,
+    payload,
+    note: readOptionalHttpString(body, "note"),
+    actorId: readOptionalHttpString(body, "actorId"),
+    status: optionalCredentialStatus(body, "status"),
+  });
 });
 
-http.route({
-  path: "/qa-credentials/v1/release",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    try {
-      const tokenRole = resolveAuthRole(parseBearerToken(request));
-      const body = await parseJsonObject(request);
-      const actorRole = parseActorRole(body);
-      assertRoleAllowed(tokenRole, actorRole);
-
-      const result = await ctx.runMutation(internal.credentials.releaseLease, {
-        kind: requireString(body, "kind"),
-        ownerId: requireString(body, "ownerId"),
-        actorRole,
-        credentialId: normalizeCredentialId(
-          requireString(body, "credentialId"),
-        ) as Id<"credential_sets">,
-        leaseToken: requireString(body, "leaseToken"),
-      });
-
-      return jsonResponse(200, result);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      return jsonResponse(normalized.httpStatus, normalized.payload);
-    }
-  }),
+registerPost("/qa-credentials/v1/admin/remove", parseAdminRequest, async (ctx, body) => {
+  return ctx.runMutation(internal.credentials.disableCredentialSet, {
+    credentialId: requireString(body, "credentialId") as Id<"credential_sets">,
+    actorId: readOptionalHttpString(body, "actorId"),
+  });
 });
 
-http.route({
-  path: "/qa-credentials/v1/admin/add",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    try {
-      assertMaintainerAdminAuth(parseBearerToken(request));
-      const body = await parseJsonObject(request);
-      const kind = requireString(body, "kind");
-      const payload = normalizeCredentialPayloadForKind(
-        kind,
-        requireObject(body, "payload"),
-        (httpStatus, code, message) => new BrokerHttpError(httpStatus, code, message),
-      );
-      const result = await ctx.runMutation(internal.credentials.addCredentialSet, {
-        kind,
-        payload,
-        note: readOptionalHttpString(body, "note"),
-        actorId: readOptionalHttpString(body, "actorId"),
-        status: optionalCredentialStatus(body, "status"),
-      });
-      return jsonResponse(200, result);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      return jsonResponse(normalized.httpStatus, normalized.payload);
-    }
-  }),
-});
-
-http.route({
-  path: "/qa-credentials/v1/admin/remove",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    try {
-      assertMaintainerAdminAuth(parseBearerToken(request));
-      const body = await parseJsonObject(request);
-      const result = await ctx.runMutation(internal.credentials.disableCredentialSet, {
-        credentialId: normalizeCredentialId(
-          requireString(body, "credentialId"),
-        ) as Id<"credential_sets">,
-        actorId: readOptionalHttpString(body, "actorId"),
-      });
-      return jsonResponse(200, result);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      return jsonResponse(normalized.httpStatus, normalized.payload);
-    }
-  }),
-});
-
-http.route({
-  path: "/qa-credentials/v1/admin/list",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    try {
-      assertMaintainerAdminAuth(parseBearerToken(request));
-      const body = await parseJsonObject(request);
-      const result = await ctx.runQuery(internal.credentials.listCredentialSets, {
-        kind: readOptionalHttpString(body, "kind"),
-        status: optionalListStatus(body, "status"),
-        includePayload: optionalBoolean(body, "includePayload"),
-        limit: optionalPositiveInteger(body, "limit"),
-      });
-      return jsonResponse(200, result);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      return jsonResponse(normalized.httpStatus, normalized.payload);
-    }
-  }),
+registerPost("/qa-credentials/v1/admin/list", parseAdminRequest, async (ctx, body) => {
+  return ctx.runQuery(internal.credentials.listCredentialSets, {
+    kind: readOptionalHttpString(body, "kind"),
+    status: optionalListStatus(body, "status"),
+    includePayload: optionalBoolean(body, "includePayload"),
+    limit: optionalInteger(body, "limit"),
+  });
 });
 
 export default http;

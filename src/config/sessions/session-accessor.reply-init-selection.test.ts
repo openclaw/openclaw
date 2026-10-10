@@ -51,7 +51,14 @@ it("retains only declared reply rows and their stored model parent at each snaps
 
     const persistedCurrent = loadSessionEntry(scope)!;
     const persistedUnrelated = loadSessionEntry({ ...scope, sessionKey: unrelatedKey });
-    const snapshot = loadReplySessionInitializationSnapshot(scope);
+    const initialSql = observeHostDataSql();
+    let snapshot: Awaited<ReturnType<typeof loadReplySessionInitializationSnapshot>>;
+    try {
+      snapshot = await loadReplySessionInitializationSnapshot(scope);
+    } finally {
+      initialSql.restore();
+    }
+    expect(initialSql.queries, "initial reply snapshot caller-thread SQL").toEqual([]);
     expect(snapshot.currentEntry).toEqual(persistedCurrent);
     expect(snapshot.readEntry(storedParentKey)?.sessionId).toBe("stored-parent");
     expect(snapshot.readEntry(unrelatedKey)).toBeUndefined();
@@ -98,7 +105,7 @@ it("returns the successor after a worker upsert conflict without replaying prepa
       storePath: path.join(state.sessionsDir("main"), "sessions.json"),
     };
     await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 1 });
-    const snapshot = loadReplySessionInitializationSnapshot(scope);
+    const snapshot = await loadReplySessionInitializationSnapshot(scope);
     const prepare = vi.fn(async () => {
       await upsertSessionEntryCore(scope, {
         sessionId: "successor",
@@ -123,110 +130,107 @@ it("returns the successor after a worker upsert conflict without replaying prepa
   });
 });
 
-it("refuses a replacement physical store with the same session identity after preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const primary = path.join(state.sessionsDir("main"), "reply-primary.sqlite");
-    const successor = path.join(state.sessionsDir("main"), "reply-successor.sqlite");
-    const alias = path.join(state.sessionsDir("main"), "reply-alias.sqlite");
-    const scope = { agentId: "main", sessionKey: "agent:main:reply-source", storePath: alias };
-    for (const [storePath, label] of [
-      [primary, "primary"],
-      [successor, "successor"],
-    ] as const) {
-      await upsertSessionEntryCore(
-        { ...scope, storePath },
-        { sessionId: "same-session", updatedAt: 1, label },
-      );
-    }
-    symlinkSync(primary, alias);
-    const snapshot = loadReplySessionInitializationSnapshot(scope);
-    const prepare = vi.fn(async () => {
-      unlinkSync(alias);
-      symlinkSync(successor, alias);
-      return { ...snapshot.currentEntry!, label: "must not publish" };
-    });
-    try {
-      await expect(
-        commitReplySessionInitialization({
+it.each(["snapshot", "commit"] as const)(
+  "refuses a replacement physical store with the same session identity during %s preparation",
+  async (phase) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const primary = path.join(state.sessionsDir("main"), "reply-primary.sqlite");
+      const successor = path.join(state.sessionsDir("main"), "reply-successor.sqlite");
+      const alias = path.join(state.sessionsDir("main"), "reply-alias.sqlite");
+      const scope = { agentId: "main", sessionKey: "agent:main:reply-source", storePath: alias };
+      for (const [storePath, label] of [
+        [primary, "primary"],
+        [successor, "successor"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { ...scope, storePath },
+          { sessionId: "same-session", updatedAt: 1, label },
+        );
+      }
+      symlinkSync(primary, alias);
+      const replaceSource = vi.fn(() => {
+        unlinkSync(alias);
+        symlinkSync(successor, alias);
+      });
+      let preparation: Promise<unknown>;
+      if (phase === "snapshot") {
+        preparation = loadReplySessionInitializationSnapshot(scope);
+        replaceSource();
+      } else {
+        const snapshot = await loadReplySessionInitializationSnapshot(scope);
+        preparation = commitReplySessionInitialization({
           ...scope,
           activeSessionKey: scope.sessionKey,
           expectedRevision: snapshot.revision,
           sessionEntry: snapshot.currentEntry!,
-          prepareSessionEntry: prepare,
-        }),
-      ).rejects.toThrow("Reply initialization database changed after its snapshot");
-      expect(prepare).toHaveBeenCalledOnce();
-      expect(loadSessionEntry({ ...scope, storePath: primary })?.label).toBe("primary");
-      expect(loadSessionEntry({ ...scope, storePath: successor })?.label).toBe("successor");
-    } finally {
-      unlinkSync(alias);
-      symlinkSync(primary, alias);
-    }
-  });
-});
-
-it.each(["upsert", "removal"] as const)(
-  "projects a lifecycle %s without acquiring unrelated prompt payloads",
-  async (operation) => {
-    await withOpenClawTestState({ label: `lifecycle-selected-${operation}` }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:selected",
-        storePath: path.join(state.sessionsDir("main"), "sessions.json"),
-      };
-      const current = { sessionId: "selected", updatedAt: Date.now(), label: "original" };
-      const unrelatedScope = { ...scope, sessionKey: "agent:main:unrelated" };
-      const prompt = "unrelated lifecycle prompt ".repeat(4096);
-      await upsertSessionEntryCore(scope, current);
-      await upsertSessionEntryCore(unrelatedScope, {
-        sessionId: "unrelated",
-        updatedAt: Date.now(),
-        skillsSnapshot: { prompt, skills: [] },
-      });
-      // The connection's one-time canonical check is separate from per-mutation projection.
-      const persistedCurrent = loadSessionEntry(scope)!;
-      const iterate = sqliteQueries.iterateSqliteQuerySync;
-      let acquiredPromptRows = 0;
-      const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
-        Row,
-      >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
-        for (const row of iterate<Row>(...args)) {
-          if (
-            row !== null &&
-            typeof row === "object" &&
-            "entry_json" in row &&
-            typeof row.entry_json === "string" &&
-            row.entry_json.includes(prompt)
-          ) {
-            acquiredPromptRows += 1;
-          }
-          yield row;
-        }
-      });
-      try {
-        await applySessionEntryLifecycleMutation({
-          ...scope,
-          skipMaintenance: true,
-          ...(operation === "removal"
-            ? { removals: [{ sessionKey: scope.sessionKey, expectedEntry: persistedCurrent }] }
-            : {
-                upserts: [
-                  {
-                    sessionKey: scope.sessionKey,
-                    buildEntry: ({ currentEntry }) => {
-                      expect(currentEntry).toEqual(persistedCurrent);
-                      return { ...currentEntry!, label: "updated" };
-                    },
-                  },
-                ],
-              }),
+          prepareSessionEntry: async () => {
+            replaceSource();
+            return { ...snapshot.currentEntry!, label: "must not publish" };
+          },
         });
-      } finally {
-        reads.mockRestore();
       }
-      expect(acquiredPromptRows).toBe(0);
-      expect(loadSessionEntry(unrelatedScope)?.skillsSnapshot?.prompt).toBe(prompt);
-      expect(loadSessionEntry(scope)?.label).toBe(operation === "removal" ? undefined : "updated");
+      try {
+        await expect(preparation).rejects.toThrow(
+          "Reply initialization database changed after its snapshot",
+        );
+        expect(replaceSource).toHaveBeenCalledOnce();
+        expect(loadSessionEntry({ ...scope, storePath: primary })?.label).toBe("primary");
+        expect(loadSessionEntry({ ...scope, storePath: successor })?.label).toBe("successor");
+      } finally {
+        unlinkSync(alias);
+        symlinkSync(primary, alias);
+      }
     });
   },
 );
+
+it("projects lifecycle removal without acquiring unrelated prompt payloads", async () => {
+  await withOpenClawTestState({ label: "lifecycle-selected-removal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:selected",
+      storePath: path.join(state.sessionsDir("main"), "sessions.json"),
+    };
+    const current = { sessionId: "selected", updatedAt: Date.now(), label: "original" };
+    const unrelatedScope = { ...scope, sessionKey: "agent:main:unrelated" };
+    const prompt = "unrelated lifecycle prompt ".repeat(4096);
+    await upsertSessionEntryCore(scope, current);
+    await upsertSessionEntryCore(unrelatedScope, {
+      sessionId: "unrelated",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt, skills: [] },
+    });
+    // The connection's one-time canonical check is separate from per-mutation projection.
+    const persistedCurrent = loadSessionEntry(scope)!;
+    const iterate = sqliteQueries.iterateSqliteQuerySync;
+    let acquiredPromptRows = 0;
+    const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
+      Row,
+    >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
+      for (const row of iterate<Row>(...args)) {
+        if (
+          row !== null &&
+          typeof row === "object" &&
+          "entry_json" in row &&
+          typeof row.entry_json === "string" &&
+          row.entry_json.includes(prompt)
+        ) {
+          acquiredPromptRows += 1;
+        }
+        yield row;
+      }
+    });
+    try {
+      await applySessionEntryLifecycleMutation({
+        ...scope,
+        skipMaintenance: true,
+        removals: [{ sessionKey: scope.sessionKey, expectedEntry: persistedCurrent }],
+      });
+    } finally {
+      reads.mockRestore();
+    }
+    expect(acquiredPromptRows).toBe(0);
+    expect(loadSessionEntry(unrelatedScope)?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(loadSessionEntry(scope)?.label).toBeUndefined();
+  });
+});

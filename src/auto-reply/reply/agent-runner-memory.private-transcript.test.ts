@@ -38,7 +38,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
@@ -129,8 +129,8 @@ it.each(["completed", "interrupted"] as const)(
         }
         void readBody(request)
           .then((body) => {
-            // Memory preparation reads the MCP catalog before inference. Keep a real
-            // server owned by the run without adding tools to its model request.
+            // The next foreground turn uses this real MCP server. Optional memory
+            // inference must not acquire its runtime or tools.
             if (request.url === "/mcp") {
               const message = JSON.parse(body) as {
                 id?: number;
@@ -321,7 +321,7 @@ it.each(["completed", "interrupted"] as const)(
         const firstPrivateSessionIds = [...privateSessionIds];
         expect(firstPrivateSessionIds.length).toBeGreaterThan(0);
         for (const sessionId of firstPrivateSessionIds) {
-          expect(peekSessionMcpRuntime({ sessionId }) !== undefined).toBe(true);
+          expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
         }
         if (outcome === "interrupted") {
           interrupted.abort(new Error("next human turn"));

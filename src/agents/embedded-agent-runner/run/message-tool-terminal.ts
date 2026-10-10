@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAgentAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
 import {
@@ -12,7 +13,7 @@ import {
 } from "../../embedded-agent-messaging-extraction.js";
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
-import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
+import type { AfterToolCallContext, Agent } from "../../runtime/index.js";
 import {
   getInternalToolTurnCompletion,
   setInternalToolTurnCompletion,
@@ -32,51 +33,6 @@ type MessageToolTerminalRoute = Omit<
 
 function argsRecordForToolCall(context: AfterToolCallContext): Record<string, unknown> {
   return asOptionalRecord(context.args) ?? asOptionalRecord(context.toolCall.arguments) ?? {};
-}
-
-/** Detects message-tool-only sends that delivered a visible current-source reply. */
-function isDeliveredMessageToolOnlySourceReply(
-  params: MessageToolTerminalRoute & {
-    context: AfterToolCallContext;
-    hookResult?: AfterToolCallResult;
-  },
-): boolean {
-  const toolName = params.context.toolCall.name;
-  const toolArgs = argsRecordForToolCall(params.context);
-  const extractionArgs =
-    toolName === "message" &&
-    params.currentProvider &&
-    typeof toolArgs.provider !== "string" &&
-    typeof toolArgs.channel !== "string"
-      ? { ...toolArgs, provider: params.currentProvider }
-      : toolArgs;
-  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, params);
-  const confirmedSend =
-    pendingSend && extractMessagingToolSendResult(pendingSend, params.context.result);
-  const deliveryFact = readEmbeddedMessageDeliveryFact(
-    readToolResultDetails(params.context.result)?.messageDelivery,
-  );
-  const isError = params.hookResult?.isError ?? params.context.isError;
-  return isDeliveredMessageToolOnlySourceReplyResult({
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    toolName,
-    args: toolArgs,
-    result: params.hookResult ?? params.context.result,
-    // Middleware may retain a delivery summary while redacting its source receipt.
-    hookResult: params.context.result,
-    isError,
-    allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
-      ...params,
-      send: confirmedSend,
-      deliveredPayload: params.context.result,
-    }),
-    ...(deliveryFact
-      ? {
-          deliveryConfirmed:
-            deliveryFact.status === "settled" && (!isError || deliveryFact.partialDelivery),
-        }
-      : {}),
-  });
 }
 
 /**
@@ -100,22 +56,31 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
     const previousComplete = previous?.(context) === true;
     const replies: MessagingToolSourceReplyPayload[] = [];
     for (const result of context.toolResults) {
-      if (
-        result.isError ||
-        isToolResultError(result) ||
-        !capableToolNames.has(normalizeToolPolicyName(result.toolName))
-      ) {
+      if (result.isError || isToolResultError(result)) {
+        return previousComplete;
+      }
+      if (!capableToolNames.has(normalizeToolPolicyName(result.toolName))) {
+        if (context.terminalToolCallIds.has(result.toolCallId)) {
+          continue;
+        }
         return previousComplete;
       }
       const reply = captureToolAuthoredSourceReply({
         result,
         toolCallId: result.toolCallId,
-        idempotencyScope: params.idempotencyScope,
+        idempotencyScope: resolveAgentAssistantTurnId(context.message) ?? params.idempotencyScope,
       });
       if (!reply) {
+        const sourceReply = asOptionalRecord(readToolResultDetails(result)?.sourceReply);
+        if (sourceReply?.final !== false && context.terminalToolCallIds.has(result.toolCallId)) {
+          continue;
+        }
         return previousComplete;
       }
-      replies.push(reply);
+      replies.push({
+        ...reply,
+        toolAuthoredForTurnId: resolveAgentAssistantTurnId(context.message),
+      });
     }
     if (replies.length === 0) {
       return previousComplete;
@@ -143,13 +108,43 @@ export function installMessageToolOnlyTerminalHook(
   const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
   params.agent.afterToolCall = async (context, signal) => {
     const hookResult = await previousAfterToolCall?.(context, signal);
-    if (
-      isDeliveredMessageToolOnlySourceReply({
+    const toolName = context.toolCall.name;
+    const toolArgs = argsRecordForToolCall(context);
+    const extractionArgs =
+      toolName === "message" &&
+      params.currentProvider &&
+      typeof toolArgs.provider !== "string" &&
+      typeof toolArgs.channel !== "string"
+        ? { ...toolArgs, provider: params.currentProvider }
+        : toolArgs;
+    const pendingSend = extractMessagingToolSend(toolName, extractionArgs, params);
+    const confirmedSend =
+      pendingSend && extractMessagingToolSendResult(pendingSend, context.result);
+    const deliveryFact = readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(context.result)?.messageDelivery,
+    );
+    const isError = hookResult?.isError ?? context.isError;
+    const delivered = isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      toolName,
+      args: toolArgs,
+      result: hookResult ?? context.result,
+      // Middleware may retain a delivery summary while redacting its source receipt.
+      hookResult: context.result,
+      isError,
+      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
         ...params,
-        context,
-        hookResult,
-      })
-    ) {
+        send: confirmedSend,
+        deliveredPayload: context.result,
+      }),
+      ...(deliveryFact
+        ? {
+            deliveryConfirmed:
+              deliveryFact.status === "settled" && (!isError || deliveryFact.partialDelivery),
+          }
+        : {}),
+    });
+    if (delivered) {
       params.onDeliveredSourceReply?.();
       if (resolveMessageToolSourceReplyFinal(argsRecordForToolCall(context))) {
         return { ...hookResult, terminate: true };

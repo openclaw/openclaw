@@ -163,6 +163,7 @@ export function canApplySessionListSnapshot(
           excluded.hasBoard !== options.hasBoard) ||
         (options.boardFace !== undefined && excluded.boardFace !== options.boardFace) ||
         (options.includeGlobal === false && excluded.kind === "global") ||
+        (options.excludeDock !== false && excluded.isDock === true) ||
         (options.includeUnknown === false && excluded.kind === "unknown"))
     ) {
       covered = true;
@@ -178,6 +179,7 @@ export function canApplySessionListSnapshot(
       !sessionMatchesArchivedFilter(existing, options.archivedFilter ?? "active") ||
       existing.sessionId !== next.sessionId ||
       existing.kind !== next.kind ||
+      (options.excludeDock !== false && (existing.isDock === true || next.isDock === true)) ||
       (existing.archived === true) !== (next.archived === true) ||
       (existing.pinned === true) !== (next.pinned === true) ||
       existing.pinnedAt !== next.pinnedAt ||
@@ -252,15 +254,13 @@ export function sessionListAgentMatcher(agentId?: string | null) {
 }
 
 /** Capture membership before event reconciliation can remove or move a known child. */
-export function sessionListEventMatcher(payload: unknown, fallbackAgentId?: string | null) {
-  const matches = sessionChangedSnapshots(payload).map((snapshot) =>
-    sessionListSnapshotMatcher(snapshot, fallbackAgentId),
-  );
+export function sessionListEventMatcher(payload: unknown) {
+  const matches = sessionChangedSnapshots(payload).map(sessionListSnapshotMatcher);
   return (scope: SessionListScope, result?: SessionsListResult | null): boolean =>
     matches.some((match) => match(scope, result));
 }
 
-function sessionListSnapshotMatcher(payload: unknown, fallbackAgentId?: string | null) {
+function sessionListSnapshotMatcher(payload: unknown) {
   const parsed = parseSessionChangedEvent(payload);
   const info = parsed?.[0];
   const event = parsed?.[1] ?? asOptionalRecord(payload);
@@ -268,7 +268,7 @@ function sessionListSnapshotMatcher(payload: unknown, fallbackAgentId?: string |
   const matchesAgent = sessionListAgentMatcher(
     info?.agentId ??
       parseAgentSessionKey(info?.key)?.agentId ??
-      (typeof event?.agentId === "string" ? event.agentId : fallbackAgentId),
+      (typeof event?.agentId === "string" ? event.agentId : undefined),
   );
   const owners = [
     source?.controlOwnerSessionKey,
@@ -402,6 +402,8 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  /** Raw page identities, scoped to this window, for completeness despite hidden rows. */
+  receivedKeys: Set<string>;
   startupRetryAttempt: number;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
@@ -453,6 +455,7 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&
     query.excludeSystem !== true &&
+    query.excludeDock !== false &&
     query.includeGlobal === true &&
     query.includeUnknown === true &&
     query.configuredAgentsOnly === true
@@ -483,6 +486,7 @@ export function prepareSessionRefreshOptions(
   const prepared = {
     ...options,
     source: options.source ?? "sidebar",
+    excludeDock: options.excludeDock ?? true,
     includeDerivedTitles: options.includeDerivedTitles ?? true,
   } satisfies SessionRefreshOptions;
   if (

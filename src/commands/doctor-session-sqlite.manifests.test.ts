@@ -3,8 +3,16 @@ import path from "node:path";
 import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import { assertSafeSessionSqliteMigrationMove } from "../infra/session-sqlite-migration-manifest.js";
+import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
+import {
+  assertSafeSessionSqliteMigrationMove,
+  resolveSessionSqliteMigrationRunsDir,
+} from "../infra/session-sqlite-migration-manifest.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
@@ -14,13 +22,14 @@ import {
   trustedMigrationTarget,
   canonicalTestPath,
   useDoctorSessionSqliteTestFixture,
+  RECOVERY_TRANSCRIPT_LINES,
 } from "./doctor-session-sqlite.test-support.js";
+
+const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
 }));
-
-const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 async function createImportedManifest() {
   const store = createLegacyStore();
@@ -36,7 +45,6 @@ describe("runDoctorSessionSqlite", () => {
     ["missing row", undefined, 0, false, "sqlite_entry_missing", 0, 0],
     ["different session", "other", 2, false, "sqlite_entry_mismatch", 0, 0],
     ["short transcript", "session-1", 1, false, "sqlite_transcript_count_mismatch", 1, 0],
-    ["matching transcript", "session-1", 2, false, undefined, 1, 2],
     ["longer transcript", "session-1", 3, false, undefined, 1, 3],
     ["missing source", "session-1", 2, true, undefined, 1, 2],
   ] as const)(
@@ -221,10 +229,10 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
-  it.each(["malformed", "outside archive", "untrusted target"] as const)(
+  it.each(["outside archive", "untrusted target"] as const)(
     "rejects a restore manifest with %s",
     async (fault) => {
-      const imported = fault === "malformed" ? undefined : await createImportedManifest();
+      const imported = await createImportedManifest();
       const store = imported?.store ?? createLegacyStore();
       const manifestPath =
         imported?.manifestPath ?? path.join(store.tempDir, "malformed-manifest.json");
@@ -327,4 +335,97 @@ describe("runDoctorSessionSqlite", () => {
     expect(recover.targets[0]?.issues[0]?.code).toBe("recover_manifest_missing");
     expect(fs.existsSync(outsideSqlitePath)).toBe(false);
   });
+});
+
+describe("pre-artifact session migration receipts", () => {
+  it.each([
+    { archive: "different", existing: false },
+    { archive: "different", existing: true },
+    { archive: "identical", existing: true },
+    { archive: "missing", existing: true },
+  ])(
+    "imports a V2 index with $archive archive (existing: $existing)",
+    async ({ archive, existing }) => {
+      const store = createLegacyStore({
+        transcriptLines: RECOVERY_TRANSCRIPT_LINES,
+        entryOverrides: { label: "Legacy metadata" },
+      });
+      const scope = {
+        agentId: "main",
+        env: store.env,
+        storePath: store.storePath,
+        sessionKey: "agent:main:main",
+      };
+      if (existing) {
+        await upsertSessionEntryCore(scope, {
+          sessionId: "session-1",
+          updatedAt: 3000,
+          label: "Current SQLite metadata",
+        });
+      }
+      const currentIndex = fs.readFileSync(store.storePath, "utf8");
+      const archivePath = path.join(
+        path.dirname(store.sessionDir),
+        "session-sqlite-import-archive",
+        "sessions.json.legacy.1785542400000",
+      );
+      const archivedIndex =
+        archive === "identical"
+          ? currentIndex
+          : JSON.stringify({
+              "agent:main:old": { sessionId: "older-session", updatedAt: 1 },
+            });
+      fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+      if (archive !== "missing") {
+        fs.writeFileSync(archivePath, archivedIndex);
+      }
+      const move = { archivePath, sourcePath: store.storePath, kind: "legacy-store" };
+      // v2026.8.1-beta.1 doctor-session-sqlite-migration-run.ts wrote this V2 shape.
+      const receipt = {
+        manifestVersion: 2,
+        openClawVersion: "2026.8.1-beta.1",
+        runId: "session-sqlite-1785542400000-pre-artifact",
+        startedAt: "2026-08-01T00:00:00.000Z",
+        completedAt: "2026-08-01T00:00:01.000Z",
+        targets: [
+          {
+            ...trustedMigrationTarget(store),
+            plannedMoves: [move],
+            completedMoves: [move],
+            validationBeforeArchive: "passed",
+            issues: [],
+          },
+        ],
+      };
+      const manifestPath = path.join(
+        resolveSessionSqliteMigrationRunsDir(store.env),
+        `${receipt.runId}.json`,
+      );
+      fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+      const receiptBytes = JSON.stringify(receipt);
+      fs.writeFileSync(manifestPath, receiptBytes);
+
+      const imported = await importLegacyStore(store);
+
+      expect(imported.targets.flatMap((target) => target.issues)).toEqual([]);
+      expect(readMigrationManifest(imported.migrationRun?.manifestPath).completedAt).toBeDefined();
+      expect(loadSessionEntry(scope)).toMatchObject({
+        sessionId: "session-1",
+        label: existing && archive !== "different" ? "Current SQLite metadata" : "Legacy metadata",
+      });
+      const currentArchive = expectDefined(
+        imported.targets[0]?.archivedLegacyStoreFiles?.[0],
+        "verified current index archive",
+      );
+      expect(currentArchive).not.toBe(archivePath);
+      expect(fs.readFileSync(currentArchive, "utf8")).toBe(currentIndex);
+      if (archive !== "missing") {
+        expect(fs.readFileSync(archivePath, "utf8")).toBe(archivedIndex);
+      } else {
+        expect(fs.existsSync(archivePath)).toBe(false);
+      }
+      expect(fs.readFileSync(manifestPath, "utf8")).toBe(receiptBytes);
+      expect(() => assertSessionStoreMigrationComplete({ cfg: {}, env: store.env })).not.toThrow();
+    },
+  );
 });

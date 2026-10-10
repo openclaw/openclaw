@@ -159,12 +159,7 @@ export function registerNodeCli(program: Command) {
       });
     });
 
-  for (const [name, action] of [
-    ["uninstall", "runNodeDaemonUninstall"],
-    ["stop", "runNodeDaemonStop"],
-    ["start", "runNodeDaemonStart"],
-    ["restart", "runNodeDaemonRestart"],
-  ] as const) {
+  for (const name of ["uninstall", "stop", "start", "restart"] as const) {
     node
       .command(name)
       .description(
@@ -172,8 +167,8 @@ export function registerNodeCli(program: Command) {
       )
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
-        const daemon = await import("./daemon.js");
-        await daemon[action](opts);
+        const { runNodeDaemonLifecycle } = await import("./daemon.js");
+        await runNodeDaemonLifecycle(name, opts);
       });
   }
 }

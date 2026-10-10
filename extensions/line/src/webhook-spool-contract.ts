@@ -1,4 +1,3 @@
-// Line plugin module owns the durable webhook spool row contract.
 import {
   isRecord,
   normalizeNullableString as nonEmptyString,

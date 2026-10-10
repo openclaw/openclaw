@@ -22,7 +22,7 @@ import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
-  emoji: string;
+  icon: string;
   title: string;
   label: string;
   verb?: string;
@@ -49,7 +49,6 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   pollQuestion: "poll",
   maxChars: "max chars",
 };
-const MAX_DETAIL_ENTRIES = 8;
 
 /** Resolves the display model for a tool invocation. */
 export function resolveToolDisplay(params: {
@@ -62,7 +61,6 @@ export function resolveToolDisplay(params: {
   const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
   const { verb, detail } = resolveToolVerbAndDetailForArgs({
@@ -73,12 +71,11 @@ export function resolveToolDisplay(params: {
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "summary",
     toolDetailMode: params.detailMode,
-    detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
   return {
     name,
-    emoji,
+    icon: spec?.icon ?? FALLBACK.icon,
     title,
     label,
     verb,
@@ -125,9 +122,7 @@ export function isCommandBearingToolCall(name: string | undefined, args?: unknow
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   if (detail && isShellToolDisplayName(display.name)) {
-    return `${display.emoji} ${detail}`;
+    return detail;
   }
-  return detail
-    ? `${display.emoji} ${display.label}: ${detail}`
-    : `${display.emoji} ${display.label}`;
+  return detail ? `${display.label}: ${detail}` : display.label;
 }

@@ -592,12 +592,13 @@ jobs:
               --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$EXPECTED_SHA" \
               --workflow-sha "$(jq -r .workflowSha "$full_manifest")")"
             PREFLIGHT_RUN_ID="$(jq -r .producer.runId <<<"$resolution")"
+            preflight_attempt="$(jq -r .producer.runAttempt <<<"$resolution")"
             preflight_run="$(jq -c .run <<<"$resolution")"
             full_release_preflight=true
           else
             preflight_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}")"
+            preflight_attempt="$(jq -r '.run_attempt // ""' <<<"$preflight_run")"
           fi
-          preflight_attempt="$(jq -r '.run_attempt // ""' <<<"$preflight_run")"
           if [[ ! "$preflight_attempt" =~ ^[1-9][0-9]*$ ]]; then
             echo "OpenClaw npm preflight run has an invalid attempt: ${preflight_attempt:-<missing>}." >&2
             exit 1
@@ -657,6 +658,7 @@ jobs:
           const env = process.env;
           const producer = JSON.parse(process.argv[2]);
           const qualified = process.argv[3] ? JSON.parse(process.argv[3]) : null;
+          const producerAttempt = qualified?.producer.runAttempt ?? String(producer.run_attempt);
           const deadlineMs = Date.now() + 4 * 60_000;
           const pages = JSON.parse(execFileSync('gh', [
             'api', `repos/${env.GITHUB_REPOSITORY}/actions/runs/${producer.id}/artifacts?per_page=100`,
@@ -672,7 +674,7 @@ jobs:
           // FRV records the exact independent producer and artifact. Historical
           // aliases are discovery-only; a failed transfer never selects other bytes.
           const preflight = qualified ? [qualified.artifact] : preferred.length > 0 ? preferred : candidates;
-          const sdkName = `plugin-sdk-api-release-diff-${producer.id}-${producer.run_attempt}`;
+          const sdkName = `plugin-sdk-api-release-diff-${producer.id}-${producerAttempt}`;
           const sdk = artifacts.filter((artifact) => artifact.expired === false && artifact.name === sdkName);
           if (preflight.length !== 1 || sdk.length !== 1) {
             throw new Error(`Expected ${preferredName} or one historical preflight, and exactly one ${sdkName}.`);
@@ -713,7 +715,7 @@ jobs:
                 artifactExpiresAt: artifact.expires_at,
                 repository: env.GITHUB_REPOSITORY,
                 runId: producer.id,
-                runAttempt: producer.run_attempt,
+                runAttempt: Number(producerAttempt),
                 workflowSha: producer.head_sha,
                 workflowPath: producer.path.split('@')[0],
                 workflowEvent: 'workflow_dispatch',
@@ -826,12 +828,12 @@ jobs:
             extended_stable_preflight=true
           fi
           if [[ "$extended_stable_preflight" != "true" ]]; then
-            lineage_args=()
+            lineage_args=(--verify-publication-lineage)
             if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
               lineage_args+=(--full-release-manifest "${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json")
             fi
             node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs" \
-              --verify-publication-lineage "${lineage_args[@]}" \
+              "${lineage_args[@]}" \
               --repository "$GITHUB_REPOSITORY" --source-sha "$EXPECTED_SHA" \
               --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --publisher-sha "$WORKFLOW_SHA" \
               --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
@@ -1268,6 +1270,7 @@ jobs:
       signed_tag_object_sha: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
       clawhub_run_id: ${{ steps.children.outputs.plugin_clawhub_run_id }}
       clawhub_bootstrap_run_id: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
+      clawhub_receipt: ${{ steps.clawhub_receipt.outcome }}
     if: ${{ !inputs.publish_docker_only }}
     env:
       # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
@@ -1765,11 +1768,18 @@ jobs:
           if [[ "$(jq -r '.normal.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
             append_clawhub_dispatch_args normal
-            plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
-              "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
-              "${PARENT_WORKFLOW_SHA}" \
-              "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
-              "${clawhub_dispatch_args[@]}")"
+            if (( ${#clawhub_dispatch_args[@]} )); then
+              plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
+                "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
+                "${PARENT_WORKFLOW_SHA}" \
+                "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
+                "${clawhub_dispatch_args[@]}")"
+            else
+              plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
+                "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
+                "${PARENT_WORKFLOW_SHA}" \
+                "$(jq -r '.normal.workflow' "${clawhub_plan_path}")")"
+            fi
           else
             echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1777,11 +1787,18 @@ jobs:
           if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
             append_clawhub_dispatch_args bootstrap
-            plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
-              "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
-              "${bootstrap_workflow_sha}" \
-              "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")" \
-              "${clawhub_dispatch_args[@]}")"
+            if (( ${#clawhub_dispatch_args[@]} )); then
+              plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
+                "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
+                "${bootstrap_workflow_sha}" \
+                "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")" \
+                "${clawhub_dispatch_args[@]}")"
+            else
+              plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
+                "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
+                "${bootstrap_workflow_sha}" \
+                "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")")"
+            fi
           else
             echo "- plugin-clawhub-new.yml: no bootstrap candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1856,8 +1873,7 @@ jobs:
           verify_release_tag_target
           # A failed child can still have active publishers; join them before parent cleanup.
           if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" false true; then
-            echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
-            cleanup_clawhub_children || true
+            echo "Plugin npm publish failed; deferred cleanup will preserve ClawHub recovery evidence." >&2
             exit 1
           fi
           echo "plugin_npm_completed=true" >> "$GITHUB_OUTPUT"
@@ -1930,7 +1946,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           RELEASE_TAG: ${{ inputs.tag }}
-          WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
         run: |
           node .release-harness/scripts/clawhub-parent-authorization.mjs authorize \
             --child-run '${{ steps.children.outputs.plugin_clawhub_run_id }}' \
@@ -2029,7 +2044,6 @@ jobs:
           approve_clawhub=true
           if [[ "${failed}" != "0" ]]; then
             approve_clawhub=false
-            cleanup_clawhub_children || true
             clawhub_failed=1
           fi
           if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
@@ -2156,7 +2170,7 @@ jobs:
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json
           if-no-files-found: error
 
-      - name: Clean up ClawHub children after failure
+      - name: Clean up npm children after failure
         if: ${{ failure() || cancelled() }}
         env:
           CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.core_start.outputs.plugin_npm_run_id || steps.children.outputs.plugin_npm_run_id }}
@@ -2167,7 +2181,6 @@ jobs:
           if [[ -f "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh" ]]; then
             source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
             failed=0
-            cleanup_clawhub_children || failed=1
             cleanup_waiting_npm_children || failed=1
             exit "$failed"
           fi
@@ -2280,8 +2293,8 @@ jobs:
     # Reconcile the same release after Docker; the opt-in early path reuses its approval.
     # Apps attach independently after npm and Gateway Docker evidence is complete.
     needs: [publish, publish_docker, approve_github_release, finalize_github_release_before_docker]
-    # Prepared releases become visible in the outer button workflow, after this
-    # parent succeeds and ClawHub's terminal publication can be verified.
+    # Prepared releases become visible in the outer button workflow only after
+    # this parent reaches an allowed terminal state and ClawHub is verified.
     if: ${{ always() && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' && (needs.approve_github_release.result == 'success' || (inputs.finalize_release_before_docker && needs.finalize_github_release_before_docker.result == 'success')) }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     concurrency:
@@ -2458,7 +2471,8 @@ jobs:
     needs: [resolve_release_target, finalize_github_release]
     if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-beta.') }}
     continue-on-error: true
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    # App-token minting stays on GitHub-hosted runners.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2478,9 +2492,20 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
+      - name: Create Linux release request token
+        id: linux_request_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-actions: write
+          permission-contents: read
+
       - name: Dispatch detached Linux release request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.linux_request_token.outputs.token }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -2564,7 +2589,7 @@ jobs:
           if-no-files-found: warn
 
   cleanup_clawhub:
-    name: Clean up ClawHub children after parent failure
+    name: Preserve ClawHub recovery evidence before cleanup
     needs:
       [publish, publish_android, publish_vcr, dispatch_linux_mirror, publish_linux, publish_windows]
     if: ${{ failure() || cancelled() }}
@@ -2578,15 +2603,77 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          sparse-checkout: scripts/lib
+          sparse-checkout: scripts
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Download sealed recovery manifest before cancellation
+        id: recovery_manifest
+        if: ${{ needs.publish.outputs.clawhub_run_id != '' && needs.publish.outputs.clawhub_receipt != 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-clawhub-recovery-manifest-${{ needs.publish.outputs.clawhub_run_id }}-1
+          path: ${{ runner.temp }}/clawhub-recovery-manifest
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.publish.outputs.clawhub_run_id }}
+
+      - name: Seal every available exact attempt before cancellation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHILD_RUN_ID: ${{ needs.publish.outputs.clawhub_run_id }}
+          CHILD_RUN_ATTEMPT: "1"
+          COMPLETE_MANIFEST_AVAILABLE: ${{ steps.recovery_manifest.outcome == 'success' && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          publications=()
+          if [[ -n "$CHILD_RUN_ID" ]]; then
+            mkdir -p "$RUNNER_TEMP/clawhub-cleanup/publications"
+            gh run download "$CHILD_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+              --pattern '*-publish-json' \
+              --dir "$RUNNER_TEMP/clawhub-cleanup/publications" || true
+            while IFS= read -r -d '' path; do
+              publications+=("$path")
+            done < <(find "$RUNNER_TEMP/clawhub-cleanup/publications" \
+              -type f -name package-publish.json -print0)
+          fi
+          if (( ${#publications[@]} )); then
+            node scripts/plugin-clawhub-recovery.mjs snapshot \
+              --output "$RUNNER_TEMP/clawhub-cleanup/cleanup-snapshot.json" \
+              "${publications[@]}"
+          else
+            node scripts/plugin-clawhub-recovery.mjs snapshot \
+              --output "$RUNNER_TEMP/clawhub-cleanup/cleanup-snapshot.json"
+          fi
+
+      - name: Upload sealed cleanup evidence
+        id: cleanup_evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-cleanup-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/clawhub-cleanup/cleanup-snapshot.json
+            ${{ runner.temp }}/clawhub-recovery-manifest/recovery-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Cancel unfinished ClawHub children
+        if: ${{ steps.cleanup_evidence.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ needs.publish.outputs.clawhub_run_id }}
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ needs.publish.outputs.clawhub_bootstrap_run_id }}
+          CLAWHUB_RECEIPT_OUTCOME: ${{ needs.publish.outputs.clawhub_receipt }}
         run: |
           source scripts/lib/release-publish-children.sh
+          if [[ "$CLAWHUB_RECEIPT_OUTCOME" == success ]]; then
+            # Sealed normal publication authority survives later parent failure.
+            CHILD_PLUGIN_CLAWHUB_RUN_ID=""
+          fi
           cleanup_clawhub_children

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { pathExistsSync as exists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -44,22 +45,25 @@ const CHROMIUM_BUNDLE_IDS = new Set([
   "company.thebrowser.Browser", // Arc
 ]);
 
+const CHROMIUM_LINUX_NAMES = [
+  "google-chrome",
+  "google-chrome-beta",
+  "google-chrome-unstable",
+  "brave-browser",
+  "microsoft-edge",
+  "microsoft-edge-beta",
+  "microsoft-edge-dev",
+  "microsoft-edge-canary",
+  "chromium",
+  "chromium-browser",
+  "vivaldi",
+  "vivaldi-stable",
+  "opera",
+  "opera-gx",
+  "yandex-browser",
+];
 const CHROMIUM_DESKTOP_IDS = new Set([
-  "google-chrome.desktop",
-  "google-chrome-beta.desktop",
-  "google-chrome-unstable.desktop",
-  "brave-browser.desktop",
-  "microsoft-edge.desktop",
-  "microsoft-edge-beta.desktop",
-  "microsoft-edge-dev.desktop",
-  "microsoft-edge-canary.desktop",
-  "chromium.desktop",
-  "chromium-browser.desktop",
-  "vivaldi.desktop",
-  "vivaldi-stable.desktop",
-  "opera.desktop",
-  "opera-gx.desktop",
-  "yandex-browser.desktop",
+  ...CHROMIUM_LINUX_NAMES.map((name) => `${name}.desktop`),
   "org.chromium.Chromium.desktop",
 ]);
 
@@ -78,26 +82,12 @@ const CHROMIUM_EXE_NAMES = new Set([
   "google chrome canary",
   "brave browser",
   "microsoft edge",
-  "chromium",
   "chrome",
   "brave",
   "msedge",
-  "brave-browser",
-  "google-chrome",
   "google-chrome-stable",
-  "google-chrome-beta",
-  "google-chrome-unstable",
-  "microsoft-edge",
-  "microsoft-edge-beta",
-  "microsoft-edge-dev",
-  "microsoft-edge-canary",
-  "chromium-browser",
-  "vivaldi",
-  "vivaldi-stable",
-  "opera",
   "opera-stable",
-  "opera-gx",
-  "yandex-browser",
+  ...CHROMIUM_LINUX_NAMES,
 ]);
 
 function isExecutable(filePath: string, platform: NodeJS.Platform): boolean {
@@ -223,11 +213,10 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
   if (!desktopId) {
     return null;
   }
-  const trimmed = desktopId.trim();
-  if (!CHROMIUM_DESKTOP_IDS.has(trimmed)) {
+  if (!CHROMIUM_DESKTOP_IDS.has(desktopId)) {
     return null;
   }
-  const desktopPath = findDesktopFilePath(trimmed);
+  const desktopPath = findDesktopFilePath(desktopId);
   if (!desktopPath) {
     return null;
   }
@@ -339,20 +328,13 @@ function extractExecutableFromExecLine(execLine: string): string | null {
 function splitExecLine(line: string): string[] {
   const tokens: string[] = [];
   let current = "";
-  let inQuotes = false;
   let quoteChar = "";
   for (const ch of line) {
-    if ((ch === '"' || ch === "'") && (!inQuotes || ch === quoteChar)) {
-      if (inQuotes) {
-        inQuotes = false;
-        quoteChar = "";
-      } else {
-        inQuotes = true;
-        quoteChar = ch;
-      }
+    if ((ch === '"' || ch === "'") && (!quoteChar || ch === quoteChar)) {
+      quoteChar = quoteChar ? "" : ch;
       continue;
     }
-    if (!inQuotes && /\s/.test(ch)) {
+    if (!quoteChar && /\s/.test(ch)) {
       if (current) {
         tokens.push(current);
         current = "";
@@ -485,15 +467,34 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
   return candidates;
 }
 
+function getPlaywrightEnv(name: string): string | undefined {
+  const suffix = name.toLowerCase();
+  return (
+    process.env[name] ??
+    process.env[`npm_config_${suffix}`] ??
+    process.env[`npm_package_config_${suffix}`]
+  );
+}
+
 function getPlaywrightBrowserCachePaths(): string[] {
-  const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
+  const configured = getPlaywrightEnv(PLAYWRIGHT_BROWSERS_PATH_ENV);
   const cacheHome = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
-  return [
-    ...new Set([
-      ...(configured && configured !== "0" ? [configured] : []),
-      path.join(cacheHome, "ms-playwright"),
-    ]),
-  ];
+  const candidates = [path.join(cacheHome, "ms-playwright")];
+  if (configured === "0") {
+    try {
+      const packageRoot = path.dirname(
+        fileURLToPath(import.meta.resolve("playwright-core/package.json")),
+      );
+      candidates.unshift(path.join(packageRoot, ".local-browsers"));
+    } catch {
+      // A missing Playwright package must not hide the default cache.
+    }
+  } else if (configured) {
+    candidates.unshift(configured);
+  }
+  // Match Playwright's install-time base without importing its browser runtime.
+  const base = getPlaywrightEnv("INIT_CWD") || process.cwd();
+  return [...new Set(candidates.map((candidate) => path.resolve(base, candidate)))];
 }
 
 function readSortedDirNames(dir: string): string[] {

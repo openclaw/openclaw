@@ -1,6 +1,3 @@
-/**
- * Materializes selected OpenClaw skills as a temporary Claude CLI plugin.
- */
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

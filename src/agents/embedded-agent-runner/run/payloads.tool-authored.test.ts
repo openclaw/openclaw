@@ -81,6 +81,34 @@ describe("tool-authored source reply payloads", () => {
     },
   );
 
+  it.each(["turnId", "responseId"] as const)(
+    "does not attach a later reply to an earlier input that reused the same call ID (%s)",
+    (identity) => {
+      const earlier = {
+        ...toolAssistant,
+        [identity]: "earlier-turn",
+        content: [
+          { type: "text" as const, text: "Earlier answer." },
+          { type: "toolCall" as const, id: "tc-1", name: "order_status", arguments: {} },
+        ],
+      };
+      const payloads = buildPayloads({
+        assistantTexts: ["Earlier answer.", "I will check the order now."],
+        answerSegments: [
+          { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: earlier },
+        ],
+        lastAssistant: { ...toolAssistant, [identity]: "current-turn" },
+        messagingToolSourceReplyPayloads: [
+          { ...toolAuthoredReply, toolAuthoredForTurnId: "current-turn" },
+        ],
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual([
+        "Earlier answer.",
+        toolAuthoredReply.text,
+      ]);
+    },
+  );
+
   it("preserves a sealed earlier answer before the current tool-authored final", () => {
     const earlier = makeAgentAssistantMessage({
       content: [{ type: "text", text: "Earlier answer." }],

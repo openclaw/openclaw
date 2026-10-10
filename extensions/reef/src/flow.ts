@@ -32,8 +32,8 @@ export const prepareReefMessageId = createMonotonicUlidFactory();
 
 /** Local policy or trust rejection that is safe to retire without retrying. */
 class ReefOutboundRejectedError extends Error {
-  constructor(message: string, options: { cause?: unknown } = {}) {
-    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+  constructor(message: string) {
+    super(message);
     this.name = "ReefOutboundRejectedError";
   }
 }

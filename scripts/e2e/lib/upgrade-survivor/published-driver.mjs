@@ -264,6 +264,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
 
     const port = await freePort();
     const token = "published-driver-synthetic-token";
+    const probe = async (name, version) => {
+      await run(name, "openclaw", [
+        "gateway",
+        "probe",
+        "--url",
+        `ws://127.0.0.1:${port}`,
+        "--token",
+        token,
+        "--json",
+      ]);
+      const target = output(name).targets.find((entry) => entry.url === `ws://127.0.0.1:${port}`);
+      assert.equal(target?.connect.ok, true);
+      assert.equal(target.server.version, version);
+      return target;
+    };
     const config = {
       gateway: {
         mode: "local",
@@ -274,6 +289,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       },
       plugins: { enabled: false },
       agents: {
+        defaults: { heartbeat: { every: "0m" } },
         list: [
           { id: "main", default: true, workspace: path.join(runtime, "workspaces", "main") },
           { id: "second", workspace: path.join(runtime, "workspaces", "second") },
@@ -284,6 +300,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       fs.mkdirSync(agent.workspace, { recursive: true });
     }
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);
+    // 2026.9.7 Doctor keeps unreferenced OAuth sidecars; the update must carry them unchanged.
+    const orphanSidecar = path.join(state, "credentials/auth-profiles", `${"e".repeat(32)}.json`);
+    const orphanSidecarBytes = `${JSON.stringify({
+      version: 1,
+      profileId: "openai-codex:default",
+      provider: "openai-codex",
+      encrypted: {
+        algorithm: "aes-256-gcm",
+        iv: "c3ludGg=",
+        tag: "c3ludGg=",
+        ciphertext: "c3ludGg=",
+      },
+    })}\n`;
+    fs.mkdirSync(path.dirname(orphanSidecar), { recursive: true });
+    fs.writeFileSync(orphanSidecar, orphanSidecarBytes, { mode: 0o600 });
     await run("fixture", "bash", [
       "-c",
       'source "$1"; install_update_restart_systemctl_shim absent',
@@ -305,20 +336,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     await run("install-service", "openclaw", ["gateway", "install", "--force", "--json"]);
     await ready("before-ready", port);
     if (legacySqlite) {
-      await run("running-before", "openclaw", [
-        "gateway",
-        "probe",
-        "--url",
-        `ws://127.0.0.1:${port}`,
-        "--token",
-        token,
-        "--json",
-      ]);
-      const serving = output("running-before").targets.find(
-        (entry) => entry.url === `ws://127.0.0.1:${port}`,
-      );
-      assert.equal(serving?.connect.ok, true);
-      assert.equal(serving.server.version, driverVersion);
+      const serving = await probe("running-before", driverVersion);
       const buildComparable =
         typeof serving.server.buildId === "string" && typeof driverBuild.buildId === "string";
       if (buildComparable) {
@@ -447,26 +465,14 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(recorded.status, "succeeded");
     assert.equal(result.after?.version, build.version);
     assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
+    assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
     assert.notEqual(
       fs.readFileSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "utf8"),
       beforePid,
       "Update did not replace the managed service",
     );
     await ready("after-ready", port);
-    await run("running-version", "openclaw", [
-      "gateway",
-      "probe",
-      "--url",
-      `ws://127.0.0.1:${port}`,
-      "--token",
-      token,
-      "--json",
-    ]);
-    const target = output("running-version").targets.find(
-      (entry) => entry.url === `ws://127.0.0.1:${port}`,
-    );
-    assert.equal(target?.connect.ok, true);
-    assert.equal(target.server.version, build.version);
+    const target = await probe("running-version", build.version);
     for (const session of sessions) {
       const history = await gateway(`${session.kind}-after`, "chat.history", {
         ...session.params,

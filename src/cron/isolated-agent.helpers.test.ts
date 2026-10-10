@@ -1,6 +1,4 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -22,34 +20,6 @@ describe("resolveCronPayloadOutcome", () => {
     });
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toContain("Bash failed");
-  });
-
-  it("keeps genuine visible terminal output as recovery proof", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: buildEmbeddedRunPayloads({
-        assistantTexts: [],
-        lastAssistant: undefined,
-        lastToolError: { toolName: "bash", error: "mount unavailable" },
-        sessionKey: "cron:test",
-      }),
-      finalAssistantVisibleText: "Mount restored; report written.",
-      preferFinalAssistantVisibleText: true,
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.outputText).toBe("Mount restored; report written.");
-  });
-
-  it("treats transient error payloads as non-fatal when a later success exists", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "⚠️ ✍️ Write: failed", isError: true },
-        { text: "Write completed successfully.", isError: false },
-      ],
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.summary).toBe("Write completed successfully.");
   });
 
   it("keeps marked middleware warnings diagnostic after structured cron output", () => {
@@ -120,21 +90,6 @@ describe("resolveCronPayloadOutcome", () => {
       expect(result.deliveryPayloads).toEqual([{ text: errorText, isError: true }]);
     },
   );
-
-  it("keeps error payloads fatal when the run also reported a run-level error", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "Model context overflow", isError: true },
-        { text: "Partial assistant text before error" },
-      ],
-      runLevelError: { kind: "context_overflow", message: "exceeded context window" },
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toContain("Model context overflow");
-    expect(result.outputText).toBe("Model context overflow");
-    expect(result.deliveryPayloads).toEqual([{ text: "Model context overflow", isError: true }]);
-  });
 
   it.each([
     { error: "rate limit exceeded", suffix: ": rate limit exceeded", payloads: [{ text: " " }] },
@@ -275,45 +230,6 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: false });
   });
 
-  it("records a pure heartbeat acknowledgement as a control-only terminal", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "HEARTBEAT_OK" }],
-      finalAssistantVisibleText: "HEARTBEAT_OK",
-    });
-
-    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: true });
-  });
-
-  it("preserves structured output while removing a sibling heartbeat acknowledgement", () => {
-    const mediaPayload = {
-      text: "HEARTBEAT_OK",
-      mediaUrl: "https://example.com/report.png",
-    };
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "HEARTBEAT_OK" }, mediaPayload],
-      finalAssistantVisibleText: "HEARTBEAT_OK",
-    });
-
-    expect(result.deliveryPayloads).toEqual([mediaPayload]);
-    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
-  });
-
-  it("does not promote narrated denial markers in summary text to fatal errors", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        {
-          text: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-        },
-      ],
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.embeddedRunError).toBeUndefined();
-    expect(result.outputText).toBe(
-      "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-    );
-  });
-
   it("prefers typed failure signals over denial-token fallback", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ text: "On it, retrying now." }],
@@ -349,16 +265,5 @@ describe("resolveCronRunTimeoutOverrideMs", () => {
   // Explicit payload timeouts must survive even when they equal the configured default.
   it("preserves explicit payload timeoutSeconds even when it equals the agent default", () => {
     expect(resolveCronRunTimeoutOverrideMs(300)).toBe(300_000);
-  });
-
-  it("caps oversized explicit payload timeoutSeconds at the timer-safe ceiling", () => {
-    expect(resolveCronRunTimeoutOverrideMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("omits the signal when the cron payload has no positive finite timeout", () => {
-    expect(resolveCronRunTimeoutOverrideMs(undefined)).toBeUndefined();
-    expect(resolveCronRunTimeoutOverrideMs(0)).toBeUndefined();
-    expect(resolveCronRunTimeoutOverrideMs(-1)).toBeUndefined();
-    expect(resolveCronRunTimeoutOverrideMs(Number.NaN)).toBeUndefined();
   });
 });

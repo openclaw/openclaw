@@ -3,6 +3,7 @@ import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-r
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
+import { isMatrixInviteAutoJoinTarget } from "../target-ids.js";
 
 export function registerMatrixAutoJoin(params: {
   client: MatrixClient;
@@ -33,6 +34,19 @@ export function registerMatrixAutoJoin(params: {
     logVerbose("matrix: auto-join enabled for all invites");
   } else {
     logVerbose("matrix: auto-join enabled for allowlist invites");
+    // Room-scoped matching only understands a room ID, an alias, or "*". Surface
+    // entries that can never match (for example a Matrix user ID, which is not a
+    // room target) at the default log level, otherwise an inert allowlist
+    // silently ignores every invite. This observes the same target contract the
+    // setup wizard enforces; it reports, and never rejects, saved config.
+    const inertEntries = rawAllowlist.filter((entry) => !isMatrixInviteAutoJoinTarget(entry));
+    if (inertEntries.length > 0) {
+      core.logging
+        .getChildLogger({ module: "matrix-auto-join" })
+        .warn(
+          `matrix: autoJoinAllowlist entries cannot match an invited room and are ignored: ${inertEntries.join(", ")}`,
+        );
+    }
   }
 
   const resolveAllowedAliasRoomId = async (alias: string): Promise<string | null> => {

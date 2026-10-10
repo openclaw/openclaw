@@ -71,6 +71,8 @@ async function runBatch(params: {
   tools: ToolPlan[];
   completionOrder: string[];
   capableToolNames?: string[];
+  assistantIdentity?: Pick<AssistantMessage, "responseId" | "turnId">;
+  runId?: string;
   configureAgent?: (agent: Agent) => void;
 }) {
   const signalsByTool = new Map(
@@ -127,7 +129,7 @@ async function runBatch(params: {
       if (!content) {
         throw new Error(`unexpected provider request ${requests}`);
       }
-      const message = assistant(content);
+      const message = { ...assistant(content), ...params.assistantIdentity };
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
         stream.push({ type: "done", reason: message.stopReason, message });
@@ -140,7 +142,7 @@ async function runBatch(params: {
   const replies: MessagingToolSourceReplyPayload[] = [];
   installToolAuthoredSourceReplyTerminalHook({
     agent,
-    idempotencyScope: "run-test",
+    idempotencyScope: params.runId ?? "run-test",
     onSourceReplies: (payloads) => replies.push(...payloads),
     sourceReplyCapableToolNames: new Set(params.capableToolNames ?? ["order_confirm"]),
   });
@@ -156,6 +158,78 @@ async function runBatch(params: {
 }
 
 describe("tool-authored source reply turn completion", () => {
+  it("keeps reused call IDs distinct across assistant turns and stable across recovery runs", async () => {
+    const replies: MessagingToolSourceReplyPayload[] = [];
+    for (const [runId, turnId, responseId] of [
+      ["run-first", "persisted-1", "response-1"],
+      ["run-first", "persisted-2", "response-2"],
+      ["run-recovery", "persisted-1", "response-1"],
+      ["run-without-response-id", "persisted-3", undefined],
+      ["run-response-only", undefined, "response-4"],
+    ] as const) {
+      const run = await runBatch({
+        tools: [{ name: "order_confirm", details: finalReply }],
+        completionOrder: ["order_confirm"],
+        assistantIdentity: { turnId, responseId },
+        runId,
+      });
+      expect(run.requests).toBe(1);
+      replies.push(...run.replies);
+    }
+    expect(replies.map((reply) => reply.idempotencyKey)).toEqual([
+      "response-1:tool-source-reply:call-order_confirm",
+      "response-2:tool-source-reply:call-order_confirm",
+      "response-1:tool-source-reply:call-order_confirm",
+      "persisted-3:tool-source-reply:call-order_confirm",
+      "response-4:tool-source-reply:call-order_confirm",
+    ]);
+    expect(replies.map((reply) => reply.toolAuthoredForTurnId)).toEqual([
+      "response-1",
+      "response-2",
+      "response-1",
+      "persisted-3",
+      "response-4",
+    ]);
+  });
+  it.each([
+    { terminate: true, capable: false },
+    { terminate: false, capable: false },
+    { terminate: true, capable: true },
+    { terminate: false, capable: true },
+  ])(
+    "retains a final reply beside a terminal sibling (authored terminate=$terminate, capable=$capable)",
+    async ({ terminate, capable }) => {
+      const run = await runBatch({
+        tools: [
+          { name: "order_confirm", details: finalReply, terminate },
+          { name: "handoff", details: { ok: true }, terminate: true },
+        ],
+        completionOrder: ["order_confirm", "handoff"],
+        capableToolNames: capable ? ["order_confirm", "handoff"] : ["order_confirm"],
+      });
+      expect(run.requests).toBe(1);
+      expect(run.replies).toEqual([
+        expect.objectContaining({ text: "Pedido creado.", toolAuthored: true }),
+      ]);
+    },
+  );
+
+  it.each([progressReply, { ok: false }])(
+    "does not admit a partial reply beside a terminal sibling with %j",
+    async (details) => {
+      const run = await runBatch({
+        tools: [
+          { name: "order_confirm", details: finalReply },
+          { name: "handoff", details, terminate: true },
+        ],
+        capableToolNames: ["order_confirm", "handoff"],
+        completionOrder: ["handoff", "order_confirm"],
+      });
+      expect(run.requests).toBe(2);
+      expect(run.replies).toEqual([]);
+    },
+  );
+
   it.each([
     { order: ["order_confirm", "crm_note"], label: "the capable tool finishes first" },
     { order: ["crm_note", "order_confirm"], label: "the ordinary tool finishes first" },
