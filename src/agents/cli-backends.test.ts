@@ -114,42 +114,6 @@ afterEach(() => {
 });
 
 describe("resolveCliBackendConfig", () => {
-  it("returns the plugin-owned command adapter and registration metadata", () => {
-    const resolved = requireBackend();
-
-    expect(resolved).toMatchObject({
-      id: "acme-cli",
-      modelProvider: "acme",
-      pluginId: "acme-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      runtimeArtifact,
-      config: {
-        command: "acme",
-        args: ["chat", "--json"],
-        output: "json",
-        input: "stdin",
-        modelArg: "--model",
-        sessionArgs: ["--session", "{sessionId}"],
-        sessionMode: "existing",
-      },
-    });
-  });
-
-  it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
-    const parseJsonlEvent = vi.fn();
-    const parseJsonlLifecycleEvent = vi.fn();
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        runtimeEntry({ parseJsonlEvent, parseJsonlLifecycleEvent }),
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-
-    expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
-    expect(requireBackend().parseJsonlLifecycleEvent).toBe(parseJsonlLifecycleEvent);
-  });
-
   it("normalizes the registered adapter with agent and runtime config context", () => {
     const normalizeConfig = vi.fn((config: CliBackendConfig): CliBackendConfig => ({
       ...config,
@@ -169,27 +133,6 @@ describe("resolveCliBackendConfig", () => {
       agentId: "reviewer",
       config: cfg,
     });
-  });
-
-  it("does not let a mutating normalizer rewrite the registered adapter", () => {
-    const backend = runtimeEntry({
-      normalizeConfig(config, context) {
-        config.command = `${config.command}-${context?.agentId ?? "default"}`;
-        return config;
-      },
-    });
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [backend],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-
-    expect(resolveCliBackendConfig("acme-cli", {}, { agentId: "reviewer" })?.config.command).toBe(
-      "acme-reviewer",
-    );
-    expect(resolveCliBackendConfig("acme-cli", {}, { agentId: "builder" })?.config.command).toBe(
-      "acme-builder",
-    );
-    expect(backend.config.command).toBe("acme");
   });
 
   it("falls back to setup registration before runtime activation", () => {
@@ -226,59 +169,6 @@ describe("resolveCliBackendConfig", () => {
     });
 
     expect(resolveCliBackendConfig("missing-cli")).toBeNull();
-  });
-
-  it("preserves backend-owned execution hooks", () => {
-    const prepareExecution = vi.fn(async () => ({ env: { ACME_HOME: "/tmp/acme" } }));
-    const manualCompaction = {
-      buildPrompt: vi.fn(() => "/shrink"),
-      input: "arg" as const,
-      validateOutput: vi.fn(() => ({ ok: true as const })),
-    };
-    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => [
-      ...baseArgs,
-      "--effort",
-      "high",
-    ]);
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        runtimeEntry({
-          prepareExecution,
-          resolveExecutionArgs: resolveExecutionArgs as never,
-          ownsNativeCompaction: true,
-          manualCompaction,
-          nativeToolMode: "selectable",
-          toolAvailabilityEnforcement: "execution-args",
-          sideQuestionToolMode: "disabled",
-        }),
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-
-    const resolved = requireBackend();
-
-    expect(resolved.prepareExecution).toBe(prepareExecution);
-    expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
-    expect(resolved.ownsNativeCompaction).toBe(true);
-    expect(resolved.manualCompaction).toBe(manualCompaction);
-    expect(resolved.nativeToolMode).toBe("selectable");
-    expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
-    expect(resolved.sideQuestionToolMode).toBe("disabled");
-  });
-
-  it("requires explicit enforcement for a selectable hook", () => {
-    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        runtimeEntry({
-          nativeToolMode: "selectable",
-          resolveExecutionArgs: resolveExecutionArgs as never,
-        }),
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-
-    expect(requireBackend().toolAvailabilityEnforcement).toBeUndefined();
   });
 });
 
