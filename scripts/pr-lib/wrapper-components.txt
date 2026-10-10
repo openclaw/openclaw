@@ -1609,6 +1609,7 @@ src/shared/regexp.ts
 src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
+src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
