@@ -2900,7 +2900,6 @@ export const en: TranslationMap & {
       empty: "No subagents in this conversation.",
       noRunning: "No running subagents",
       refresh: "Refresh subagents",
-      loadMore: "Show more subagents",
       stop: "Stop {name}",
       stopping: "Stopping…",
       elapsed: "Elapsed time",

@@ -122,11 +122,12 @@ and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
 Open the parent conversation's side panel and select **Subagents** from its **+**
-menu to inspect ordinary child runs. The panel groups running and finished work,
+menu to inspect child runs, including swarm workers. The panel loads all child
+pages automatically and groups running and finished work,
 keeping children waiting on their own descendants under **Running**. It shows
 elapsed time and available tool activity, and opens each child's existing
-view-only transcript beside the parent. It does not add rows to the left sidebar;
-Swarm members remain in their parallel-tasks view. A directly opened child page
+view-only transcript beside the parent. It does not add rows to the left sidebar.
+The parallel-tasks view also shows aggregate swarm progress. A directly opened child page
 offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
 and `/subagents log <id|#>` commands remain available.
 
