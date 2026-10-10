@@ -997,6 +997,7 @@ src/infra/secure-random.ts
 src/infra/semver.ts
 src/infra/session-cost-usage-cache-migration.ts
 src/infra/session-cost-usage-rollup-codec.ts
+src/infra/session-cost-usage-worker.types.ts
 src/infra/shell-env.ts
 src/infra/shell-inline-command.ts
 src/infra/shell-wrapper-resolution.ts
@@ -1007,6 +1008,10 @@ src/infra/sqlite-audit-record.kernel.ts
 src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-commit-receipt.ts
+src/infra/sqlite-database-admission-key.ts
+src/infra/sqlite-database-admission-record.ts
+src/infra/sqlite-database-admission-turn.ts
+src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
@@ -1022,6 +1027,7 @@ src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
+src/infra/sqlite-native-admission.ts
 src/infra/sqlite-native-observer.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-page-cache-residency.ts
@@ -1047,6 +1053,7 @@ src/infra/sqlite-recovery-files.ts
 src/infra/sqlite-recovery-snapshot.ts
 src/infra/sqlite-rollback-recovery.ts
 src/infra/sqlite-runtime-version.ts
+src/infra/sqlite-schema-admission.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
 src/infra/sqlite-schema-ensure.ts
@@ -1054,6 +1061,7 @@ src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-mutation.ts
+src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
@@ -1093,6 +1101,7 @@ src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
+src/infra/sqlite-worker-operation-settlement.ts
 src/infra/sqlite-worker-request-class.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
@@ -1159,6 +1168,7 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
+src/infra/worker-ancestry.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
@@ -1677,6 +1687,7 @@ src/state/openclaw-agent-db-session-provenance.ts
 src/state/openclaw-agent-db-terminal.ts
 src/state/openclaw-agent-db-transaction.ts
 src/state/openclaw-agent-db-validation-cache.ts
+src/state/openclaw-agent-db-validation-facts.ts
 src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
@@ -1720,6 +1731,7 @@ src/state/openclaw-database-verify.ts
 src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
 src/state/openclaw-state-db-additive-columns.ts
+src/state/openclaw-state-db-admission.ts
 src/state/openclaw-state-db-async-lifecycle.ts
 src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts

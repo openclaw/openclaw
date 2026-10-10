@@ -89,13 +89,12 @@ function copySmallPluginSourceFile(
 ) {
   const parent = path.dirname(target);
   const parentIdentity = fs.lstatSync(parent, { bigint: true });
-  const assertParent = () =>
+  const assertAdmission = () => {
     assertDirectoryIdentitySync(parent, {
       dev: parentIdentity.dev,
       ino: parentIdentity.ino,
       realPath: parent,
     });
-  const assertSource = () =>
     withPluginSourceFile(source, boundary, (currentFd) => {
       const current = fs.fstatSync(currentFd, { bigint: true });
       const before = pluginSourceStatIdentity(admitted);
@@ -107,9 +106,6 @@ function copySmallPluginSourceFile(
         );
       }
     });
-  const assertAdmission = () => {
-    assertParent();
-    assertSource();
   };
   using copied = createFileSync(target, { mode: 0o600, assertBeforeMutation: assertAdmission });
   const identity = fs.fstatSync(copied.fd, { bigint: true });

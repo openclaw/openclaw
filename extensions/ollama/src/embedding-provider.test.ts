@@ -452,6 +452,15 @@ describe("ollama embedding provider", () => {
     );
   });
 
+  it("rejects empty embeddings instead of silently disabling semantic search", async () => {
+    mockEmbeddingFetch([]);
+    const { provider } = await createEmbeddingProvider();
+
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
+      "Ollama embed response contains an empty embedding",
+    );
+  });
+
   it.each([
     {
       name: "registry-qualified qwen",

@@ -139,6 +139,105 @@ describe("PaletteSessionDraft", () => {
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
   });
 
+  it("selects a hosted workspace in palette settings without cloning or dispatching a project", async () => {
+    const hosted = {
+      id: "agentsapi",
+      source: "model",
+      workspaceEnvironment: { kind: "provider-hosted", label: "OpenAI (Agents API)" },
+    };
+    const model = {
+      id: "gpt-5.6-luna",
+      name: "Luna",
+      provider: "openai",
+      available: true,
+      agentRuntime: { id: "openclaw", source: "model" },
+      runtimeChoices: [{ agentRuntime: hosted, available: true }],
+    };
+    const { host, context, request } = await mount({
+      modelCatalog: async () => ({ models: [model] }),
+      methods: ["agents.list", "environments.list", "sessions.create", "projects.list"],
+      request: async (method) =>
+        method === "projects.list"
+          ? {
+              projects: [
+                {
+                  id: "registered",
+                  displayName: "Local project",
+                  repoRoot: "/local/project",
+                  source: "registered",
+                },
+              ],
+            }
+          : {},
+    });
+    const select = async (machine: string, project = "") => {
+      await vi.waitFor(() =>
+        expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+      );
+      expectDefined(
+        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
+        "workspace picker",
+      ).click();
+      await host.updateComplete;
+      await vi.waitFor(() =>
+        expect(
+          host.querySelector('[data-machine="' + machine + '"][data-project="' + project + '"]'),
+        ).not.toBeNull(),
+      );
+      const row = host.querySelector<HTMLButtonElement>(
+        '[data-machine="' + machine + '"][data-project="' + project + '"]',
+      );
+      expectDefined(row, "environment choice").click();
+      await host.updateComplete;
+    };
+
+    await select("local", "registered");
+    await select("runtime:agentsapi");
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "Hosted workspace",
+    );
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "OpenAI (Agents API)",
+    );
+    expect(host.querySelector(".palette-session-settings__worktree")).toBeNull();
+    await select("local", "registered");
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "Local project",
+    );
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).not.toContain(
+      "Agents API",
+    );
+    await select("runtime:agentsapi");
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:hosted-palette",
+      initialRun: { status: "idle" },
+    });
+    host.draft.setMessage("Analyze my attachment");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    await host.draft.submit();
+    const payload = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      model: "openai/gpt-5.6-luna",
+      agentRuntime: "agentsapi",
+      message: "Analyze my attachment",
+    });
+    for (const key of [
+      "projectId",
+      "projectGitUrl",
+      "repository",
+      "cwd",
+      "worktree",
+      "catalogId",
+    ]) {
+      expect(payload).not.toHaveProperty(key);
+    }
+    expect(
+      request.mock.calls.some(
+        ([method]) => method === "sessions.dispatch" || method === "projects.add",
+      ),
+    ).toBe(false);
+  });
+
   it.each(["unchanged", "connection", "account"] as const)(
     "settles one locked creation when its owner is %s",
     async (change) => {

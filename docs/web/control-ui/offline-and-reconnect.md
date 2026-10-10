@@ -61,6 +61,10 @@ and account. Switching accounts cannot send or overwrite the previous account's
 input. Retiring offline access does not discard unsent drafts or queued work;
 that work remains under its original storage owner. Live state replaces cached
 roster data on connect, and chat resumes from its saved transcript cursor. The
+cached transcript opens at its latest messages without an initial scroll animation.
+It retains participant and completed-work timing information and the last task
+progress card for display while connecting; live Gateway results replace those
+cached facts in place. Cached progress does not authorize offline actions. The
 first chat request waits up to 300 ms for stored history before falling back to
 a live read. Agent switches and stale asynchronous reads retain their own
 identity checks. Agent pickers and the agent directory wait for a live roster;
