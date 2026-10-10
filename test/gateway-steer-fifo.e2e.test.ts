@@ -8,6 +8,7 @@ import type { ChatPendingInputsPage } from "../packages/gateway-protocol/src/ind
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayClient, type GatewayClientOptions } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { RUNTIME_CONTEXT_HEADER } from "../src/llm/types.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
@@ -862,7 +863,7 @@ function currentUserInput(request: ModelRequest | undefined): string {
   // Conversation metadata can follow the user message as a separate protected block.
   return (
     userInputs(request).findLast(
-      (text) => !text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"),
+      (text) => !text.startsWith(RUNTIME_CONTEXT_HEADER),
     ) ?? ""
   );
 }
