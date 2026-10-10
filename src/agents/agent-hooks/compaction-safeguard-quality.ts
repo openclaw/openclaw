@@ -226,13 +226,9 @@ export function createSummaryQualityRetentionPlan(
           (hasAskOverlap(pendingAsk, params.latestAsk) && !pendingAsk.includes(requiredAskContext)))
       ? `${LATEST_USER_REQUEST_CONTEXT_LABEL}\n${JSON.stringify(requiredAskContext)}`
       : "";
-  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map((_, index) =>
-    index === PENDING_ASK_SECTION_INDEX
-      ? protectedAskContext
-      : index === EXACT_IDENTIFIERS_SECTION_INDEX
-        ? auditedIdentifiers.join("\n")
-        : "",
-  );
+  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map(() => "");
+  protectedTails[PENDING_ASK_SECTION_INDEX] = protectedAskContext;
+  protectedTails[EXACT_IDENTIFIERS_SECTION_INDEX] = auditedIdentifiers.join("\n");
   const bodyHasIdentifiers = auditedIdentifiers.every((identifier) =>
     summaryIncludesIdentifier(summary, identifier),
   );
@@ -268,17 +264,19 @@ export function createSummaryQualityRetentionPlan(
       ? [tail, isEmptyPendingAsk(leading) ? "" : optional].filter(Boolean).join("\n")
       : [isEmptyPendingAsk(optional) ? "" : optional, tail].filter(Boolean).join("\n");
   };
+  const joinBlocks = (blocks: string[], includeMarker: boolean) =>
+    [
+      ...(requiredContextBlock ? [requiredContextBlock] : []),
+      ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
+      ...(includeMarker ? [marker] : []),
+      ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
+    ].join("\n\n");
   // Reserve every heading/content/tail separator up front so trimmed optional
   // text can never push the rendered artifact past `maxChars`.
   const minimumBlocks = REQUIRED_SUMMARY_SECTIONS.map(
     (heading, index) => `${heading}\n\n${protectedTails[index] ?? ""}`,
   );
-  const minimumSummary = [
-    ...(requiredContextBlock ? [requiredContextBlock] : []),
-    ...minimumBlocks.slice(0, QUALITY_PROTECTED_SECTION_START),
-    marker,
-    ...minimumBlocks.slice(QUALITY_PROTECTED_SECTION_START),
-  ].join("\n\n");
+  const minimumSummary = joinBlocks(minimumBlocks, true);
   // Audit-bearing sections (pending asks, exact identifiers) are funded first so
   // a runaway earlier section cannot starve them, but each is hard-capped: an
   // uncapped identifier list re-distills into the whole budget — even while the
@@ -343,12 +341,7 @@ export function createSummaryQualityRetentionPlan(
       );
       const blocks = renderSections(sectionContents);
       return {
-        text: [
-          ...(requiredContextBlock ? [requiredContextBlock] : []),
-          ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
-          ...(trimmed ? [marker] : []),
-          ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
-        ].join("\n\n"),
+        text: joinBlocks(blocks, trimmed),
         trimmed,
       };
     },

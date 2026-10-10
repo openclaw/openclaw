@@ -280,14 +280,13 @@ export function filterPreparedProviderCatalog(
   catalog: ModelCatalogSnapshot,
   includesProvider: (provider: string) => boolean,
 ): ModelCatalogSnapshot {
+  const includes = (entry: { provider: string }) => includesProvider(entry.provider);
   return {
     ...catalog,
-    entries: catalog.entries.filter((entry) => includesProvider(entry.provider)),
-    routeVariants: catalog.routeVariants.filter((entry) => includesProvider(entry.provider)),
-    staticEntries: catalog.staticEntries?.filter((entry) => includesProvider(entry.provider)),
-    providerOutcomes: catalog.providerOutcomes?.filter((outcome) =>
-      includesProvider(outcome.provider),
-    ),
+    entries: catalog.entries.filter(includes),
+    routeVariants: catalog.routeVariants.filter(includes),
+    staticEntries: catalog.staticEntries?.filter(includes),
+    providerOutcomes: catalog.providerOutcomes?.filter(includes),
     nativeProviderOutcomes: filterNativeModelCatalogScopes(
       catalog.nativeProviderOutcomes,
       includesProvider,

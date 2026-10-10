@@ -74,24 +74,16 @@ export function replacePluginModelCatalogEntriesInDatabase(params: {
   updatedAt: number;
 }): boolean {
   const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(params.database);
-  const existing = executeSqliteQuerySync(
-    params.database,
-    kysely
-      .selectFrom("cache_entries")
-      .select(["key", "value_json"])
-      .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE),
-  ).rows;
-  const existingByPluginId = new Map(existing.map((row) => [row.key, row.value_json]));
+  const readCacheEntries = (scope: string) =>
+    new Map(
+      executeSqliteQuerySync(
+        params.database,
+        kysely.selectFrom("cache_entries").select(["key", "value_json"]).where("scope", "=", scope),
+      ).rows.map((row) => [row.key, row.value_json]),
+    );
+  const existingByPluginId = readCacheEntries(PLUGIN_MODEL_CATALOG_CACHE_SCOPE);
   const existingMigrationPayloads = params.migrationPayloads
-    ? new Map(
-        executeSqliteQuerySync(
-          params.database,
-          kysely
-            .selectFrom("cache_entries")
-            .select(["key", "value_json"])
-            .where("scope", "=", PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE),
-        ).rows.map((row) => [row.key, row.value_json]),
-      )
+    ? readCacheEntries(PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE)
     : undefined;
   const upsertCacheEntry = (scope: string, pluginId: string, contents: string): void => {
     const values = {

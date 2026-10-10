@@ -168,19 +168,16 @@ async function selectPromptBoundedItems(
     const section = buildAgentSteeringPromptSection(prepared, selected.length);
     // Account for the exact separator so selection preserves the rendered character cap.
     const nextPromptLength = promptLength + "\n\n".length + section.length;
-    if (nextPromptLength <= MAX_MERGED_STEERING_CHARS) {
-      selected.push(prepared);
-      sections.push(section);
-      promptLength = nextPromptLength;
-      continue;
+    if (nextPromptLength > MAX_MERGED_STEERING_CHARS && selected.length > 0) {
+      break;
     }
-    if (selected.length === 0) {
-      // Deliver an oversized first result whole so the soft batch cap cannot
-      // truncate it or permanently block the queue.
-      selected.push(prepared);
-      sections.push(section);
+    selected.push(prepared);
+    sections.push(section);
+    promptLength = nextPromptLength;
+    // Deliver an oversized first result whole so the soft cap cannot strand it.
+    if (promptLength > MAX_MERGED_STEERING_CHARS) {
+      break;
     }
-    break;
   }
   if (selected.length === 0) {
     return undefined;

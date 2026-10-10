@@ -212,10 +212,10 @@ export function createExecRequestPreparation(params: {
     } catch {
       return execParams;
     }
-    if (host === "sandbox" && !params.defaults?.sandbox) {
-      return execParams;
-    }
-    if (host === "sandbox" && params.defaults?.sandbox?.workdirValidation === "backend") {
+    if (
+      host === "sandbox" &&
+      (!params.defaults?.sandbox || params.defaults.sandbox.workdirValidation === "backend")
+    ) {
       return execParams;
     }
     const resolution = await resolveExecWorkdir({
@@ -471,14 +471,11 @@ export function resolvePreparedExecEnvironment(params: {
     const blockedKeys = hostEnvResult.rejectedOverrideBlockedKeys;
     const invalidKeys = hostEnvResult.rejectedOverrideInvalidKeys;
     const pathBlocked = blockedKeys.includes("PATH");
-    if (pathBlocked && blockedKeys.length === 1 && invalidKeys.length === 0) {
-      throw new Error(
-        "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
-      );
-    }
     if (blockedKeys.length === 1 && invalidKeys.length === 0) {
       throw new Error(
-        `Security Violation: Environment variable '${blockedKeys[0]}' is forbidden during host execution.`,
+        pathBlocked
+          ? "Security Violation: Custom 'PATH' variable is forbidden during host execution."
+          : `Security Violation: Environment variable '${blockedKeys[0]}' is forbidden during host execution.`,
       );
     }
     const details: string[] = [];
