@@ -105,28 +105,27 @@ export function buildMemorySearchUnavailableResult(
   const deadlineAction = overrides?.agentId
     ? `Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent ${overrides.agentId}, and rebuild with openclaw memory index --force --agent ${overrides.agentId} only if it reports the index dirty or incomplete`
     : "Retry memory_search after a short wait. If memory-corpus timeouts persist, inspect this agent's memory index before rebuilding it.";
-  const warning =
-    overrides?.warning ??
-    (overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
-      ? SESSION_CANONICAL_KEY_MIGRATION_WARNING
+  const [defaultWarning, defaultAction]: [string, string] =
+    overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
+      ? [SESSION_CANONICAL_KEY_MIGRATION_WARNING, SESSION_CANONICAL_KEY_MIGRATION_ACTION]
       : isQuotaError
-        ? "Memory search is unavailable because the embedding provider quota is exhausted."
+        ? [
+            "Memory search is unavailable because the embedding provider quota is exhausted.",
+            "Top up or switch embedding provider, then retry memory_search.",
+          ]
         : isMissingNodeSqlite
-          ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
+          ? [
+              "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support.",
+              "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search.",
+            ]
           : isSearchDeadline
-            ? "Memory search did not finish within its time limit."
-            : "Memory search is unavailable due to an embedding/provider error.");
-  const action =
-    overrides?.action ??
-    (overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
-      ? SESSION_CANONICAL_KEY_MIGRATION_ACTION
-      : isQuotaError
-        ? "Top up or switch embedding provider, then retry memory_search."
-        : isMissingNodeSqlite
-          ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
-          : isSearchDeadline
-            ? deadlineAction
-            : "Check embedding provider configuration and retry memory_search.");
+            ? ["Memory search did not finish within its time limit.", deadlineAction]
+            : [
+                "Memory search is unavailable due to an embedding/provider error.",
+                "Check embedding provider configuration and retry memory_search.",
+              ];
+  const warning = overrides?.warning ?? defaultWarning;
+  const action = overrides?.action ?? defaultAction;
   return {
     results: [],
     disabled: true,

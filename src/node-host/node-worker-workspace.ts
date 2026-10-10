@@ -100,7 +100,7 @@ export class NodeWorkerWorkspaceRuntime {
   // Per-generation capture hash memo; lets upload captures skip re-hashing unchanged trees.
   private readonly workspaceHashMemos = new Map<string, Map<string, string>>();
   private readonly deletingWorkspaceGenerations = new Set<string>();
-  private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
+  private readonly activeRetainProtections = new Map<string, Set<string>>();
   readonly processes = new NodeWorkerWorkspaceProcesses();
   readonly quiescence = new NodeWorkerWorkspaceQuiescence();
 
@@ -196,9 +196,7 @@ export class NodeWorkerWorkspaceRuntime {
       generationKey,
       (this.activeWorkspaceOperations.get(generationKey) ?? 0) + 1,
     );
-    for (const protection of this.activeRetainProtections.get(gatewayNamespace) ?? []) {
-      protection.add(generationKey);
-    }
+    this.activeRetainProtections.get(gatewayNamespace)?.add(generationKey);
     let released = false;
     return () => {
       if (released) {
@@ -278,9 +276,7 @@ export class NodeWorkerWorkspaceRuntime {
       }
       this.acceptedSnapshots.set(input.gatewayNamespace, next);
       const retainedDuringPass = this.currentLocalProtection(input.gatewayNamespace);
-      const protections = this.activeRetainProtections.get(input.gatewayNamespace) ?? new Set();
-      protections.add(retainedDuringPass);
-      this.activeRetainProtections.set(input.gatewayNamespace, protections);
+      this.activeRetainProtections.set(input.gatewayNamespace, retainedDuringPass);
       try {
         const result = await this.collectRetainedWorkspaceSnapshot({
           gatewayNamespace: input.gatewayNamespace,
@@ -292,10 +288,7 @@ export class NodeWorkerWorkspaceRuntime {
         signal?.throwIfAborted();
         return { applied: true, ...result };
       } finally {
-        protections.delete(retainedDuringPass);
-        if (protections.size === 0) {
-          this.activeRetainProtections.delete(input.gatewayNamespace);
-        }
+        this.activeRetainProtections.delete(input.gatewayNamespace);
       }
     });
   }

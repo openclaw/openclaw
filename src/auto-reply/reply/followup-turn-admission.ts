@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -13,7 +14,6 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
-import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
@@ -120,9 +120,7 @@ export async function admitFollowupTurn(params: {
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
   const resolveRunSessionFile = (source: FollowupRun["run"]) =>
-    resolveAdmittedRunSessionFile({
-      sessionKey: replySessionKey,
-    }) ?? source.sessionFile;
+    normalizeOptionalString(replySessionKey) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     agentId: run.agentId,
     resolveGatewayContext: params.defaults.resolveGatewayContext,
@@ -131,6 +129,29 @@ export async function admitFollowupTurn(params: {
     expectedSessionId: initialEntry?.sessionId,
     storePath: params.defaults.storePath,
     kind: "queued_followup",
+    // Settings writers can refresh this queued source while admission waits.
+    // Copy only selection at the admission owner’s writer fence, before any
+    // source-adoption await. Session identity and authority keep their original
+    // bindings; later preference edits cannot alter this detached turn selection.
+    captureRunSelection: () => {
+      const selected = params.queued.run;
+      run = {
+        ...run,
+        provider: selected.provider,
+        model: selected.model,
+        requestedRouteResolution: selected.requestedRouteResolution,
+        hasAutoFallbackProvenance: selected.hasAutoFallbackProvenance,
+        autoFallbackPrimaryProbe: selected.autoFallbackPrimaryProbe
+          ? { ...selected.autoFallbackPrimaryProbe }
+          : undefined,
+        hasSessionModelOverride: selected.hasSessionModelOverride,
+        modelOverrideSource: selected.modelOverrideSource,
+        authProfileId: selected.authProfileId,
+        authProfileIdSource: selected.authProfileIdSource,
+        thinkLevel: selected.thinkLevel,
+        thinkingCatalog: selected.thinkingCatalog,
+      };
+    },
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
@@ -144,6 +165,8 @@ export async function admitFollowupTurn(params: {
     return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
+  const selectionEntry = admission.sessionEntry ?? initialEntry;
+  const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
   try {
@@ -221,7 +244,10 @@ export async function admitFollowupTurn(params: {
     }
     run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
       run,
-      entry: activeEntry,
+      // Reconcile the probe against the same admitted preferences, not a newer
+      // selection published while source adoption awaited. Lifecycle checks and
+      // compaction still consume fresh session state independently above/below.
+      entry: admittedSelectionEntry,
       sessionKey: replySessionKey,
     });
     const queued: FollowupRun = { ...params.queued, run };

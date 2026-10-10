@@ -4,6 +4,7 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
+import { captureSessionWriterDeliveryRead } from "../../../auto-reply/reply/session-writer-delivery-authority.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -27,6 +28,7 @@ import type {
 } from "../../harness/types.js";
 import { observeReplyDelivery } from "../../reply-completion.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
+import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -168,7 +170,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     (transcriptCustodyIsManagerOwned ? preparedAttempt.sessionId : undefined) ??
     initial.sessionIdUsed;
   const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
-    attempt: input.finalization.preparedAttempt,
+    attempt: preparedAttempt,
     sessionId: committedSessionId,
     sessionTarget: committedSessionTarget,
   });
@@ -198,21 +200,29 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     for (;;) {
       finalizationAttempt += 1;
       assertFinalizationActive();
-      finalization = await runPreparedSettledTurnFinalization({
-        attempt: {
-          ...input.finalization.preparedAttempt,
-          // The first transcript append may have committed the writer after
-          // dispatch preparation. The summary must retain that original fence.
-          ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
-          sessionId: committedSessionId,
-          sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
-        },
-        settledAttempt: initial.attempt,
-        harness: input.finalization.harness,
-        prompt,
-        createAttemptControls: input.finalization.createAttemptControls,
-        abortSignal: input.finalization.abortSignal,
-      });
+      const runFinalizationAttempt = () =>
+        runPreparedSettledTurnFinalization({
+          attempt: {
+            ...input.finalization.preparedAttempt,
+            // The first transcript append may have committed the writer after
+            // dispatch preparation. The summary must retain that original fence.
+            ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
+            sessionId: committedSessionId,
+            sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
+          },
+          settledAttempt: initial.attempt,
+          harness: input.finalization.harness,
+          prompt,
+          createAttemptControls: input.finalization.createAttemptControls,
+          abortSignal: input.finalization.abortSignal,
+        });
+      finalization = input.finalization.preparedAttempt.sessionManager
+        ? await withSessionManagerWriteAssertion(
+            input.finalization.preparedAttempt.sessionManager,
+            assertFinalizationActive,
+            runFinalizationAttempt,
+          )
+        : await runFinalizationAttempt();
       assertFinalizationActive();
       attempt = finalization.attempt;
       // The harness retains authored silence as an empty result; only the host
@@ -394,7 +404,13 @@ function resolveSessionWriterDeliveryAuthority(input: {
   ) {
     return undefined;
   }
+  const readCurrentSession = captureSessionWriterDeliveryRead({
+    agentId: target?.agentId ?? input.attempt.agentId,
+    sessionKey,
+    storePath: target?.storePath,
+  });
   return {
+    ...(readCurrentSession ? { readCurrentSession } : {}),
     ...(target?.agentId || input.attempt.agentId
       ? { agentId: target?.agentId ?? input.attempt.agentId }
       : {}),

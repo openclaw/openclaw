@@ -28,6 +28,20 @@ the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
 
+## Claude CLI model routing
+
+Claude CLI sign-in now writes `agents.defaults.models["anthropic/*"]` with the
+`claude-cli` runtime. Configs from earlier sign-ins pinned only the Claude models
+that sign-in added, so other Claude models fell back to the API route and failed
+without an Anthropic credential. The Anthropic plugin's Doctor repair adds the
+wildcard when the default model is an Anthropic model whose entry pins
+`claude-cli`, no `anthropic/*` entry exists, no provider-level Anthropic runtime
+is set, and no Anthropic credential is configured (auth profile, provider API
+key, `ANTHROPIC_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`). An API default model with
+a Claude CLI fallback is left unchanged, and an existing `anthropic/*` entry is
+never replaced. Updates run the same repair through the backed-up Doctor config
+write; `openclaw doctor` without `--fix` reports it.
+
 ## Command-owner target kinds
 
 Doctor preserves `commands.ownerAllowFrom` target kinds declared by channel plugins.
@@ -654,6 +668,19 @@ While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
 
+## Blocked local plugins
+
+Doctor preserves the complete configuration entry and plugin policy for a local
+plugin rejected by discovery, including ownership and writable-path safety
+checks. A blocked plugin is not an uninstalled plugin. Its runtime remains
+blocked, and Doctor reports the path problem instead of removing its enablement
+or suggesting a registry reinstall for a local path. Fix the path and rerun
+`openclaw doctor --fix` as the account that runs the Gateway.
+
+This preservation also applies when an update invokes the candidate Doctor. It
+does not change the update execution account or repair files already made owned
+by another user.
+
 ## Retired TaskFlow Webhooks plugin
 
 The bundled TaskFlow Webhooks plugin has been removed. Existing
@@ -974,7 +1001,7 @@ against the current SQLite owners before the import can rename profiles.
     | `session.maintenance.rotateBytes`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
-    | `skills.workshop.autonomous.mode: "propose"`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `"off"`; proposal settings removed (Skill Workshop proposals were retired). `approvalPolicy: "pending"` also sets an `auto` or unset mode to `"off"`, so approval-first setups do not start writing skills unreviewed |
+    | `skills.workshop.autonomous.mode: "propose"`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `"off"`; proposal settings removed (Skill Workshop proposals were retired) |
 
     Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 

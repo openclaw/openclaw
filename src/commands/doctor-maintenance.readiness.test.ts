@@ -2,7 +2,9 @@ import "./doctor-maintenance.settlement.test-support.js";
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
 import { registerMaintenanceCommands } from "../cli/program/register.maintenance.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { ExitError } from "../runtime.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { doctorCommand } from "./doctor.js";
 
 const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
@@ -12,7 +14,8 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 vi.mock("./doctor.js", () => ({ doctorCommand: vi.fn() }));
 
-const { begin, boundary } = await import("./doctor-maintenance.settlement.test-support.js");
+const settlement = await import("./doctor-maintenance.settlement.test-support.js");
+const { begin, boundary } = settlement;
 
 it.each([
   { outcome: "starting", phase: "waiting for Gateway listener", elapsedMs: 60_000, code: 0 },
@@ -71,4 +74,23 @@ it.each([
     "Gateway restarted and verified after Doctor repair.",
   );
   expect(boundary.restart).toHaveBeenCalledOnce();
+});
+
+it("preserves an explicitly stopped service after accepted interactive maintenance", async () => {
+  boundary.stop.mockImplementation(async () => ({ ...settlement.stopped, stopped: false }));
+  boundary.read.mockResolvedValue({
+    ...(await boundary.read(resolveGatewayService())),
+    loadState: { status: "not-loaded" },
+  });
+  const maintenance = await beginDoctorMaintenance({
+    root: settlement.root,
+    options: {},
+    interactiveRepair: true,
+    runtime: { log: boundary.log, error: () => {}, exit: () => {} },
+  });
+  await expect(maintenance!.finish({}, async (cfg) => cfg)).resolves.toBeUndefined();
+  expect(boundary.restart).not.toHaveBeenCalled();
+  expect(boundary.health).not.toHaveBeenCalled();
+  expect(boundary.repair).not.toHaveBeenCalled();
+  expect(boundary.resume).toHaveBeenCalledOnce();
 });

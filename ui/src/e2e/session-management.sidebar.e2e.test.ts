@@ -17,6 +17,7 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
+  openSessionMenuSubmenu,
   requireRecord,
   sessionsListResponse,
   trimmedTextContents,
@@ -135,10 +136,9 @@ suite.define(() => {
       await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
-      await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
-      await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
-      await page.getByText("Stale activity", { exact: true }).waitFor({ state: "visible" });
-      await page.getByText("Failed checks", { exact: true }).waitFor({ state: "visible" });
+      for (const label of ["Research sources", "Verify tests", "Stale activity", "Failed checks"]) {
+        await page.getByText(label, { exact: true }).waitFor({ state: "visible" });
+      }
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some(
@@ -155,15 +155,11 @@ suite.define(() => {
 
       const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
       const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
-      expect(await staleRunningChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
-      expect(await failedChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
       await failedChild.getByRole("img", { name: "Failed" }).waitFor();
       await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
 
-      const childToggle = parent.locator(`[data-child-session-toggle="${parentKey}"]`);
-      expect(await childToggle.getAttribute("class")).toContain(
-        "sidebar-child-session-toggle--running",
-      );
+      const childToggle = parent.locator(".sidebar-child-session-toggle--running");
+      expect(await childToggle.count()).toBe(1);
       const expandedTree = await accessibility.send("Accessibility.getFullAXTree");
       const expandedToggle = expandedTree.nodes.find(
         (node) =>
@@ -174,6 +170,7 @@ suite.define(() => {
       expect(expandedToggle?.description?.value ?? "").toBe("");
       await accessibility.detach();
       for (const child of [staleRunningChild, failedChild]) {
+        expect(await child.getByRole("img", { name: "Active run" }).count()).toBe(0);
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
         expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
       }
@@ -210,13 +207,19 @@ suite.define(() => {
       await childMenu.waitFor({ state: "visible" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
       await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
-      await page.getByRole("menuitem", { name: "Icon & color" }).waitFor();
+      await page.getByRole("menuitem", { name: "Session settings", exact: true }).waitFor();
       await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
-      expect(await page.getByRole("menuitem", { name: "Move to group" }).count()).toBe(0);
+      expect(await page.getByRole("menuitem", { name: "Move to group" }).isEnabled()).toBe(true);
+      expect(await page.getByRole("menuitem", { name: "Move to top level" }).isEnabled()).toBe(
+        true,
+      );
       await captureUiProof(suite, page, "child-session-menu.png");
+      await openSessionMenuSubmenu(page, "Session settings");
+      await page.getByRole("menuitem", { name: "Icon & color", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       await childMenu.waitFor({ state: "detached" });
 

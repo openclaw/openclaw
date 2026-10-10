@@ -22,8 +22,8 @@ import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import "../../../components/tooltip.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import "../../../components/tooltip.ts";
 import type {
   ChatAttachment,
   ChatGuardianNotice,
@@ -40,6 +40,7 @@ import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
+import type { ChatTranscriptMetadata } from "../session-message-cache.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -121,6 +122,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    transcriptMetadata?: ChatTranscriptMetadata;
     boardProvider?: BoardProvider;
     announceTranscript?: boolean;
     loading: boolean;
@@ -132,6 +134,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
+    reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
     stream: string | null;
     streamStartedAt: number | null;
     /** Browser-local active run identity, retained across transient disconnects. */
@@ -301,11 +304,10 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   }
   if (paneId) {
     transcriptStates.delete(paneId);
-    resetChatThreadState(paneId);
   } else {
     transcriptStates.clear();
-    resetChatThreadState();
   }
+  resetChatThreadState(paneId);
 }
 
 export function renderTranscriptSearch(

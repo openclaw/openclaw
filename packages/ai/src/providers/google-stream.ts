@@ -1,4 +1,3 @@
-import type { FinishReason } from "@google/genai";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { calculateCost } from "../model-utils.js";
 import {
@@ -67,6 +66,7 @@ const stopReasons = new Map<string, StopReason>(
   Object.entries({
     STOP: "stop",
     MAX_TOKENS: "length",
+    CONTINUATION: "length",
     BLOCKLIST: "error",
     PROHIBITED_CONTENT: "error",
     SPII: "error",
@@ -83,7 +83,7 @@ const stopReasons = new Map<string, StopReason>(
     TOO_MANY_TOOL_CALLS: "error",
     UNEXPECTED_TOOL_CALL: "error",
     NO_IMAGE: "error",
-  } satisfies Record<FinishReason, StopReason>),
+  } satisfies Record<string, StopReason>),
 );
 
 function mapStopReason(reason: string): StopReason {
@@ -344,7 +344,7 @@ export async function consumeGoogleGenerateContentStream(params: {
           { code: candidate.finishReason, type: "google_generation_failed" },
         );
       }
-      // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+      // Token limits can leave a complete-looking partial call. Only a normal
       // Google stop may promote parsed calls into an executable tool-use turn.
       if (
         params.output.stopReason === "stop" &&

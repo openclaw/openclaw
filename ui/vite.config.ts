@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import solid from "@solidjs/vite-plugin";
 import { gzip } from "pako";
 import {
   runnerImport,
@@ -13,14 +14,9 @@ import {
   type ResolveModulePreloadDependenciesFn,
   type UserConfig,
 } from "vite";
+import type { ViteUserConfig } from "vitest/config";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
-import {
-  CONTROL_UI_ASSET_MANIFEST_FILENAME,
-  CONTROL_UI_ASSET_MANIFEST_VERSION,
-  hashControlUiAssetManifestEntries,
-  type ControlUiAssetManifestEntry,
-} from "../src/gateway/control-ui-asset-manifest.ts";
 import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   isControlUiVersionedPublicAsset,
@@ -48,6 +44,68 @@ const outDir = path.resolve(here, "../dist/control-ui");
 const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+
+export function controlUiSolidPlugin(): Plugin[] {
+  let testMode = false;
+  return [
+    ...solid({
+      include: /\.[jt]sx$/u,
+      // Skip automatic page-wide Chrome performance tracks; keep Solid's dev runtime.
+      performanceTracks: false,
+    }),
+    {
+      name: "openclaw:solid-test-runtime",
+      enforce: "post",
+      apply(config, env) {
+        return env.command === "serve" && env.mode === "test" && config.test !== undefined;
+      },
+      config(_config, env): ViteUserConfig | undefined {
+        testMode = env.mode === "test";
+        if (!testMode) {
+          return undefined;
+        }
+        return {
+          resolve: {
+            alias: [
+              {
+                find: /^solid-js$/u,
+                replacement: path.join(path.dirname(require.resolve("solid-js")), "solid.dev.js"),
+              },
+              {
+                find: /^@solidjs\/web$/u,
+                replacement: path.join(path.dirname(require.resolve("@solidjs/web")), "web.dev.js"),
+              },
+            ],
+          },
+          test: {
+            server: {
+              deps: {
+                // Native imports and optimized browser imports must share one owner graph.
+                inline: [
+                  "solid-js",
+                  "@solidjs/signals",
+                  "@solidjs/web",
+                  "@solidjs/testing-library",
+                ],
+              },
+            },
+          },
+        };
+      },
+      configEnvironment(name, config) {
+        if (testMode && (name === "ssr" || config.consumer === "server") && config.resolve) {
+          // Node-pragmas share this server; only Solid should use its browser runtime.
+          config.resolve.conditions = config.resolve.conditions?.filter(
+            (condition) => condition !== "browser",
+          );
+          config.resolve.externalConditions = config.resolve.externalConditions?.filter(
+            (condition) => condition !== "browser",
+          );
+        }
+      },
+    },
+  ];
+}
 type ControlUiViteAlias = {
   find: string | RegExp;
   replacement: string;
@@ -465,23 +523,18 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
 }
 
 function controlUiBuildOutputPlugin(buildId: string): Plugin {
-  let publicAssets: ControlUiAssetManifestEntry[] = [];
+  let publicAssets: string[] = [];
   let cacheId: string | undefined;
   return {
     name: "control-ui-build-output",
     apply: "build",
     configResolved(config) {
       const publicDir = config.build.copyPublicDir && config.publicDir;
-      publicAssets = publicDir
-        ? collectControlUiAssetManifestEntries(publicDir, publicDir).filter(
-            (entry) => entry.path !== "sw.js",
-          )
-        : [];
+      const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
+      publicAssets = publicContent?.paths ?? [];
       // Public bytes can change during same-commit source rebuilds; the runtime
       // build identity stays separate from this immutable URL namespace.
-      cacheId = publicDir
-        ? `${buildId}-${hashControlUiAssetManifestEntries(publicAssets)}`
-        : undefined;
+      cacheId = publicContent ? `${buildId}-${publicContent.hash}` : undefined;
     },
     transformIndexHtml: {
       order: "post",
@@ -532,11 +585,11 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
       for (const asset of publicAssets) {
-        const fontStylesheet = asset.path.startsWith("fonts/") && asset.path.endsWith(".css");
-        if (!fontStylesheet && asset.path !== "manifest.webmanifest") {
+        const fontStylesheet = asset.startsWith("fonts/") && asset.endsWith(".css");
+        if (!fontStylesheet && asset !== "manifest.webmanifest") {
           continue;
         }
-        const filePath = path.join(buildOutDir, asset.path);
+        const filePath = path.join(buildOutDir, asset);
         const assetSource = fs.readFileSync(filePath, "utf8");
         if (fontStylesheet) {
           // Relative CSS URLs do not inherit their parent stylesheet's query.
@@ -570,13 +623,9 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
             ...bootAssets.chat,
             ...bootAssets.new,
             ...bootAssets.login,
-            ...publicAssets
-              .filter(
-                (asset) =>
-                  /\.(?:css|woff2)$/u.test(asset.path) &&
-                  isControlUiVersionedPublicAsset(asset.path),
-              )
-              .map((asset) => asset.path),
+            ...publicAssets.filter(
+              (asset) => /\.(?:css|woff2)$/u.test(asset) && isControlUiVersionedPublicAsset(asset),
+            ),
           ]),
         ]
           .toSorted()
@@ -602,9 +651,7 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
           inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
         }),
         publicAssetVersion: cacheId,
-        publicAssets: publicAssets
-          .map((asset) => asset.path)
-          .filter(isControlUiVersionedPublicAsset),
+        publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
         id: createHash("sha256").update(JSON.stringify(offlineShell)).digest("hex").slice(0, 16),
       };
       const offlinePlaceholder = "const OFFLINE_BOOT = null;";
@@ -616,25 +663,13 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
         .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
       fs.mkdirSync(buildOutDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
-      const assets = collectControlUiAssetManifestEntries(buildOutDir);
-      const manifest = {
-        version: CONTROL_UI_ASSET_MANIFEST_VERSION,
-        generation: hashControlUiAssetManifestEntries(assets),
-        assets,
-      };
-      fs.writeFileSync(
-        path.join(buildOutDir, CONTROL_UI_ASSET_MANIFEST_FILENAME),
-        `${JSON.stringify(manifest)}\n`,
-      );
     },
   };
 }
 
-function collectControlUiAssetManifestEntries(
-  buildOutDir: string,
-  assetsRoot = path.join(buildOutDir, "assets"),
-): ControlUiAssetManifestEntry[] {
-  const entries: ControlUiAssetManifestEntry[] = [];
+function collectControlUiPublicAssets(publicDir: string): { paths: string[]; hash: string } {
+  const paths: string[] = [];
+  const hash = createHash("sha256");
   const visit = (directory: string) => {
     for (const entry of fs
       .readdirSync(directory, { withFileTypes: true })
@@ -645,22 +680,21 @@ function collectControlUiAssetManifestEntries(
         continue;
       }
       // Source maps are diagnostics, not runtime dependencies of an open document.
-      if (entry.name.endsWith(".map")) {
+      const assetPath = path.relative(publicDir, filePath).split(path.sep).join("/");
+      if (entry.name.endsWith(".map") || assetPath === "sw.js") {
         continue;
       }
       if (!entry.isFile() || entry.isSymbolicLink()) {
         throw new Error(`Unsafe Control UI build asset: ${filePath}`);
       }
       const source = fs.readFileSync(filePath);
-      entries.push({
-        path: path.relative(buildOutDir, filePath).split(path.sep).join("/"),
-        sha256: createHash("sha256").update(source).digest("hex"),
-        size: source.byteLength,
-      });
+      paths.push(assetPath);
+      const digest = createHash("sha256").update(source).digest("hex");
+      hash.update(`${assetPath}\0${source.byteLength}\0${digest}\n`);
     }
   };
-  visit(assetsRoot);
-  return entries;
+  visit(publicDir);
+  return { paths, hash: hash.digest("hex") };
 }
 
 export default function controlUiViteConfig(
@@ -751,6 +785,7 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiIsolatedDesktopRuntimePlugin(),
       {

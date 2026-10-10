@@ -306,7 +306,7 @@ async function resolveBackupPlanFromPaths(params: {
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const skipped: SkippedBackupAsset[] = [];
   const seenCanonicalPaths = new Set<string>();
-  for (const candidate of [...candidates].toSorted(compareCandidates)) {
+  for (const candidate of candidates.toSorted(compareCandidates)) {
     // Check both the original selection and the already resolved target before deduplication.
     const privateSelection = isUpdateCapturePath(candidate.sourcePath, stateDir);
     const privateTarget =

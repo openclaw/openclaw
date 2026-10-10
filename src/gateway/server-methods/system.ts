@@ -23,6 +23,7 @@ import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
@@ -245,7 +246,8 @@ export const systemHandlers: GatewayRequestHandlers = {
     }
     respond(true, await collectSystemInfo(context), undefined);
   },
-  "system-event": ({ params, respond, context }) => {
+  "system-event": async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
       return;
     }
@@ -294,9 +296,30 @@ export const systemHandlers: GatewayRequestHandlers = {
       }
       // A targeted wake starts a model run. Require a live persisted session
       // so malformed keys cannot create phantom work under agent defaults.
-      const { entry: targetSession } = loadGatewaySessionEntryReadOnly(requestedSessionKey, {
+      const binding = captureIncognitoSessionSource({
         agentId: requestedAgentId,
+        sessionKey: requestedSessionKey,
       });
+      const authority = readGatewayRequestMutationAuthority(options);
+      const read =
+        binding && !("kind" in binding)
+          ? await binding.actor.sessions.read(
+              authority,
+              { sessionKey: requestedSessionKey },
+              binding.admissionSignal,
+            )
+          : undefined;
+      authority.assertCurrent();
+      binding?.admissionSignal?.throwIfAborted();
+      if (binding && "kind" in binding) {
+        binding.assertCurrent();
+      }
+      read?.snapshot.assertCurrent();
+      const targetSession = binding
+        ? read?.entry
+        : loadGatewaySessionEntryReadOnly(requestedSessionKey, {
+            agentId: requestedAgentId,
+          }).entry;
       if (!targetSession || targetSession.archivedAt !== undefined) {
         respond(
           false,

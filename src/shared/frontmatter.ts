@@ -108,21 +108,12 @@ export function parseOpenClawManifestInstallBase(
     return undefined;
   }
 
-  const spec: ParsedOpenClawManifestInstallBase = {
-    raw,
-    kind,
+  const common = {
+    ...(typeof raw.id === "string" ? { id: raw.id } : {}),
+    ...(typeof raw.label === "string" ? { label: raw.label } : {}),
   };
-  if (typeof raw.id === "string") {
-    spec.id = raw.id;
-  }
-  if (typeof raw.label === "string") {
-    spec.label = raw.label;
-  }
   const bins = normalizeCsvOrLooseStringList(raw.bins);
-  if (bins.length > 0) {
-    spec.bins = bins;
-  }
-  return spec;
+  return { raw, kind, ...common, ...(bins.length > 0 ? { bins } : {}) };
 }
 
 /** Copies optional common install fields onto a caller-specific install spec object. */

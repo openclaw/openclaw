@@ -29,7 +29,6 @@ import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
   cleanupReplyAgentRun,
   handleReplyAgentRunError,
-  resolveAdmittedRunSessionFile,
   type RunReplyAgentParams,
   scheduleFollowupDrainAfterReplyOperationClear,
 } from "./agent-runner-core.js";
@@ -223,8 +222,7 @@ export async function runReplyAgent(
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
     ) {
       if (!restartRecoveryTarget) {
-        releaseAdmissionTicket();
-        typing.cleanup();
+        releaseUnusedAdmission();
         throw new Error("Restart recovery retirement has no admitted session target");
       }
       const retired = await retireTerminalRestartRecoverySourceClaim({
@@ -586,10 +584,7 @@ export async function runReplyAgent(
         if (admission.sessionEntry && activeSessionStore && replySessionKey) {
           activeSessionStore[replySessionKey] = admission.sessionEntry;
         }
-        const admittedSessionFile = resolveAdmittedRunSessionFile({
-          sessionFile: undefined,
-          sessionKey: replySessionKey,
-        });
+        const admittedSessionFile = normalizeOptionalString(replySessionKey);
         if (admittedSessionFile) {
           followupRun.run.sessionFile = admittedSessionFile;
         }

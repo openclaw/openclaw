@@ -76,14 +76,14 @@ describe("realtime relay finalization", () => {
     {
       providerAsync: true,
       fails: false,
-      changeState: false,
+      changeState: true,
       createRecord: true,
       permitFails: true,
     },
     {
       providerAsync: true,
       fails: false,
-      changeState: false,
+      changeState: true,
       createRecord: false,
       cold: true,
       sourceFails: true,
@@ -177,7 +177,7 @@ describe("realtime relay finalization", () => {
       const target = { relaySessionId: session.relaySessionId, connId: "conn-finalize" };
       active = target;
       if (createRecord) {
-        ensureTalkRealtimeRelayVoiceSession({ ...target, sessionKey: "agent:main:main" });
+        await ensureTalkRealtimeRelayVoiceSession({ ...target, sessionKey: "agent:main:main" });
       }
       if (cold) {
         expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(false);
@@ -226,9 +226,12 @@ describe("realtime relay finalization", () => {
           env.restore();
         }
       }
-      if (!sourceFails) {
+      if (!sourceFails && !silent) {
+        if (!permitFails) {
+          await owned.voiceSessionCreation;
+        }
         expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
-          silent ? undefined : "open",
+          "open",
         );
       }
       const emitted = () => broadcastToConnIds.mock.calls.map(([, payload]) => payload);

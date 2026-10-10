@@ -41,6 +41,7 @@ import {
   pinSqliteSessionReceiptDeletionDatabase,
   prepareSqliteSessionReceiptDeletions,
   type IncognitoDeletionSource,
+  type SessionReceiptDeletionGeneration,
 } from "./session-accessor.sqlite-deletion-receipts.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
@@ -62,6 +63,7 @@ type SessionMutationRun<T> = (
   captureSettlement: (
     entries: readonly DeletionEntry[],
   ) => ReturnType<typeof captureSqliteSessionDeletionSettlement>,
+  settleReceipts: (assertCurrent?: () => void) => Promise<void>,
 ) => Promise<T>;
 type PreparedDeletion = {
   target: AgentHarnessSessionDeletionTarget;
@@ -221,7 +223,7 @@ export async function withSqliteSessionDeletions<T>(
   run: SessionMutationRun<T>,
   options: {
     additionalIdentities?: readonly string[];
-    callerSettlesReceipts?: boolean;
+    receiptsOnCommit?: { generations: readonly SessionReceiptDeletionGeneration[] };
     incognito?: IncognitoDeletionSource;
   } = {},
 ): Promise<T> {
@@ -234,10 +236,12 @@ export async function withSqliteSessionContextReset<T>(
   entry: DeletionEntry,
   run: SessionMutationRun<T>,
   assertSourceCurrent?: () => void,
+  incognito?: IncognitoDeletionSource,
 ): Promise<T> {
   return withSqliteSessionMutations(scope, [entry], run, {
     contextReset: true,
     assertSourceCurrent,
+    incognito,
   });
 }
 
@@ -247,7 +251,7 @@ async function withSqliteSessionMutations<T>(
   run: SessionMutationRun<T>,
   options: {
     additionalIdentities?: readonly string[];
-    callerSettlesReceipts?: boolean;
+    receiptsOnCommit?: { generations: readonly SessionReceiptDeletionGeneration[] };
     contextReset?: boolean;
     assertSourceCurrent?: () => void;
     incognito?: IncognitoDeletionSource;
@@ -314,7 +318,7 @@ async function withSqliteSessionMutations<T>(
     : undefined;
   const databaseOptions = toDatabaseOptions(scope);
   const receiptSource =
-    !options.contextReset && !options.callerSettlesReceipts && targets.length > 0
+    !options.contextReset && !options.receiptsOnCommit && targets.length > 0
       ? pinSqliteSessionReceiptDeletionDatabase(databaseOptions, actor)
       : undefined;
   const execution =
@@ -325,13 +329,6 @@ async function withSqliteSessionMutations<T>(
     const repositoryWorkspaces = repositories
       ? await findSessionRepositoryWorkspaces(targets, { path: repositories.path, env: scope.env })
       : [];
-    const receiptOnlyTargets =
-      !options.contextReset && !options.callerSettlesReceipts
-        ? targets.filter(
-            (target) =>
-              !repositoryWorkspaces.some((workspace) => workspace.sessionKey === target.sessionKey),
-          )
-        : [];
     const invoke = async (
       prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
     ) => {
@@ -450,14 +447,13 @@ async function withSqliteSessionMutations<T>(
           }),
         );
       }
-      const settleReceiptOnlyDeletions =
-        receiptSource && receiptOnlyTargets.length > 0
-          ? await prepareSqliteSessionReceiptDeletions(receiptSource, receiptOnlyTargets, {
-              env: scope.env,
-              assertCurrent,
-              assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
-            })
-          : undefined;
+      const receipts = await prepareSqliteSessionReceiptDeletions(receiptSource, targets, {
+        receiptsOnCommit: options.receiptsOnCommit,
+        repositorySessionKeys: repositoryWorkspaces.map((workspace) => workspace.sessionKey),
+        env: scope.env,
+        assertCurrent,
+        assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
+      });
       return await deletions.run(
         new Map(
           targets.map((target) => [
@@ -479,10 +475,14 @@ async function withSqliteSessionMutations<T>(
             assertCurrent();
           };
           try {
-            return await run(assertCurrent, (checkedEntries) => {
-              assertActive();
-              return captureSqliteSessionDeletionSettlement(checkedEntries, assertActive);
-            });
+            return await run(
+              assertCurrent,
+              (checkedEntries) => {
+                assertActive();
+                return captureSqliteSessionDeletionSettlement(checkedEntries, assertActive);
+              },
+              receipts.settleReceipts,
+            );
           } finally {
             active = false;
             // Conversation deletion owns repository cleanup, including retained publication
@@ -543,7 +543,7 @@ async function withSqliteSessionMutations<T>(
                 assertCurrent: assertSessionAbsent,
               });
             }
-            await settleReceiptOnlyDeletions?.();
+            await receipts.settlePresence();
           }
         },
       );

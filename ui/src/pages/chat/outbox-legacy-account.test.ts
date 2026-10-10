@@ -18,7 +18,7 @@ import { resumeStoredChatOutboxes, retryQueuedChatMessage } from "./chat-send-ac
 import {
   admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
 } from "./composer-persistence.ts";
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
@@ -75,7 +75,7 @@ it("stamps explicit legacy recovery before reentrant account replacement and nev
   let recoveredIds: string[] = [];
   const unsubscribe = subscribeStoredChatOutboxChanges(() => {
     // Recovery publishes synchronously, before the pane's account-change lifecycle runs.
-    host.chatQueue = loadChatComposerSnapshot(host, host.sessionKey)?.queue ?? [];
+    host.chatQueue = loadChatComposerState(host, host.sessionKey).snapshot?.queue ?? [];
     recoveredIds = host.chatQueue.map((item) => item.id);
     switchAccount();
     chatOutboxOwner(host).syncHost(host);
@@ -108,7 +108,7 @@ it("stamps direct queue admission before subscribers can replace the mutable cli
   const { host, switchAccount } = fixture();
   const captured = captureChatOutboxAdmission(host, host.sessionKey);
   const unsubscribe = subscribeStoredChatOutboxChanges(() => {
-    host.chatQueue = loadChatComposerSnapshot(host, host.sessionKey)?.queue ?? [];
+    host.chatQueue = loadChatComposerState(host, host.sessionKey).snapshot?.queue ?? [];
     switchAccount();
     chatOutboxOwner(host).syncHost(host);
   });

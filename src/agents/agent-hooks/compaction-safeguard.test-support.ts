@@ -2,19 +2,18 @@ import type { AgentMessage, CompactionPreparation } from "openclaw/plugin-sdk/ag
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expect, vi } from "vitest";
-import type { summarizeInStages } from "../compaction.js";
+import type { summarizeCompactionHistory } from "../compaction.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { setCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "./compaction-safeguard.js";
 
 type CompactionSafeguardTestApi = {
-  setSummarizeInStagesForTest(next?: typeof summarizeInStages): void;
+  setSummarizeCompactionHistoryForTest(next?: typeof summarizeCompactionHistory): void;
   collectToolFailures: CallableFunction;
   formatToolFailuresSection: CallableFunction;
   splitPreservedRecentTurns: CallableFunction;
   buildPreservedTurnsSection: CallableFunction;
   buildCompactionStructureInstructions: CallableFunction;
-  prependPreviousSummaryForRedistill: CallableFunction;
   resolveRecentTurnsPreserve: CallableFunction;
   resolveQualityGuardMaxRetries: CallableFunction;
   extractOpaqueIdentifiers: CallableFunction;

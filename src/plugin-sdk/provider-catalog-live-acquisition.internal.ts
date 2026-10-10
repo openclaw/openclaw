@@ -104,7 +104,9 @@ function selectLiveModelCatalogRequestApiKey(
   );
 }
 
-function buildDefaultLiveModelCatalogHeaders(ctx: LiveModelCatalogHeaderContext): HeadersInit {
+export function buildDefaultLiveModelCatalogHeaders(
+  ctx: LiveModelCatalogHeaderContext,
+): Record<string, string> {
   const requestApiKey = selectLiveModelCatalogRequestApiKey(ctx);
   return {
     Accept: "application/json",

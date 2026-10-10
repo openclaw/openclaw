@@ -258,7 +258,7 @@ function buildToolCallView(
   const kind = resolveToolCallKind(key, args, editorCommand);
 
   if (kind === "command") {
-    const command = args ? readNonBlankString(args.command) : undefined;
+    const command = readNonBlankString(args?.command);
     // Display the inner command from a harness's sh -lc wrapper.
     const shellWrapper = command?.match(
       /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
@@ -303,11 +303,9 @@ function buildToolCallView(
     if (details?.changed === false) {
       return view;
     }
-    const content = args
-      ? editorCommand === "create"
-        ? readNonBlankString(args.file_text)
-        : readNonBlankString(args.content)
-      : undefined;
+    const content = readNonBlankString(
+      args?.[editorCommand === "create" ? "file_text" : "content"],
+    );
     if (!content) {
       return view;
     }
@@ -323,11 +321,10 @@ function buildToolCallView(
   }
 
   if (kind === "search") {
-    const pattern = args
-      ? (readNonBlankString(args.pattern) ??
-        readNonBlankString(args.query) ??
-        readNonBlankString(args.glob))
-      : undefined;
+    const pattern =
+      readNonBlankString(args?.pattern) ??
+      readNonBlankString(args?.query) ??
+      readNonBlankString(args?.glob);
     const path = resolvePathArg(args);
     if (!pattern && !path) {
       return { kind: "generic" };
@@ -336,7 +333,7 @@ function buildToolCallView(
   }
 
   if (kind === "fetch") {
-    const url = args ? readNonBlankString(args.url) : undefined;
+    const url = readNonBlankString(args?.url);
     if (!url) {
       return { kind: "generic" };
     }

@@ -32,13 +32,11 @@ import {
   hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   bindPreparedModelRuntimeAuth,
-  type PreparedModelRuntimeAuth,
-  type PreparedAccountCatalogAccess,
-  type PreparedModelRuntimeAuthScope,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogAccess,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
@@ -50,8 +48,6 @@ import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtim
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
-  PreparedModelCatalogRefreshOptions,
-  PreparedNativeModelSelection,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -112,15 +108,8 @@ export function retainPreparedModelCatalogPublication(
 
 /** Builds complete inventory before generation-specific runtime capability projection. */
 export async function prepareFullCatalogFacts(
-  agentFacts: Pick<
-    PreparedModelRuntimeAgentFacts,
-    | "input"
-    | "env"
-    | "templateAuthStorage"
-    | "credentials"
-    | "configuredModelRefs"
-    | "configuredRuntimeModels"
-  >,
+  agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
+    Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
@@ -393,11 +382,7 @@ export function prepareModelCatalogPublication(
   const acceptedRows = new Map<string, Set<string>>();
   for (const [owner, keys] of hookRows) {
     const provider = normalizeProvider(owner);
-    const accepted = acceptedRows.get(provider) ?? new Set<string>();
-    for (const key of keys) {
-      accepted.add(key);
-    }
-    acceptedRows.set(provider, accepted);
+    acceptedRows.set(provider, new Set([...(acceptedRows.get(provider) ?? []), ...keys]));
   }
   const outcomeProviders = new Set(
     catalog.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
@@ -630,23 +615,6 @@ export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): Mo
   return snapshot;
 }
 
-export type PreparedModelRuntimeCatalogAccess = Readonly<{
-  initialAuth: PreparedModelCatalogAuth;
-  accountCatalog?: PreparedAccountCatalogAccess;
-  isCurrent: () => boolean;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: () => void;
-  refreshExpiredModelCatalog: () => void;
-  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
-  loadFullModelCatalog: (
-    options?: PreparedModelCatalogRefreshOptions,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadNativeModelCatalog: (
-    selection: PreparedNativeModelSelection,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-}>;
 export function createPreparedModelRuntimeSnapshot(
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
   agentFacts: PreparedModelRuntimeAgentFacts,

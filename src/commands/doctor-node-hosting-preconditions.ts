@@ -19,34 +19,37 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 const CHECK_ID = "core/doctor/node-hosting-preconditions";
 
 function usesIdentityHeadersWithoutMachineCredentials(cfg: OpenClawConfig): boolean {
-  const hasToken = hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.token");
-  const hasPassword = hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.password");
-  if (hasToken || hasPassword) {
-    return false;
-  }
-  if (cfg.gateway?.auth?.mode === "trusted-proxy") {
-    return true;
-  }
   return (
-    cfg.gateway?.tailscale?.mode === "serve" &&
-    cfg.gateway?.auth?.mode !== "password" &&
-    cfg.gateway?.auth?.mode !== "none" &&
-    cfg.gateway?.auth?.allowTailscale !== false
+    !hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.token") &&
+    !hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.password") &&
+    (cfg.gateway?.auth?.mode === "trusted-proxy" ||
+      (cfg.gateway?.tailscale?.mode === "serve" &&
+        cfg.gateway?.auth?.mode !== "password" &&
+        cfg.gateway?.auth?.mode !== "none" &&
+        cfg.gateway?.auth?.allowTailscale !== false))
   );
 }
 
-async function lacksNodeOnboardingUrl(cfg: OpenClawConfig): Promise<boolean> {
-  const bind = cfg.gateway?.bind ?? "loopback";
-  if (bind !== "loopback" && bind !== "auto") {
-    return false;
-  }
-  // This config-only check reports missing ingress, not live Tailscale availability.
-  const result = await resolvePairingGatewayUrl(cfg, {
-    env: process.env,
-    publicUrl: resolveConfiguredPairingPublicUrl(cfg),
-    networkInterfaces: os.networkInterfaces,
-  });
-  return result.error === PAIRING_GATEWAY_LOOPBACK_ERROR;
+function hasConfiguredNodeHosting(cfg: OpenClawConfig): boolean {
+  const nodes = cfg.gateway?.nodes;
+  const execConfigs = [
+    cfg.tools?.exec,
+    ...Object.values(cfg.agents?.entries ?? {}).map((agent) => agent.tools?.exec),
+  ];
+  // Bundled plugin availability and default/deny-only node policies are not hosting intent.
+  return Boolean(
+    cfg.plugins?.entries?.["device-pair"]?.enabled === true ||
+    resolveConfiguredPairingPublicUrl(cfg) ||
+    (nodes?.browser?.mode !== "off" && nodes?.browser?.node?.trim()) ||
+    nodes?.pairing?.autoApproveCidrs?.length ||
+    nodes?.pairing?.sshVerify ||
+    nodes?.commands?.allow?.length ||
+    execConfigs.some(
+      (exec) =>
+        exec?.host === "node" ||
+        ((exec?.host ?? cfg.tools?.exec?.host ?? "auto") === "auto" && exec?.node?.trim()),
+    ),
+  );
 }
 
 function lacksNodeOnboardingPlugin(cfg: OpenClawConfig): boolean {
@@ -82,6 +85,9 @@ function lacksDeviceCapableRuntimeRoute(cfg: OpenClawConfig): boolean {
 export async function collectNodeHostingPreconditionFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
+  if (cfg.gateway?.mode === "remote" || !hasConfiguredNodeHosting(cfg)) {
+    return [];
+  }
   const findings: HealthFinding[] = [];
   const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
     findings.push({ checkId: CHECK_ID, severity: "warning", ...finding });
@@ -115,7 +121,18 @@ export async function collectNodeHostingPreconditionFindings(
         "Switch gateway.auth.mode to token and configure gateway.auth.token as a SecretRef so machine clients can authenticate as devices. Keep trusted-proxy only if machine clients use a clean loopback/direct gateway.auth.password path. For Access-fronted gateways, configure the node gateway.cloudflareAccess.clientId / clientSecret SecretInputs or set CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET before openclaw connect.",
     });
   }
-  if (await lacksNodeOnboardingUrl(cfg)) {
+  const bind = cfg.gateway?.bind ?? "loopback";
+  // This config-only check reports missing ingress, not live Tailscale availability.
+  if (
+    (bind === "loopback" || bind === "auto") &&
+    (
+      await resolvePairingGatewayUrl(cfg, {
+        env: process.env,
+        publicUrl: resolveConfiguredPairingPublicUrl(cfg),
+        networkInterfaces: os.networkInterfaces,
+      })
+    ).error === PAIRING_GATEWAY_LOOPBACK_ERROR
+  ) {
     warn({
       message: PAIRING_GATEWAY_LOOPBACK_ERROR,
       path: "gateway.bind",

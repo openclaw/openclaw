@@ -39,6 +39,7 @@ import {
 } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -115,6 +116,9 @@ class CronPage extends OpenClawLightDomElement {
         this.clearHeartbeatScratch();
         this.deliveryDirectory.clear();
       }
+      if (!change.initial && change.becameAvailable && !change.becameConnected) {
+        this.ensureInitialData(true);
+      }
     },
     ensureInitialData: () => this.ensureInitialData(),
     onPageActivation: () => {
@@ -181,12 +185,7 @@ class CronPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway) =>
         gateway.subscribeEvents((event) => {
-          if (
-            this.gateway.gateway === gateway &&
-            this.context.gateway === gateway &&
-            this.gateway.connected &&
-            this.gateway.client
-          ) {
+          if (this.gateway.gateway === gateway && this.context.gateway === gateway) {
             if (event.event === "cron") {
               void this.refreshCron({ coalesce: true });
             } else if (modelCatalogEventInvalidation(event)) {
@@ -225,7 +224,12 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private canRefreshCron(cron: CronState = this.cron) {
-    return this.isConnected && this.cron === cron && document.visibilityState !== "hidden";
+    return (
+      this.isConnected &&
+      this.cron === cron &&
+      isGatewayAvailable(this.context.gateway.snapshot) &&
+      document.visibilityState !== "hidden"
+    );
   }
 
   private ensureInitialData(forceRefresh = false) {
@@ -240,7 +244,7 @@ class CronPage extends OpenClawLightDomElement {
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns();
     }
-    if (this.modelSuggestionsRequest?.state !== this.cron) {
+    if (forceRefresh || this.modelSuggestionsRequest?.state !== this.cron) {
       void this.loadModelSuggestions(this.cron);
     }
   }
@@ -357,7 +361,7 @@ class CronPage extends OpenClawLightDomElement {
       this.cronModelSuggestions = [];
       this.modelSuggestionsError = null;
     }
-    if (!client || !cronState.connected || !agentId) {
+    if (!client || !agentId || !isGatewayAvailable(this.context.gateway.snapshot)) {
       return;
     }
     const request = { state: cronState, agentId };

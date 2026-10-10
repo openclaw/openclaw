@@ -19,6 +19,7 @@ import {
 import {
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
+  emitPersistentReasoning,
   emitReasoningEnd,
   hasMessageToolOnlySourceDelivery,
   isAssistantTextPhasePending,
@@ -107,7 +108,7 @@ export function handleMessageUpdate(
     const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
       recordRawStream("assistant_text_stream", "commentary_update", "", commentaryText);
-      emitAssistantCommentaryStreamData(ctx, msg, false, commentaryText);
+      emitAssistantCommentaryStreamData(ctx, msg);
     }
     return undefined;
   }
@@ -145,6 +146,10 @@ export function handleMessageUpdate(
         openReasoningStream(ctx);
       }
       emitReasoningEnd(ctx);
+      if (ctx.state.includeReasoning && ctx.state.blockReplyBreak === "text_end") {
+        // Waiting for message_end lets text_end answer blocks overtake completed reasoning.
+        emitPersistentReasoning(ctx, extractAssistantThinking(msg) || thinkingContent);
+      }
     }
     return undefined;
   }

@@ -117,6 +117,49 @@ it("keeps replay tails metadata-only unless message payloads are selected", asyn
   });
 });
 
+it("settles callback-owned tail reads while independent history waits on the writer", async () => {
+  await withOpenClawTestState({ label: "writer-owned-transcript-tail" }, async (state) => {
+    const scope = transcriptScope(state);
+    await replaceTranscriptEvents(scope, events);
+    openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+    const independentRead = createDeferred();
+    const blockedHistory = createDeferred<never>();
+    void blockedHistory.promise.catch(() => {});
+    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
+      independentRead.resolve();
+      return blockedHistory.promise;
+    });
+    let accepted = false;
+    const reading = readSessionTranscriptAnchorsAsync(
+      scope,
+      { entryIds: ["question"], afterSeq: 1, includeMessagesForRunId: "answer-run" },
+      undefined,
+      (facts) => {
+        expect(facts.anchors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ entryId: "question" })]),
+        );
+        expect(facts.tail?.entries).toContainEqual(
+          expect.objectContaining({ entryId: "answer", runId: "answer-run" }),
+        );
+        accepted = true;
+      },
+    );
+    try {
+      await Promise.race([
+        reading,
+        independentRead.promise.then(() => {
+          throw new Error("Tail acceptance waited on independent history custody");
+        }),
+      ]);
+      expect(accepted).toBe(true);
+    } finally {
+      blockedHistory.reject(new Error("Synthetic history custody released"));
+      await reading.catch(() => {});
+      spy.mockRestore();
+    }
+  });
+});
+
 it("rejects an async anchor consumer on the selected execution owner", async () => {
   await withOpenClawTestState({ label: "transcript-anchors-async-consumer" }, async (state) => {
     const scope = transcriptScope(state);

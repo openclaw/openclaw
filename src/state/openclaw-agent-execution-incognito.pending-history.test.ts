@@ -11,6 +11,7 @@ import {
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { createIncognitoSessionHistoryReader } from "../gateway/session-history-snapshot.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
@@ -153,18 +154,13 @@ it.each(["transaction", "commit"] as const)(
     const history = await reader(phase);
     const owner = pendingOwner(phase);
     let registered = false;
-    const create = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        create((request, grant) => {
-          if (request.stage === phase && !registered) {
-            registerSessionPendingInputOwner(owner);
-            registered = true;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const admission = workerProbe.admission(workerAdmission, (request, grant, callback) => {
+      if (request.stage === phase && !registered) {
+        registerSessionPendingInputOwner(owner);
+        registered = true;
+      }
+      callback(request, grant);
+    });
     try {
       if (phase === "transaction") {
         await expect(history.listPendingInputs()).resolves.toMatchObject({

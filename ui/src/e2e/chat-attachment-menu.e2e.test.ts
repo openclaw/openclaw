@@ -123,6 +123,14 @@ suite.define(() => {
       ["iPhone Safari", "chat"],
       ["iPad desktop Safari", "new"],
       ["Android Chrome", "chat"],
+      ["Android Firefox", "new"],
+      ["Android Edge", "new"],
+      ["Android Samsung", "chat"],
+      ["Android WebView", "new"],
+      ["Android unknown app", "chat"],
+      ["Android native", "chat"],
+      ["Android web chrome", "new"],
+      ["unknown", "new"],
       ["macOS Safari", "new"],
       ["iOS unknown engine", "chat"],
       ["iOS in-app", "new"],
@@ -144,6 +152,12 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installAttachmentBrowserIdentity(page, fixture);
+        await page.addInitScript(() => {
+          navigator.mediaDevices.getUserMedia = async () => {
+            document.documentElement.dataset.cameraRequested = "true";
+            throw new DOMException("Preview permission denied", "NotAllowedError");
+          };
+        });
         await installMockGateway(page, { historyMessages: [] });
         await page.goto(suite.server.baseUrl + fixture.route);
         const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
@@ -177,22 +191,55 @@ suite.define(() => {
           expect(await chooser.element().getAttribute("capture")).toBeNull();
           const accept = await chooser.element().getAttribute("accept");
           if (kind === "file") {
-            for (const type of [
-              "image/*",
-              "video/*",
-              "audio/*",
-              "application/pdf",
-              ".docx",
-              ".zip",
-            ]) {
-              expect(accept).toContain(type);
-            }
+            expect(accept).toBeNull();
           } else {
             expect(accept).toBe("image/*");
           }
           // Boundary-only cancellation: Playwright does not exercise OS dialogs.
           await chooser.setFiles([]);
           expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
+        }
+        if (fixture.nativeCapture) {
+          const draft = page
+            .locator(".agent-chat__composer-shell textarea, .new-session-page__composer textarea")
+            .first();
+          await draft.fill("Keep this draft while taking a photo");
+          const chooser = await choose(page, "camera");
+          expect(chooser.isMultiple()).toBe(false);
+          expect(await chooser.element().getAttribute("accept")).toBe("image/*");
+          expect(await chooser.element().getAttribute("capture")).toBe("environment");
+          expect(await page.getByRole("dialog", { name: "Take photo", exact: true }).count()).toBe(
+            0,
+          );
+          expect(await page.locator("html").getAttribute("data-camera-requested")).toBeNull();
+          await chooser.setFiles([]);
+          expect(await draft.inputValue()).toBe("Keep this draft while taking a photo");
+          const photo = {
+            name: "camera.png",
+            mimeType: "image/png",
+            buffer: Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+              "base64",
+            ),
+          };
+          await (await choose(page, "camera")).setFiles(photo);
+          const ready = page.locator('.chat-attachment-thumb[aria-busy="false"]');
+          await expect.poll(() => ready.count()).toBe(1);
+          expect(await page.locator(".agent-chat__camera-input").inputValue()).toBe("");
+          await page.getByRole("button", { name: "Remove camera.png", exact: true }).click();
+          await (await choose(page, "camera")).setFiles(photo);
+          await expect.poll(() => ready.count()).toBe(1);
+          expect(await draft.inputValue()).toBe("Keep this draft while taking a photo");
+        } else if (!fixture.single) {
+          await trigger.press("Enter");
+          await page.getByRole("menuitem", { name: "Take photo", exact: true }).press("Enter");
+          const dialog = page.getByRole("dialog", { name: "Take photo", exact: true });
+          await dialog.waitFor();
+          expect(await page.locator("html").getAttribute("data-camera-requested")).toBe("true");
+          await page
+            .locator("openclaw-chat-camera-capture")
+            .getByRole("button", { name: "Cancel", exact: true })
+            .click();
         }
         if (fixture.single) {
           await page.setViewportSize({ width: 390, height: 844 });

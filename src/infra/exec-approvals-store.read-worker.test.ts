@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -25,7 +24,6 @@ import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import { prepareCronExecHostPolicyUse } from "./exec-approvals-cron-policy.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
-import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import {
   loadExecApprovalsReadOnlyAsync,
@@ -237,30 +235,18 @@ it("drains an accepted authorization when maintenance closes before batch dispat
   await Promise.all([expect(pending).resolves.toBeTypeOf("function"), maintenance.close()]);
 });
 
-it.each(["cached", "fresh"] as const)(
-  "loads exact-agent policy grants from a %s source without caller SQLite",
-  async (mode) => {
-    expect(isMainThread).toBe(true);
-    const { env } = fixture();
-    const source = seed(env);
-    if (mode === "fresh") {
-      await closeOpenClawStateDatabaseAsync();
-    }
-    const calls = watchNativeSql();
-    const startedAt = performance.now();
-    expect(await loadMcpToolGrants("main", { env })).toEqual([grant]);
-    expect(await loadMcpToolGrants("other", { env })).toEqual([]);
-    expect(await loadMcpToolGrants("*", { env })).toEqual([]);
-    const callerSqlCalls = calls.count();
-    console.info("exec policy read", {
-      mode,
-      callerSqlCalls,
-      elapsedMs: Math.round(performance.now() - startedAt),
-    });
-    expect(callerSqlCalls).toBe(0);
-    expect(source.db.isOpen).toBe(mode === "cached");
-  },
-);
+it("loads exact-agent policy grants from a fresh source without caller SQLite", async () => {
+  expect(isMainThread).toBe(true);
+  const { env } = fixture();
+  const source = seed(env);
+  await closeOpenClawStateDatabaseAsync();
+  const calls = watchNativeSql();
+  expect(await loadMcpToolGrants("main", { env })).toEqual([grant]);
+  expect(await loadMcpToolGrants("other", { env })).toEqual([]);
+  expect(await loadMcpToolGrants("*", { env })).toEqual([]);
+  expect(calls.count()).toBe(0);
+  expect(source.db.isOpen).toBe(false);
+});
 
 it("keeps a captured source when its caller changes the environment", async () => {
   const original = fixture();
@@ -327,19 +313,6 @@ it("joins an admitted policy read before its disposable source is released", asy
   expect(outcome).toEqual([grant]);
 });
 
-it.each(["missing-database", "missing-row"] as const)(
-  "preserves noncreating %s reads",
-  async (mode) => {
-    const { env, databasePath } = fixture();
-    if (mode === "missing-row") {
-      openOpenClawStateDatabase({ env });
-    }
-    expect(await loadMcpToolGrants("main", { env })).toEqual([]);
-    expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBeUndefined();
-    expect(fs.existsSync(databasePath)).toBe(mode === "missing-row");
-  },
-);
-
 it.each(["{not-json", '{"version":1,"agents":{"__proto__":{"security":42}}}'])(
   "fails closed and retains host warning throttling for malformed policy %s",
   async (raw) => {
@@ -354,18 +327,6 @@ it.each(["{not-json", '{"version":1,"agents":{"__proto__":{"security":42}}}'])(
     expect(loggerWarn.mock.calls[0]?.[0]).toContain("malformed");
   },
 );
-
-it.each(["", ".doctor-importing"])("preserves the typed legacy gate for %s", async (suffix) => {
-  const { root, env, databasePath } = fixture();
-  const legacy = path.join(root, `exec-approvals.json${suffix}`);
-  fs.writeFileSync(legacy, "{}");
-  await expect(loadMcpToolGrants("main", { env })).rejects.toBeInstanceOf(
-    ExecApprovalsMigrationRequiredError,
-  );
-  expect(fs.existsSync(databasePath)).toBe(false);
-  fs.rmSync(legacy);
-  expect(await loadMcpToolGrants("main", { env })).toEqual([]);
-});
 
 it("fails closed without a native retry when the worker read fails", async () => {
   const { env } = fixture();

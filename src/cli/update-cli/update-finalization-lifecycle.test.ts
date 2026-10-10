@@ -57,6 +57,35 @@ it("writes successful finalization progress to stderr and failures as errors", a
   lifecycle.fail();
 });
 
+it.each(["pre-plugin doctor", "post-plugin doctor"])(
+  "preserves %s duration and section diagnostics in run history",
+  (name) => {
+    const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+    lifecycle.attachLedger();
+    const endedAtMs = Date.now();
+    lifecycle.recordDoctorStep({
+      name,
+      command: "openclaw doctor --repair",
+      cwd: "/fixture",
+      durationMs: 3_400,
+      exitCode: 0,
+      diagnostics: ["Doctor sections: config-flow 3.4 s"],
+    });
+    const run = listUpdateRuns()[0]!;
+    expect(run.steps).toEqual(
+      expect.arrayContaining(
+        [name, `diagnostic:${name}`].map((step) =>
+          expect.objectContaining({
+            step,
+            startedAtMs: endedAtMs - 3_400,
+            endedAtMs,
+          }),
+        ),
+      ),
+    );
+  },
+);
+
 it.each([false, true])(
   "records a Doctor refusal before reporting standalone finalization (nested=%s)",
   async (nested) => {

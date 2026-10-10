@@ -34,10 +34,12 @@ const llmHarness = vi.hoisted(() => {
   const calls: Array<{
     call: number;
     toolNames: string[];
+    hasToolResult: boolean;
     lastRole?: string;
     promptText?: string;
   }> = [];
   const advanceStoreWriterGeneration = vi.fn(async () => undefined);
+  const beforeFinalAnswer = vi.fn(async () => undefined);
   const textOf = (content: unknown): string | undefined => {
     if (typeof content === "string") {
       return content;
@@ -75,6 +77,7 @@ const llmHarness = vi.hoisted(() => {
     calls.push({
       call,
       toolNames: context.tools?.map((tool) => tool.name?.trim() ?? "").filter(Boolean) ?? [],
+      hasToolResult: context.messages?.some((message) => message.role === "toolResult") ?? false,
       lastRole: context.messages?.at(-1)?.role,
       promptText: textOf(context.messages?.at(-1)?.content),
     });
@@ -96,13 +99,14 @@ const llmHarness = vi.hoisted(() => {
       return buildAssistant(model, { content: [] });
     }
     if (call === 3) {
+      await beforeFinalAnswer();
       return buildAssistant(model, {
         content: [{ type: "text", text: finalAnswer }],
       });
     }
     throw new Error(`unexpected model call ${call}`);
   };
-  return { advanceStoreWriterGeneration, calls, nextMessage };
+  return { advanceStoreWriterGeneration, beforeFinalAnswer, calls, nextMessage };
 });
 
 vi.mock("@openclaw/ai/transports", async (importOriginal) => {
@@ -250,6 +254,7 @@ beforeAll(async () => {
   vi.useRealTimers();
   vi.resetModules();
   installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
+  // mock-isolation: Keep context engine plugin discovery outside this full-runner fixture.
   vi.doMock("../context-engine/registry.js", () => ({
     hasSameContextEngineInstance: vi.fn((left: unknown, right: unknown) => left === right),
     resolveContextEngine: vi.fn(async () => ({ dispose: async () => undefined })),
@@ -273,6 +278,7 @@ beforeAll(async () => {
       return { configured: ref, configuredId: "legacy", fallback: ref };
     }),
   }));
+  // mock-isolation: Keep provider plugin hooks inert while provider transport stays deterministic.
   vi.doMock("../plugins/provider-hook-runtime.js", () => ({
     attachModelProviderRuntimePluginHandle: (model: unknown) => model,
     ensureProviderRuntimePluginHandle: vi.fn((params: object) => params),
@@ -291,9 +297,11 @@ beforeAll(async () => {
     wrapProviderSimpleCompletionStreamFn: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
   }));
+  // mock-isolation: Prevent model config file writes from the isolated test workspace.
   vi.doMock("./models-config.js", () => ({
     ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
   }));
+  // mock-isolation: Supply a resolved in-memory model registry without loading live provider catalogs.
   vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) => {
       const resolved = createResolvedEmbeddedRunnerModel(provider, modelId);
@@ -324,15 +332,18 @@ beforeAll(async () => {
       return resolved;
     },
   }));
+  // mock-isolation: Avoid starting MCP runtimes; this fixture exercises the built-in read tool.
   vi.doMock("./agent-bundle-mcp-tools.js", () => ({
     acquireSessionMcpRuntime: vi.fn(async () => undefined),
     disposeSessionMcpRuntime: vi.fn(async () => undefined),
     retireSessionMcpRuntimeForSessionKey: vi.fn(async () => false),
     retireSessionMcpRuntime: vi.fn(async () => false),
   }));
+  // mock-isolation: Keep external auth profile discovery out of this provider-transport fixture.
   vi.doMock("../plugins/provider-external-auth.js", () => ({
     resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
   }));
+  // mock-isolation: Bypass dynamic model materialization while preserving the prepared model object.
   vi.doMock("./runtime-plan/materialize-model.js", () => ({
     materializePreparedRuntimeModel: vi.fn(
       async <Model>(params: { model?: Model }): Promise<Model | undefined> => params.model,
@@ -350,46 +361,87 @@ beforeAll(async () => {
 beforeEach(() => {
   llmHarness.calls.length = 0;
   llmHarness.advanceStoreWriterGeneration.mockReset();
+  llmHarness.beforeFinalAnswer.mockReset();
   finalizerProbe.calls.length = 0;
 });
 
-describe("settled-turn finalization under host-owned transcript custody", () => {
-  it("persists the real finalizer answer to the borrowed manager after the private writer generation advances", async () => {
-    const root = sessionDirs.make();
-    const agentDir = path.join(root, "agents", "test", "agent");
-    const workspaceDir = path.join(root, "workspace");
-    await Promise.all([fs.mkdir(agentDir, { recursive: true }), fs.mkdir(workspaceDir)]);
-    await fs.writeFile(path.join(workspaceDir, toolFile), "reviewed\n", "utf8");
+async function createBorrowedCustodyFixture(runId = "review-run") {
+  const root = sessionDirs.make();
+  const agentDir = path.join(root, "agents", "test", "agent");
+  const workspaceDir = path.join(root, "workspace");
+  await Promise.all([fs.mkdir(agentDir, { recursive: true }), fs.mkdir(workspaceDir)]);
+  await fs.writeFile(path.join(workspaceDir, toolFile), "reviewed\n", "utf8");
 
-    const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
-    config.agents ??= {};
-    config.agents.defaults ??= {};
-    config.agents.defaults.sessionStore = { agentId: "test" };
-    config.session = { store: path.join(agentDir, "openclaw-agent.sqlite") };
+  const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+  config.agents ??= {};
+  config.agents.defaults ??= {};
+  config.agents.defaults.sessionStore = { agentId: "test" };
+  config.session = { store: path.join(agentDir, "openclaw-agent.sqlite") };
 
-    const privateSessionId = "internal-session-effects-review-run-0123456789abcdef";
-    const privateSessionKey = "agent:test:internal-session-effects:review-run-0123456789abcdef";
-    const privateTarget = {
+  const privateSessionId = "internal-session-effects-review-run-0123456789abcdef";
+  const privateSessionKey = "agent:test:internal-session-effects:review-run-0123456789abcdef";
+  const privateTarget = {
+    agentId: "test",
+    sessionId: privateSessionId,
+    sessionKey: privateSessionKey,
+    storePath: config.session.store,
+  };
+  await replaceSessionEntry(privateTarget, {
+    sessionId: privateSessionId,
+    updatedAt: 1,
+    lifecycleRevision: "dispatch-generation",
+    activeWriterRunId: "dispatch-writer",
+  });
+
+  const borrowedManager = SessionManager.inMemory(workspaceDir);
+  expect(borrowedManager.getSessionId()).not.toBe(privateSessionId);
+
+  const admission = prepareSystemAgentRunAdmission(
+    config,
+    runId,
+    "test",
+    "finalizer-writer-rebound-test",
+  );
+
+  const run = () =>
+    runEmbeddedAgent({
+      preparedRunAdmission: admission,
       agentId: "test",
       sessionId: privateSessionId,
       sessionKey: privateSessionKey,
-      storePath: config.session.store,
-    };
-    await replaceSessionEntry(privateTarget, {
-      sessionId: privateSessionId,
-      updatedAt: 1,
-      lifecycleRevision: "dispatch-generation",
-      activeWriterRunId: "dispatch-writer",
+      sessionManager: borrowedManager,
+      sessionPersistence: "detached",
+      workspaceDir,
+      agentDir,
+      config,
+      prompt: "Review the completed session.",
+      provider: "openai",
+      model: "mock-1",
+      agentHarnessRuntimeOverride: "openclaw",
+      toolsAllow: ["read"],
+      runId,
+      timeoutMs: 10_000,
+      enqueue: async (task) => await task(),
     });
 
-    const borrowedManager = SessionManager.inMemory(workspaceDir);
-    const borrowedSessionId = borrowedManager.getSessionId();
-    expect(borrowedSessionId).not.toBe(privateSessionId);
+  return {
+    admission,
+    borrowedManager,
+    privateSessionId,
+    privateTarget,
+    run,
+  };
+}
+
+describe("settled-turn finalization under host-owned transcript custody", () => {
+  it("persists the real finalizer answer to the borrowed manager after the private writer generation advances", async () => {
+    const fixture = await createBorrowedCustodyFixture();
+    const { admission, borrowedManager, privateSessionId, privateTarget, run } = fixture;
 
     let advancedAfterDispatch = false;
     llmHarness.advanceStoreWriterGeneration.mockImplementation(async () => {
       expect(llmHarness.calls.map((call) => call.call)).toEqual([1, 2]);
-      expect(llmHarness.calls[1]).toEqual(expect.objectContaining({ lastRole: "toolResult" }));
+      expect(llmHarness.calls[1]).toEqual(expect.objectContaining({ hasToolResult: true }));
       await replaceSessionEntry(privateTarget, {
         // Rebind the private store key to the successor generation. A finalizer
         // that incorrectly mints direct-store custody for the dispatched run
@@ -402,32 +454,8 @@ describe("settled-turn finalization under host-owned transcript custody", () => 
       advancedAfterDispatch = true;
     });
 
-    const admission = prepareSystemAgentRunAdmission(
-      config,
-      "review-run",
-      "test",
-      "finalizer-writer-rebound-test",
-    );
     try {
-      const result = await runEmbeddedAgent({
-        preparedRunAdmission: admission,
-        agentId: "test",
-        sessionId: privateSessionId,
-        sessionKey: privateSessionKey,
-        sessionManager: borrowedManager,
-        sessionPersistence: "detached",
-        workspaceDir,
-        agentDir,
-        config,
-        prompt: "Review the completed session.",
-        provider: "openai",
-        model: "mock-1",
-        agentHarnessRuntimeOverride: "openclaw",
-        toolsAllow: ["read"],
-        runId: "review-run",
-        timeoutMs: 10_000,
-        enqueue: async (task) => await task(),
-      });
+      const result = await run();
 
       expect(advancedAfterDispatch).toBe(true);
       expect(loadSessionEntryReadOnly(privateTarget)).toMatchObject({
@@ -440,7 +468,7 @@ describe("settled-turn finalization under host-owned transcript custody", () => 
       ]);
       expect(llmHarness.calls).toEqual([
         expect.objectContaining({ call: 1, toolNames: expect.arrayContaining(["read"]) }),
-        expect.objectContaining({ call: 2, lastRole: "toolResult" }),
+        expect.objectContaining({ call: 2, hasToolResult: true }),
         expect.objectContaining({ call: 3, toolNames: [] }),
       ]);
 
@@ -464,13 +492,83 @@ describe("settled-turn finalization under host-owned transcript custody", () => 
           }),
         ]),
       );
-      expect(borrowedTranscript.at(-1)).toMatchObject({
+      const borrowedLastMessage = borrowedTranscript.at(-1);
+      expect(borrowedLastMessage).toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: finalAnswer }],
       });
-      expect(await readMessages(privateTarget)).toEqual([]);
+      const privateTranscriptMessages = await readMessages(privateTarget);
+      expect(privateTranscriptMessages).toEqual([]);
+      if (process.env.FINALIZER_REBOUND_PROOF_LOG === "1") {
+        console.info(
+          `[finalizer-rebound-proof] ${JSON.stringify({
+            finalizerCustody: finalizerProbe.calls,
+            privateTranscriptMessageCount: privateTranscriptMessages.length,
+            borrowedLastMessage,
+            recoveredPayloads: result?.payloads,
+          })}`,
+        );
+      }
     } finally {
       admission.close();
     }
+  });
+
+  it("rejects final effects when the real borrowed-manager run admission closes during finalization", async () => {
+    const fixture = await createBorrowedCustodyFixture("revoked-review-run");
+    const { admission, borrowedManager, privateSessionId, privateTarget, run } = fixture;
+
+    let advancedAfterDispatch = false;
+    llmHarness.advanceStoreWriterGeneration.mockImplementation(async () => {
+      expect(llmHarness.calls.map((call) => call.call)).toEqual([1, 2]);
+      await replaceSessionEntry(privateTarget, {
+        sessionId: "successor-session",
+        updatedAt: 2,
+        lifecycleRevision: "advanced-generation",
+        activeWriterRunId: "advanced-writer",
+      });
+      advancedAfterDispatch = true;
+    });
+    llmHarness.beforeFinalAnswer.mockImplementation(async () => {
+      expect(llmHarness.calls.map((call) => call.call)).toEqual([1, 2, 3]);
+      admission.close();
+    });
+
+    let result: Awaited<ReturnType<typeof runEmbeddedAgent>> | undefined;
+    let thrown: unknown;
+    try {
+      result = await run();
+    } catch (error) {
+      thrown = error;
+    } finally {
+      admission.close();
+    }
+
+    expect(advancedAfterDispatch).toBe(true);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown instanceof Error ? thrown.message : thrown)).toContain(
+      "admitted run authority is no longer active",
+    );
+    expect(result?.payloads ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: finalAnswer })]),
+    );
+    expect(finalizerProbe.calls).toEqual([
+      { sessionId: privateSessionId, sessionTarget: undefined },
+    ]);
+    expect(llmHarness.calls).toEqual([
+      expect.objectContaining({ call: 1, toolNames: expect.arrayContaining(["read"]) }),
+      expect.objectContaining({ call: 2, hasToolResult: true }),
+      expect.objectContaining({ call: 3, toolNames: [] }),
+    ]);
+    const borrowedTranscript = borrowedManager.buildSessionContext().messages;
+    expect(borrowedTranscript).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: finalAnswer }],
+        }),
+      ]),
+    );
+    expect(await readMessages(privateTarget)).toEqual([]);
   });
 });
