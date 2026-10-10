@@ -193,6 +193,45 @@ describe("voice creation authority", () => {
       { sessionId, updatedAt: Date.now() },
     );
   });
+  it("releases transport authority after a same-session replacement closes", async () => {
+    const fixture = configureDelegatedBrowserProvider(async () => browserSession);
+    const releaseSubscription = vi.fn();
+    const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true, undefined, {
+      isCurrent: () => true,
+      subscribe: () => releaseSubscription,
+    });
+    const create = async (voiceSessionId?: string) => {
+      const respond = vi.fn();
+      await invokeCreate({
+        req: { type: "req", id: "replace-voice", method: "talk.client.create" },
+        params: { sessionKey, provider: "openai", ...(voiceSessionId ? { voiceSessionId } : {}) },
+        isWebchatConnect: () => false,
+        respond,
+        context: fixture.context as never,
+        client: fixture.client as never,
+        hasCurrentClientAuthority: lifetime.isCurrent,
+      });
+      expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
+      ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
+      return ownedVoiceSessionId;
+    };
+    try {
+      const originalId = await create();
+      expect(originalId).toBeTruthy();
+      expect(await create(originalId)).toBe(originalId);
+      expect(releaseSubscription).not.toHaveBeenCalled();
+      await closeTalkClientGatewayControlSession({
+        voiceSessionId: originalId!,
+        sessionKey,
+        connId: fixture.client.connId,
+      });
+      lifetime.release();
+      expect(releaseSubscription).toHaveBeenCalledOnce();
+    } finally {
+      lifetime.release();
+    }
+  });
+
   it.each([
     { mixed: false, grant: false, revoked: undefined },
     { mixed: false, grant: false, revoked: "foreign" },

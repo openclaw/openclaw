@@ -282,7 +282,6 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         );
       };
       const closeLogicalSession = async () => {
-        runAuthority?.release();
         unregisterVoiceSession?.();
         await awaitVoiceCreation();
         if (closingFailure) {
@@ -399,6 +398,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
               errors.push(failure);
               throw failure;
             } finally {
+              runAuthority?.release();
               const writer = closingWriter;
               closingWriter = undefined;
               closingFailure = undefined;
