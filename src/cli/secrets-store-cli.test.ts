@@ -60,6 +60,15 @@ vi.mock("./local-state-owner.js", () => ({
     }),
 }));
 
+vi.mock("@clack/prompts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@clack/prompts")>();
+  return {
+    ...actual,
+    confirm: (options: unknown) => mocks.confirm(options),
+    isCancel: (value: unknown) => typeof value === "symbol",
+  };
+});
+
 function createProgram(): Command {
   const program = new Command();
   program.exitOverride();

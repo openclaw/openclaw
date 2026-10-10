@@ -34,6 +34,17 @@ vi.mock("./local-state-owner.js", () => ({
       assertCurrent() {},
     }),
 }));
+vi.mock("./secrets-store-input.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./secrets-store-input.js")>();
+  return {
+    ...actual,
+    readSecretStoreInput: async (params: Parameters<typeof actual.readSecretStoreInput>[0]) => {
+      const value = await actual.readSecretStoreInput(params);
+      await runPendingInterleave();
+      return value;
+    },
+  };
+});
 vi.mock("@clack/prompts", () => ({
   confirm: async () => {
     await runPendingInterleave();
