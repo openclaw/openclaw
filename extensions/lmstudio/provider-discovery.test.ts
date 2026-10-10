@@ -1,7 +1,7 @@
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { expect, it } from "vitest";
-import manifest from "./openclaw.plugin.json";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 it("provides local auth through its manifest entry before runtime activation", async () => {
   const metadata: { id: string; providerCatalogEntry?: string } = manifest;
