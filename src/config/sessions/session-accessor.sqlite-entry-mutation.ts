@@ -141,7 +141,7 @@ export function writeSessionEntryPatchInDatabase(
   let postimages: SessionEntryReplacementPostimages | undefined;
   if (params.reusePostimage && canReuseSnapshot && committedRevision !== undefined) {
     const canonical = stripRuntimeOnlySessionSkillsFields(
-      projectCanonicalSessionEntryShape(persisted),
+      projectCanonicalSessionEntryShape({ ...persisted }),
     );
     const metadata = parseSqliteSessionEntryRecord({ entry_json: JSON.stringify(canonical) });
     if (!metadata) {
