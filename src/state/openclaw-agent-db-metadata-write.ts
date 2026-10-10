@@ -1,11 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { VERSION } from "../version.js";
-import { publishAgentSchemaMetadata } from "./openclaw-agent-db-metadata.js";
+import {
+  publishAgentSchemaMetadata,
+  readExistingAgentSchemaMeta,
+} from "./openclaw-agent-db-metadata.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
@@ -22,18 +21,12 @@ export function persistAgentSchemaMetadata(
     agent_id: agentId,
     app_version: VERSION,
   };
-  const current = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db)
-      .selectFrom("schema_meta")
-      .select(["role", "schema_version", "agent_id", "app_version"])
-      .where("meta_key", "=", "primary"),
-  );
+  const current = readExistingAgentSchemaMeta(db, { includeAppVersion: true });
   if (
     current?.role === metadata.role &&
-    current.schema_version === targetVersion &&
-    current.agent_id === agentId &&
-    current.app_version === VERSION
+    current.schemaVersion === targetVersion &&
+    current.agentId === agentId &&
+    current.appVersion === VERSION
   ) {
     publishAgentSchemaMetadata(db, { role: "agent", schemaVersion: targetVersion, agentId });
     return;
