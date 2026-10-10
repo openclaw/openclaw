@@ -18,7 +18,7 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings.ts";
-import { setCurrentThemeBranding } from "./theme-branding.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
 import {
@@ -117,14 +117,14 @@ export function createApplicationTheme(
   const publish = () => {
     const generation = ++presentationGeneration;
     let preferencesPublished = false;
-    setCurrentThemeBranding(themeBranding(settings, catalog?.theme(settings.theme)));
+    const previousBranding = currentThemeBranding();
+    const branding = themeBranding(settings, catalog?.theme(settings.theme));
+    setCurrentThemeBranding(branding);
     syncThemePaletteStylesheet(settings.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
       if (generation !== presentationGeneration) {
         return;
       }
-      const previousMascot =
-        typeof document === "undefined" ? undefined : document.documentElement.dataset.themeMascot;
       applyThemePresentation(settings, catalog?.theme(settings.theme));
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
@@ -135,7 +135,7 @@ export function createApplicationTheme(
       }
       if (
         typeof document !== "undefined" &&
-        (previousMascot === "none" || document.documentElement.dataset.themeMascot === "none")
+        (previousBranding.brandIcon !== "claw" || branding.brandIcon !== "claw")
       ) {
         void import("./control-ui-environment-presentation.runtime.ts").then(
           ({ invalidateControlUiFaviconPalette, syncControlUiFavicon }) => {
