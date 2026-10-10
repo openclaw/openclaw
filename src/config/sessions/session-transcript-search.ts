@@ -3,7 +3,7 @@
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
@@ -92,7 +92,11 @@ export function isSessionTranscriptSearchCurrentSync(
   return result.found && result.value;
 }
 
-let tokenProbe: { clear: StatementSync; insert: StatementSync; count: StatementSync } | undefined;
+type TokenProbeDatabase = {
+  probe: { t: string };
+  probe_vocab: { term: string };
+};
+let tokenProbe: DatabaseSync | undefined;
 
 // unicode61 classifies with fixed Unicode 6.1 tables, so ask SQLite instead of a JS regex.
 function isIndexedTerm(term: string): boolean {
@@ -100,18 +104,18 @@ function isIndexedTerm(term: string): boolean {
     return true;
   }
   if (!tokenProbe) {
-    const db = openNodeSqliteDatabase(":memory:");
-    db.exec(`CREATE VIRTUAL TABLE probe USING fts5(t, tokenize = 'unicode61 remove_diacritics 2');
+    tokenProbe = openNodeSqliteDatabase(":memory:");
+    // sqlite-allow-raw -- Private in-memory FTS5 tokenizer probe; mirrors session_transcript_fts.
+    tokenProbe.exec(`CREATE VIRTUAL TABLE probe USING fts5(t, tokenize = 'unicode61 remove_diacritics 2');
       CREATE VIRTUAL TABLE probe_vocab USING fts5vocab(probe, 'row');`);
-    tokenProbe = {
-      clear: db.prepare("DELETE FROM probe"),
-      insert: db.prepare("INSERT INTO probe(t) VALUES (?)"),
-      count: db.prepare("SELECT count(*) AS n FROM probe_vocab"),
-    };
   }
-  tokenProbe.clear.run();
-  tokenProbe.insert.run(term);
-  return Number((tokenProbe.count.get() as { n: number }).n) > 0;
+  const db = getNodeSqliteKysely<TokenProbeDatabase>(tokenProbe);
+  executeSqliteQuerySync(tokenProbe, db.deleteFrom("probe"));
+  executeSqliteQuerySync(tokenProbe, db.insertInto("probe").values({ t: term }));
+  return (
+    executeSqliteQueryTakeFirstSync(tokenProbe, db.selectFrom("probe_vocab").select("term")) !==
+    undefined
+  );
 }
 
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
