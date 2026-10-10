@@ -51,6 +51,8 @@ import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
+import { bindProviderRenameAuthProfiles } from "./provider-rename-auth.js";
+import { rewriteRenamedSessionModelPair, type ProviderRename } from "./provider-rename.js";
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
@@ -263,6 +265,9 @@ function repairCodexSessionStoreRoutes(params: {
   authProfileIdMap?: ReadonlyMap<string, string>;
   authProfileOnly?: boolean;
   retirement?: SessionModelRetirement;
+  providerRenames?: readonly ProviderRename[];
+  providerRenameChanges?: Set<string>;
+  providerRenameAgentId?: string;
   warnings?: string[];
 }): string[] {
   const now = params.now ?? Date.now();
@@ -296,6 +301,28 @@ function repairCodexSessionStoreRoutes(params: {
     const runtimeWasExplicit =
       entry.agentRuntimeOverride !== undefined &&
       normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) !== "auto";
+    const changedProviderModel = params.providerRenames?.length
+      ? rewriteRenamedSessionModelPair(
+          entry,
+          "modelProvider",
+          "model",
+          params.providerRenames,
+          `session.${JSON.stringify([params.providerRenameAgentId, sessionKey])}`,
+          params.providerRenameChanges,
+          params.providerRenameAgentId,
+        )
+      : false;
+    const changedProviderOverride = params.providerRenames?.length
+      ? rewriteRenamedSessionModelPair(
+          entry,
+          "providerOverride",
+          "modelOverride",
+          params.providerRenames,
+          `session.${JSON.stringify([params.providerRenameAgentId, sessionKey])}`,
+          params.providerRenameChanges,
+          params.providerRenameAgentId,
+        )
+      : false;
     const runtimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
@@ -353,6 +380,8 @@ function repairCodexSessionStoreRoutes(params: {
         )
       : false;
     if (
+      !changedProviderModel &&
+      !changedProviderOverride &&
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedRuntimePins &&
@@ -457,11 +486,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
   authProfileOnly?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
+  providerRenames?: readonly ProviderRename[];
 }): Promise<CodexSessionRouteRepairSummary> {
   const env = params.env ?? process.env;
   const authProfileOnly = !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
+  const previewProviderChanges = new Set<string>();
+  const committedProviderChanges = new Set<string>();
   const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
@@ -469,6 +501,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).filter(
     (target) => !isRetained(target.storePath, target.agentId),
   );
+  const providerRenames = params.providerRenames?.length
+    ? bindProviderRenameAuthProfiles(
+        params.cfg,
+        params.providerRenames,
+        env,
+        sessionTargets.map((target) => target.agentId),
+      )
+    : undefined;
   const resolveRetired = authProfileOnly
     ? undefined
     : createRetiredModelRefRepairResolver({
@@ -518,10 +558,24 @@ export async function maybeRepairCodexSessionRoutes(params: {
         authProfileIdMap,
         authProfileOnly,
         retirement,
+        providerRenames,
+        providerRenameChanges: committedProviderChanges,
+        providerRenameAgentId: target.agentId,
         warnings,
       });
     // Preview uses the same owner-bound repair against copies, preserving persisted entries.
-    const scan = (store: Record<string, SessionEntry>) => repair(structuredClone(store));
+    const scan = (store: Record<string, SessionEntry>) =>
+      repairCodexSessionStoreRoutes({
+        store: structuredClone(store),
+        blockedModelIdentities: params.blockedModelIdentities,
+        authProfileIdMap,
+        authProfileOnly,
+        retirement,
+        providerRenames,
+        providerRenameChanges: previewProviderChanges,
+        providerRenameAgentId: target.agentId,
+        warnings,
+      });
     const staleSqliteSessionKeys: string[] = [];
     const scanEntry = ({ entry, sessionKey }: { entry: SessionEntry; sessionKey: string }) => {
       if (scan({ [sessionKey]: entry }).length > 0) {
@@ -564,6 +618,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
       repairedSessions: 0,
       warnings: [
         ...warnings,
+        ...Array.from(previewProviderChanges, (change) =>
+          change.replace(/^Upgraded /, "Would upgrade "),
+        ),
+        ...(previewProviderChanges.size > 0
+          ? [
+              "To re-pin an account, select the intended saved target-provider account with /model after the repair.",
+            ]
+          : []),
         ...(stale.length > 0
           ? [
               [
@@ -631,6 +693,12 @@ export async function maybeRepairCodexSessionRoutes(params: {
             authProfileOnly
               ? `Updated auth-profile references in ${repairedScope}.`
               : `Repaired legacy bindings or retired model routes in ${repairedScope} while preserving auth-profile pins.`,
+            ...committedProviderChanges,
+            ...(committedProviderChanges.size > 0
+              ? [
+                  "To re-pin an account, select the intended saved target-provider account with /model.",
+                ]
+              : []),
           ]
         : [],
   };

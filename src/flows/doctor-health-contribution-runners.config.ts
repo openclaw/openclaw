@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import nodePath from "node:path";
+import { note as showDoctorNote } from "../../packages/terminal-core/src/note.js";
+import { maybeRepairProviderRenameCronJobs } from "../commands/doctor/shared/provider-rename-state.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
@@ -507,10 +509,20 @@ export async function runWriteConfigHealth(
   if (
     (!ctx.prompter.shouldRepair &&
       !ctx.configResult.openAICodexAuthProfileIdMap?.size &&
-      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
+      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true &&
+      !ctx.configResult.providerRenames?.length) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
     return true;
+  }
+  if (ctx.configResult.providerRenames?.length) {
+    const renamed = await maybeRepairProviderRenameCronJobs({
+      cfg: ctx.cfg,
+      renames: ctx.configResult.providerRenames,
+      env: ctx.env ?? process.env,
+      shouldRepair: ctx.prompter.shouldRepair,
+    });
+    noteDoctorRepairResult(renamed, showDoctorNote);
   }
   // The config write above must finish before cron rows are rewritten against
   // the now-durable model policy; otherwise a failed write could corrupt them.

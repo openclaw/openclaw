@@ -3,8 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
+import type * as DoctorContractRegistry from "./doctor-contract-registry.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -12,6 +15,12 @@ import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
+
+// Registry tests own plugin selection; real persisted auth reads are covered by binder tests.
+vi.mock("../commands/doctor/shared/provider-rename-auth.js", () => ({
+  bindProviderRenameAuthProfiles: (_config: OpenClawConfig, renames: readonly ProviderRename[]) =>
+    renames,
+}));
 
 // Script contract exports at module binding while keeping setup instance ownership.
 vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
@@ -56,6 +65,8 @@ let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
 let resolvePluginDoctorStateMigrationInventory: typeof import("./doctor-contract-registry.js").resolvePluginDoctorStateMigrationInventory;
+let resolvePluginDoctorProviderRenames: typeof DoctorContractRegistry.resolvePluginDoctorProviderRenames;
+let withDeferredPluginDoctorMigrations: typeof DoctorContractRegistry.withDeferredPluginDoctorMigrations;
 
 function mockDoctorPlugins(
   ...plugins: Parameters<typeof createPluginManifestRecordFixture>[0][]
@@ -92,6 +103,8 @@ describe("doctor-contract-registry module loader", () => {
       listPluginDoctorSessionRouteStateOwners,
       listPluginDoctorSessionStoreAgentIds,
       resolvePluginDoctorStateMigrationInventory,
+      resolvePluginDoctorProviderRenames,
+      withDeferredPluginDoctorMigrations,
     } = await import("./doctor-contract-registry.js"));
     ({ clearPluginDoctorContractRegistryCache } =
       await import("./doctor-contract-registry.test-fixtures.js"));
@@ -179,10 +192,12 @@ describe("doctor-contract-registry module loader", () => {
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     mocks.createJiti.mockImplementation(() => () => ({
       legacyConfigRules: [{ path: ["plugins", "entries", "demo"], message: "demo rule" }],
+      providerRenames: [{ from: "old", to: "new", baseUrl: "https://models.example" }],
     }));
     mockDoctorPlugins({
       id: "test-plugin",
       rootDir: pluginRoot,
+      providers: ["old", "new"],
       ...(testCase.doctorContract ? { doctorContract: testCase.doctorContract } : {}),
     });
 
@@ -190,6 +205,94 @@ describe("doctor-contract-registry module loader", () => {
       testCase.expectedRuleCount,
     );
     expect(mocks.createJiti).toHaveBeenCalledTimes(testCase.expectedLoadCount);
+  });
+
+  it.each([
+    { declared: false, providers: ["old", "new"], loads: 0 },
+    { declared: true, providers: ["old"], loads: 1 },
+  ])("rejects undeclared or unowned provider renames: %j", ({ declared, providers, loads }) => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      providerRenames: [{ from: "old", to: "new", baseUrl: "https://models.example" }],
+    }));
+    mockDoctorPlugins({
+      id: "owner",
+      providers,
+      rootDir: root,
+      doctorContract: { configRepair: declared },
+    });
+    expect(resolvePluginDoctorProviderRenames({ pluginIds: ["old"], env: {} })).toEqual([]);
+    expect(mocks.createJiti).toHaveBeenCalledTimes(loads);
+  });
+
+  it("selects provider renames only from scoped, non-deferred config-repair owners", () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    const rename = { from: "old-provider", to: "new-provider", baseUrl: "https://models.example" };
+    mocks.createJiti.mockImplementation(() => () => ({ providerRenames: [rename] }));
+    mockDoctorPlugins(
+      {
+        id: "owner",
+        providers: ["old-provider", "new-provider"],
+        rootDir: root,
+        doctorContract: { configRepair: true },
+      },
+      { id: "unrelated", rootDir: root, doctorContract: { configRepair: true } },
+    );
+    const config: OpenClawConfig = {
+      models: { providers: { "old-provider": { baseUrl: rename.baseUrl, models: [] } } },
+    };
+    expect(resolvePluginDoctorProviderRenames({ config, env: {} })).toEqual([rename]);
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(
+      withDeferredPluginDoctorMigrations(["owner"], () =>
+        resolvePluginDoctorProviderRenames({ config, env: {} }),
+      ),
+    ).toEqual([]);
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the Ollama rename before local-marker cleanup without changing saved auth", async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    const contract = await vi.importActual("../../extensions/ollama/doctor-contract-api.js");
+    mocks.createJiti.mockImplementation(() => () => contract);
+    mockDoctorPlugins({
+      id: "ollama",
+      providers: ["ollama", "ollama-cloud"],
+      rootDir: root,
+      doctorContract: { configRepair: true },
+    });
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "https://OLLAMA.COM:443/api",
+            api: "ollama",
+            apiKey: "OLLAMA_API_KEY",
+            models: [],
+          },
+        },
+      },
+      agents: { defaults: { model: "ollama/model:cloud@ollama:default" } },
+      auth: { profiles: { "ollama:default": { provider: "ollama", mode: "api_key" } } },
+    };
+    const result = applyPluginDoctorCompatibilityMigrations(config, {
+      env: {},
+      pluginIds: ["ollama"],
+    });
+    expect(result.config.models?.providers?.["ollama-cloud"]?.apiKey).toBe("OLLAMA_API_KEY");
+    expect(result.config.models?.providers?.ollama).toBeUndefined();
+    expect(result.config.agents?.defaults?.model).toBe("ollama-cloud/model:cloud");
+    expect(result.config.auth).toEqual(config.auth);
+    expect(config.models?.providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
+    expect(
+      applyPluginDoctorCompatibilityMigrations(result.config, {
+        env: {},
+        pluginIds: ["ollama"],
+      }).changes,
+    ).toEqual([]);
   });
 
   it.each([false, true])("isolates a normalizer-only config repair (throws=%s)", (throws) => {

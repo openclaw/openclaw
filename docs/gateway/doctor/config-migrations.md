@@ -28,6 +28,45 @@ the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
 
+## Direct Ollama Cloud routing
+
+Older Cloud-only setup stored hosted Ollama models under `models.providers.ollama`.
+When that provider points to `https://ollama.com`, Doctor moves it to
+`ollama-cloud` and rewrites its model references in agent defaults, model
+allowlists, per-agent settings, heartbeat, utility, subagent and compaction
+models, cron jobs, and session overrides. URL paths and trailing slashes do not
+change the hosted classification. An existing `ollama-cloud` catalog keeps its
+models and gains missing migrated models without duplicates.
+
+Localhost, LAN, and custom endpoints stay unchanged, including cloud models
+served through a signed-in local Ollama daemon. Other provider keys also stay
+unchanged. Doctor does not infer hosted routing from a model name.
+
+Both providers use `OLLAMA_API_KEY`, so environment-backed credentials and
+SecretRefs keep working without a credential-store migration. Doctor leaves
+saved `ollama` auth profiles untouched; if the key exists only in that saved
+profile, run `openclaw onboard --auth-choice ollama-cloud` to configure Cloud
+authentication.
+
+Old `@ollama:...` model-reference pins never cross into the Cloud provider.
+Doctor chooses from the owning agent's visible saved profiles: shared profiles
+plus that agent's local profiles, never another agent's local profiles. Defaults
+and global references use the configured system agent's visible profiles, or only
+shared profiles when no system agent is selected. An existing valid Cloud pin
+is preserved; otherwise Doctor selects `ollama-cloud:default` when visible, then
+the sole visible Cloud profile. With no Cloud profile or an ambiguous choice, it
+removes the suffix so normal environment or later sign-in resolution can apply.
+Doctor lists each changed pin and explains how to re-pin a model explicitly;
+the credential store is not modified or migrated.
+
+Use `openclaw doctor --lint --json` to preview, or `openclaw doctor --fix` to
+apply the migration. Updates use the same repair. Config is backed up before
+publication; cron and session references are repaired through their existing
+state owners afterward. If interrupted between those steps, rerun Doctor.
+It recovers the rename from the config backup only while the recorded provider
+topology still matches; it does not search through later provider edits or
+reinterpret historical includes.
+
 ## Claude CLI model routing
 
 Claude CLI sign-in now writes `agents.defaults.models["anthropic/*"]` with the

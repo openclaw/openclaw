@@ -1,4 +1,9 @@
 import {
+  applyProviderRenames,
+  planProviderRenames,
+} from "../commands/doctor/shared/provider-rename.js";
+import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
+import {
   configValidationIssuesToHealthFindings,
   configValidationWarningsToHealthFindings,
   FINAL_CONFIG_VALIDATION_CHECK_ID,
@@ -21,9 +26,23 @@ export const finalConfigValidationCheck: DoctorHealthCheck = {
     if (!snap.exists) {
       return [];
     }
+    const renames =
+      ctx.mode === "lint"
+        ? planProviderRenames(
+            ctx.cfg,
+            resolvePluginDoctorProviderRenames({ config: ctx.cfg, env: ctx.env }),
+          )
+        : [];
+    const migration = applyProviderRenames(ctx.cfg, renames);
     return [
       ...configValidationIssuesToHealthFindings(snap.issues),
       ...configValidationWarningsToHealthFindings(snap.warnings),
+      ...migration.changes.map((message) => ({
+        checkId: FINAL_CONFIG_VALIDATION_CHECK_ID,
+        severity: "warning" as const,
+        message,
+        fixHint: "Run openclaw doctor --fix to migrate the provider and its model references.",
+      })),
     ];
   },
 };

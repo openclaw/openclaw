@@ -60,6 +60,7 @@ export type {
   PluginDoctorChannelIngressQueueAccess,
   PluginDoctorMigrationBackupResource,
   PluginDoctorMigrationBackupWarning,
+  PluginDoctorProviderRename,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
