@@ -499,18 +499,24 @@ export async function renameSession(
   session: SidebarRecentSession,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
-  const value = await showInputDialog({
+  await showInputDialog({
     signal: scope.signal,
     title: t("sessionsView.renameSessionPrompt"),
     defaultValue: session.renameValue,
+    submit: async (value) => {
+      const patch = resolveSessionRenamePatch(value, session.renameValue, session.userLabel);
+      if (!patch) {
+        return null;
+      }
+      const result = await patchSession(host, session, patch, scope, { sessionScope: true });
+      const error = host.sessionData.sessionMutationError;
+      if (result === "failed" && error && /^label already in use:/iu.test(error)) {
+        host.sessionData.dismissSessionMutationError();
+        return t("sessionsView.sessionNameInUse");
+      }
+      return null;
+    },
   });
-  if (value === null) {
-    return;
-  }
-  const patch = resolveSessionRenamePatch(value, session.renameValue, session.userLabel);
-  if (patch) {
-    await patchSession(host, session, patch, scope, { sessionScope: true });
-  }
 }
 
 export async function assignSessionOwner(

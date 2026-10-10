@@ -132,7 +132,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps a rejected sidebar mutation visible until the user dismisses it", async () => {
+  it("keeps a duplicate rename in the dialog and other rejected mutations in the sidebar", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -158,10 +158,34 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.patch");
       await gateway.rejectDeferred("sessions.patch", {
         code: "INVALID_REQUEST",
-        message: "sidebar rename rejected",
+        message: "label already in use: Rejected rename",
       });
 
       const error = page.locator("[data-sidebar-session-error]");
+      await expect
+        .poll(() => dialog.getByRole("alert").textContent())
+        .toContain("A session with this name already exists.");
+      await expect.poll(() => error.count()).toBe(0);
+      await expect
+        .poll(() => dialog.getByRole("textbox", { name: "Rename session" }).inputValue())
+        .toBe("Rejected rename");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-session-duplicate-rename.png",
+        dialog.locator("dialog"),
+        [dialog.getByRole("alert")],
+      );
+
+      await gateway.deferNext("sessions.patch");
+      await dialog.getByRole("textbox", { name: "Rename session" }).fill("Unavailable rename");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await gateway.waitForRequest("sessions.patch", { after: 1 });
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "UNAVAILABLE",
+        message: "sidebar rename rejected",
+      });
+
       await error.waitFor({ state: "visible" });
       await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
       expect(
