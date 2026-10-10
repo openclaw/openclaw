@@ -1,5 +1,6 @@
 import { listAgentIds } from "../agents/agent-roster.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
 import { pruneRemovedProviderPluginModelCatalogs } from "../agents/plugin-model-catalog.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,11 +33,11 @@ export async function pruneRemovedProviderModelCatalogs(
   previousConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
 ): Promise<void> {
+  const previousProviders = normalizeProviderMapKeys(previousConfig.models?.providers);
+  const nextProviders = normalizeProviderMapKeys(nextConfig.models?.providers);
   const removedProviderBaseUrls = Object.fromEntries(
-    Object.entries(previousConfig.models?.providers ?? {}).flatMap(([id, provider]) =>
-      provider.baseUrl && !Object.hasOwn(nextConfig.models?.providers ?? {}, id)
-        ? [[id, provider.baseUrl]]
-        : [],
+    Object.entries(previousProviders).flatMap(([id, provider]) =>
+      provider.baseUrl && !Object.hasOwn(nextProviders, id) ? [[id, provider.baseUrl]] : [],
     ),
   );
   if (Object.keys(removedProviderBaseUrls).length === 0) {

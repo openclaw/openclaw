@@ -24,6 +24,7 @@ import {
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
+import { applyModelDefaults } from "../config/defaults.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -1580,25 +1581,47 @@ describe("gateway hot reload model state", () => {
   it.each([
     {
       name: "removes the normalized authored endpoint",
+      providerKey: "ollama",
+      nextProviderKey: undefined,
       authoredBaseUrl: "HTTPS://OLLAMA.EXAMPLE:443/v1/",
       cachedBaseUrl: "https://ollama.example/v1",
       removed: true,
     },
     {
       name: "retains a nonmatching local discovery endpoint",
+      providerKey: "ollama",
+      nextProviderKey: undefined,
       authoredBaseUrl: "https://ollama.example/v1",
       cachedBaseUrl: "http://127.0.0.1:11434",
       removed: false,
     },
     {
       name: "retains discovery when no endpoint was authored",
+      providerKey: "ollama",
+      nextProviderKey: undefined,
       authoredBaseUrl: undefined,
       cachedBaseUrl: "http://127.0.0.1:11434",
       removed: false,
     },
+    {
+      name: "removes a provider configured with an uppercase key",
+      providerKey: "OLLAMA",
+      nextProviderKey: undefined,
+      authoredBaseUrl: "https://ollama.example/v1",
+      cachedBaseUrl: "https://ollama.example/v1",
+      removed: true,
+    },
+    {
+      name: "retains discovery when only provider key spelling changes",
+      providerKey: "ollama",
+      nextProviderKey: "OLLAMA",
+      authoredBaseUrl: "https://ollama.example/v1",
+      cachedBaseUrl: "https://ollama.example/v1",
+      removed: false,
+    },
   ])(
     "$name before refreshing a removed provider without discovery",
-    async ({ authoredBaseUrl, cachedBaseUrl, removed }) => {
+    async ({ providerKey, nextProviderKey, authoredBaseUrl, cachedBaseUrl, removed }) => {
       const root = autoCleanupTempDirs.make("openclaw-provider-removal-reload-");
       const agentDirs = [path.join(root, "main"), path.join(root, "secondary")] as const;
       const initialConfig = {
@@ -1610,7 +1633,7 @@ describe("gateway hot reload model state", () => {
         },
         models: {
           providers: {
-            ollama: {
+            [providerKey]: {
               ...(authoredBaseUrl ? { baseUrl: authoredBaseUrl } : {}),
               api: "ollama",
               models: [],
@@ -1620,7 +1643,11 @@ describe("gateway hot reload model state", () => {
       } as OpenClawConfig;
       const nextConfig: OpenClawConfig = {
         agents: initialConfig.agents,
-        models: { providers: {} },
+        models: {
+          providers: nextProviderKey
+            ? { [nextProviderKey]: initialConfig.models!.providers![providerKey]! }
+            : {},
+        },
       };
       const contents = JSON.stringify({
         generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -1648,8 +1675,14 @@ describe("gateway hot reload model state", () => {
             pluginCatalogWrites: { [encodePluginModelCatalogRelativePath("ollama")]: contents },
           });
         }
-        hoisted.runtimeConfig.value = initialConfig;
-        setRuntimeConfigSnapshot(initialConfig, initialConfig);
+        const loadedConfig = applyModelDefaults(initialConfig);
+        if (!authoredBaseUrl) {
+          expect(loadedConfig.models?.providers?.[providerKey]?.baseUrl).toBe(
+            "http://127.0.0.1:11434",
+          );
+        }
+        hoisted.runtimeConfig.value = loadedConfig;
+        setRuntimeConfigSnapshot(loadedConfig, initialConfig);
         const logReload = { info: vi.fn(), warn: vi.fn() };
         const { applyHotReload, setState } = createReloadHandlersForTest(logReload);
         let catalogsAtRefresh: PersistedPluginModelCatalog[][] = [];
@@ -1663,7 +1696,7 @@ describe("gateway hot reload model state", () => {
         });
 
         const application = await applyHotReload(
-          buildGatewayReloadPlan(["models.providers.ollama"]),
+          buildGatewayReloadPlan([`models.providers.${providerKey}`]),
           nextConfig,
         );
         expect(logReload.warn.mock.calls).toEqual([]);
