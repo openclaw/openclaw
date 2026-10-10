@@ -321,6 +321,10 @@ describe("private session source staging", () => {
 
   it("preserves the published index when an accepted transfer fails without replaying inline", async () => {
     const { manager, db } = await setup();
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "transfer.md"),
+      "Violet transfer source.\n".repeat(30_000),
+    );
     await manager.sync({ reason: "baseline", force: true });
     const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
     const transfer = await import("./manager-publication-transfer.js");
@@ -330,7 +334,7 @@ describe("private session source staging", () => {
       .mockImplementation(function* (replacement) {
         for (const batch of batches(replacement)) {
           yield batch;
-          if (replacement.source === "sessions") {
+          if (replacement.entry.path === "memory/transfer.md") {
             throw new SqliteWorkerError("controlled accepted transfer failure", "overloaded");
           }
         }
