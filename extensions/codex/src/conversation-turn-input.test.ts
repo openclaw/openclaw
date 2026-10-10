@@ -47,6 +47,11 @@ it("preserves sparse media order and staged paths instead of original iMessage p
     ],
     [
       remoteImage("https://example.test/first.webp"),
+      {
+        type: "text",
+        text: '[Inbound audio attachment: "/tmp/voice"]',
+        text_elements: [],
+      },
       localImage(stagedPath),
       remoteImage(inlineImage),
     ],
@@ -60,6 +65,24 @@ it("preserves sparse media order and staged paths instead of original iMessage p
       ],
     },
   );
+});
+
+it("does not silently discard an inbound voice attachment", () => {
+  const input = buildCodexConversationTurnInput({
+    prompt: "Please answer the attached voice note.",
+    event: {
+      content: "Please answer the attached voice note.",
+      channel: "telegram",
+      isGroup: true,
+      metadata: {
+        mediaPath: "/tmp/voice.ogg",
+        mediaPaths: ["/tmp/voice.ogg"],
+        mediaType: "audio/ogg",
+        mediaTypes: ["audio/ogg"],
+      },
+    },
+  });
+  expect(JSON.stringify(input)).toContain("/tmp/voice.ogg");
 });
 
 const photo = "/tmp/photo.png";
