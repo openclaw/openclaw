@@ -395,6 +395,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}: ${message}`,
             guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
           };
+          if (doctorStep) {
+            doctorStep.advisory = { kind: "recoverable-maintenance", message: warning.message };
+          }
         } else {
           throw new UpdateDoctorError(message, failureFacts, { cause: error, exitCode });
         }

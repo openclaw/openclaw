@@ -275,9 +275,17 @@ describe("post-plugin update readiness", () => {
     },
   );
 
-  it.each(["success", "advisory", "exit", "timeout"] as const)(
+  it.each([
+    "success",
+    "advisory",
+    "exit",
+    "timeout",
+    "post-plugin-exit",
+    "post-plugin-timeout",
+  ] as const)(
     "records the fresh Doctor's traced sections without printing the trace (%s)",
     async (outcome) => {
+      const phase = outcome.startsWith("post-plugin-") ? "post-plugin" : "pre-plugin";
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
       vi.mocked(defaultRuntime.error).mockClear();
       const stderr = [
@@ -305,10 +313,10 @@ describe("post-plugin update readiness", () => {
             exitCode:
               outcome === "advisory"
                 ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
-                : outcome === "exit"
+                : outcome.endsWith("exit")
                   ? 23
                   : undefined,
-            timedOut: outcome === "timeout",
+            timedOut: outcome.endsWith("timeout"),
             stderr,
           });
         }
@@ -317,11 +325,13 @@ describe("post-plugin update readiness", () => {
       const onDoctorStep = vi.fn();
       const pending = runUpdateFinalizationDoctorInFreshProcess({
         ...updateOptions,
-        phase: "pre-plugin",
+        phase,
         onDoctorStep,
         root: tempDirs.make("fresh-doctor-sections-"),
       });
-      if (outcome === "success" || outcome === "advisory") {
+      if (phase === "post-plugin") {
+        await expect(pending).resolves.toMatchObject({ reason: "doctor-advisory" });
+      } else if (outcome === "success" || outcome === "advisory") {
         await pending;
       } else {
         await expect(pending).rejects.toThrow("Updated pre-plugin Doctor failed");
@@ -330,13 +340,13 @@ describe("post-plugin update readiness", () => {
       expect(traceEnv).toBe("1");
       expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          name: "pre-plugin doctor",
+          name: `${phase} doctor`,
           exitCode:
             outcome === "success"
               ? 0
               : outcome === "advisory"
                 ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
-                : outcome === "exit"
+                : outcome.endsWith("exit")
                   ? 23
                   : null,
           durationMs: expect.any(Number),
@@ -347,7 +357,9 @@ describe("post-plugin update readiness", () => {
       );
       const step = onDoctorStep.mock.calls[0]![0];
       expect(updateRunStepsFromResultStep(step)[0]?.status).toBe(
-        outcome === "success" || outcome === "advisory" ? "completed" : "failed",
+        outcome === "success" || outcome === "advisory" || phase === "post-plugin"
+          ? "completed"
+          : "failed",
       );
       expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("real Doctor warning");
     },
