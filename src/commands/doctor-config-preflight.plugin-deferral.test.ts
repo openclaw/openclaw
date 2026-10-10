@@ -32,7 +32,7 @@ afterAll(() => restoreMigrationRuntime?.());
 
 function createPluginConfig(pluginId: string, config?: Record<string, string>, paths?: string[]) {
   return {
-    gateway: { mode: "local" },
+    gateway: { mode: "local" as const },
     plugins: {
       allow: [pluginId],
       entries: { [pluginId]: { enabled: true, ...(config ? { config } : {}) } },
@@ -212,7 +212,10 @@ describe("configured plugin migration deferral", () => {
       await withDoctorConfigPreflightHome(async (home) => {
         const pluginRoot = path.join(home, "linked-plugin");
         const pluginId = "linked-fixture";
-        await installStatelessFixture(pluginRoot, pluginId);
+        const source = path.join(home, "legacy-binding.json");
+        const migrated = path.join(home, "migrated-binding.json");
+        await fs.writeFile(source, '{"binding":"retained"}\n');
+        await installMigrationFixture({ root: pluginRoot, pluginId, source, migrated });
         const config = createPluginConfig(pluginId, undefined, [pluginRoot]);
         await writeOpenClawConfig(home, config);
         if (install === "linked") {
@@ -241,6 +244,12 @@ describe("configured plugin migration deferral", () => {
                     }),
                   ],
             );
+            expect(await fs.readFile(install === "linked" ? migrated : source, "utf8")).toBe(
+              '{"binding":"retained"}\n',
+            );
+            await expect(fs.stat(install === "linked" ? source : migrated)).rejects.toMatchObject({
+              code: "ENOENT",
+            });
           },
         );
       });
