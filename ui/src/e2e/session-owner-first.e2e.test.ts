@@ -5,31 +5,16 @@ import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ownerFirstSessionRow } from "./session-ownership-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
 const rosterMatch = { includeGlobal: true };
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
-function sessionRoster(ownerId: string, key: string, label: string, updatedAt: number) {
-  const owner = {
-    type: "human" as const,
-    id: ownerId,
-    label: ownerId === "profile-ada" ? "Ada" : "Bob",
-  };
-  return {
-    key,
-    kind: "direct" as const,
-    label,
-    createdActor: owner,
-    owner: { actor: owner },
-    updatedAt,
-  };
-}
-
 function sessionsList() {
   const sessions = [
-    sessionRoster("profile-ada", "agent:main:ada", "Ada research", 2),
-    sessionRoster("profile-bob", "agent:main:bob", "Bob operations", 1),
+    ownerFirstSessionRow("profile-ada", "agent:main:ada", "Ada research", 2),
+    ownerFirstSessionRow("profile-bob", "agent:main:bob", "Bob operations", 1),
   ];
   return {
     count: sessions.length,

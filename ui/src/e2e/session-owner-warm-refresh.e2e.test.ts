@@ -7,28 +7,13 @@ import type { ApplicationContext } from "../app/context.ts";
 import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ownerFirstSessionRow } from "./session-ownership-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI warm owner-first refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const rosterMatch = { includeGlobal: true };
 
-function sessionRow(ownerId: string, key: string, label: string, updatedAt: number) {
-  const owner = {
-    type: "human" as const,
-    id: ownerId,
-    label: ownerId === "profile-ada" ? "Ada" : "Bob",
-  };
-  return {
-    key,
-    kind: "direct" as const,
-    label,
-    createdActor: owner,
-    owner: { actor: owner },
-    updatedAt,
-  };
-}
-
-function rosterOf(sessions: ReturnType<typeof sessionRow>[]) {
+function rosterOf(sessions: ReturnType<typeof ownerFirstSessionRow>[]) {
   return {
     count: sessions.length,
     owners: sessions.map((session) => session.owner.actor),
@@ -67,8 +52,8 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    const adaRow = sessionRow("profile-ada", "agent:main:ada", "Ada research", 2);
-    const bobRow = sessionRow("profile-bob", "agent:main:bob", "Bob operations", 1);
+    const adaRow = ownerFirstSessionRow("profile-ada", "agent:main:ada", "Ada research", 2);
+    const bobRow = ownerFirstSessionRow("profile-bob", "agent:main:bob", "Bob operations", 1);
     const sharedRoster = rosterOf([adaRow, bobRow]);
     const gateway = await installMockGateway(page, {
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],

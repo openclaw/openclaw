@@ -3,6 +3,7 @@ import { expect as expectBrowser } from "playwright/test";
 import { it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { personGroupedSessionsList } from "./session-ownership-fixtures.test-support.ts";
 import {
   captureSessionOwnerPageProof,
   captureSessionOwnerProof,
@@ -15,48 +16,6 @@ import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-men
 const suite = createControlUiE2eSuite({
   name: "Control UI person-grouped session presence",
 });
-
-function sessionsList() {
-  const ada = {
-    type: "human" as const,
-    id: "profile-ada",
-    identity: { type: "profile" as const, id: "profile-ada" },
-    label: "Ada",
-    avatarUrl: "/api/users/profile-ada/avatar?v=1",
-  };
-  const bob = {
-    type: "human" as const,
-    id: "profile-bob",
-    identity: { type: "profile" as const, id: "profile-bob" },
-    label: "Bob",
-    avatarUrl: "/api/users/profile-bob/avatar?v=1",
-  };
-  return {
-    count: 2,
-    owners: [ada, bob],
-    defaults: { contextTokens: null, model: null, modelProvider: null },
-    path: "",
-    sessions: [
-      {
-        key: "agent:main:ada",
-        kind: "direct",
-        label: "Ada research",
-        createdActor: ada,
-        owner: { actor: ada },
-        updatedAt: 2,
-      },
-      {
-        key: "agent:main:bob",
-        kind: "direct",
-        label: "Bob operations",
-        createdActor: bob,
-        owner: { actor: bob },
-        updatedAt: 1,
-      },
-    ],
-    ts: 1,
-  };
-}
 
 suite.define(() => {
   it("shows row owners only for live presence under person headers", async () => {
@@ -81,7 +40,7 @@ suite.define(() => {
       sessionKey: "agent:main:ada",
       presenceUsers: [{ self: true, id: "profile-self", name: "Self" }],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: { "sessions.list": sessionsList() },
+      methodResponses: { "sessions.list": personGroupedSessionsList() },
     });
 
     try {
