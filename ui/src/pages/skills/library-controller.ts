@@ -194,7 +194,8 @@ export class SkillLibraryController {
     if (this.busy || this.loading) {
       return;
     }
-    if (!this.gateway.connected) {
+    const connection = this.gateway.capture();
+    if (!connection) {
       this.error = t("skillLibrary.connectionChanged");
       this.changed();
       return;
@@ -205,17 +206,21 @@ export class SkillLibraryController {
     try {
       await action();
     } catch (error) {
-      const code =
-        error instanceof GatewayRequestError ? asNullableRecord(error.details)?.code : undefined;
-      this.error =
-        code === "SKILL_LIBRARY_CONFLICT"
-          ? t("skillLibrary.conflict")
-          : code === "SKILL_LIBRARY_IDENTITY_REQUIRED"
-            ? t("skillLibrary.signIn")
-            : formatUiError(error);
+      if (this.gateway.isCurrent(connection)) {
+        const code =
+          error instanceof GatewayRequestError ? asNullableRecord(error.details)?.code : undefined;
+        this.error =
+          code === "SKILL_LIBRARY_CONFLICT"
+            ? t("skillLibrary.conflict")
+            : code === "SKILL_LIBRARY_IDENTITY_REQUIRED"
+              ? t("skillLibrary.signIn")
+              : formatUiError(error);
+      }
     } finally {
-      this.busy = false;
-      this.changed();
+      if (this.gateway.isCurrent(connection)) {
+        this.busy = false;
+        this.changed();
+      }
     }
   }
 
