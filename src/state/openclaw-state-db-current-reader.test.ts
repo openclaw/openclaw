@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { runSqliteForeignUse } from "../infra/sqlite-foreign-observation.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { prepareOpenClawStateCurrentReader } from "./openclaw-state-db-current-reader.js";
 import * as readConnections from "./openclaw-state-db-read-connection.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
@@ -19,7 +19,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 function fixture() {
-  const root = directories.make("state-foreign-observation-");
+  const root = directories.make("state-current-reader-");
   const options = {
     path: path.join(root, "openclaw.sqlite"),
     env: { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" },
@@ -32,8 +32,8 @@ function fixture() {
   return { root, options, database, prepare };
 }
 
-it("shares a physical probe across aliases and nested guards while retaining independent custody", async () => {
-  const { root, options, prepare } = fixture();
+it("shares one physical reader and write receipt across aliases with independent custody and no probes", async () => {
+  const { root, options, database, prepare } = fixture();
   const alias = path.join(root, "alias.sqlite");
   fs.symlinkSync(options.path, alias);
   const first = await prepare();
@@ -41,22 +41,28 @@ it("shares a physical probe across aliases and nested guards while retaining ind
   if (!first || !second) {
     throw new Error("Existing source must admit both readers");
   }
-  const a = first.createCertification();
-  const b = second.createCertification();
-  expect(a.beginRefresh().accept()).toBe(true);
-  expect(b.beginRefresh().accept()).toBe(true);
+  expect(first.read(({ db }) => db)).toBe(second.read(({ db }) => db));
+  const before = first.writeRevision();
+  expect(before).toBeTypeOf("number");
   const trace = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
   try {
-    runSqliteForeignUse((use) => {
-      expect(a.isCurrent(use)).toBe(true);
-      runSqliteForeignUse((nested) => expect(b.isCurrent(nested)).toBe(true));
-    });
-    expect(trace.queries).toEqual(["PRAGMA data_version"]);
+    expect(second.writeRevision()).toBe(before);
+    expect(first.writeRevision()).toBe(before);
+    expect(trace.queries).toEqual([]);
+    database.db
+      .prepare("INSERT INTO config_machine_state VALUES ('fixture.receipt', '1', 1)")
+      .run();
+    trace.queries.length = 0;
+    const after = first.writeRevision();
+    expect(after).toBeTypeOf("number");
+    expect(after).not.toBe(before);
+    expect(second.writeRevision()).toBe(after);
+    expect(trace.queries).toEqual([]);
     first.dispose();
-    expect(() => runSqliteForeignUse((use) => a.isCurrent(use))).toThrow(/closed/);
-    expect(runSqliteForeignUse((use) => b.isCurrent(use))).toBe(true);
+    expect(() => first.writeRevision()).toThrow(/closed/);
+    expect(second.writeRevision()).toBe(after);
     await closeOpenClawStateDatabaseAsync();
-    expect(() => b.beginRefresh()).toThrow(/closed/);
+    expect(() => second.writeRevision()).toThrow(/closed/);
   } finally {
     trace.restore();
     first.dispose();
@@ -64,46 +70,50 @@ it("shares a physical probe across aliases and nested guards while retaining ind
   }
 });
 
-it("cannot adopt a reopened handle's observation", async () => {
+it("does not revive a disposed borrower when the physical reader reopens", async () => {
   const { prepare } = fixture();
   const first = await prepare();
   if (!first) {
     throw new Error("Existing source must admit a reader");
   }
-  const old = first.createCertification();
-  expect(old.beginRefresh().accept()).toBe(true);
+  const original = first.read(({ db }) => db);
   first.dispose();
+  expect(original.isOpen).toBe(false);
   const next = await prepare();
   if (!next) {
     throw new Error("Existing source must reopen");
   }
   try {
-    expect(() => runSqliteForeignUse((use) => old.isCurrent(use))).toThrow(/closed/);
-    const current = next.createCertification();
-    expect(runSqliteForeignUse((use) => current.isCurrent(use))).toBe(false);
-    expect(current.beginRefresh().accept()).toBe(true);
-    expect(runSqliteForeignUse((use) => current.isCurrent(use))).toBe(true);
+    expect(() => first.writeRevision()).toThrow(/closed/);
+    const reopened = next.read(({ db }) => db);
+    expect(reopened.isOpen).toBe(true);
+    expect(reopened === original).toBe(false);
+    expect(next.writeRevision()).toBeTypeOf("number");
   } finally {
     next.dispose();
   }
 });
 
-it("accepts a coherent native fallback when its first read fills derived schema facts", async () => {
+it("keeps the receipt stable while a coherent native read fills derived schema facts", async () => {
   const { prepare } = fixture();
   const reader = await prepare();
   if (!reader) {
     throw new Error("Existing source must admit a reader");
   }
   try {
-    const certification = reader.createCertification();
-    const refresh = certification.beginRefresh();
+    const before = reader.writeRevision();
+    expect(before).toBeTypeOf("number");
     expect(
       reader.read(({ db }) =>
         db.prepare("SELECT count(*) AS count FROM config_machine_state").get(),
       ),
     ).toHaveProperty("count");
-    expect(refresh.accept()).toBe(true);
-    expect(runSqliteForeignUse((use) => certification.isCurrent(use))).toBe(true);
+    expect(reader.writeRevision()).toBe(before);
+    const database = reader.read(({ db }) => db);
+    runSqliteSchemaReadSnapshotSync(database, () => {
+      expect(() => reader.writeRevision()).toThrow(/transaction or snapshot/);
+    });
+    expect(reader.writeRevision()).toBe(before);
   } finally {
     reader.dispose();
   }
@@ -126,11 +136,10 @@ it.each(["dispose", "prepare"] as const)(
       }
       return false;
     });
-    const old = first.createCertification();
-    expect(old.beginRefresh().accept()).toBe(true);
+    expect(first.writeRevision()).toBeTypeOf("number");
     first.dispose();
     expect(close).toHaveBeenCalledTimes(1);
-    expect(() => old.beginRefresh()).toThrow(/closed/);
+    expect(() => first.writeRevision()).toThrow(/closed/);
     if (retry === "dispose") {
       first.dispose();
       expect(close).toHaveBeenCalledTimes(2);
@@ -138,8 +147,8 @@ it.each(["dispose", "prepare"] as const)(
     const next = await prepare();
     try {
       expect(close).toHaveBeenCalledTimes(2);
-      expect(next?.createCertification().beginRefresh().accept()).toBe(true);
-      expect(() => runSqliteForeignUse((use) => old.isCurrent(use))).toThrow(/closed/);
+      expect(next?.writeRevision()).toBeTypeOf("number");
+      expect(() => first.writeRevision()).toThrow(/closed/);
     } finally {
       next?.dispose();
     }
@@ -147,7 +156,7 @@ it.each(["dispose", "prepare"] as const)(
 );
 
 it.runIf(process.platform !== "win32")(
-  "retires observations after alias rebinding or identical-byte file replacement",
+  "retires every borrower after alias rebinding or identical-byte canonical replacement",
   async () => {
     const { root, options, database, prepare } = fixture();
     database.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
@@ -156,35 +165,48 @@ it.runIf(process.platform !== "win32")(
     fs.copyFileSync(options.path, replacement);
     fs.symlinkSync(options.path, alias);
     const reader = await prepare(alias);
-    if (!reader) {
-      throw new Error("Existing alias must admit a reader");
+    const sibling = await prepare();
+    if (!reader || !sibling) {
+      throw new Error("Existing aliases must admit readers");
     }
-    const certification = reader.createCertification();
-    expect(certification.beginRefresh().accept()).toBe(true);
-    const sibling = reader.createCertification();
-    expect(sibling.beginRefresh().accept()).toBe(true);
     try {
+      expect(reader.writeRevision()).toBeTypeOf("number");
       fs.unlinkSync(alias);
       fs.symlinkSync(replacement, alias);
-      expect(() => runSqliteForeignUse((use) => certification.isCurrent(use))).toThrow(/identity/);
+      expect(() => reader.writeRevision()).toThrow(/identity/);
       fs.unlinkSync(alias);
       fs.symlinkSync(options.path, alias);
-      expect(runSqliteForeignUse((use) => certification.isCurrent(use))).toBe(false);
-      expect(runSqliteForeignUse((use) => sibling.isCurrent(use))).toBe(false);
-      const next = reader.createCertification();
-      expect(next.beginRefresh().accept()).toBe(true);
-      const original = path.join(root, "original.sqlite");
-      fs.renameSync(options.path, original);
-      fs.renameSync(replacement, options.path);
-      try {
-        expect(() => runSqliteForeignUse((use) => next.isCurrent(use))).toThrow(/identity/);
-      } finally {
-        fs.renameSync(options.path, replacement);
-        fs.renameSync(original, options.path);
+      expect(() => reader.writeRevision()).toThrow(/closed/);
+      expect(() => sibling.writeRevision()).toThrow(/closed/);
+
+      const next = await prepare();
+      const hardAlias = path.join(root, "hard-alias.sqlite");
+      fs.linkSync(options.path, hardAlias);
+      const hardReader = await prepare(hardAlias);
+      if (!next || !hardReader) {
+        throw new Error("Restored aliases must admit new readers");
       }
-      expect(runSqliteForeignUse((use) => next.isCurrent(use))).toBe(false);
+      const original = path.join(root, "original.sqlite");
+      try {
+        expect(hardReader.writeRevision()).toBeTypeOf("number");
+        fs.renameSync(options.path, original);
+        fs.renameSync(replacement, options.path);
+        try {
+          // The hard-link path still selects the old file; the pooled canonical source changed.
+          expect(() => hardReader.writeRevision()).toThrow(/identity/);
+        } finally {
+          fs.renameSync(options.path, replacement);
+          fs.renameSync(original, options.path);
+        }
+        expect(() => next.writeRevision()).toThrow(/closed/);
+        expect(() => hardReader.writeRevision()).toThrow(/closed/);
+      } finally {
+        next.dispose();
+        hardReader.dispose();
+      }
     } finally {
       reader.dispose();
+      sibling.dispose();
     }
   },
 );

@@ -213,6 +213,11 @@ applies to subsequent events and admissions. Disabling collection drains already
 accepted writes; enabling it does not reconstruct earlier events or add identity
 to runs already admitted without one. Existing retention policy is unchanged.
 
+When Memory Core is selected, changes to `models.providers` reload its index
+service. Cached memory managers close before replacements use the new provider
+configuration, so correcting an embedding endpoint or credential does not require
+a Gateway restart. Existing indexes remain on disk.
+
 Operation settings apply at their next use; they do not restart in-flight runs
 or recreate provisioned workers. Approval expiry changes affect newly issued
 grants. Attachment retention changes apply on the next cleanup sweep, including

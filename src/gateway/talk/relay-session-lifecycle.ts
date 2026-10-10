@@ -1,5 +1,8 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
+const MAX_RELAY_SESSIONS_PER_CONN = 2;
+const MAX_RELAY_SESSIONS_GLOBAL = 64;
+
 type TalkRelayLifecycleSession = {
   connId: string;
   expiresAtMs: number;
@@ -8,6 +11,21 @@ type TalkRelayLifecycleSession = {
 type CloseTalkRelaySession<TSession extends TalkRelayLifecycleSession> = (
   session: TSession,
 ) => void;
+
+export function assertTalkRelaySessionCapacity(
+  sessions: readonly Pick<TalkRelayLifecycleSession, "connId">[],
+  connId: string,
+  label: "realtime relay" | "transcription Talk",
+): void {
+  if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
+    throw new Error(`Too many active ${label} sessions`);
+  }
+  if (
+    sessions.filter((session) => session.connId === connId).length >= MAX_RELAY_SESSIONS_PER_CONN
+  ) {
+    throw new Error(`Too many active ${label} sessions for this connection`);
+  }
+}
 
 function isExpiredTalkRelaySession(
   session: TalkRelayLifecycleSession,

@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -123,13 +124,11 @@ suite.define(() => {
         .toBeLessThan(beforeFooter - 100);
       await waitForChatScrollIdle(page);
 
-      const progress = page.locator(
-        ".session-progress-card--composer .session-progress-card__body",
-      );
+      await openChatDetails(page);
+      const progress = page.locator('.chat-details[role="dialog"]');
       await expect
-        .poll(() => page.locator(".session-progress-card--composer").getAttribute("open"))
-        .toBeNull();
-      await page.locator(".session-progress-card--composer > summary").click();
+        .poll(() => page.locator('[data-progress-card-placement="details"]').getAttribute("open"))
+        .toBe("");
       await progress.waitFor();
       await waitForChatScrollIdle(page);
       const beforeProgress = await thread.evaluate((element) => element.scrollTop);
@@ -237,7 +236,7 @@ suite.define(() => {
     }
   });
 
-  it("scrolls a delayed pending send past expanding progress before the ACK resolves", async () => {
+  it("scrolls a delayed pending send while Details progress expands before the ACK resolves", async () => {
     const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactDirParent
       ? createControlUiE2eArtifactDir("chat-send-scroll", artifactDirParent)
@@ -285,7 +284,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("History message 49").waitFor({ timeout: 10_000 });
-      const progress = page.locator('[data-progress-card-placement="composer"]');
+      const progress = page.locator('[data-progress-card-placement="details"]');
+      await openChatDetails(page);
       await expect.poll(() => progress.getAttribute("open")).toBe("");
       await progress.locator("summary").click();
       await expect.poll(() => progress.getAttribute("open")).toBeNull();
@@ -316,8 +316,9 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
         );
       }
-      // Keyboard submission can land while the progress disclosure is resizing;
-      // a pointer click on the moving send button would wait for stable layout.
+      // Opening Details must not interfere with submission or the pending-send
+      // scroll, even before the delayed ACK resolves.
+      await openChatDetails(page);
       await progress.locator("summary").click();
       await composer.press("Enter");
 

@@ -171,7 +171,15 @@ Themes can choose a neutral prompt mark instead of the lobster mascot and supply
 
 Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
 
-Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images stay quiet behind content and follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. New-session and chat composers use a lightly translucent surface instead of repeating the image; navigation, menus, and reading cards retain their own surfaces. No external image requests are required. Increased contrast and forced colors hide the artwork and make composers opaque; reduced transparency also makes composers opaque.
+Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. Existing users keep this theme artwork until they change their background preference.
+
+In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Conversations** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with conversation backgrounds off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
+
+Custom images belong to your authenticated profile, not the shared conversation. Upload a static JPEG, PNG, or WebP up to 8 MiB and 25 megapixels. The Gateway resizes it to at most 2560 pixels on the longest side, strips metadata, and saves a normalized JPEG of at most 2 MiB. The original file is not retained. You can keep one image; **Replace image** replaces it and **Remove image** deletes it. Choosing None or theme artwork retains the image for later use. Uploading requires profile write access; the Control UI explains when a personal profile or permission is unavailable.
+
+Choose **Faded** to fade artwork into the canvas, or **Full bleed** to keep it across the full canvas. Both protect text contrast using the active palette; the modes change coverage, not readability. Custom-image visibility is bounded even at maximum strength, and Full bleed always retains a theme-colored overlay. Faded is the default when no presentation mode is saved. Both modes keep the composer and user-message bubbles solid and fade the artwork near the top bar. **Image visibility** adjusts decorative strength; moving its slider briefly previews the background in Settings. Source and presentation are independent, so changing or removing an image does not reset the selected mode.
+
+A missing image leaves the normal theme-colored canvas. Disabled surfaces do not request the private image. Increased contrast and forced colors suppress decorative imagery; reduced transparency suppresses custom artwork and restores opaque writing surfaces. No external image host is contacted.
 
 Themes imported from tweakcn are stored only in the current browser profile; they are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches back to Claw if the imported theme was active.
 
@@ -401,6 +409,11 @@ discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
+
+When Advanced settings reconnects, a form with an already loaded schema stays
+visible at your reading position while the schema refreshes. Form and Setup
+controls cannot be edited until that refresh finishes. The first load still
+shows **Loading schema…** until a schema is available.
 
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or

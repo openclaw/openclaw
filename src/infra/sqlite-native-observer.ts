@@ -103,7 +103,9 @@ function createIteratorLifetime(
 const bindingMutation: SqliteNativeMutation = {
   schemaChange: false,
   mainSchemaChange: false,
+  temporaryTableSchemaChange: false,
   dataChange: false,
+  temporaryWriteTables: undefined,
   control: undefined,
 };
 
@@ -337,7 +339,10 @@ export function observeSqliteNativeOperations(
             return nativeReturn.apply(this, args);
           }
           const result = execute(
-            () => reset(() => nativeReturn.apply(this, args), "return"),
+            () =>
+              lifetime.finished || lifetime.invalidated
+                ? nativeReturn.apply(this, args)
+                : reset(() => nativeReturn.apply(this, args), "return"),
             bindingMutation,
             "bind",
           );

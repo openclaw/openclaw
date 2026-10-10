@@ -287,7 +287,9 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     }
     await expect.poll(() => document.activeElement).toBe(child);
     await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
-    await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe(highlight);
+    // A loaded WebKit worker can sample the color transition just before the poll expires.
+    await Promise.all(parent.getAnimations().map((animation) => animation.finished));
+    expect(getComputedStyle(parent).backgroundColor).toBe(highlight);
 
     await userEvent.keyboard("{ArrowLeft}");
     await expect.poll(() => document.activeElement).toBe(parent);
