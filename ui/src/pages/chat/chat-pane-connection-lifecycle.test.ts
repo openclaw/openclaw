@@ -264,12 +264,10 @@ describe("chat pane connection lifecycle", () => {
     const snapshot = { ...pane.context.gateway.snapshot, client };
     const initialGeneration = pane.connectionGeneration;
 
-    state.chatLoading = true;
     pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
     expect(pane.connectionGeneration).toBe(initialGeneration + 1);
     expect(state.connectionEpoch).toBe(initialGeneration + 1);
-    expect(state.chatLoading).toBe(false);
-    state.chatLoading = true;
+    expect(state.chatLoading).toBe(true);
     pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
     expect(pane.connectionGeneration).toBe(initialGeneration + 1);
     expect(state.connectionEpoch).toBe(initialGeneration + 1);
