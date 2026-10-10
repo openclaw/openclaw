@@ -1,6 +1,7 @@
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { executeSandboxRegistryCommand } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import { captureWorkspaceStateReceipt } from "../agents/workspace-state-publication.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -177,13 +178,17 @@ export function executeSharedStateCommand(
     return importSandboxRegistryRow(command.input, writeOptions);
   }
   if (command.type === "workspace.replaceAttestation") {
-    return runOpenClawStateWriteTransaction((writer) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
-      return result;
-    }, writeOptions);
+    return runOpenClawStateWriteTransaction(
+      (writer) =>
+        captureWorkspaceStateReceipt(writer.db, () => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
+          return result;
+        }),
+      writeOptions,
+    );
   }
   if (
     command.type === "workspace.snapshotAndRegister" ||

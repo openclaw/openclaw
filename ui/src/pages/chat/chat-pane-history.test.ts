@@ -166,7 +166,7 @@ describe("chat pane native history pagination", () => {
     },
   );
 
-  it("keeps all run output above the steer through refresh and later cumulative deltas", async () => {
+  it("keeps the accepted steer between saved output and the live tail through refresh", async () => {
     const history = createDeferred<ChatHistoryResult>();
     const request = vi.fn(() => history.promise);
     const client = { request } as unknown as GatewayBrowserClient;
@@ -222,8 +222,8 @@ describe("chat pane native history pagination", () => {
     delta("Saved opening. Still working.");
     const liveExpected = [
       "Start working.",
-      "Saved opening. Still working.",
       "Also check the result.",
+      "Saved opening. Still working.",
     ];
 
     try {
@@ -256,15 +256,15 @@ describe("chat pane native history pagination", () => {
       expect(renderedText()).toEqual([
         "Start working.",
         "Saved opening.",
-        "Still working.",
         "Also check the result.",
+        "Still working.",
       ]);
       delta("Still working. More progress.");
       expect(renderedText()).toEqual([
         "Start working.",
         "Saved opening.",
-        "Still working. More progress.",
         "Also check the result.",
+        "Still working. More progress.",
       ]);
     } finally {
       state.connected = false;

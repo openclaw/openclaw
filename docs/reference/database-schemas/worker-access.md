@@ -90,7 +90,12 @@ restore prior facts. Native settlement and result delivery remain separate:
 retained commit evidence survives a lost reply, while missing or conflicting
 evidence stays unknown. A confirmed identity mutation still notifies lifecycle
 observers when native settlement is unknown; retained read facts remain fenced.
-Unknown writes are never automatically repeated.
+Unknown writes are never automatically repeated. A failed session patch with confirmed
+native completion and explicitly absent commit evidence is a rollback, not an
+unknown write. Maintenance conflicts retain their typed identity across the
+worker boundary so reply initialization can refresh through its existing bounded
+conflict retry. Missing settlement or mismatched receipts remain unknown. This
+changes no schema, stored bytes, retention, or update behavior.
 
 This is a scoped completeness contract, not global writer certification. Conversation
 and plugin-state writers, approvals,
@@ -328,6 +333,42 @@ are complete. The synchronous SDK methods and native Promise wrappers remain
 synchronous compatibility paths; receipt publication does not migrate their SQL
 to a worker. There is no schema, stored-byte, retention, durability, permission,
 or update-format change.
+
+### Approval, placement, and workspace receipts
+
+Managed approval and exec writers capture exact row postimages and deletion
+facts in their mutation statements. Approval expiry and corrupt-row repair are
+writers too. Effective exec policy and usage accounting remain separate domains:
+recording a use does not advertise a new policy. Existing cron grant and
+resolution receipts retain their settlement meaning alongside those facts.
+
+Environment receipts replace each affected environment's complete environment,
+credential, and attachment tuple, including explicit absence. Placement receipts
+retain exact turn, tool, pending-result, and journal-presence facts through the
+existing authority owner. Committed facts install when native commit evidence
+arrives, before the ordinary reply; the writer queue still owns accepted work
+until settlement. A lost reply never triggers mutation replay.
+
+Workspace setup, aliases, attestation sets, local and repository workspaces, and
+node prepared-workspace lifecycle operations publish through their existing
+native or worker kernels. Deletion remains a tombstone, and newer native changes
+supersede delayed worker postimages. All domains in a compound receipt install
+before public observers. Nested rollback discards tentative facts; a confirmed
+rollback preserves the previous committed projection. Missing accepted receipts,
+unknown settlement, or failed installation invalidate the affected domain.
+
+This coverage applies to the named managed writers. Standing-grant generation
+companions, cascade child identities, and cron-specific worker transport of grant
+revocations remain incomplete. Move error/cancellation paths retain explicit
+invalidation instead of claiming a complete move postimage. Raw handles,
+unmanaged trigger or cascade effects, and offline Doctor relocation/import also
+remain outside this coverage. Final exec, node-dispatch, placement, and workspace authority guards
+remain in place. Receipt publication grants no permission and no cross-store
+exclusion. The Gateway owns runtime writes; other processes use its APIs or write
+only while it is stopped. No runtime freshness probes are added.
+
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+Released synchronous methods still commit and install their facts before returning.
 
 ### Foreign observation and recertification
 
@@ -1823,6 +1864,36 @@ contract retain native behavior and allocate no actor. This prerequisite changes
 no schema, stored bytes, durability, retention, permissions, or update migration;
 it claims no incognito T1 retirement. The production owner selection and native
 selector deletion remain a later atomic cutover.
+
+### Incognito command, CLI, and harness consumers (P03, inactive)
+
+Explicit actor bindings now carry command admission, CLI history and compaction,
+harness consent, node grants, sandbox classification, and session lineage through
+their existing owners. Asynchronous preparation reads the captured actor. Final
+synchronous guards consume its finite committed policy and identity facts, which
+publish before observers and reflect later revocation. They do not cache full
+session rows, query the actor queue, or probe for foreign commits.
+
+CLI transcript recording captures its actor before accepting events. Its ordered
+queue settles accepted appends before finalization returns, including stop and
+timeout salvage. Model rollback and final-delivery guards retain that same actor
+for delayed callbacks. Cancellation snapshots read current facts without waiting
+behind the run being stopped. Same-process restart recovery retains exact input
+source predicates through admission and delivery; shutdown marking excludes
+volatile stores from durable restart discovery.
+
+Partial transcript markers and store-plus-session-ID targets use the existing
+noncreating target readers. An explicitly selected absence remains missing and
+cannot discover a durable replacement; an ended actor remains ended. Standalone
+CLI diagnostics cannot inspect another process's private actor and keep their
+existing missing-session or warning result.
+
+This composition is inactive: production incognito acquisition remains host-owned
+until P12, and ordinary unbound calls allocate no actor. Native selectors remain
+for that production route, with worker-local kernels, detached SessionManagers,
+and documented deprecated durable SDK adapters retained under their own contracts.
+No schema, retention, permission, content limit, or update migration changes are
+introduced, and no incognito T1 retirement is claimed.
 
 ### Incognito SDK history preparation (P04, inactive)
 
