@@ -785,7 +785,10 @@ export const en: TranslationMap & {
       "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
-    sessionSettings: "Session settings",
+    advanced: "Advanced",
+    copyDetails: "Copy details",
+    copyLink: "Copy link",
+    archiveSessionOnly: "Session only",
     communication: {
       send: "Send messages",
       receive: "Receive messages",

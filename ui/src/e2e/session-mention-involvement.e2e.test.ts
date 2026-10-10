@@ -150,6 +150,7 @@ suite.define(() => {
         await expectBrowser(target).toBeVisible();
         await target.hover();
         await target.click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
         const show = page.getByRole("menuitem", { name: "Show in Involving me", exact: true });
         await expectBrowser(show).toBeVisible();
         await captureUiProof(suite, page, "04-restore-from-all-owners.png");

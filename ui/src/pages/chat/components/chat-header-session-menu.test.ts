@@ -442,13 +442,11 @@ describe("chat header session menu", () => {
           "Pin session",
           "Rename…",
           "Mark as unread",
-          "Archive session",
-          "Session settings",
+          "Copy link",
+          "Assign to…",
           "Move to group",
-          "Fork conversation",
-          "Copy",
-          "Open in",
-          "Delete…",
+          "Archive session",
+          "Advanced",
         ]);
         expect(menu.querySelector("[slot='submenu']")).toBeNull();
         select(menu, "open-command-palette");
@@ -456,7 +454,6 @@ describe("chat header session menu", () => {
         await navigate("open-copy");
         expect(rootLabels(menu)).toEqual([
           "Back",
-          "Session link",
           "Preview link",
           "Conversation as Markdown",
           "Session ID",

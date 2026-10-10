@@ -309,12 +309,8 @@ describe("AppSidebar session mutation feedback", () => {
 
     const menu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menu.textContent).toContain("Bob"));
-    expect(menuItemLabels(menu)).not.toContain("Assign to…");
-    const settings = menuItem(menu, "Session settings");
-    expect(menuItemLabels(settings).filter((label) => label.startsWith("Assign to"))).toEqual([
-      "Assign to…",
-    ]);
-    const assignmentMenu = menuItem(settings, "Assign to…");
+    expect(menuItemLabels(menu)).toContain("Assign to…");
+    const assignmentMenu = menuItem(menu, "Assign to…");
     expect(
       Array.from(
         assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
@@ -342,6 +338,7 @@ describe("AppSidebar session mutation feedback", () => {
     });
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
+    await waitForFast(() => expect(menuItemLabels(selfMenu)).toContain("Assign to…"));
     const selfItem = selfMenu.querySelector<HTMLElement>(
       ':scope > wa-dropdown > wa-dropdown-item wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]',
     );

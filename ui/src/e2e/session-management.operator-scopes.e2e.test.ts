@@ -205,7 +205,7 @@ suite.define(() => {
           expect(await action.getAttribute("disabled")).not.toBeNull();
           await action.click({ force: true });
         }
-        await openSessionMenuSubmenu(page, "Session settings");
+        await openSessionMenuSubmenu(page, "Advanced");
         const appearance = menu.getByRole("menuitem", { name: "Icon & color", exact: true });
         expect(await appearance.getAttribute("disabled")).not.toBeNull();
         await appearance.click({ force: true });

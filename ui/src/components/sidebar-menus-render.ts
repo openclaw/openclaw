@@ -288,6 +288,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             sharedCategory !== null &&
             rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
         }}
+        .involvingMeContext=${host.sessionInvolvingMeFilterActive}
         .selectionCount=${rows.length}
         .compact=${isMobileNavLayout()}
         .lastActive=${batchRows ? "" : formatSidebarTimestamp(session.updatedAt)}

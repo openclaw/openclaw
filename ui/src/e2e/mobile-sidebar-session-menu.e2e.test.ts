@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  createControlUiMockSameOriginGatewayScript,
   captureControlUiE2eFailureDiagnostics,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -312,6 +313,159 @@ suite.define(() => {
       } finally {
         await context.close();
       }
+    },
+  );
+});
+
+suite.define(() => {
+  it.each([1280, 390])(
+    "shows everyday actions and the advanced page at width %i",
+    async (width) => {
+      await suite.withPage(
+        { colorScheme: "dark", hasTouch: width === 390, viewport: { width, height: 900 } },
+        async ({ page, context }) => {
+          const sessionKey = "agent:main:release-checklist";
+          await installMockGateway(page, {
+            sessionKey,
+            featureMethods: [
+              "chat.startup",
+              "sessions.assignOwner",
+              "sessions.setInvolvement",
+              "sessions.create",
+              "sessions.patch",
+              "users.list",
+            ],
+            sessionGroups: ["Product", "Research"],
+            hasMultipleSessionSharingIdentities: true,
+            operatorScopes: ["operator.read", "operator.write", "operator.admin"],
+            presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+            sessions: [
+              sessionRow(sessionKey, "Release checklist", Date.now() - 300_000, {
+                hiddenFromInvolvingMe: false,
+                owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
+                effectiveCommunication: { send: "always", receive: "ask" },
+              }),
+              sessionRow("agent:main:design-review", "Design review", Date.now() - 600_000),
+              sessionRow("agent:main:customer-notes", "Customer notes", Date.now() - 900_000),
+            ],
+            historyMessages: [
+              { role: "user", content: "What is left before the release?" },
+              {
+                role: "assistant",
+                content:
+                  "The implementation is ready. Next: review the changes, verify the checklist, and publish the release notes.",
+              },
+            ],
+            methodResponses: {
+              "users.list": {
+                profiles: ["Ada", "Ben"].map((name) => ({
+                  id: "profile-" + name.toLowerCase(),
+                  displayName: name,
+                  emails: [],
+                  mergedInto: null,
+                  avatarMime: null,
+                  hasAvatar: false,
+                  githubIdentity: null,
+                  createdAt: 1,
+                  updatedAt: 1,
+                })),
+              },
+            },
+          });
+          await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          if (width === 390) {
+            await page
+              .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+              .first()
+              .click();
+            await waitForMobileSidebarDrawerOpen(page);
+          }
+          const row = page.locator('[data-session-key="' + sessionKey + '"]');
+          await row.locator(".sidebar-recent-session__link").click({ button: "right" });
+          const menu = page.locator("openclaw-session-menu");
+          await menu.getByRole("menuitem", { name: "Pin session", exact: true }).waitFor();
+          const phase = "after-" + width;
+          expect(
+            await menu
+              .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
+              .allTextContents(),
+          ).toEqual([
+            "Pin session",
+            "Rename…",
+            "Mark as unread",
+            "Copy link",
+            "Assign to…",
+            "Move to group",
+            "Snooze",
+            "Archive session",
+            "Advanced",
+          ]);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [menu.getByRole("menuitem", { name: "Pin session", exact: true })],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(suite.artifactDir, phase + "-root.png"), frame.png);
+          }
+          await menu.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+          await expect
+            .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+            .toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await row.locator(".sidebar-recent-session__link").click({ button: "right" });
+          await menu.getByRole("menuitem", { name: "Assign to…", exact: true }).click();
+          await menu.getByRole("menuitemradio", { name: "Ben", exact: true }).waitFor();
+          if (width === 390) {
+            expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+            await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+            await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
+          } else {
+            await page.keyboard.press("ArrowLeft");
+          }
+          const advanced = menu.getByRole("menuitem", {
+            name: "Advanced",
+            exact: true,
+          });
+          await advanced.click();
+          await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [
+                width === 390
+                  ? menu.getByRole("menuitem", { name: "Back", exact: true })
+                  : advanced,
+                menu.locator(".session-menu__communication"),
+              ],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(suite.artifactDir, phase + "-advanced.png"), frame.png);
+          }
+          if (width === 390) {
+            for (const label of ["Copy details", "Open in", "Icon & color"]) {
+              await menu.getByRole("menuitem", { name: label, exact: true }).click();
+              expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+              await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+              await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
+            }
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [menu.getByRole("menuitem", { name: "Back", exact: true })],
+              { animations: "disabled" },
+            );
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+              await writeFile(path.join(suite.artifactDir, "after-phone-back.png"), frame.png);
+            }
+            await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+            await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
+          }
+        },
+      );
     },
   );
 });

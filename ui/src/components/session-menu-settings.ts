@@ -1,5 +1,4 @@
 import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
-import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -9,32 +8,34 @@ import {
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
 import { SessionDetailsController } from "./session-details-controller.ts";
+import type {
+  SessionMenuActionsState,
+  SessionManagementActionKind,
+} from "./session-menu-actions.ts";
+import type { CompactSessionMenuView } from "./session-menu-compact.ts";
 
-type SessionSettingsActionKind =
-  | "set-icon"
-  | "set-color"
-  | "assign-owner"
-  | SessionCommunicationMenuAction["kind"];
+type SessionAdvancedActionKind = "set-icon" | "set-color" | SessionCommunicationMenuAction["kind"];
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
-  readState: () => {
-    session: Pick<GatewaySessionRow, "communication" | "effectiveCommunication"> & {
-      target?: { key: string; agentId?: string };
-      sessionId: string | null;
-    };
-    selectionCount: number;
-    actionDisabledReasons: Partial<Record<SessionSettingsActionKind, string>>;
-  };
-  disabled: (kind: SessionSettingsActionKind) => boolean;
+  readState: () => SessionMenuActionsState;
+  disabled: (kind: SessionAdvancedActionKind) => boolean;
   renderSubmenu: (
-    view: "settings" | "icon" | "assign-owner",
+    view: Exclude<CompactSessionMenuView, "root">,
     label: string,
     icon: TemplateResult,
     disabled?: boolean,
     title?: string,
     inline?: boolean,
   ) => TemplateResult;
+  renderItem: (
+    kind: SessionManagementActionKind,
+    label: string,
+    icon: TemplateResult,
+    options: { inline: boolean; shortcut?: string; title?: string },
+  ) => TemplateResult;
+  renderInvolvement: (inline: boolean) => TemplateResult | typeof nothing;
+  renderDelete: (inline: boolean) => TemplateResult;
   runAction: (action: SessionCommunicationMenuAction) => void;
 };
 
@@ -119,7 +120,7 @@ export class SessionMenuSettings {
   renderAction() {
     return this.options.readState().selectionCount > 1
       ? nothing
-      : this.options.renderSubmenu("settings", t("sessionsView.sessionSettings"), icons.settings);
+      : this.options.renderSubmenu("advanced", t("sessionsView.advanced"), icons.settings);
   }
 
   render(inline: boolean): TemplateResult {
@@ -133,14 +134,24 @@ export class SessionMenuSettings {
         state.actionDisabledReasons["set-icon"] ?? state.actionDisabledReasons["set-color"],
         inline,
       )}
-      ${this.options.renderSubmenu(
-        "assign-owner",
-        t("sessionsView.assignTo"),
-        icons.users,
-        this.options.disabled("assign-owner"),
-        state.actionDisabledReasons["assign-owner"],
+      ${this.options.renderItem("fork", t("sessionsView.forkSession"), icons.copy, {
         inline,
-      )}
+        shortcut: "f",
+        title: state.forkFromLastCompleted ? t("sessionsView.forkFromLastCompleted") : undefined,
+      })}
+      ${this.options.renderSubmenu("copy", t("sessionsView.copyDetails"), icons.copy, false, undefined, inline)}
+      ${
+        state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
+          ? this.options.renderSubmenu(
+              "open-in",
+              t("sessionsView.openInEditorMenu"),
+              icons.externalLink,
+              false,
+              undefined,
+              inline,
+            )
+          : nothing
+      }
       ${this.communicationMenu.renderActions(inline)}
       ${
         this.settingsDetails.error
@@ -155,6 +166,13 @@ export class SessionMenuSettings {
               >`
           : nothing
       }
+      ${!state.involvingMeContext ? this.options.renderInvolvement(inline) : nothing}
+      <div
+        slot=${inline ? nothing : "submenu"}
+        class="session-menu__separator"
+        role="separator"
+      ></div>
+      ${this.options.renderDelete(inline)}
     `;
   }
 }
