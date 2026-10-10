@@ -7,6 +7,7 @@ import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectedUserGitHubConnection,
   disconnectUserGitHubConnectionInDatabase,
+  listUserGitHubConnectionsInDatabase,
   readUserGitHubConnectionInDatabase,
   readCanonicalUserGitHubConnectionInDatabase,
   writeUserGitHubConnectionInDatabase,
@@ -146,6 +147,10 @@ function mutate<T>(
 }
 
 export const userGitHubConnectionOperations = {
+  "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
+    readUserGitHubConnectionInDatabase(open().db, owner),
+  "userGitHubConnections.list": (_input: undefined, { open }) =>
+    listUserGitHubConnectionsInDatabase(open().db),
   "userGitHubConnections.mutate": (
     input: { owner: string; mutation: UserGitHubConnectionMutation },
     context,

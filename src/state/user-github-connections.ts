@@ -3,7 +3,6 @@ import {
   createSqliteWorkerOperationAdmission,
   observeSqliteWorkerCommittedFacts,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -37,7 +36,7 @@ export type {
   UserGitHubDevice,
 } from "./user-github-connections.types.js";
 
-/** Native final-effect guard; preparation uses the read worker. */
+/** Native final-effect guard; preparation uses the shared-state worker. */
 export function resolvePersonalGitHubOwner(
   profile: string,
   db = openOpenClawStateDatabase().db,
@@ -93,32 +92,24 @@ export async function readUserGitHubConnectionAsync(
   owner: string,
 ): Promise<UserGitHubConnection | undefined> {
   const context = captureOpenClawStateReadWorkerContext();
-  const reply = await executeExistingOpenClawStateRead(
-    { path: context.admission.databasePath, env: context.environment },
-    { type: "userGitHubConnections.read", owner },
-    { context, current: true, preferIndependentWarmRead: true },
+  const connection = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "userGitHubConnections.read", input: { owner } }),
+    { existingOnly: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userGitHubConnections.read")) {
-    throw new Error(reply.ok ? "Unexpected personal GitHub connection reply" : reply.message);
-  }
-  return reply?.connection
-    ? parseUserGitHubConnection(JSON.stringify(reply.connection))
-    : undefined;
+  return connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
 }
 
 export async function listUserGitHubConnectionsAsync(): Promise<UserGitHubConnectionEntry[]> {
   const context = captureOpenClawStateReadWorkerContext();
-  const reply = await executeExistingOpenClawStateRead(
-    { path: context.admission.databasePath, env: context.environment },
-    { type: "userGitHubConnections.list" },
-    { context, current: true, preferIndependentWarmRead: true },
+  const connections = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "userGitHubConnections.list", input: undefined }),
+    { existingOnly: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userGitHubConnections.list")) {
-    throw new Error(reply.ok ? "Unexpected personal GitHub connections reply" : reply.message);
-  }
-  return (reply?.connections ?? []).map(({ owner, connection }) => ({
+  return (connections ?? []).map(({ owner, connection }) => ({
     owner,
     connection: parseUserGitHubConnection(JSON.stringify(connection)),
   }));
