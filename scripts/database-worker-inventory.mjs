@@ -1986,6 +1986,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "resolveUserProfileGitHubAttributionInDatabase",
+          "selectUserProfileRoleAuthority",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
           "selectGitHubProfileAlias",
@@ -1993,7 +1994,7 @@ const reviewedOperations = new Map([
           "applyVerifiedGitHubIdentity.writeIdentity",
         ],
         evidence:
-          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:474,482 and merges :375,425. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:474,482 and merges :375,425. Role authority runs only through user-profiles.worker.ts:152. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
       },
     ],
   ],
