@@ -26,8 +26,11 @@ OpenClaw provides `pixverse` as an official external plugin for hosted PixVerse 
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/pixverse-provider
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
   <Step title="Set the API key">
     ```bash
@@ -72,7 +75,7 @@ Local image references are uploaded to PixVerse before the image-to-video reques
 | Generated audio | `audio: true`                                                                                                                    |
 
 <Note>
-PixVerse image template generation is not exposed through `image_generate` yet. That API is template-id driven, while OpenClaw's shared image-generation contract does not currently have a PixVerse-specific typed option bag.
+PixVerse image template generation is not exposed through `image_generate`. That API is template-id driven, while OpenClaw's shared image-generation contract has no PixVerse-specific typed option bag.
 </Note>
 
 ## Provider options

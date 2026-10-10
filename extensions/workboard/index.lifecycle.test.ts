@@ -1,14 +1,19 @@
-import { Command } from "commander";
+import { fileURLToPath } from "node:url";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginService } from "./api.js";
+import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
 
+const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
+
+const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
+
 function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.register) {
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const methods = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
   let gatewayStart = () => {};
   let gatewayStop = () => {};
@@ -32,12 +37,14 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
           };
         }
       };
-      register(api);
+      register({ ...api, runtimeSource });
     },
   });
   const warn = vi.fn();
   const emit = vi.fn();
+  const scheduler = createTestPluginServiceScheduler();
   const serviceContext = {
+    scheduler,
     config: {},
     stateDir: process.env.OPENCLAW_STATE_DIR!,
     logger: { ...captured.api.logger, warn },
@@ -51,9 +58,14 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
     await vi.advanceTimersByTimeAsync(0);
   };
   const stop = async () => {
-    gatewayStop();
-    for (const service of services) {
-      await service.stop?.(serviceContext);
+    scheduler.beginClose();
+    try {
+      gatewayStop();
+      for (const service of services) {
+        await service.stop?.(serviceContext);
+      }
+    } finally {
+      await scheduler.stop();
     }
   };
   const cleanup = async (
@@ -68,28 +80,6 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
       await lifecycle.dispose?.();
     }
   };
-  const run = async (...args: string[]): Promise<unknown> => {
-    const program = new Command().exitOverride();
-    for (const registration of captured.cliRegistrars) {
-      await registration.register({
-        program,
-        parentPath: [],
-        config: {},
-        logger: captured.api.logger,
-      });
-    }
-    const chunks: string[] = [];
-    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      chunks.push(String(chunk));
-      return true;
-    });
-    try {
-      await program.parseAsync(["workboard", ...args, "--json"], { from: "user" });
-      return JSON.parse(chunks.join(""));
-    } finally {
-      write.mockRestore();
-    }
-  };
   const call = async (method: string, params = {}) => {
     const handler = methods.get(method);
     if (!handler) {
@@ -100,28 +90,28 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
     const [ok, payload, error] = respond.mock.calls[0] ?? [];
     return { ok, payload, error };
   };
-  return { cleanup, dispose, run, start, stop, warn, emit, call };
+  return { cleanup, dispose, start, stop, warn, emit, call };
 }
 
 describe("Workboard registration cleanup", () => {
   it("registers store disposal before a later runtime dependency throws", async () => {
     await withStateDirEnv("workboard-registration-failure-", async () => {
-      const store = WorkboardStore.openSqlite();
+      const store = WorkboardStore.openSqlite(workerModuleUrl);
       const opened = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValueOnce(store);
-      const failure = new Error("synthetic Gateway runtime unavailable");
+      const failure = new Error("synthetic worktree runtime unavailable");
       try {
         const captured = capturePluginRegistration({
           ...plugin,
           register(api) {
             const runtime = new Proxy(api.runtime, {
               get(target, property) {
-                if (property === "gateway") {
+                if (property === "worktrees") {
                   throw failure;
                 }
                 return Reflect.get(target, property, target);
               },
             });
-            expect(() => plugin.register({ ...api, runtime })).toThrow(failure);
+            expect(() => plugin.register({ ...api, runtime, runtimeSource })).toThrow(failure);
           },
         });
         expect(captured.runtimeLifecycles).toHaveLength(1);
@@ -145,7 +135,11 @@ describe("Workboard registration cleanup", () => {
         const retire = () => (action === "dispose" ? first.dispose() : first.cleanup({ reason }));
         try {
           await first.start();
-          await first.run("create", "Retained card");
+          expect(
+            await first.call("workboard.cards.create", { title: "Retained card" }),
+          ).toMatchObject({
+            ok: true,
+          });
           for (const context of [
             { reason: "reset" as const },
             { reason: "delete" as const },
@@ -153,30 +147,44 @@ describe("Workboard registration cleanup", () => {
             { reason, runId: "other-run" },
           ]) {
             await first.cleanup(context);
-            await expect(first.run("list")).resolves.toMatchObject({
-              cards: [expect.objectContaining({ title: "Retained card" })],
+            expect(await first.call("workboard.cards.list")).toMatchObject({
+              ok: true,
+              payload: { cards: [expect.objectContaining({ title: "Retained card" })] },
             });
           }
 
           expect(vi.getTimerCount()).toBeGreaterThan(0);
           await retire();
-          await expect(first.run("list")).rejects.toThrow("workboard store is closed.");
+          expect(await first.call("workboard.cards.list")).toMatchObject({
+            ok: false,
+            error: { message: "workboard store is closed." },
+          });
           await vi.advanceTimersByTimeAsync(60_000);
           expect(first.warn).not.toHaveBeenCalled();
           expect(vi.getTimerCount()).toBe(0);
           await second.start();
-          await expect(second.run("create", "Fresh card")).resolves.toMatchObject({
-            card: { title: "Fresh card" },
+          expect(
+            await second.call("workboard.cards.create", { title: "Fresh card" }),
+          ).toMatchObject({
+            ok: true,
+            payload: { card: { title: "Fresh card" } },
           });
-          await expect(second.run("list")).resolves.toMatchObject({
-            cards: expect.arrayContaining([
-              expect.objectContaining({ title: "Retained card" }),
-              expect.objectContaining({ title: "Fresh card" }),
-            ]),
+          expect(await second.call("workboard.cards.list")).toMatchObject({
+            ok: true,
+            payload: {
+              cards: expect.arrayContaining([
+                expect.objectContaining({ title: "Retained card" }),
+                expect.objectContaining({ title: "Fresh card" }),
+              ]),
+            },
           });
           await retire();
           second.emit.mockClear();
-          await second.run("create", "After repeated retirement");
+          expect(
+            await second.call("workboard.cards.create", { title: "After repeated retirement" }),
+          ).toMatchObject({
+            ok: true,
+          });
           expect(second.emit).toHaveBeenCalled();
         } finally {
           await first.stop();
@@ -193,7 +201,8 @@ describe("Workboard registration cleanup", () => {
     "retains public Gateway store ownership for %s stores",
     async (ownership) => {
       await withStateDirEnv("workboard-gateway-lifecycle-", async () => {
-        const store = ownership === "injected" ? WorkboardStore.openSqlite() : undefined;
+        const store =
+          ownership === "injected" ? WorkboardStore.openSqlite(workerModuleUrl) : undefined;
         const generation = registerGeneration((api) =>
           registerWorkboardGatewayMethods({ api, store }),
         );
@@ -214,7 +223,7 @@ describe("Workboard registration cleanup", () => {
           expect(await generation.call("workboard.cards.list")).toMatchObject({
             ok: ownership === "injected",
           });
-          const reopened = WorkboardStore.openSqlite();
+          const reopened = WorkboardStore.openSqlite(workerModuleUrl);
           try {
             expect(await reopened.listBoards()).toMatchObject({
               boards: expect.arrayContaining([

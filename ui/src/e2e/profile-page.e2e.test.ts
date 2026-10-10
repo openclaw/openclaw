@@ -180,9 +180,7 @@ suite.define(() => {
           });
         });
         const gateway = await openProfilePage(page, {
-          "users.self": {
-            sequence: [{ profile: testProfile }, { profile: linkedGitHubProfile }],
-          },
+          "users.self": { profile: testProfile },
           "users.prefs.get": {
             status: "ok",
             entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
@@ -211,8 +209,10 @@ suite.define(() => {
         ).toHaveCount(0);
         await screenshot(page, "08-github-identity-unlinked.png");
 
+        await gateway.setMethodResponse("users.self", { profile: linkedGitHubProfile });
+        const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
         await page.locator(".profile-refresh").click();
-        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
         const prefGet = await gateway.waitForRequest("users.prefs.get");
         expect(prefGet.params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
         const account = githubRow.getByRole("link", { name: "@octocat" });
@@ -296,6 +296,7 @@ suite.define(() => {
         const gateway = await openProfilePage(
           page,
           {
+            "users.self": { __mockError: { code: "FORBIDDEN", message: "No authenticated user" } },
             "agent.identity.get": {
               agentId: "main",
               name: "Main agent",
@@ -316,7 +317,7 @@ suite.define(() => {
         );
 
         await gateway.waitForRequest("agent.identity.get");
-        const image = page.locator(".profile-hero__avatar-image");
+        const image = page.locator(".profile-hero__avatar .identity-avatar__image");
         await image.waitFor({ timeout: 10_000 });
         await expect.poll(() => image.getAttribute("src")).toMatch(/^blob:/u);
         await expect
@@ -497,7 +498,7 @@ suite.define(() => {
         await expect(page.locator(".sidebar-identity-card__name")).toHaveText(updatedDisplayName);
         expect(
           await originalSidebarImage?.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+            image.closest(".viewer-avatar")?.classList.contains("is-pending"),
           ),
         ).toBe(true);
         expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
@@ -744,8 +745,9 @@ suite.define(() => {
         });
         await startSignIn();
         await expect(section.locator(".wizard-step__progress")).toHaveText("Saving account…");
+        const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
         await page.locator(".profile-refresh").click();
-        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
         await expect(section.locator(".profile-auth-connect-cancel")).toBeEnabled();
         await captureAccounts(
           "model-accounts-saving.png",
@@ -784,7 +786,12 @@ suite.define(() => {
         await captureAccounts("model-accounts-default-selected.png", selectedAccount);
         await gateway.setMethodResponse("users.unlinkAuthProfile", { links: [] });
         await gateway.setMethodResponse("users.listModelAccounts", inventory(null));
-        await section.getByRole("button", { name: "Use gateway default", exact: true }).click();
+        await section
+          .getByRole("button", {
+            name: `Use gateway default: OpenAI · ${work.label}`,
+            exact: true,
+          })
+          .click();
         await expect(selectedAccount).toHaveCount(0);
         await expect(section.locator(".profile-auth-account-select")).toHaveCount(3);
         await expect(section.locator(".model-accounts-notice")).toContainText(

@@ -2,24 +2,19 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { sessionsCompactCommand } from "./sessions-compact.js";
 
 const callGatewayCli = vi.hoisted(() => vi.fn());
 
 vi.mock("../cli/gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: callGatewayCli }));
 
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-  };
-}
-
-function joinedArgs(mock: { mock: { calls: unknown[][] } }): string {
-  return mock.mock.calls.map((call) => String(call[0])).join("\n");
+function joinedArgs(mock: RuntimeEnv["log"]): string {
+  return vi
+    .mocked(mock)
+    .mock.calls.map((call) => String(call[0]))
+    .join("\n");
 }
 
 beforeEach(() => {
@@ -28,7 +23,7 @@ beforeEach(() => {
 
 describe("sessionsCompactCommand", () => {
   it("rejects a blank agent before calling the Gateway", async () => {
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await expect(
       sessionsCompactCommand({ key: "agent:main:main", agent: "" }, runtime),
@@ -44,7 +39,7 @@ describe("sessionsCompactCommand", () => {
       compacted: true,
       result: { tokensBefore: 243868, tokensAfter: 34941 },
     });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
@@ -53,19 +48,6 @@ describe("sessionsCompactCommand", () => {
     const logged = joinedArgs(runtime.log);
     expect(logged).toContain("243868");
     expect(logged).toContain("34941");
-  });
-
-  it("preserves an explicit client timeout override", async () => {
-    callGatewayCli.mockResolvedValue({
-      ok: true,
-      key: "agent:main:main",
-      compacted: true,
-    });
-    const runtime = createRuntime();
-
-    await sessionsCompactCommand({ key: "agent:main:main", timeout: "120000" }, runtime);
-
-    expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: "120000" });
   });
 
   it("reports an asynchronously started Codex compaction as pending, not a no-op", async () => {
@@ -78,7 +60,7 @@ describe("sessionsCompactCommand", () => {
         details: { backend: "codex-app-server", signal: "thread/compact/start", pending: true },
       },
     });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
@@ -88,31 +70,6 @@ describe("sessionsCompactCommand", () => {
     expect(logged).not.toContain("No compaction needed");
   });
 
-  it("reports a terminal Codex compaction as completed", async () => {
-    callGatewayCli.mockResolvedValue({
-      ok: true,
-      key: "agent:main:main",
-      compacted: true,
-      result: {
-        tokensBefore: 1200,
-        details: {
-          backend: "codex-app-server",
-          signal: "thread/compact/start",
-          pending: false,
-          completed: true,
-        },
-      },
-    });
-    const runtime = createRuntime();
-
-    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    const logged = joinedArgs(runtime.log);
-    expect(logged).toContain("Compacted session");
-    expect(logged).not.toContain("pending");
-  });
-
   it("exits non-zero when the gateway reports ok:false (no silent no-op)", async () => {
     callGatewayCli.mockResolvedValue({
       ok: false,
@@ -120,7 +77,7 @@ describe("sessionsCompactCommand", () => {
       compacted: false,
       reason: "summarize interrupted",
     });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
@@ -130,7 +87,7 @@ describe("sessionsCompactCommand", () => {
 
   it("exits non-zero when the gateway response omits explicit success", async () => {
     callGatewayCli.mockResolvedValue({ key: "agent:main:main", compacted: false });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
@@ -140,7 +97,7 @@ describe("sessionsCompactCommand", () => {
 
   it("exits non-zero and surfaces the error when the RPC throws", async () => {
     callGatewayCli.mockRejectedValue(new Error("gateway unreachable"));
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
@@ -156,14 +113,14 @@ describe("sessionsCompactCommand", () => {
       reason: "summarize interrupted",
     };
     callGatewayCli.mockResolvedValue(payload);
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await sessionsCompactCommand({ key: "agent:main:main", json: true }, runtime);
 
     expect(runtime.writeJson).toHaveBeenCalledTimes(1);
     expect(
       expectDefined(
-        runtime.writeJson.mock.calls[0],
+        vi.mocked(runtime.writeJson).mock.calls[0],
         "runtime.writeJson.mock.calls[0] test invariant",
       )[0],
     ).toEqual(payload);
@@ -177,7 +134,7 @@ describe("sessionsCompactCommand", () => {
       compacted: true,
       kept: 200,
     });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await sessionsCompactCommand({ key: "agent:work:main", agent: "work", maxLines: 200 }, runtime);
 

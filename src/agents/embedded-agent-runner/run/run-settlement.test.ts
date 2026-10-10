@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { createCommandCompactionAccounting } from "../../command/compaction-accounting.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -73,11 +75,12 @@ async function createSettlementFixture(state: OpenClawTestState) {
       throw new Error("settlement fixture requires a claimed session writer");
     }
     runParams.sessionTarget = { ...target, ...writer };
-    const session = createEmbeddedRunSessionPromptState({
+    const session = await createEmbeddedRunSessionPromptState({
       runParams,
       sessionAgentId: target.agentId,
       resolvedSessionKey: target.sessionKey,
       lifecycleGeneration: authority.lifecycleGeneration,
+      onInterrupt: (reason) => controller.abort(reason),
     });
     const input: Parameters<typeof settleEmbeddedRun>[0] = {
       runInput: {
@@ -177,10 +180,13 @@ async function withSettlementFixture(
 describe("MCP run lifetime", () => {
   it("retires a run-owned transient successor without a durable commit", async () => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime } =
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting } =
+      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
         await import("../../agent-bundle-mcp-manager-api.js");
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      await setSessionMcpRuntimeScheduler(scheduler);
       const manager = getSessionMcpRuntimeManagerForTesting();
       const sessionId = randomUUID();
       fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = true;
@@ -195,7 +201,7 @@ describe("MCP run lifetime", () => {
           sessionId,
           sessionKey: fixture.target.sessionKey,
           workspaceDir: fixture.input.runInput.runParams.workspaceDir,
-          cfg: { mcp: { servers: {} } },
+          cfg: unopenedMcpConfig,
           manifestRegistry: { plugins: [] },
         });
         await fixture.settle();
@@ -208,10 +214,13 @@ describe("MCP run lifetime", () => {
 
   it.each([false, true])("retires only run-owned IDs when cleanup is %s", async (cleanup) => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime } =
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting } =
+      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
         await import("../../agent-bundle-mcp-manager-api.js");
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      await setSessionMcpRuntimeScheduler(scheduler);
       const manager = getSessionMcpRuntimeManagerForTesting();
       fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = cleanup;
       const create = (sessionId: string) =>
@@ -219,7 +228,7 @@ describe("MCP run lifetime", () => {
           sessionId,
           sessionKey: fixture.target.sessionKey,
           workspaceDir: fixture.input.runInput.runParams.workspaceDir,
-          cfg: { mcp: { servers: {} } },
+          cfg: unopenedMcpConfig,
           manifestRegistry: { plugins: [] },
         });
       try {
@@ -268,6 +277,7 @@ describe("settleEmbeddedRun compaction identity", () => {
           count: 1,
           currentContextSnapshot: { tokens: 3_000 },
           previousSessionId: fixture.target.sessionId,
+          hostCompactionCommitted: true,
           target: {
             ...fixture.target,
             sessionId: accepted.entry.sessionId,
@@ -333,6 +343,7 @@ describe("settleEmbeddedRun compaction identity", () => {
           kind: "durable",
           count: 1,
           currentContextSnapshot: { tokens: 3_000 },
+          hostCompactionCommitted: true,
           target: {
             ...fixture.target,
             lifecycleRevision: fixture.writer.expectedLifecycleRevision,
@@ -341,6 +352,61 @@ describe("settleEmbeddedRun compaction identity", () => {
         },
       ]);
       expect(fixture.loadEntry()).toEqual(before);
+    });
+  });
+});
+
+describe.each(["settlement", "command"] as const)("%s transcript-byte latch", (consumer) => {
+  it.each([
+    {
+      title: "clears the latch once a committed host compaction is persisted",
+      committed: true,
+      latchedAfterSettle: false,
+    },
+    {
+      title: "keeps the latch for native-only accounting without a host commit",
+      committed: false,
+      latchedAfterSettle: true,
+    },
+  ] as const)("$title", async ({ committed, latchedAfterSettle }) => {
+    await withSettlementFixture(async (fixture) => {
+      const { replaceSessionEntry } = await import("../../../config/sessions/session-accessor.js");
+      const entry = fixture.loadEntry();
+      if (!entry) {
+        throw new Error("settlement fixture lost its session row");
+      }
+      await replaceSessionEntry(fixture.target, {
+        ...entry,
+        transcriptByteCompactionLatch: {
+          activeBytes: 60_000,
+          sessionId: fixture.target.sessionId,
+          maxBytes: 50_000,
+        },
+      });
+      const candidate = createCommandCompactionAccounting({
+        persistCounts: true,
+        onDurableFact: () => {},
+        refreshSessionEntry: () => {},
+      }).beginCandidate();
+      fixture.input.runInput.runParams.onCompactionAccounting =
+        consumer === "command" ? candidate.observe : undefined;
+      if (committed) {
+        await fixture.accept(fixture.target.sessionId);
+      }
+      await fixture.settle();
+      if (consumer === "command") {
+        await candidate.finish(fixture.loadEntry());
+      }
+      const latch = fixture.loadEntry()?.transcriptByteCompactionLatch;
+      if (latchedAfterSettle) {
+        expect(latch).toEqual({
+          activeBytes: 60_000,
+          sessionId: fixture.target.sessionId,
+          maxBytes: 50_000,
+        });
+      } else {
+        expect(latch).toBeUndefined();
+      }
     });
   });
 });

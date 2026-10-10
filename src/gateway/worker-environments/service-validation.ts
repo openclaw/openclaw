@@ -5,26 +5,37 @@ import {
   WorkerMachineOptionsSchema,
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { validateProviderSettings } from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
-  type WorkerDesktopEndpoint,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
+  type WorkerProfile,
   type WorkerMachineOption,
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { normalizeWorkerSshEndpoint } from "./store-validation.js";
+
+export function requireWorkerProfile(value: unknown): WorkerProfile {
+  const error = validateProviderSettings(value, "Worker profile");
+  if (error) {
+    throw serviceError("invalid_profile", error);
+  }
+  // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
+  return value as WorkerProfile;
+}
 
 export function requireInheritedWorkerProfileAuthorization(
   profileId: string,
   providerId: string,
   settings: unknown,
   configuredProviderId: string | undefined,
-  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
 ): void {
   if (
     providerId === DEVICE_WORKER_PROVIDER_ID &&
@@ -57,14 +68,10 @@ export function requireProviderOperationTimeoutMs(
   return timeoutMs;
 }
 
-function isWorkerMachineOptions(value: unknown): value is readonly WorkerMachineOption[] {
-  return Value.Check(WorkerMachineOptionsSchema, value);
-}
-
 export function normalizeWorkerMachineOptions(
   value: unknown,
 ): readonly WorkerMachineOption[] | undefined {
-  if (!isWorkerMachineOptions(value)) {
+  if (!Value.Check(WorkerMachineOptionsSchema, value)) {
     return undefined;
   }
   const ids = new Set<string>();
@@ -109,6 +116,8 @@ export function normalizeWorkerOperatingSystems(
       !Value.Check(WorkerOperatingSystemSchema, option) ||
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
+      (option.disabledReason !== undefined &&
+        option.disabledReason.trim() !== option.disabledReason) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -120,6 +129,7 @@ export function normalizeWorkerOperatingSystems(
       id: option.id,
       label: option.label,
       ...(option.default === undefined ? {} : { default: option.default }),
+      ...(option.disabledReason === undefined ? {} : { disabledReason: option.disabledReason }),
     });
   }
   return systems;
@@ -207,10 +217,10 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   }
   const common = {
     leaseId: value.leaseId.trim(),
-    ...(value.sharedHost === true ? { sharedHost: true } : {}),
+    ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
-      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),
+      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop) }),
   };
   if (hasSsh) {
     return {

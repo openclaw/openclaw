@@ -2,10 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
+import { resolvePluginProviders } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
-import { registerPluginCliCommands } from "../plugins/cli.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "../plugins/cli.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { acquirePluginRegistryForInspection } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -13,13 +16,18 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { withPluginRegistrationContext } from "../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { registerCommandGroups } from "./program/register-command-groups.js";
 import {
@@ -38,6 +46,7 @@ function nativeFixture(
     disposalFailure?: boolean;
     capturedDisposal?: "async-context" | "work-tracker";
     queuedAbortCleanup?: boolean;
+    sdkProvider?: boolean;
   } = {},
 ) {
   const id = `cli-owned-native-${sequence++}`;
@@ -90,6 +99,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     ? require("node:async_hooks").AsyncLocalStorage.bind(() => state.trackAsyncWork(cooperatingCleanup))
     : captureMode === "work-tracker" ? () => track(cooperatingCleanup) : closeResource;
   api.registerRuntimeLifecycle({ id: "native", dispose });
+  if (${options.sdkProvider === true}) api.registerProvider({
+    id: ${JSON.stringify(id)}, label: "CLI SDK provider", auth: [],
+    isCacheTtlEligible: () => database.prepare("SELECT 42 AS value").get().value === 42,
+  });
   api.registerCli(async ({ program }) => {
     state.entered.resolve();
     await state.resume.promise;
@@ -108,6 +121,16 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
   };`,
   );
+  if (options.sdkProvider) {
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id,
+        providers: [id],
+        configSchema: { type: "object", properties: {}, additionalProperties: false },
+      }),
+    );
+  }
   const config = { plugins: { allow: [id], load: { paths: [plugin.dir] } } };
   const env = {
     HOME: plugin.dir,
@@ -158,6 +181,7 @@ afterEach(() => {
     cleanup();
   }
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -228,20 +252,93 @@ it("releases an acquisition that finishes after admission closes", async () => {
   expect(fixture.state.disposals).toBe(1);
 });
 
+it("retains CLI SDK providers through their actual local Gateway context", async () => {
+  const { withLocalGatewayRequestScope } = await import("../gateway/local-request-context.js");
+  const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+  const state = await createOpenClawTestState({ label: "cli-sdk-local-context" });
+  const fixture = nativeFixture({ sdkProvider: true });
+  const foreign = new LegacyPluginSdkResourceHost();
+  try {
+    await withCliProcessScope(() =>
+      withCliCommandCleanup(false, async () => {
+        const resources = getCliPluginInvocationResources()!;
+        const registry = await resources.acquire(fixture.load);
+        const resolveProviders = () =>
+          resolvePluginProviders({
+            config: fixture.config,
+            env: fixture.env,
+            onlyPluginIds: [fixture.id],
+          });
+        try {
+          const captured = await resources.run(() =>
+            withPluginRuntimeRegistryScope(registry, () =>
+              withLocalGatewayRequestScope(
+                { deps: {}, getRuntimeConfig: () => fixture.config },
+                () => {
+                  const scope = getPluginRuntimeGatewayRequestScope();
+                  if (!scope) {
+                    throw new Error("The local Gateway must retain its request scope");
+                  }
+                  return { scope, providers: resolveProviders() };
+                },
+              ),
+            ),
+          );
+          expect(captured.providers).toHaveLength(1);
+          expect(
+            captured.providers[0]?.isCacheTtlEligible?.({
+              provider: fixture.id,
+              modelId: "synthetic-model",
+            }),
+          ).toBe(true);
+          await resources.release();
+          expect(fixture.state.disposals).toBe(1);
+          expect(fixture.state.database?.isOpen).toBe(false);
+          expect(() =>
+            foreign.run(() =>
+              withPluginRuntimeGatewayRequestScope(captured.scope, resolveProviders),
+            ),
+          ).toThrow("SDK resource host is closed");
+        } finally {
+          await resources.release();
+        }
+      }),
+    );
+  } finally {
+    await foreign.close();
+    await state.cleanup();
+  }
+});
+
 it.each(["returned", "cooperating"] as const)(
-  "keeps native resources through %s cleanup work after the five-second grace",
+  "keeps native SDK provider resources through %s cleanup work after the five-second grace",
   async (mode) => {
-    const fixture = nativeFixture();
+    const fixture = nativeFixture({ sdkProvider: true });
     await withCliProcessScope(() =>
       withCliCommandCleanup(false, async (cleanup) => {
         const resources = getCliPluginInvocationResources()!;
         const registry = await resources.acquire(fixture.load);
+        // Terminal cleanup consumes an admitted handle; it cannot acquire a retired provider.
+        const providers = withPluginRuntimeRegistryScope(registry, () =>
+          resolvePluginProviders({
+            config: fixture.config,
+            env: fixture.env,
+            onlyPluginIds: [fixture.id],
+          }),
+        );
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         let descendant: Promise<void> | undefined;
         const actualCleanup = async () => {
           entered.resolve();
           await resume.promise;
+          expect(providers).toHaveLength(1);
+          expect(
+            providers[0]!.isCacheTtlEligible?.({
+              provider: fixture.id,
+              modelId: "synthetic-model",
+            }),
+          ).toBe(true);
           fixture.state.afterCleanup = fixture.state.database!.prepare("SELECT 42 AS value").get();
         };
         const dispose = async () => {
@@ -350,7 +447,11 @@ it("leaves standalone command programs with their caller after registration retu
   const fixture = nativeFixture();
   fixture.state.resume.resolve();
   const program = new Command();
-  await registerPluginCliCommands(program, fixture.config, fixture.env);
+  const configPath = path.join(fixture.env.HOME, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify(fixture.config));
+  await withEnvAsync({ ...fixture.env, OPENCLAW_CONFIG_PATH: configPath }, () =>
+    registerPluginCliCommandsFromValidatedConfig(program, fixture.env),
+  );
   expect(getCliPluginInvocationResources()).toBeUndefined();
   expect(program.commands.map((command) => command.name())).toEqual(["native"]);
   await program.parseAsync(["node", "fixture", "native"]);

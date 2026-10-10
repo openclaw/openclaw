@@ -1,5 +1,6 @@
 // Shared mock harness for the stuck session recovery runtime suites.
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 export const mocks = {
   abortEmbeddedAgentRun: vi.fn(),
@@ -18,6 +19,7 @@ export const mocks = {
   waitForEmbeddedAgentRunEnd: vi.fn(),
   getDiagnosticSessionActivitySnapshot: vi.fn(),
   diag: {
+    isEnabled: vi.fn(() => true),
     debug: vi.fn(),
     warn: vi.fn(),
   },
@@ -76,7 +78,9 @@ vi.mock("./diagnostic-run-activity.js", () => ({
   getDiagnosticSessionActivitySnapshot: mocks.getDiagnosticSessionActivitySnapshot,
 }));
 
-export function resetMocks() {
+export async function resetMocks(): Promise<void> {
+  const { retireSessionDiagnosticLogs } = await import("./diagnostic-session-context.js");
+  retireSessionDiagnosticLogs();
   mocks.abortEmbeddedAgentRun.mockReset();
   mocks.forceClearEmbeddedAgentRun.mockReset();
   mocks.isEmbeddedAgentRunActive.mockReset();
@@ -104,6 +108,16 @@ export function resetMocks() {
   mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({});
   mocks.diag.debug.mockReset();
   mocks.diag.warn.mockReset();
+}
+
+export function observeRecoveryContextLog(sessionId: string): Promise<void> {
+  const logged = createDeferred();
+  mocks.diag.warn.mockImplementation((message: string) => {
+    if (message.startsWith(`stuck session recovery: sessionId=${sessionId} `)) {
+      logged.resolve();
+    }
+  });
+  return logged.promise;
 }
 
 export function warnLogMessages(): string[] {

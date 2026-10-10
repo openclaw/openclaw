@@ -1,12 +1,15 @@
 // Dashboard MCP App E2E covers the real Control UI, sandbox proxy, and mocked Gateway lease flow.
 import { writeFile } from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -29,6 +32,7 @@ let browser: Browser;
 let controlUi: ControlUiE2eServer;
 let sandboxServer: HttpServer;
 let sandboxPort: number;
+let sandboxPortClaim: TestPortClaim | undefined;
 const contexts = new Set<BrowserContext>();
 
 function widget(index: number) {
@@ -97,14 +101,20 @@ async function cycleBoardProviderConnection(page: Page): Promise<void> {
     const surface = document.querySelector(".board-session-surface");
     const pane = surface?.closest("openclaw-chat-pane");
     const lease = pane ? Reflect.get(pane, "boardProviderLease") : undefined;
-    const scopedProvider = lease?.provider;
-    const transport = scopedProvider ? Reflect.get(scopedProvider, "transport") : undefined;
-    const client = transport ? Reflect.get(transport, "client") : undefined;
-    if (!transport || !client || typeof transport.attachClient !== "function") {
+    const context = pane ? Reflect.get(pane, "context") : undefined;
+    const client = context?.gateway.snapshot.client;
+    const provider = lease?.provider;
+    if (!lease || !provider || !client) {
       throw new Error("Dashboard Gateway provider is unavailable");
     }
-    transport.attachClient(client, false);
-    transport.attachClient(client, true);
+    const capabilities = {
+      canPinWidgets: provider.canPinWidgets,
+      canPinMcpApps: provider.canPinMcpApps,
+      canMutate: provider.canMutate,
+      canGrant: provider.canGrant,
+    };
+    lease.update(client, false, capabilities);
+    lease.update(client, true, capabilities);
   });
 }
 
@@ -174,7 +184,8 @@ async function expectRetainedBoardPresentation(
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   beforeAll(async () => {
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getGatewayE2ePortBlock();
+    sandboxPortClaim = await acquireGatewayE2ePortBlock();
+    sandboxPort = sandboxPortClaim.port;
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
@@ -193,7 +204,52 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
         sandboxServer.close(() => resolve());
       });
     }
+    await sandboxPortClaim?.release();
     await controlUi?.close();
+  });
+
+  it("closes Inbox when a dashboard frame receives an outside click without stealing focus", async () => {
+    const context = await browser.newContext({
+      permissions: ["local-network-access"],
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionKey,
+      featureMethods: ["board.get", "board.widget.appView", "mcp.app.view"],
+      methodResponses: {
+        "board.get": boardSnapshot(1),
+        "board.widget.appView": {
+          viewId: "inbox-focus-view",
+          expiresAtMs: Date.now() + 3_600_000,
+        },
+        "mcp.app.view": appViewPayload(),
+      },
+    });
+    await openDashboard(page);
+    const note = page
+      .frameLocator("mcp-app-view iframe")
+      .frameLocator("iframe")
+      .getByRole("textbox", { name: "Draft note" });
+    await note.waitFor();
+    const trigger = page.locator(".sidebar-issues-button:visible");
+    const panel = page.locator("#sidebar-issues-panel");
+    await trigger.click();
+    await panel.waitFor();
+    await clickBoardWidgetControl(page, note);
+    await panel.waitFor({ state: "hidden" });
+    // Type through actual keyboard focus, not fill(), which would refocus the input.
+    await page.keyboard.type("Keep this dashboard draft");
+    expect(await note.inputValue()).toBe("Keep this dashboard draft");
+    await page.keyboard.press("Escape");
+    expect(await panel.count()).toBe(0);
+
+    await trigger.click();
+    await panel.waitFor();
+    await page.keyboard.press("Escape");
+    await panel.waitFor({ state: "hidden" });
+    expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
+    expect(await note.inputValue()).toBe("Keep this dashboard draft");
   });
 
   it("renders a pinned app and proactively renews its board lease", async () => {
@@ -364,8 +420,42 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
           viewId: "retained-view",
           expiresAtMs: Date.now() + 3_600_000,
         },
-        "mcp.app.view": appViewPayload(),
-        "tasks.list": { tasks: [] },
+        "mcp.app.view": {
+          ...appViewPayload(),
+          html: `<!doctype html><style>
+            body{margin:0;min-height:100vh;box-sizing:border-box;padding:28px;background:#11222d;color:#dbefed;font:16px system-ui}
+            h1{font-size:36px;margin:8px 0 24px}.metrics{display:flex;gap:16px;margin:24px 0}
+            .metric{flex:1;padding:24px;background:#193746;border:1px solid #38616b;border-radius:12px}
+            strong{display:block;font-size:32px;margin-top:8px}input{display:block;margin-top:8px;padding:12px;border-radius:8px}
+          </style><output>Dashboard app</output><h1>Release overview</h1>
+          <p>A synthetic dashboard for fullscreen layout verification.</p>
+          <div class="metrics"><div class="metric">Checks passed<strong>24 / 24</strong></div>
+          <div class="metric">Median duration<strong>12m 40s</strong></div></div>
+          <label>Draft note <input aria-label="Draft note"></label>
+          <script>
+            const send = (message) => parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+            const dimensions = (context) => {
+              if (context?.containerDimensions) {
+                document.documentElement.dataset.hostDimensions = JSON.stringify(context.containerDimensions);
+              }
+            };
+            addEventListener("message", ({ source, data }) => {
+              if (source !== parent) return;
+              if (data.id === 1 && data.result) {
+                dimensions(data.result.hostContext);
+                send({ method: "ui/notifications/initialized" });
+              } else if (data.method === "ui/notifications/host-context-changed") {
+                dimensions(data.params);
+              } else if (data.method === "ui/resource-teardown") {
+                send({ id: data.id, result: {} });
+              }
+            });
+            send({ id: 1, method: "ui/initialize", params: {
+              appInfo: { name: "Dashboard fixture", version: "1.0.0" }, appCapabilities: {},
+              protocolVersion: ${JSON.stringify(LATEST_PROTOCOL_VERSION)}
+            } });
+          </script>`,
+        },
       },
     });
 
@@ -395,12 +485,69 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
 
     await focusChatSidePanel(page);
     await expectRetainedBoardPresentation(page, "expanded");
+    const frameInsets = () =>
+      page.evaluate(() => {
+        const board = document.querySelector("openclaw-board-view");
+        const body = board?.querySelector(".board-widget__body");
+        const frame = board?.querySelector("mcp-app-view")?.shadowRoot?.querySelector("iframe");
+        if (!board || !body || !frame) {
+          throw new Error("Dashboard MCP App layout is unavailable");
+        }
+        const outer = board.getBoundingClientRect();
+        const available = body.getBoundingClientRect();
+        const inner = frame.getBoundingClientRect();
+        return {
+          top: Math.round(inner.top - outer.top),
+          bottom: Math.round(outer.bottom - inner.bottom),
+          bodyHeightGap: Math.round(available.height - inner.height),
+        };
+      });
+    if (artifactDir) {
+      await appContent.waitFor();
+      await page.screenshot({ path: `${artifactDir}/fullscreen-dashboard.png` });
+    }
+    // Measure the frame on every poll: a viewport resize settles the board
+    // layout asynchronously, so a size read before polling can be stale.
+    const expectHostDimensions = async () => {
+      const frame = page.locator("mcp-app-view iframe");
+      await expect
+        .poll(async () => {
+          const size = await frame.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return { width: Math.round(rect.width), height: Math.round(rect.height) };
+          });
+          const reported = JSON.parse(
+            (await page
+              .frameLocator("mcp-app-view iframe")
+              .frameLocator("iframe")
+              .locator("html")
+              .getAttribute("data-host-dimensions")) ?? "null",
+          ) as { width?: number; height?: number } | null;
+          return { size, reported };
+        })
+        .toSatisfy(
+          ({ size, reported }) =>
+            reported?.width === size.width && reported?.height === size.height,
+        );
+    };
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expectHostDimensions();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expectHostDimensions();
+    await expectRetainedBoardPresentation(page, "expanded");
+    if (artifactDir) {
+      await page.screenshot({ path: `${artifactDir}/fullscreen-dashboard-resized.png` });
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
 
     await page
       .locator(".chat-pane__header")
       .getByRole("button", { name: "Restore split", exact: true })
       .click();
     await expectRetainedBoardPresentation(page, "split");
+    await expect.poll(async () => (await frameInsets()).bodyHeightGap).toBe(0);
+    await expectHostDimensions();
     await restoreChatAsMain(page);
 
     const draftNote = page
@@ -434,7 +581,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
 
     const typeMenu = sidePanel.locator("wa-dropdown.side-panel-type-menu");
     await typeMenu.getByRole("button", { name: "Add side panel tab" }).click();
-    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Tasks" }).click();
+    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Files" }).click();
     await expect
       .poll(() => typeMenu.evaluate((element) => Reflect.get(element, "open")))
       .toBe(false);
@@ -442,15 +589,22 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     const inactiveIdentity = await readBoardIdentity(page);
     if (artifactDir) {
       await writeFile(
-        `${artifactDir}/02-tasks.png`,
+        `${artifactDir}/02-files.png`,
         await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-          sidePanel.getByRole("tab", { name: "Tasks", exact: true }),
+          sidePanel.getByRole("tab", { name: "Files", exact: true }),
         ]),
       );
     }
 
     await sidePanel.getByRole("tab", { name: "Dashboard", exact: true }).click();
-    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
+    await expectRetainedBoardPresentation(page, "expanded");
+    await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
+    await sidePanel
+      .locator('[data-region-header="side"]')
+      .getByRole("button", { name: "Restore split", exact: true })
+      .click();
+    await expectRetainedBoardPresentation(page, "split");
+    await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
     if (artifactDir) {
       await appContent.waitFor();
       await writeFile(

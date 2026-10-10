@@ -27,6 +27,7 @@ Good fit for plugin-local logic:
 - reply-to-bot detection
 - quoted-bot detection
 - thread-participation checks
+- bot-owned thread detection and channel-specific config inheritance
 - service/system-message exclusions
 - platform-native caches needed to prove bot participation
 
@@ -37,6 +38,32 @@ Good fit for the shared helper:
 - implicit mention allowlist
 - command bypass
 - final skip decision
+
+For a qualified group-thread entry, compute explicit participant mention facts
+once with `resolveGroupThreadMentionFacts({ cfg, channel, peerId, text, sessionKey, acpBinding })`
+from `openclaw/plugin-sdk/channel-inbound`, including direct conversations. Pass
+the resolved session key and whether a configured ACP binding owns the route.
+It returns `undefined` for an exclusive ACP route or when no qualified entry
+applies, otherwise the resolved group and `mentionedAgentIds`. If routing changes
+after preparation, use `isGroupThreadRouteExclusive({ sessionKey, acpBinding })`
+to discard participant facts for an ACP-owned destination and reevaluate admission
+using only the final route’s ordinary mention and command facts.
+Merge a non-empty participant match with the routed agent’s local mention facts before
+the ordinary gate, and carry the same selection facts into dispatch. A mention
+of a non-routed participant must not be dropped by a single-agent gate.
+Participant selection requires an `@`-style match; a bare name or emoji does not
+select an agent. Keep sender authorization and command policy unchanged.
+
+Set the optional `replyOptions.groupThreadReplyFormatter(text, participant)` to
+apply the adapter’s participant label to source-conversation message-tool replies.
+The participant contains `agentId` and `name`; reuse the same transport formatter
+used for ordinary replies with participant delivery metadata.
+
+For plugin-owned sends, read `getGroupThreadDeliverySession()` from the same SDK
+at delivery entry. When present, use its `agentId` and `sessionKey` for media
+roots, internal hooks, and transcript mirrors, including unlabeled single-agent
+groups. Keep transport account ownership unchanged. Shared durable delivery
+selects the active participant context and run identity in core.
 
 Preferred flow:
 
@@ -107,3 +134,45 @@ bundled channel plugins that already depend on runtime injection:
 If you only need `implicitMentionKindWhen` and `resolveInboundMentionDecision`,
 import from `openclaw/plugin-sdk/channel-mention-gating` to avoid loading
 unrelated inbound runtime helpers.
+
+## Bot-owned threads
+
+Channels with native thread ownership can expose `requireMentionInBotThreads`.
+An omitted value preserves the channel's existing mention behavior. `false`
+allows messages without a mention in threads started by the configured bot.
+`true` requires a mention there, including when the ordinary `requireMention`
+setting is `false`; replying to or quoting the bot and prior bot participation
+do not satisfy that requirement. Explicit mentions, native mention evidence,
+and authorized command bypass retain their ordinary behavior.
+
+The plugin owns proof that the current bot started the thread and resolves the
+most specific config value before calling `resolveBotThreadMentionPolicy` from
+`openclaw/plugin-sdk/channel-mention-gating`. Bot participation alone is not
+ownership. For unknown ownership, foreign threads, and ordinary channel
+messages, pass `isBotOwnedThread: false` to preserve existing behavior.
+
+Apply the helper after gathering mention evidence and before the shared decision:
+
+```typescript
+const threadPolicy = resolveBotThreadMentionPolicy({
+  isBotOwnedThread,
+  requireMentionInBotThreads,
+  requireMention,
+  implicitMentionKinds: facts.implicitMentionKinds,
+});
+
+const decision = resolveInboundMentionDecision({
+  facts: { ...facts, implicitMentionKinds: threadPolicy.implicitMentionKinds },
+  policy: { ...policy, requireMention: threadPolicy.requireMention },
+});
+```
+
+This override changes mention admission only. Preserve the existing sender
+allowlists, channel access policy, and command authorization. Channels without
+reliable native ownership evidence should not infer ownership from cached
+participation or expose an override they cannot enforce.
+
+Recheck mutable admission rules before handing the turn to shared dispatch.
+After admission, retain the turn's captured policy for its replies rather than
+using mention or sender gates to cancel delivery. Account, run, and transport
+liveness remain separate responsibilities of their existing owners.

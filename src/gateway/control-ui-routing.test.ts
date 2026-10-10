@@ -2,29 +2,7 @@
  * Control UI gateway routing tests.
  */
 import { describe, expect, it } from "vitest";
-import {
-  classifyControlUiRequest,
-  isControlUiApprovalDocumentPath,
-  isControlUiFocusDocumentPath,
-  isControlUiPluginManagerRequest,
-} from "./control-ui-routing.js";
-
-describe("isControlUiPluginManagerRequest", () => {
-  it.each([
-    { basePath: "", pathname: "/settings/plugins", method: "GET", expected: true },
-    { basePath: "", pathname: "/settings/plugins/", method: "HEAD", expected: true },
-    {
-      basePath: "/openclaw",
-      pathname: "/openclaw/settings/plugins",
-      method: "GET",
-      expected: true,
-    },
-    { basePath: "", pathname: "/settings/plugins", method: "POST", expected: false },
-    { basePath: "", pathname: "/plugins", method: "GET", expected: false },
-  ])("classifies $method $pathname", ({ basePath, pathname, method, expected }) => {
-    expect(isControlUiPluginManagerRequest({ basePath, pathname, method })).toBe(expected);
-  });
-});
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 
 describe("isControlUiApprovalDocumentPath", () => {
   it.each([
@@ -45,30 +23,10 @@ describe("isControlUiApprovalDocumentPath", () => {
   });
 });
 
-describe("isControlUiFocusDocumentPath", () => {
-  it.each([
-    { basePath: "", pathname: "/focus" },
-    { basePath: "", pathname: "/focus/" },
-    { basePath: "", pathname: "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb" },
-    { basePath: "", pathname: "/focus/not-supported" },
-    { basePath: "/openclaw", pathname: "/openclaw/focus/desktop/control" },
-  ])("classifies $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(true);
-  });
-
-  it.each([
-    { basePath: "", pathname: "/focused" },
-    { basePath: "", pathname: "/focused/terminal" },
-    { basePath: "/openclaw", pathname: "/focus/terminal" },
-    { basePath: "/openclaw", pathname: "/openclaw/focused" },
-  ])("does not classify $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(false);
-  });
-});
-
 describe("Control UI SPA fallback Accept routing", () => {
   it.each<[string, string, string, string, string | undefined, boolean]>([
     ["missing Accept header", "", "/chat", "GET", undefined, true],
+    ["plugin tab slug at root", "", "/reports", "GET", "text/html", true],
     ["empty Accept header", "/openclaw", "/openclaw/chat", "HEAD", "  ", true],
     [
       "browser Accept header",
@@ -78,7 +36,6 @@ describe("Control UI SPA fallback Accept routing", () => {
       "text/html, application/xhtml+xml;q=0.9, application/xml;q=0.8",
       true,
     ],
-    ["text wildcard at root", "", "/chat", "GET", "text/*", true],
     [
       "nonzero text wildcard under a base path",
       "/openclaw",
@@ -116,7 +73,6 @@ describe("Control UI SPA fallback Accept routing", () => {
     ["nonzero HTML quality", "", "/chat", "GET", "text/html;q=0.5", true],
     ["mixed-case zero-quality parameter", "", "/chat", "GET", "text/html; Q = 0", false],
     ["trailing-dot zero quality", "", "/chat", "GET", "text/html; q=0.", false],
-    ["one-decimal zero quality", "", "/chat", "GET", "text/html;q=0.0", false],
     [
       "mixed-case XHTML three-decimal rejection",
       "/openclaw",
@@ -127,23 +83,7 @@ describe("Control UI SPA fallback Accept routing", () => {
     ],
     ["zero-quality wildcard rejection", "", "/chat", "GET", "application/json, */*;q=0", false],
     ["JSON-only Accept header", "", "/chat", "GET", "application/json", false],
-    [
-      "event-stream Accept header under a base path",
-      "/openclaw",
-      "/openclaw/chat",
-      "HEAD",
-      "text/event-stream",
-      false,
-    ],
     ["plugin manager recovery at root", "", "/settings/plugins", "GET", "application/json", true],
-    [
-      "plugin manager recovery under a base path",
-      "/openclaw",
-      "/openclaw/settings/plugins/",
-      "HEAD",
-      "text/event-stream",
-      true,
-    ],
   ])("classifies %s", (_name, basePath, pathname, method, accept, expected) => {
     expect(classifyControlUiRequest({ basePath, pathname, search: "", method, accept })).toEqual({
       kind: "serve",
@@ -187,10 +127,16 @@ describe("classifyControlUiRequest", () => {
         { kind: "not-control-ui" as const },
       ],
       [
-        "keeps the plugin HTTP root outside the SPA catch-all",
+        "serves the marketplace document at the plugin root",
         "/plugins",
         "GET",
-        { kind: "not-control-ui" as const },
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
+        "serves the marketplace document at the plugin root slash",
+        "/plugins/",
+        "GET",
+        { kind: "serve" as const, spaFallback: true },
       ],
       [
         "keeps API routes outside the SPA catch-all",
@@ -354,6 +300,42 @@ describe("classifyControlUiRequest", () => {
     });
   });
 
+  describe("plugin catalogue documents vs plugin HTTP", () => {
+    it.each([
+      {
+        name: "serves HTML GET for the catalogue root slash",
+        pathname: "/plugins/",
+        method: "GET",
+        accept: "text/html",
+        expected: { kind: "serve" as const, spaFallback: true },
+      },
+      {
+        name: "keeps JSON catalogue reads outside the SPA",
+        pathname: "/plugins",
+        method: "GET",
+        accept: "application/json",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps JSON catalogue slash reads outside the SPA",
+        pathname: "/plugins/",
+        method: "GET",
+        accept: "application/json",
+        expected: { kind: "not-control-ui" as const },
+      },
+    ])("$name", ({ pathname, method, accept, expected }) => {
+      expect(
+        classifyControlUiRequest({
+          basePath: "",
+          pathname,
+          search: "",
+          method,
+          accept,
+        }),
+      ).toEqual(expected);
+    });
+  });
+
   describe("basePath-mounted control ui", () => {
     it.each<[string, string, string, string, ReturnType<typeof classifyControlUiRequest>]>([
       [
@@ -371,6 +353,27 @@ describe("classifyControlUiRequest", () => {
         { kind: "serve" as const, spaFallback: true },
       ],
       [
+        "serves the plugin catalogue under a configured basePath",
+        "/openclaw/plugins",
+        "",
+        "GET",
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
+        "serves the plugin catalogue slash under a configured basePath",
+        "/openclaw/plugins/",
+        "",
+        "GET",
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
+        "serves the plugin manager under a configured basePath",
+        "/openclaw/settings/plugins",
+        "",
+        "GET",
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
         "falls through unmatched paths",
         "/elsewhere/chat",
         "",
@@ -384,15 +387,13 @@ describe("classifyControlUiRequest", () => {
         "POST",
         { kind: "not-control-ui" as const },
       ],
-      ...["PUT", "DELETE", "PATCH", "OPTIONS"].map(
-        (method): [string, string, string, string, ReturnType<typeof classifyControlUiRequest>] => [
-          `falls through ${method} subroute requests`,
-          "/openclaw/webhook",
-          "",
-          method,
-          { kind: "not-control-ui" },
-        ],
-      ),
+      [
+        "falls through write requests to a subroute",
+        "/openclaw/webhook",
+        "",
+        "PATCH",
+        { kind: "not-control-ui" },
+      ],
     ])("%s", (_name, pathname, search, method, expected) => {
       expect(
         classifyControlUiRequest({

@@ -3,7 +3,6 @@ import Foundation
 import OpenClawIPC
 
 func runMacControl(_ context: MacCLIContext) {
-    let args = context.arguments
     do {
         var options = try MacControlOptions.parse(context)
         if options.help {
@@ -27,15 +26,12 @@ func runMacControl(_ context: MacCLIContext) {
         let response = try MacControlClient(options: options).send(options.request)
         let result = try macControlResult(response, primaryOnly: options.primaryOnly)
         if options.json {
-            guard let text = String(data: result, encoding: .utf8) else {
-                throw MacControlError(code: "invalid_response", message: "The app returned invalid text.")
-            }
-            print(text)
+            print(String(bytes: result, encoding: .utf8)!)
         } else {
             try printMacControlResult(result, operation: options.request.operation, primaryOnly: options.primaryOnly)
         }
     } catch {
-        exitMacCLI(error, json: args.contains("--json"))
+        exitMacCLI(error, json: context.arguments.contains("--json"))
     }
 }
 
@@ -43,10 +39,9 @@ func exitMacCLI(_ error: Error, json: Bool) -> Never {
     let controlError = error as? MacControlError
         ?? MacControlError(code: "operation_failed", message: "The app control operation failed.")
     if json,
-       let data = try? JSONEncoder().encode(MacControlResponse<String>(error: controlError)),
-       let text = String(data: data, encoding: .utf8)
+       let data = try? JSONEncoder().encode(MacControlResponse<String>(error: controlError))
     {
-        fputs(text + "\n", stderr)
+        fputs(String(bytes: data, encoding: .utf8)! + "\n", stderr)
     } else {
         fputs("openclaw-mac: \(controlError.message)\n", stderr)
     }
@@ -83,8 +78,8 @@ private func printMacControlResult(_ data: Data, operation: String, primaryOnly:
     if operation == "status", !primaryOnly {
         let status = try decoder.decode(MacControlStatus.self, from: data)
         print("OpenClaw \(status.app.version) (\(status.app.build)) · profile \(status.app.profile)")
-        print("NAME\tCONNECTION\tURL")
-        print("Primary (\(status.primary.mode))\t\(status.primary.connection.state)\t\(status.primary.url)")
+        print("NAME\tKIND\tCONNECTION\tURL")
+        print("Primary\t\(status.primary.mode)\t\(status.primary.connection.state)\t\(status.primary.url)")
         for gateway in status.gateways {
             printMacControlGateway(gateway)
         }
@@ -93,7 +88,7 @@ private func printMacControlResult(_ data: Data, operation: String, primaryOnly:
         print("MODE\tTRANSPORT\tCONNECTION\tURL")
         print("\(primary.mode)\t\(primary.transport ?? "—")\t\(primary.connection.state)\t\(primary.url)")
     } else if operation == "gateway.list" {
-        print("NAME\tCONNECTION\tURL")
+        print("NAME\tKIND\tCONNECTION\tURL")
         for gateway in try decoder
             .decode([MacControlGatewayStatus].self, from: data)
         {
@@ -107,7 +102,7 @@ private func printMacControlResult(_ data: Data, operation: String, primaryOnly:
 }
 
 private func printMacControlGateway(_ gateway: MacControlGatewayStatus) {
-    print("\(gateway.name)\t\(gateway.connection.state)\t\(gateway.url)")
+    print("\(gateway.name)\t\(gateway.kind)\t\(gateway.connection.state)\t\(gateway.url)")
     if let identity = gateway.identity {
         print("  \(identity.subject) · expires \(identity.expiresAt)")
     }

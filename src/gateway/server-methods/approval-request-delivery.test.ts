@@ -1,28 +1,33 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequestPayload,
+} from "../../infra/exec-approvals.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
-import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
-
-const handleApprovalWebPushRequestedMock = vi.fn(() => false);
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
+import { createContext } from "./approval.test-support.js";
 
 const approvalDeliveryCallers = [
   {
     name: "exec approvals",
     approvalKind: "exec",
+    source: "rpc",
     id: "approval-first-exec-delivery",
     request: { command: "echo ok" },
   },
   {
     name: "plugin approvals",
     approvalKind: "plugin",
+    source: "rpc",
     id: "plugin:approval-first-plugin-delivery",
     request: { pluginId: "example", title: "Sensitive action", description: "Approve action" },
   },
   {
     name: "plugin node policies",
     approvalKind: "plugin",
+    source: "node-policy",
     id: "plugin:approval-first-node-policy-delivery",
     request: {
       pluginId: "example",
@@ -33,52 +38,123 @@ const approvalDeliveryCallers = [
   },
 ] as const;
 
-async function expectPromptDelivery(delivery: boolean | Promise<boolean>): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const timedDelivery = Promise.race([
-      Promise.resolve(delivery),
-      new Promise<boolean>((resolve) => {
-        timeout = setTimeout(() => resolve(false), 100);
-      }),
-    ]);
-    await expect(timedDelivery).resolves.toBe(true);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
+type DeliveryParams = Parameters<
+  typeof handlePendingApprovalRequestWithDelivery<"exec" | "plugin">
+>[0];
 
-function deliveryContext(error?: (message: string) => void) {
+function createDeliveryFixture(
+  test: TestContext,
+  caller: (typeof approvalDeliveryCallers)[number] = approvalDeliveryCallers[0],
+) {
+  const manager = createTestApprovalManager<
+    ExecApprovalRequestPayload | PluginApprovalRequestPayload
+  >(test, {
+    approvalKind: caller.approvalKind,
+  });
+  const record = manager.create(caller.request, 60_000, caller.id);
+  const decision = createDeferredCore<ExecApprovalDecision | null>();
+  // Persistence/decision custody is a separate owner; delivery still uses its real work tracker.
+  vi.spyOn(manager, "registerDecisionHandoff").mockImplementation((_id, run) => ({
+    observation: decision.promise.then(run),
+    abandon: () => decision.resolve(null),
+  }));
+  const expire = vi.spyOn(manager, "expire").mockImplementation(async () => {
+    decision.resolve(null);
+    return true;
+  });
+  const context = createContext();
+  context.getApprovalClientConnIds = () => new Set();
+  const webPush = vi.fn(() => false);
+  context.approvalWebPushDelivery = {
+    handleRequested: webPush,
+    handleResolved: vi.fn(),
+    handleExpired: vi.fn(),
+  };
+  const respond = vi.fn();
+  const requests: Promise<void>[] = [];
+  test.onTestFinished(async () => {
+    decision.resolve(null);
+    await Promise.allSettled(requests);
+  });
   return {
-    approvalWebPushDelivery: { handleRequested: handleApprovalWebPushRequestedMock },
-    ...(error ? { logGateway: { error } } : {}),
+    manager,
+    record,
+    context,
+    respond,
+    expire,
+    webPush,
+    settle: () => decision.resolve("deny"),
+    start: (
+      routes: Pick<DeliveryParams, "forwardRequest" | "getIosPushDelivery"> = {
+        getIosPushDelivery: () => undefined,
+      },
+    ) => {
+      const request = handlePendingApprovalRequestWithDelivery({
+        approvalKind: caller.approvalKind,
+        source: caller.source,
+        manager,
+        record,
+        respond,
+        context,
+        twoPhase: true,
+        ...routes,
+      });
+      requests.push(request);
+      return request;
+    },
   };
 }
 
-describe("runApprovalRequestDeliveries", () => {
+function expectAccepted(fixture: ReturnType<typeof createDeliveryFixture>) {
+  expect(fixture.respond).toHaveBeenCalledWith(
+    true,
+    {
+      status: "accepted",
+      id: fixture.record.id,
+      deliveryRoute: "forwarder",
+      createdAtMs: fixture.record.createdAtMs,
+      expiresAtMs: fixture.record.expiresAtMs,
+    },
+    undefined,
+  );
+  expect(fixture.expire).not.toHaveBeenCalled();
+}
+
+describe("handlePendingApprovalRequestWithDelivery", () => {
   beforeEach(() => {
-    handleApprovalWebPushRequestedMock.mockReset();
-    handleApprovalWebPushRequestedMock.mockReturnValue(false);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("returns false synchronously when no external routes exist", (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-no-delivery");
+  it("expires a request when no external routes or approval clients exist", async (test) => {
+    const fixture = createDeliveryFixture(test);
+    await fixture.start();
 
-    expect(runApprovalRequestDeliveries({ context: deliveryContext(), record })).toBe(false);
+    expect(fixture.expire).toHaveBeenCalledExactlyOnceWith(fixture.record.id, "no-approval-route");
+    expect(fixture.respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      {
+        id: fixture.record.id,
+        decision: null,
+        createdAtMs: fixture.record.createdAtMs,
+        expiresAtMs: fixture.record.expiresAtMs,
+      },
+      undefined,
+    );
   });
 
-  it("counts a successful approval Web Push as an external route", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-web-push");
-    handleApprovalWebPushRequestedMock.mockResolvedValue(true);
+  it("accepts a request delivered by Web Push", async (test) => {
+    const fixture = createDeliveryFixture(test);
+    fixture.webPush.mockResolvedValue(true);
+    const request = fixture.start();
+    await vi.advanceTimersByTimeAsync(0);
 
-    const delivery = runApprovalRequestDeliveries({ context: deliveryContext(), record });
-
-    await expect(delivery).resolves.toBe(true);
-    expect(handleApprovalWebPushRequestedMock).toHaveBeenCalledWith(record);
+    expectAccepted(fixture);
+    expect(fixture.webPush).toHaveBeenCalledExactlyOnceWith(fixture.record);
+    fixture.settle();
+    await request;
   });
 
   it.for(
@@ -86,56 +162,71 @@ describe("runApprovalRequestDeliveries", () => {
       approvalDeliveryCallers.map((caller) => ({ caller, successfulRoute })),
     ),
   )(
-    "immediately reports a successful $caller.name $successfulRoute while the other route remains pending",
-    async ({ caller, successfulRoute }, testContext) => {
-      const { approvalKind, id, request } = caller;
-      const manager = createTestApprovalManager<typeof request>(testContext, { approvalKind });
-      const record = manager.create(request, 60_000, id);
-      const scope = new AsyncWorkScope();
+    "accepts $caller.name through $successfulRoute while retaining the other route",
+    async ({ caller, successfulRoute }, test) => {
+      const fixture = createDeliveryFixture(test, caller);
       const release = createDeferredCore<boolean>();
       const started: string[] = [];
-      const routeTasks: Promise<boolean>[] = [];
       let pendingRouteFinished = false;
-      const route = (name: "forward" | "push") => {
-        const task = (async () => {
-          started.push(name);
-          if (name === successfulRoute) {
-            return true;
-          }
-          const delivered = await release.promise;
-          pendingRouteFinished = true;
-          return delivered;
-        })();
-        routeTasks.push(task);
-        return task;
+      const route = async (name: "forward" | "push") => {
+        started.push(name);
+        if (name === successfulRoute) {
+          return true;
+        }
+        const delivered = await release.promise;
+        pendingRouteFinished = true;
+        return delivered;
       };
+      const forwardRequest = vi.fn(() => route("forward"));
+      const handleRequested = vi.fn(() => route("push"));
+      const request = fixture.start({
+        forwardRequest,
+        getIosPushDelivery: () => ({ handleRequested }),
+      });
       let draining: Promise<void> | undefined;
       let drained = false;
       try {
-        const delivery = scope.track(() =>
-          runApprovalRequestDeliveries({
-            context: deliveryContext(),
-            record,
-            forward: [() => route("forward"), "forward failed"],
-            iosPush: [() => route("push"), "push failed"],
-          }),
-        );
         expect(started).toEqual(["forward", "push"]);
-        await expectPromptDelivery(delivery);
+        await vi.advanceTimersByTimeAsync(0);
+        expectAccepted(fixture);
+        const event = {
+          approvalKind: caller.approvalKind,
+          id: fixture.record.id,
+          request: caller.request,
+          createdAtMs: fixture.record.createdAtMs,
+          expiresAtMs: fixture.record.expiresAtMs,
+        };
+        expect(fixture.context.broadcastToConnIds).toHaveBeenCalledWith(
+          `${caller.approvalKind}.approval.requested`,
+          event,
+          new Set(),
+          { dropIfSlow: true },
+        );
+        expect(forwardRequest).toHaveBeenCalledExactlyOnceWith(event);
+        expect(handleRequested).toHaveBeenCalledExactlyOnceWith(event, {
+          isTargetVisible: expect.any(Function),
+        });
         expect(pendingRouteFinished).toBe(false);
-        draining = scope.drain().then(() => {
+        fixture.settle();
+        await request;
+        expect(fixture.respond).toHaveBeenLastCalledWith(
+          true,
+          expect.objectContaining({ decision: "deny" }),
+          undefined,
+        );
+        draining = fixture.manager.drain().then(() => {
           drained = true;
         });
-        await nextTurn();
-        // Fast delivery acknowledgement must not release the other route's active work.
+        await vi.advanceTimersByTimeAsync(0);
         expect(drained).toBe(false);
         release.resolve(true);
         await draining;
         expect(pendingRouteFinished).toBe(true);
       } finally {
         release.resolve(true);
-        await Promise.allSettled(routeTasks);
-        await (draining ?? scope.drain());
+        fixture.settle();
+        await request;
+        await (draining ?? fixture.manager.drain());
       }
     },
   );
@@ -145,118 +236,127 @@ describe("runApprovalRequestDeliveries", () => {
     { name: "forwarding rejects", forwardRejects: true, pushRejects: false },
     { name: "iOS push rejects", forwardRejects: false, pushRejects: true },
     { name: "both routes reject", forwardRejects: true, pushRejects: true },
-  ])("reports false after $name", async ({ forwardRejects, pushRejects }, testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-all-deliveries-fail");
-    const error = vi.fn();
-
-    const delivery = runApprovalRequestDeliveries({
-      context: deliveryContext(error),
-      record,
-      forward: [
-        async () => {
-          if (forwardRejects) {
-            throw new Error("forward offline");
-          }
-          return false;
-        },
-        "forward failed",
-      ],
-      iosPush: [
-        async () => {
+  ])("expires after $name", async ({ forwardRejects, pushRejects }, test) => {
+    const fixture = createDeliveryFixture(test);
+    await fixture.start({
+      forwardRequest: async () => {
+        if (forwardRejects) {
+          throw new Error("forward offline");
+        }
+        return false;
+      },
+      getIosPushDelivery: () => ({
+        handleRequested: async () => {
           if (pushRejects) {
             throw new Error("push offline");
           }
           return false;
         },
-        "push failed",
-      ],
+      }),
     });
 
-    await expect(delivery).resolves.toBe(false);
+    expect(fixture.expire).toHaveBeenCalledExactlyOnceWith(fixture.record.id, "no-approval-route");
+    expect(fixture.respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      expect.objectContaining({ decision: null }),
+      undefined,
+    );
+    const error = fixture.context.logGateway.error;
     expect(error).toHaveBeenCalledTimes(Number(forwardRejects) + Number(pushRejects));
     if (forwardRejects) {
-      expect(error).toHaveBeenCalledWith("forward failed: Error: forward offline");
+      expect(error).toHaveBeenCalledWith(
+        "exec approvals: forward request failed: Error: forward offline",
+      );
     }
     if (pushRejects) {
-      expect(error).toHaveBeenCalledWith("push failed: Error: push offline");
+      expect(error).toHaveBeenCalledWith(
+        "exec approvals: iOS push request failed: Error: push offline",
+      );
     }
   });
 
-  it("continues handling a late route rejection after another route succeeds", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-late-push-failure");
-    const error = vi.fn();
-    let rejectPush: ((reason: Error) => void) | undefined;
-    const pendingPush = new Promise<boolean>((_resolve, reject) => {
-      rejectPush = reject;
+  it("handles a late route rejection after accepting and answering the request", async (test) => {
+    const fixture = createDeliveryFixture(test);
+    const pendingPush = createDeferredCore<boolean>();
+    const request = fixture.start({
+      forwardRequest: async () => true,
+      getIosPushDelivery: () => ({ handleRequested: () => pendingPush.promise }),
     });
-
-    const delivery = runApprovalRequestDeliveries({
-      context: deliveryContext(error),
-      record,
-      forward: [async () => true, "forward failed"],
-      iosPush: [async () => await pendingPush, "push failed"],
-    });
-
-    await expectPromptDelivery(delivery);
-    expect(error).not.toHaveBeenCalled();
-    rejectPush?.(new Error("offline after delivery"));
-    await vi.waitFor(() => {
-      expect(error).toHaveBeenCalledWith("push failed: Error: offline after delivery");
-    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expectAccepted(fixture);
+      fixture.settle();
+      await request;
+      expect(fixture.context.logGateway.error).not.toHaveBeenCalled();
+      pendingPush.reject(new Error("offline after delivery"));
+      await fixture.manager.drain();
+      expect(fixture.context.logGateway.error).toHaveBeenCalledExactlyOnceWith(
+        "exec approvals: iOS push request failed: Error: offline after delivery",
+      );
+    } finally {
+      pendingPush.resolve(false);
+      fixture.settle();
+      await request;
+    }
   });
 
-  it.for([
-    {
-      failedRoute: "forward",
-      expectedError: "forward failed: Error: offline",
-    },
-    {
-      failedRoute: "push",
-      expectedError: "push failed: Error: offline",
-    },
-  ] as const)(
-    "starts every route before awaiting and isolates $failedRoute failures",
-    async ({ failedRoute, expectedError }, testContext) => {
-      const manager = createTestApprovalManager(testContext);
-      const record = manager.create({ command: "echo ok" }, 60_000, "approval-deliveries");
+  it.for(["forward", "push"] as const)(
+    "starts both routes and isolates a %s failure",
+    async (failedRoute, test) => {
+      const fixture = createDeliveryFixture(test);
+      const successfulResult = createDeferredCore<boolean>();
       const started: string[] = [];
-      const error = vi.fn();
-      let finishDelivery: ((delivered: boolean) => void) | undefined;
-      const successfulResult = new Promise<boolean>((resolve) => {
-        finishDelivery = resolve;
+      const route = (name: "forward" | "push") => {
+        started.push(name);
+        return name === failedRoute
+          ? Promise.reject(new Error("offline"))
+          : successfulResult.promise;
+      };
+      const request = fixture.start({
+        forwardRequest: () => route("forward"),
+        getIosPushDelivery: () => ({ handleRequested: () => route("push") }),
       });
-
-      const delivery = runApprovalRequestDeliveries({
-        context: deliveryContext(error),
-        record,
-        forward: [
-          async () => {
-            started.push("forward");
-            if (failedRoute === "forward") {
-              throw new Error("offline");
-            }
-            return await successfulResult;
-          },
-          "forward failed",
-        ],
-        iosPush: [
-          async () => {
-            started.push("push");
-            if (failedRoute === "push") {
-              throw new Error("offline");
-            }
-            return await successfulResult;
-          },
-          "push failed",
-        ],
-      });
-
-      expect(started).toEqual(["forward", "push"]);
-      finishDelivery?.(true);
-      await expect(delivery).resolves.toBe(true);
-      expect(error).toHaveBeenCalledWith(expectedError);
+      try {
+        expect(started).toEqual(["forward", "push"]);
+        successfulResult.resolve(true);
+        await vi.advanceTimersByTimeAsync(0);
+        expectAccepted(fixture);
+        expect(fixture.context.logGateway.error).toHaveBeenCalledExactlyOnceWith(
+          `exec approvals: ${failedRoute === "forward" ? "forward" : "iOS push"} request failed: Error: offline`,
+        );
+      } finally {
+        successfulResult.resolve(true);
+        fixture.settle();
+        await request;
+      }
     },
   );
+
+  it("limits mobile delivery to the bound requester, reviewers, and administrators", async (test) => {
+    const fixture = createDeliveryFixture(test);
+    fixture.record.requestedByDeviceId = "requester";
+    fixture.record.approvalReviewerDeviceIds = ["reviewer"];
+    const visible: boolean[] = [];
+    const request = fixture.start({
+      getIosPushDelivery: () => ({
+        handleRequested: async (_event, options) => {
+          for (const target of [
+            { deviceId: "requester", scopes: [] },
+            { deviceId: "reviewer", scopes: ["operator.approvals"] },
+            { deviceId: "reviewer", scopes: [] },
+            { deviceId: "other", scopes: ["operator.approvals"] },
+            { deviceId: "admin", scopes: ["operator.admin"] },
+          ]) {
+            visible.push(options?.isTargetVisible?.(target) === true);
+          }
+          return true;
+        },
+      }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expectAccepted(fixture);
+    expect(visible).toEqual([true, true, false, false, true]);
+    fixture.settle();
+    await request;
+  });
 });

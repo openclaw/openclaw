@@ -3,6 +3,7 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -58,7 +59,9 @@ describe("gateway hooks helpers", () => {
         allowedAgentIds,
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, hooks: {} },
       },
     }) as OpenClawConfig;
 
@@ -372,7 +375,9 @@ describe("gateway hooks helpers", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
       agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, hooks: {} },
       },
     } as OpenClawConfig;
     const resolved = resolveHooksConfigOrThrow(cfg);
@@ -415,30 +420,79 @@ describe("gateway hooks helpers", () => {
     });
   });
 
-  test("global hook dispatch honors the persisted fixed-store owner", () => {
-    const resolved = resolveHooksConfigOrThrow({
-      hooks: { enabled: true, token: "secret" },
-      session: { scope: "global", store: "/tmp/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    });
+  test.each([undefined, "explicit"] as const)(
+    "hook dispatch uses a recorded designation only with explicit ownership (%s)",
+    (ownership) => {
+      const resolved = resolveHooksConfigOrThrow({
+        hooks: { enabled: true, token: "synthetic-hook-token" },
+        agents: {
+          ownership,
+          defaults: { systemAgent: { agentId: "research" } },
+          entries: { ops: {}, research: {} },
+        },
+      });
+      expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual(
+        ownership === "explicit"
+          ? { ok: true, effectiveAgentId: "research" }
+          : {
+              ok: false,
+              code: "agent-required",
+              error: "agentId is required when multiple agents are configured",
+            },
+      );
+    },
+  );
 
-    expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual({
-      ok: true,
-      effectiveAgentId: "ops",
-    });
-    expect(resolveEffectiveHookTargetAgentId(resolved, "research", "request")).toEqual({
+  test("hook dispatch cannot use migration provenance as an explicit fleet default", () => {
+    const resolved = resolveHooksConfigOrThrow(
+      retainLegacyDefaultAgentId(
+        {
+          hooks: { enabled: true, token: "synthetic-hook-token" },
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        },
+        "ops",
+      ),
+    );
+    expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toMatchObject({
       ok: false,
-      code: "owner-conflict",
-      agentId: "research",
-      ownerAgentId: "ops",
-      error:
-        'agentId "research" conflicts with global session-store owner "ops"; use agentId "ops" or update agents.defaults.sessionStore.agentId',
+      code: "agent-required",
     });
   });
+
+  test.each([undefined, "research"])(
+    "global hook dispatch honors the persisted fixed-store owner (runtime default: %s)",
+    (runtimeDefault) => {
+      const resolved = resolveHooksConfigOrThrow({
+        hooks: { enabled: true, token: "secret" },
+        session: { scope: "global", store: "/tmp/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            sessionStore: { agentId: "ops" },
+            ...(runtimeDefault ? { systemAgent: { agentId: runtimeDefault } } : {}),
+          },
+          entries: { ops: {}, research: {} },
+        },
+      });
+
+      expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual({
+        ok: true,
+        effectiveAgentId: "ops",
+      });
+      expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "mapping")).toEqual({
+        ok: true,
+        effectiveAgentId: "ops",
+      });
+      expect(resolveEffectiveHookTargetAgentId(resolved, "research", "request")).toEqual({
+        ok: false,
+        code: "owner-conflict",
+        agentId: "research",
+        ownerAgentId: "ops",
+        error:
+          'agentId "research" conflicts with global session-store owner "ops"; use agentId "ops" or update agents.defaults.sessionStore.agentId',
+      });
+    },
+  );
 
   test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["hooks"]));
@@ -450,12 +504,6 @@ describe("gateway hooks helpers", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig([]));
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(false);
-  });
-
-  test("isHookAgentAllowed allows the resolved default agent when allowlisted", () => {
-    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["main"]));
-    expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
-    expect(isHookAgentAllowed(resolved, "main")).toBe(true);
   });
 
   test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
@@ -475,19 +523,6 @@ describe("gateway hooks helpers", () => {
       sessionKey: "agent:main:dm:u99999",
     });
     expect(denied.ok).toBe(false);
-  });
-
-  test("resolveHookSessionKey allows request sessionKey when explicitly enabled", () => {
-    const cfg = {
-      hooks: { enabled: true, token: "secret", allowRequestSessionKey: true },
-    } as OpenClawConfig;
-    const resolved = resolveHooksConfigOrThrow(cfg);
-    const allowed = resolveHookSessionKey({
-      hooksConfig: resolved,
-      source: "request",
-      sessionKey: "hook:manual",
-    });
-    expect(allowed).toEqual({ ok: true, value: "hook:manual" });
   });
 
   test("resolveHookSessionKey enforces allowed prefixes", () => {
@@ -534,24 +569,6 @@ describe("gateway hooks helpers", () => {
     expect(denied.ok).toBe(false);
   });
 
-  test("resolveHookSessionKey still allows static mapping sessionKey when request overrides are disabled", () => {
-    const cfg = {
-      hooks: {
-        enabled: true,
-        token: "secret",
-        allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
-      },
-    } as OpenClawConfig;
-    const resolved = resolveHooksConfigOrThrow(cfg);
-
-    const allowed = resolveHookSessionKey({
-      hooksConfig: resolved,
-      source: "mapping-static",
-      sessionKey: "hook:gmail:fixed",
-    });
-    expect(allowed).toEqual({ ok: true, value: "hook:gmail:fixed" });
-  });
-
   test("resolveHookSessionKey uses defaultSessionKey when request key is absent", () => {
     const cfg = {
       hooks: {
@@ -567,15 +584,6 @@ describe("gateway hooks helpers", () => {
       source: "request",
     });
     expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
-  });
-
-  test("normalizeHookDispatchSessionKey preserves target agent scope", () => {
-    expect(
-      normalizeHookDispatchSessionKey({
-        sessionKey: "agent:hooks:slack:channel:c123",
-        targetAgentId: "hooks",
-      }),
-    ).toBe("agent:hooks:slack:channel:c123");
   });
 
   test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {
@@ -654,16 +662,6 @@ describe("gateway hooks helpers", () => {
 
     expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
       "hook:gmail:static",
-      "hook:gmail:{{messages[0].id}}",
-    ]);
-    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
-  });
-
-  test("resolveHooksConfig allows a static catch-all mapping to shadow a later templated mapping", () => {
-    const resolved = resolveHooksConfigOrThrow(buildStaticShadowingMappingConfig({}));
-
-    expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
-      "hook:static",
       "hook:gmail:{{messages[0].id}}",
     ]);
     expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();

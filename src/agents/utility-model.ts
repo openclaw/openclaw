@@ -2,45 +2,70 @@
 // narration). Unset config derives the provider-declared small model from the
 // agent's primary provider; an explicit empty string disables utility routing.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  hasUtilityModelSeparationMigrationMarker,
+  resolveLegacyImplicitPrimaryModelRef,
+} from "../config/utility-model-separation-migration.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { resolveNativeModelPrimary } from "./agent-scope.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { readUtilityModelSetting } from "./utility-model-setting.js";
 
-type UtilityModelSetting =
-  | { kind: "explicit"; modelRef: string }
-  | { kind: "disabled" }
-  | { kind: "auto" };
-
-/**
- * Reads the configured utility-model setting. A defined-but-empty value is an
- * explicit opt-out ("disabled"), distinct from unset ("auto"); the agent-level
- * value wins over defaults even when it is the empty string.
- */
-export function readUtilityModelSetting(cfg: OpenClawConfig, agentId: string): UtilityModelSetting {
-  const value =
-    resolveAgentConfig(cfg, agentId)?.utilityModel ?? cfg.agents?.defaults?.utilityModel;
-  if (value === undefined) {
-    return { kind: "auto" };
+/** Legacy utility settings did not remove the ordinary implicit primary route. */
+export function resolveConfiguredPrimaryModelForAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): string | undefined {
+  const primary = resolveNativeModelPrimary(params.cfg, params.agentId)?.trim();
+  if (primary) {
+    return primary;
   }
-  const trimmed = value.trim();
-  return trimmed ? { kind: "explicit", modelRef: trimmed } : { kind: "disabled" };
+  return !hasUtilityModelSeparationMigrationMarker(params.cfg) &&
+    readUtilityModelSetting(params.cfg, params.agentId).kind === "explicit"
+    ? resolveLegacyImplicitPrimaryModelRef(params.cfg)
+    : undefined;
+}
+
+/** Setup can use an explicit utility model until the agent has its own primary. */
+export function resolveConfiguredSetupModelForAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  /** An explicit utility selection is used only to verify that configuration role. */
+  modelTarget?: "utility";
+}): { modelRef: string; modelTarget?: "utility"; implicitPrimary?: true } | undefined {
+  const primary = resolveConfiguredPrimaryModelForAgent(params);
+  if (primary && params.modelTarget !== "utility") {
+    return {
+      modelRef: primary,
+      ...(!resolveNativeModelPrimary(params.cfg, params.agentId)?.trim()
+        ? { implicitPrimary: true as const }
+        : {}),
+    };
+  }
+  const utility = readUtilityModelSetting(params.cfg, params.agentId);
+  return utility.kind === "explicit"
+    ? { modelRef: utility.modelRef, modelTarget: "utility" }
+    : undefined;
 }
 
 /**
- * Provider-declared default utility model (manifest
+ * Automatic utility model for an already-resolved primary provider (manifest
  * `modelCatalog.providers.<id>.defaultUtilityModel`), or undefined when the
  * provider does not declare one. Reads only the process-current plugin
  * metadata snapshot, so the lookup stays synchronous and cheap; contexts
  * without a snapshot simply get no derived default.
  */
-function resolveProviderDefaultUtilityModelRef(params: {
+export function resolveAutomaticUtilityModelRef(params: {
   cfg: OpenClawConfig;
-  provider: string;
+  primaryProvider: string;
+  primaryModelRef?: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | undefined {
-  const provider = params.provider.trim().toLowerCase();
+  const provider = params.primaryProvider.trim().toLowerCase();
   if (!provider) {
     return undefined;
   }
@@ -57,7 +82,12 @@ function resolveProviderDefaultUtilityModelRef(params: {
     const defaultUtilityModel = plugin.modelCatalog?.providers?.[provider]?.defaultUtilityModel;
     const modelId = defaultUtilityModel?.trim();
     if (modelId) {
-      return `${provider}/${modelId}`;
+      const derived = `${provider}/${modelId}`;
+      // Automatic routing stays with the primary model's explicit auth owner.
+      const profile = params.primaryModelRef
+        ? splitTrailingAuthProfile(params.primaryModelRef).profile
+        : undefined;
+      return profile ? `${derived}@${profile}` : derived;
     }
   }
   return undefined;
@@ -88,24 +118,63 @@ export function resolveUtilityModelRefForAgent(params: {
   const provider =
     params.primaryProvider?.trim() ||
     resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }).provider;
-  if (!provider) {
-    return undefined;
-  }
-  const derived = resolveProviderDefaultUtilityModelRef({
+  return resolveAutomaticUtilityModelRef({
     cfg: params.cfg,
-    provider,
+    primaryProvider: provider,
+    primaryModelRef:
+      params.primaryModelRef?.trim() || resolveNativeModelPrimary(params.cfg, params.agentId),
     metadataSnapshot: params.metadataSnapshot,
   });
-  if (!derived) {
+}
+
+/** Candidate runtime for an automatic utility model; preparation checks auth availability. */
+export function resolveAutomaticUtilityRuntimeOverride(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  /** Provider and model of the already-resolved utility selection. */
+  utilityProvider: string;
+  utilityModelId: string;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+}): string | undefined {
+  // An explicit utilityModel owns its own runtime; only automatic routing inherits.
+  if (readUtilityModelSetting(params.cfg, params.agentId).kind !== "auto") {
     return undefined;
   }
-  // The derived default shares the primary's provider, so a trailing auth
-  // profile on the primary ref must carry over; otherwise profile-isolated
-  // setups would route utility calls through default credentials.
-  const primaryRef =
-    params.primaryModelRef?.trim() ||
-    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ||
-    "";
-  const primaryProfile = primaryRef ? splitTrailingAuthProfile(primaryRef)?.profile : undefined;
-  return primaryProfile ? `${derived}@${primaryProfile}` : derived;
+  const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const utilityProvider = params.utilityProvider.trim().toLowerCase();
+  if (!primary.provider || !primary.model || primary.provider.toLowerCase() !== utilityProvider) {
+    return undefined;
+  }
+  // The observer passes its derived ref back as modelRef. Match that exact model
+  // so other same-provider selections keep their own runtime and billing route.
+  const automaticRef = resolveAutomaticUtilityModelRef({
+    cfg: params.cfg,
+    primaryProvider: primary.provider,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  const utilityRef = `${utilityProvider}/${params.utilityModelId.trim().toLowerCase()}`;
+  if (automaticRef?.toLowerCase() !== utilityRef) {
+    return undefined;
+  }
+  const derived = resolveAgentHarnessPolicy({
+    provider: params.utilityProvider,
+    modelId: params.utilityModelId,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  if (!isDefaultAgentRuntimeId(derived.runtime)) {
+    return undefined;
+  }
+  const primaryPolicy = resolveAgentHarnessPolicy({
+    provider: primary.provider,
+    modelId: primary.model,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  // Provider-wide policy already covers the derived model; implicit policy is
+  // resolved per route and must not be copied from a different model.
+  if (primaryPolicy.runtimeSource !== "model") {
+    return undefined;
+  }
+  return isDefaultAgentRuntimeId(primaryPolicy.runtime) ? undefined : primaryPolicy.runtime;
 }

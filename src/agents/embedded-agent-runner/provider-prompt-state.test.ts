@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -6,6 +7,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
@@ -20,26 +22,27 @@ const model = {
   baseUrl: "https://api.openai.com/v1",
 } as Model;
 
-function createResultStream(stopReason: "error" | "stop") {
-  const stream = createAssistantMessageEventStream();
+function endResultStream(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  stopReason: "error" | "stop",
+  errorMessage = "context length exceeded",
+) {
   stream.end({
     role: "assistant",
     content: [],
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason,
-    ...(stopReason === "error" ? { errorMessage: "context length exceeded" } : {}),
+    ...(stopReason === "error" ? { errorMessage } : {}),
     timestamp: 1,
   });
+}
+
+function createResultStream(stopReason: "error" | "stop", errorMessage?: string) {
+  const stream = createAssistantMessageEventStream();
+  endResultStream(stream, stopReason, errorMessage);
   return stream;
 }
 
@@ -99,6 +102,7 @@ describe("provider prompt state", () => {
 
     expect(recordEvent).toHaveBeenCalledWith("provider.prompt.observed", observation);
     expect(JSON.stringify({ calls: recordEvent.mock.calls, state })).not.toContain(marker);
+    expect(state.lastAttempt?.cachePrefix).toBeUndefined();
     clearProviderPromptState(runId);
   });
 
@@ -115,28 +119,9 @@ describe("provider prompt state", () => {
       const rawPayload = { input: "raw", model: model.id };
       const replacement = await options?.onPayload?.(rawPayload, model);
       sentPayloads.push(replacement === undefined ? rawPayload : replacement);
-      const stream = createAssistantMessageEventStream();
-      stream.end({
-        role: "assistant",
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "error",
-        errorMessage: "context length exceeded",
-        timestamp: 1,
-      });
-      return stream;
+      return createResultStream("error");
     });
-    const finalPayload = { input: "final", model: model.id };
+    const finalPayload = { input: "final 🦞 日本語".repeat(3_000), model: model.id };
     const wrapped = wrapStreamFnWithProviderPromptState({
       streamFn: transport,
       state,
@@ -164,6 +149,52 @@ describe("provider prompt state", () => {
     expect(sentPayloads).toEqual([finalPayload, changedPayload]);
     expect(JSON.stringify(state)).not.toContain("final");
     clearProviderPromptState(runId);
+  });
+
+  it.each([
+    {
+      name: "ordinary nested payload",
+      payload: { messages: [{ text: "earlier 🦞" }, { text: "tail" }], model: "model-1" },
+      canonical: '{"messages":[{"text":"earlier 🦞"},{"text":"tail"}],"model":"model-1"}',
+    },
+    {
+      name: "non-enumerable array element with metadata",
+      payload: Object.defineProperty(Object.assign(["earlier"], { metadata: "fixture" }), "0", {
+        enumerable: false,
+      }),
+      canonical: '["earlier"]',
+    },
+    {
+      name: "custom hook callback",
+      payload: { input: "hello", callback: () => undefined },
+      canonical: '{"callback":null,"input":"hello"}',
+    },
+    {
+      name: "custom error name",
+      payload: Object.assign(new Error("fixture"), {
+        name: "FixtureError",
+        stack: "fixture-stack",
+      }),
+      canonical: '{"message":"fixture","name":"FixtureError","stack":"fixture-stack"}',
+    },
+  ])("preserves canonical identity for $name", async ({ payload, canonical }) => {
+    const state = {};
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: async (_model, _context, options) => {
+        await options?.onPayload?.(payload, model);
+        return createResultStream("error");
+      },
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+    await wrapped(model, { messages: [] });
+    expect(markLastProviderPromptContextRejected(state)).toMatchObject({
+      digest: hash("sha256", canonical),
+      byteWeight: Buffer.byteLength(canonical),
+    });
+    await expect(wrapped(model, { messages: [] })).rejects.toThrow(
+      "byte-identical provider payload",
+    );
   });
 
   it("does not compare rejected payloads across effective context scopes", async () => {
@@ -245,25 +276,7 @@ describe("provider prompt state", () => {
     await observedResult.result();
     expect(state.lastAttempt).toBeDefined();
 
-    const stream = createAssistantMessageEventStream();
-    stream.end({
-      role: "assistant",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "error",
-      errorMessage: "connection dropped after dispatch",
-      timestamp: 1,
-    });
+    const stream = createResultStream("error", "connection dropped after dispatch");
     const wrapped = wrapStreamFnWithProviderPromptState({
       streamFn: () => stream,
       state,
@@ -317,23 +330,7 @@ describe("provider prompt state", () => {
     await observedPayloadHook;
     expect(state.lastAttempt).toBeDefined();
 
-    stream.end({
-      role: "assistant",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: 1,
-    });
+    endResultStream(stream, "stop");
     await result.result();
     clearProviderPromptState(runId);
   });

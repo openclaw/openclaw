@@ -1,352 +1,323 @@
-// Browser tests cover doctor browser plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readBrowserVersion } from "./browser/chrome.executable-probe.js";
 import {
-  maybeArchiveLegacyClawdBrowserProfileResidue,
-  noteChromeMcpBrowserReadiness,
-} from "./doctor-browser.js";
+  resolveBrowserExecutableForPlatform,
+  resolveGoogleChromeExecutableForPlatform,
+} from "./browser/chrome.executables.js";
+import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
 
-function requireFirstNoteText(noteFn: ReturnType<typeof vi.fn>): string {
-  const [call] = noteFn.mock.calls;
-  if (!call) {
-    throw new Error("expected browser doctor note");
-  }
-  const [message] = call;
-  return String(message);
-}
+vi.mock("./browser/chrome.executables.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/chrome.executables.js")>()),
+  resolveBrowserExecutableForPlatform: vi.fn(),
+  resolveGoogleChromeExecutableForPlatform: vi.fn(),
+}));
+vi.mock("./browser/chrome.executable-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/chrome.executable-probe.js")>()),
+  readBrowserVersion: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-utility-runtime")>();
+  return {
+    ...actual,
+    get CONFIG_DIR() {
+      return process.env.OPENCLAW_STATE_DIR ?? actual.CONFIG_DIR;
+    },
+  };
+});
 
-function requireNoteTextContaining(noteFn: ReturnType<typeof vi.fn>, expected: string): string {
-  const call = noteFn.mock.calls.find(([message]) => String(message).includes(expected));
-  if (!call) {
-    throw new Error(`expected browser doctor note containing ${expected}`);
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+const uidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
+afterEach(() => {
+  Object.defineProperty(process, "platform", platformDescriptor);
+  if (uidDescriptor) {
+    Object.defineProperty(process, "getuid", uidDescriptor);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
   }
-  return String(call[0]);
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+type BrowserConfig = NonNullable<Parameters<typeof noteChromeMcpBrowserReadiness>[0]["browser"]>;
+type DoctorHost = {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  getUid?: () => number;
+  resolveManagedExecutable?: typeof resolveBrowserExecutableForPlatform;
+  resolveChromeExecutable?: typeof resolveGoogleChromeExecutableForPlatform;
+  readVersion?: typeof readBrowserVersion;
+};
+const managedHost = {
+  platform: "linux",
+  env: { DISPLAY: ":99" },
+  getUid: () => 1000,
+  resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
+} satisfies DoctorHost;
+
+async function diagnose(browser: BrowserConfig, overrides: DoctorHost = {}) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("browser-doctor-"));
+  const host = { ...managedHost, ...overrides };
+  const env: NodeJS.ProcessEnv = host.env;
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: host.platform });
+  Object.defineProperty(process, "getuid", { configurable: true, value: host.getUid });
+  for (const key of ["DISPLAY", "WAYLAND_DISPLAY", "OPENCLAW_BROWSER_HEADLESS"]) {
+    vi.stubEnv(key, env[key]);
+  }
+  vi.mocked(resolveBrowserExecutableForPlatform)
+    .mockReset()
+    .mockImplementation(host.resolveManagedExecutable);
+  vi.mocked(resolveGoogleChromeExecutableForPlatform)
+    .mockReset()
+    .mockImplementation(host.resolveChromeExecutable ?? (() => null));
+  vi.mocked(readBrowserVersion)
+    .mockReset()
+    .mockImplementation(host.readVersion ?? (() => null));
+  const noteFn = vi.fn();
+  await noteChromeMcpBrowserReadiness(
+    { browser: { extensionRelay: { allowLegacyAuth: false }, ...browser } },
+    { noteFn },
+  );
+  const notes = noteFn.mock.calls.map(([message]) => String(message));
+  return { noteFn, text: notes.join("\n") };
 }
 
 describe("browser doctor readiness", () => {
-  it("does nothing when Chrome MCP is not configured", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
-      },
-    );
-    expect(noteFn).not.toHaveBeenCalled();
-  });
-
   it("warns while legacy Browser Relay Authentication remains enabled", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: true },
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
-      },
-    );
-
+    const { noteFn } = await diagnose({
+      extensionRelay: { allowLegacyAuth: true },
+      profiles: { openclaw: { cdpPort: 18800 } },
+    });
     expect(noteFn).toHaveBeenCalledWith(
       expect.stringContaining("browser.extensionRelay.allowLegacyAuth=true"),
       "Browser relay authentication",
     );
   });
 
-  it("warns when managed browser profiles have no local executable", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        resolveManagedExecutable: () => null,
-      },
-    );
-
-    expect(noteFn).toHaveBeenCalledWith(
-      [
-        "- OpenClaw-managed browser profile(s) are configured: openclaw.",
-        "- No Chromium-based browser executable was found on this host for OpenClaw-managed launch.",
-        "- Install Chrome, Chromium, Brave, Edge, or set browser.executablePath explicitly.",
-      ].join("\n"),
-      "Browser",
-    );
-  });
-
-  it("warns when managed browser launch needs display and no-sandbox adjustments", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          headless: false,
-          noSandbox: false,
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: {},
-        getUid: () => 0,
-        resolveManagedExecutable: () => ({ kind: "chromium", path: "/usr/bin/chromium" }),
-      },
-    );
-
-    expect(noteFn).toHaveBeenCalledWith(
-      [
-        "- OpenClaw-managed browser profile(s) are configured: openclaw.",
-        "- No DISPLAY or WAYLAND_DISPLAY is set, and browser.headless is false. Managed browser launch needs a desktop session, Xvfb, or browser.headless: true.",
-        "- The Gateway is running as root and browser.noSandbox is false. Chromium commonly requires browser.noSandbox: true in container/root runtimes.",
-      ].join("\n"),
-      "Browser",
-    );
-  });
-
-  it("warns about legacy clawd managed browser profile residue", async () => {
-    const noteFn = vi.fn();
-    const configDir = "/tmp/openclaw-home";
-
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        configDir,
-        pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
-      },
-    );
-
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    const note = requireFirstNoteText(noteFn);
-    expect(note).toContain("Legacy managed browser profile residue");
-    expect(note).toContain("/tmp/openclaw-home/browser/clawd");
-    expect(note).toContain("/tmp/openclaw-home/browser/openclaw/user-data");
-    expect(note).toContain("openclaw doctor --fix");
-  });
-
-  it("does not warn when clawd is still configured as a browser profile", async () => {
-    const noteFn = vi.fn();
-
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            clawd: { color: "#FF4500" },
-            openclaw: { color: "#00AA00" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        configDir: "/tmp/openclaw-home",
-        pathExists: () => true,
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
-      },
-    );
-
-    expect(noteFn).not.toHaveBeenCalled();
-  });
-
   it("warns when Chrome MCP is configured but Chrome is missing", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          defaultProfile: "user",
-        },
-      },
-      {
-        noteFn,
-        platform: "darwin",
-        resolveChromeExecutable: () => null,
-      },
+    const { text } = await diagnose(
+      { defaultProfile: "user" },
+      { platform: "darwin", resolveChromeExecutable: () => null },
     );
-
-    const chromeNote = requireNoteTextContaining(noteFn, "Google Chrome was not found");
-    expect(chromeNote).toContain("brave://inspect/#remote-debugging");
-    const importNote = requireNoteTextContaining(noteFn, "System browser profile cookie import");
-    expect(importNote).toContain("enabled");
-    expect(importNote).toContain("System browser profile discovery skipped");
+    expect(text).toContain("Google Chrome was not found");
+    expect(text).toContain("brave://inspect/#remote-debugging");
+    expect(text).toContain("System browser profile cookie import is enabled");
+    expect(text).toContain("System browser profile discovery skipped");
   });
 
-  it("warns when detected Chrome is too old for Chrome MCP", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
+  it.each<[string, BrowserConfig, boolean, boolean]>([
+    [
+      "custom default Chrome MCP",
+      { defaultProfile: "work", profiles: { work: { driver: "existing-session" } } },
+      false,
+      true,
+    ],
+    [
+      "explicit Chrome MCP endpoint",
+      { profiles: { endpoint: { driver: "existing-session", cdpUrl: "https://browser.example" } } },
+      false,
+      false,
+    ],
+    [
+      "Chrome MCP endpoint arguments",
       {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            chromeLive: {
-              driver: "existing-session",
-              color: "#00AA00",
-            },
+        profiles: {
+          endpoint: {
+            driver: "existing-session",
+            mcpArgs: ["--browserUrl", "https://browser.example"],
           },
         },
       },
+      false,
+      false,
+    ],
+    [
+      "explicit Chrome MCP auto-connect override",
       {
-        noteFn,
-        platform: "linux",
-        resolveChromeExecutable: () => ({ path: "/usr/bin/google-chrome" }),
-        readVersion: () => "Google Chrome 143.0.7499.4",
-      },
-    );
-
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    const note = requireFirstNoteText(noteFn);
-    expect(note).toContain("too old");
-    expect(note).toContain("Chrome 144+");
-  });
-
-  it("reports the detected Chrome version for existing-session profiles", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            chromeLive: {
-              driver: "existing-session",
-              color: "#00AA00",
-            },
+        profiles: {
+          local: {
+            driver: "existing-session",
+            cdpUrl: "https://browser.example",
+            mcpArgs: ["--autoConnect"],
           },
         },
       },
+      false,
+      true,
+    ],
+    [
+      "explicit managed override of user",
+      { defaultProfile: "user", profiles: { user: { driver: "openclaw", cdpPort: 18801 } } },
+      true,
+      false,
+    ],
+    [
+      "extension",
+      { defaultProfile: "chrome", profiles: { chrome: { driver: "extension" } } },
+      false,
+      false,
+    ],
+    ["remote CDP", { profiles: { remote: { cdpUrl: "https://browser.example" } } }, false, false],
+    [
+      "profile attach-only",
+      { profiles: { attached: { cdpPort: 18801, attachOnly: true } } },
+      false,
+      false,
+    ],
+    [
+      "inherited attach-only",
+      { attachOnly: true, profiles: { attached: { cdpPort: 18801 } } },
+      false,
+      false,
+    ],
+    [
+      "explicit managed override of inherited attach-only",
+      { attachOnly: true, profiles: { local: { cdpPort: 18801, attachOnly: false } } },
+      true,
+      false,
+    ],
+    [
+      "Lightpanda",
       {
-        noteFn,
-        platform: "win32",
-        resolveChromeExecutable: () => ({
-          path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        }),
-        readVersion: () => "Google Chrome 144.0.7534.0",
+        profiles: {
+          lightweight: { engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true },
+        },
       },
+      false,
+      false,
+    ],
+    ["unconfigured built-ins", {}, false, false],
+  ])("checks only launch prerequisites for %s", async (_name, browser, managed, chromeMcp) => {
+    const resolveManagedExecutable = vi.fn(() => null);
+    const resolveChromeExecutable = vi.fn(() => null);
+    const { text } = await diagnose(
+      { headless: false, ...browser },
+      { env: {}, getUid: () => 0, resolveManagedExecutable, resolveChromeExecutable },
     );
-
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(requireFirstNoteText(noteFn)).toContain("Detected Chrome Google Chrome 144.0.7534.0");
+    expect(resolveManagedExecutable).toHaveBeenCalledTimes(managed ? 1 : 0);
+    expect(resolveChromeExecutable).toHaveBeenCalledTimes(chromeMcp ? 1 : 0);
+    expect(text.includes("No Chromium-based browser executable was found")).toBe(managed);
+    expect(text.includes("No DISPLAY or WAYLAND_DISPLAY is set")).toBe(managed);
+    expect(text.includes("The Gateway is running as root")).toBe(managed);
+    expect(text.includes("Google Chrome was not found")).toBe(chromeMcp);
   });
+
+  it.each([
+    { name: "profile headless override", global: false, profile: true, env: {}, warning: false },
+    { name: "profile headed override", global: true, profile: false, env: {}, warning: true },
+    {
+      name: "Linux headless default",
+      global: undefined,
+      profile: undefined,
+      env: {},
+      warning: false,
+    },
+    {
+      name: "environment headless override",
+      global: false,
+      profile: false,
+      env: { OPENCLAW_BROWSER_HEADLESS: "1" },
+      warning: false,
+    },
+    {
+      name: "environment headed override",
+      global: true,
+      profile: true,
+      env: { OPENCLAW_BROWSER_HEADLESS: "0" },
+      warning: true,
+    },
+  ])("matches managed launch display requirements for $name", async (testCase) => {
+    const { text } = await diagnose(
+      {
+        headless: testCase.global,
+        profiles: { work: { cdpPort: 18801, headless: testCase.profile } },
+      },
+      { env: testCase.env },
+    );
+    expect(text.includes("DISPLAY") || text.includes("Linux display server")).toBe(
+      testCase.warning,
+    );
+    if (testCase.warning) {
+      expect(text).toContain(
+        testCase.name === "profile headed override"
+          ? "browser.profiles.work.headless=false"
+          : "OPENCLAW_BROWSER_HEADLESS=0",
+      );
+    }
+  });
+
+  it("checks effective executables once per path and names only profiles missing a browser", async () => {
+    const resolveManagedExecutable = vi.fn((resolved: { executablePath?: string }) =>
+      resolved.executablePath === "/custom/chrome"
+        ? { kind: "chrome" as const, path: resolved.executablePath }
+        : null,
+    );
+    const { text } = await diagnose(
+      {
+        executablePath: "/global/missing-chrome",
+        profiles: {
+          custom: { cdpPort: 18801, executablePath: "/custom/chrome" },
+          fallback: { cdpPort: 18802 },
+          shared: { cdpPort: 18803, executablePath: "/custom/chrome" },
+        },
+      },
+      { resolveManagedExecutable },
+    );
+    expect(
+      resolveManagedExecutable.mock.calls.map(([resolved]) => resolved.executablePath),
+    ).toEqual(["/custom/chrome", "/global/missing-chrome"]);
+    expect(text).toContain("No Chromium-based browser executable");
+    expect(text).toContain("profile(s) are configured: fallback.");
+    expect(text).not.toContain("custom");
+    expect(text).not.toContain("shared");
+  });
+
+  it.each([
+    { version: "143.0.7499.4", platform: "linux", expected: "too old" },
+    {
+      version: "144.0.7534.0",
+      platform: "win32",
+      expected: "Detected Chrome Google Chrome 144.0.7534.0",
+    },
+  ] as const)(
+    "reports Chrome MCP compatibility for $version",
+    async ({ version, platform, expected }) => {
+      const { noteFn, text } = await diagnose(
+        { profiles: { chromeLive: { driver: "existing-session", color: "#00AA00" } } },
+        {
+          platform,
+          resolveChromeExecutable: () => ({ kind: "chrome", path: "/chrome" }),
+          readVersion: () => `Google Chrome ${version}`,
+        },
+      );
+      expect(noteFn).toHaveBeenCalledTimes(1);
+      expect(text).toContain(expected);
+      if (version.startsWith("143")) {
+        expect(text).toContain("Chrome 144+");
+      }
+    },
+  );
 
   it("skips Chrome auto-detection when profiles use explicit userDataDir", async () => {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
+    const { noteFn, text } = await diagnose(
       {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            braveLive: {
-              driver: "existing-session",
-              userDataDir: "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
-              color: "#FB542B",
-            },
+        profiles: {
+          braveLive: {
+            driver: "existing-session",
+            userDataDir: "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
+            color: "#FB542B",
           },
         },
       },
       {
-        noteFn,
         resolveChromeExecutable: () => {
           throw new Error("should not look up Chrome");
         },
       },
     );
-
     expect(noteFn).toHaveBeenCalled();
-    const note = requireNoteTextContaining(noteFn, "explicit Chromium user data directory");
-    expect(note).toContain("brave://inspect/#remote-debugging");
-  });
-});
-
-describe("legacy clawd browser profile cleanup", () => {
-  it("archives stale clawd residue with the safe trash mover", async () => {
-    const movePathToTrash = vi.fn(async () => "/tmp/openclaw-home/browser/.trash/clawd");
-
-    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
-      {
-        browser: {
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        configDir: "/tmp/openclaw-home",
-        pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
-        movePathToTrash,
-      },
-    );
-
-    expect(movePathToTrash).toHaveBeenCalledWith("/tmp/openclaw-home/browser/clawd");
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes.join("\n")).toContain(
-      "Archived legacy clawd managed browser profile residue.",
-    );
-    expect(result.changes.join("\n")).toContain("/tmp/openclaw-home/browser/openclaw/user-data");
-  });
-
-  it("does not archive a configured clawd browser profile", async () => {
-    const movePathToTrash = vi.fn(async () => "/tmp/unused");
-
-    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
-      {
-        browser: {
-          defaultProfile: "clawd",
-          profiles: {
-            clawd: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        configDir: "/tmp/openclaw-home",
-        pathExists: () => true,
-        movePathToTrash,
-      },
-    );
-
-    expect(movePathToTrash).not.toHaveBeenCalled();
-    expect(result).toStrictEqual({ changes: [], warnings: [] });
+    expect(text).toContain("explicit Chromium user data directory");
+    expect(text).toContain("brave://inspect/#remote-debugging");
   });
 });

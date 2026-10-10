@@ -10,24 +10,16 @@ type MSTeamsConversationMember = {
 const MAX_CONVERSATION_MEMBER_PAGES = 100;
 
 export async function findMSTeamsConversationMember(params: {
-  includeIndirectChannelMembers?: boolean;
   token: string;
   to: string;
   userId: string;
-}): Promise<{
-  conversationId: string;
-  member: MSTeamsConversationMember | undefined;
-}> {
+}) {
   const conversationId = await resolveGraphConversationId(params.to);
   const conversation = resolveConversationPath(conversationId);
-  const collection =
-    conversation.kind === "channel" && params.includeIndirectChannelMembers
-      ? "allMembers"
-      : "members";
   const userId = params.userId.trim().toLowerCase();
   const result = await fetchAllGraphPages<MSTeamsConversationMember>({
     token: params.token,
-    path: `${conversation.basePath}/${collection}`,
+    path: `${conversation.basePath}/members`,
     maxPages: MAX_CONVERSATION_MEMBER_PAGES,
     collectItems: false,
     findOne: (candidate) =>

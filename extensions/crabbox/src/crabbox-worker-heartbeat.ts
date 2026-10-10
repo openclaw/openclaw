@@ -1,7 +1,5 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-
-const CRABBOX_HEARTBEAT_UPGRADE = "upgrade Crabbox to v0.44.0 or newer for `crabbox heartbeat`";
+import { crabboxCommandError } from "./crabbox-worker-command.js";
 
 type HeartbeatContext = {
   binary: string;
@@ -19,21 +17,13 @@ type HeartbeatEntry = HeartbeatContext & {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-function permanentHeartbeatFailure(result: SpawnResult): "command" | "provider" | undefined {
+function providerDoesNotSupportHeartbeat(result: SpawnResult): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
-  if (
+  return (
     result.termination === "exit" &&
     result.code === 2 &&
     /\bprovider=\S+ does not support lease heartbeat\b/iu.test(output)
-  ) {
-    return "provider";
-  }
-  const commandUnknown =
-    /\b(?:unexpected argument|unknown command|unrecognized command)[^\r\n]*\bheartbeat\b/iu.test(
-      output,
-    ) || /\bheartbeat\b[^\r\n]*\b(?:unknown|unrecognized)\b/iu.test(output);
-  // Exit 2 also reports claim conflicts; only explicit capability errors disable renewal.
-  return commandUnknown ? "command" : undefined;
+  );
 }
 
 export function createCrabboxHeartbeatManager(dependencies: {
@@ -83,13 +73,11 @@ export function createCrabboxHeartbeatManager(dependencies: {
       schedule(entry);
       return;
     }
-    const permanentFailure = permanentHeartbeatFailure(result);
-    if (permanentFailure) {
-      const message =
-        permanentFailure === "command"
-          ? `Crabbox heartbeat is unavailable for worker lease ${entry.id}; ${CRABBOX_HEARTBEAT_UPGRADE}`
-          : `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`;
-      warn(entry, message);
+    if (providerDoesNotSupportHeartbeat(result)) {
+      warn(
+        entry,
+        `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`,
+      );
       return;
     }
     if (!entry.failureWarned) {

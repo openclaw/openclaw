@@ -74,7 +74,7 @@ Default agent-proxy voice-channel session example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         followUsersEnabled: true,
         followUsers: ["123456789012345678"],
         realtime: {
@@ -124,7 +124,7 @@ Realtime bidi example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2.1",
@@ -147,7 +147,7 @@ Voice as an extension of an existing Discord channel session:
       voice: {
         enabled: true,
         mode: "agent-proxy",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         agentSession: {
           mode: "target",
           target: "channel:123456789012345678",
@@ -164,6 +164,24 @@ Voice as an extension of an existing Discord channel session:
 ```
 
 In `agent-proxy` mode the bot joins the configured voice channel, but OpenClaw agent turns use the target channel's normal routed session and agent. The realtime voice session speaks the returned result back into the voice channel. The supervisor agent can still use normal message tools according to its tool policy, including sending a separate Discord message if that is the right action.
+
+During a realtime voice call, ask the agent to list available voices or switch to
+one. The `talk_voice` tool changes the current room's voice and reconnects its
+realtime provider connections while preserving the Discord connection,
+conversation, and ongoing agent work. The agent confirms the change after the
+replacement is ready. If the switch fails, OpenClaw keeps or restores the previous
+voice. If restoration also fails, it asks you to join voice again; accepted agent
+work can still finish.
+The selection applies to subsequent speakers in that room and lasts until the
+room disconnects; `voice.realtime.speakerVoice` remains the default for future
+calls. This requires an owner-authorized voice turn, agent delegation, and access
+to the `talk_voice` tool.
+
+In-call changes require a provider voice catalog. Google Live supports the same
+`talk_voice` flow: OpenClaw opens a fresh connection with the selected voice and
+keeps unfinished agent work with the Discord call. Answers waiting to be sent
+follow the replacement. A response already submitted to the previous connection
+may be interrupted by the switch and is not replayed, avoiding duplicate speech.
 
 While a delegated OpenClaw run is active, command-authorized Discord conversation transcripts are treated as live run control before starting another agent turn. Phrases such as "status", "cancel that", "use the smaller fix", or "when you're done also check tests" are classified as status, cancel, steering, or follow-up input for the active session. Status, cancel, accepted steering, and follow-up outcomes are spoken back into the voice channel so the caller knows whether OpenClaw handled the request.
 
@@ -184,7 +202,7 @@ Echo-heavy OpenAI Realtime example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2.1",

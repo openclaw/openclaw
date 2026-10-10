@@ -1,7 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
@@ -11,10 +11,8 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
-import {
-  normalizeAgentRunTerminalReplySnapshot,
-  type AgentRunTerminalReplySnapshot,
-} from "./agent-run-terminal-reply.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -168,14 +166,13 @@ function rememberItemStatus(
   state: SessionActivityNoteState,
   itemId: string,
   status: string,
-  limit: number,
 ): boolean {
   if (state.itemStatuses.get(itemId) === status) {
     return false;
   }
   state.itemStatuses.delete(itemId);
   state.itemStatuses.set(itemId, status);
-  pruneMapToMaxSize(state.itemStatuses, limit);
+  pruneMapToMaxSize(state.itemStatuses, MAX_ITEM_STATUSES);
   return true;
 }
 
@@ -194,7 +191,7 @@ export function flushSessionActivityAssistantNote(
   if (
     !visible ||
     visible === HEARTBEAT_TOKEN ||
-    visible === HEARTBEAT_TRANSCRIPT_PROMPT ||
+    Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS).some((prompt) => visible === prompt) ||
     isSilentReplyPayloadText(visible)
   ) {
     return;
@@ -266,7 +263,7 @@ export function noteSessionActivityEvent(
       if (!["running", "completed", "failed", "blocked"].includes(status)) {
         return;
       }
-      if (!rememberItemStatus(state, itemId, status, MAX_ITEM_STATUSES)) {
+      if (!rememberItemStatus(state, itemId, status)) {
         return;
       }
       addActivityNote(state, `${title}: ${status}`, noteMaxChars);
@@ -283,7 +280,7 @@ export function noteSessionActivityEvent(
       };
       for (const [index, step] of steps.entries()) {
         const itemId = `plan:${index}:${step.step}`;
-        if (!rememberItemStatus(state, itemId, step.status, MAX_ITEM_STATUSES)) {
+        if (!rememberItemStatus(state, itemId, step.status)) {
           continue;
         }
         const status = step.status === "in_progress" ? "running" : step.status;

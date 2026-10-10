@@ -1,23 +1,9 @@
 /** Covers cloud-worker provider manifest ownership, uniqueness, and lookup ordering. */
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import type { WorkerProvider } from "./types.js";
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-manifest.js";
-
-function createTestRegistry() {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-}
 
 function createWorkerProvider(id: string): WorkerProvider {
   return {

@@ -14,6 +14,14 @@ on:
       - scripts/control-ui-i18n.ts
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
+      - scripts/lib/control-ui-i18n-catalog-values.ts
+      - ui/src/i18n/lib/config-hint-translation.ts
+      - ui/src/lib/fnv1a.ts
+      - src/config/schema*.ts
+      - src/config/zod-schema*.ts
+      - src/config/media-audio-field-metadata.ts
+      - src/config/talk-defaults.ts
+      - src/config/channel-config-keys.ts
       - scripts/lib/control-ui-i18n-config.json
       - scripts/lib/control-ui-i18n-config.ts
       - scripts/lib/control-ui-i18n-raw-copy.ts
@@ -281,6 +289,14 @@ jobs:
             scripts/control-ui-i18n.ts
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-catalog-values.ts
+            ui/src/i18n/lib/config-hint-translation.ts
+            ui/src/lib/fnv1a.ts
+            src/config/schema*.ts
+            src/config/zod-schema*.ts
+            src/config/media-audio-field-metadata.ts
+            src/config/talk-defaults.ts
+            src/config/channel-config-keys.ts
             scripts/lib/control-ui-i18n-config.json
             scripts/lib/control-ui-i18n-config.ts
             scripts/lib/control-ui-i18n-raw-copy.ts

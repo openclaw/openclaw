@@ -1,9 +1,10 @@
-// Msteams plugin module implements access behavior.
-import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import {
+  formatAllowlistMatchMeta,
+  resolveAllowlistMatchSimple,
+} from "openclaw/plugin-sdk/allow-from";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
-  resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -22,7 +23,7 @@ import type {
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../policy.js";
+import { resolveMSTeamsRouteConfig } from "../policy.js";
 import { looksLikeMSTeamsConversationId } from "../resolve-allowlist.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
@@ -127,6 +128,13 @@ export async function resolveMSTeamsSenderAccess(params: {
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
+  // Bot Framework uses non-personal types and group/team/channel markers for shared scopes.
+  // Consumers fail closed when those asserted facts contradict direct-message classification.
+  const hasConflictingConversationScope =
+    isDirectMessage &&
+    (activity.conversation?.isGroup === true ||
+      activity.channelData?.team !== undefined ||
+      activity.channelData?.channel !== undefined);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const senderName = activity.from?.name ?? activity.from?.id ?? senderId;
 
@@ -154,7 +162,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     allowNameMatching,
   });
 
-  const resolved = await resolveStableChannelMessageIngress({
+  const resolved = await core.channel.inbound.ingress.resolveStable({
     channelId: "msteams",
     accountId: pairing.accountId,
     identity: {
@@ -229,6 +237,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     channelIngress: resolved,
     pairing,
     isDirectMessage,
+    hasConflictingConversationScope,
     conversationId,
     senderId,
     senderName,
@@ -269,6 +278,7 @@ export async function admitMSTeamsMessage(params: {
     senderName,
     pairing,
     isDirectMessage,
+    hasConflictingConversationScope,
     channelGate,
     senderAccess,
     commandAccess,
@@ -278,6 +288,27 @@ export async function admitMSTeamsMessage(params: {
   } = access;
   const effectiveDmAllowFrom = senderAccess.effectiveAllowFrom;
   const effectiveGroupAllowFrom = senderAccess.effectiveGroupAllowFrom;
+  const saveConversationReference = () =>
+    params.conversationStore
+      .upsert(params.conversationId, params.conversationRef)
+      .catch((err: unknown) => {
+        params.log.debug?.("failed to save conversation reference", {
+          error: formatUnknownError(err),
+        });
+      });
+  const dropGroupMessage = (reason: string, details: Record<string, unknown>) => {
+    params.log.info(reason, details);
+    params.log.debug?.(reason, details);
+    return null;
+  };
+
+  if (hasConflictingConversationScope) {
+    params.log.info("dropping message (conflicting conversation scope)", {
+      conversationId: params.conversationId,
+    });
+    params.log.debug?.("dropping message (conflicting conversation scope)");
+    return null;
+  }
 
   if (isDirectMessage && msteamsCfg && senderAccess.decision !== "allow") {
     if (senderAccess.reasonCode === "dm_policy_disabled") {
@@ -288,20 +319,14 @@ export async function admitMSTeamsMessage(params: {
       params.log.debug?.("dropping dm (dms disabled)");
       return null;
     }
-    const allowMatch = resolveMSTeamsAllowlistMatch({
+    const allowMatch = resolveAllowlistMatchSimple({
       allowFrom: effectiveDmAllowFrom,
       senderId,
       senderName,
       allowNameMatching,
     });
     if (senderAccess.decision === "pairing") {
-      params.conversationStore
-        .upsert(params.conversationId, params.conversationRef)
-        .catch((err: unknown) => {
-          params.log.debug?.("failed to save conversation reference", {
-            error: formatUnknownError(err),
-          });
-        });
+      void saveConversationReference();
       const request = await pairing.upsertPairingRequest({
         id: senderId,
         meta: { name: senderName },
@@ -334,47 +359,31 @@ export async function admitMSTeamsMessage(params: {
 
   if (!isDirectMessage && msteamsCfg) {
     if (channelGate.allowlistConfigured && !channelGate.allowed) {
-      params.log.info("dropping group message (not in team/channel allowlist)", {
+      return dropGroupMessage("dropping group message (not in team/channel allowlist)", {
         conversationId: params.conversationId,
         teamKey: channelGate.teamKey ?? "none",
         channelKey: channelGate.channelKey ?? "none",
         channelMatchKey: channelGate.channelMatchKey ?? "none",
         channelMatchSource: channelGate.channelMatchSource ?? "none",
       });
-      params.log.debug?.("dropping group message (not in team/channel allowlist)", {
-        conversationId: params.conversationId,
-        teamKey: channelGate.teamKey ?? "none",
-        channelKey: channelGate.channelKey ?? "none",
-        channelMatchKey: channelGate.channelMatchKey ?? "none",
-        channelMatchSource: channelGate.channelMatchSource ?? "none",
-      });
-      return null;
     }
 
     if (!senderAccess.allowed && senderAccess.reasonCode === "group_policy_disabled") {
-      params.log.info("dropping group message (groupPolicy: disabled)", {
+      return dropGroupMessage("dropping group message (groupPolicy: disabled)", {
         conversationId: params.conversationId,
       });
-      params.log.debug?.("dropping group message (groupPolicy: disabled)", {
-        conversationId: params.conversationId,
-      });
-      return null;
     }
     if (
       !senderAccess.allowed &&
       (senderAccess.reasonCode === "group_policy_empty_allowlist" ||
         senderAccess.reasonCode === "route_sender_empty")
     ) {
-      params.log.info("dropping group message (groupPolicy: allowlist, no allowlist)", {
+      return dropGroupMessage("dropping group message (groupPolicy: allowlist, no allowlist)", {
         conversationId: params.conversationId,
       });
-      params.log.debug?.("dropping group message (groupPolicy: allowlist, no allowlist)", {
-        conversationId: params.conversationId,
-      });
-      return null;
     }
     if (!senderAccess.allowed) {
-      const allowMatch = resolveMSTeamsAllowlistMatch({
+      const allowMatch = resolveAllowlistMatchSimple({
         allowFrom: effectiveGroupAllowFrom,
         senderId,
         senderName,
@@ -404,13 +413,7 @@ export async function admitMSTeamsMessage(params: {
     return null;
   }
 
-  params.conversationStore
-    .upsert(params.conversationId, params.conversationRef)
-    .catch((err: unknown) => {
-      params.log.debug?.("failed to save conversation reference", {
-        error: formatUnknownError(err),
-      });
-    });
+  void saveConversationReference();
 
   return {
     ...access,

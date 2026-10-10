@@ -8,6 +8,20 @@ use zbus::zvariant::OwnedFd;
 pub(crate) type BeginSleepCycleHook = Arc<dyn Fn() -> bool + Send + Sync>;
 pub(crate) type EndSleepCycleHook = Arc<dyn Fn() + Send + Sync>;
 
+struct SleepCycleGuard {
+    abandon: Option<(Arc<GatewaySleepCycleController>, u64)>,
+    end: EndSleepCycleHook,
+}
+
+impl Drop for SleepCycleGuard {
+    fn drop(&mut self) {
+        if let Some((controller, generation)) = &self.abandon {
+            controller.abandon(*generation);
+        }
+        (self.end)();
+    }
+}
+
 #[zbus::proxy(
     default_service = "org.freedesktop.login1",
     default_path = "/org/freedesktop/login1",
@@ -45,7 +59,7 @@ async fn run_listener_on_connection(
         .await
         .map_err(|error| format!("could not subscribe to PrepareForSleep: {error}"))?;
     let mut inhibitor = Some(acquire_inhibitor(&proxy).await?);
-    let mut cycle_began = false;
+    let mut cycle = None;
 
     while let Some(signal) = signals.next().await {
         let sleeping = signal
@@ -53,23 +67,34 @@ async fn run_listener_on_connection(
             .map_err(|error| format!("invalid PrepareForSleep signal: {error}"))?
             .sleeping;
         if sleeping {
-            cycle_began = begin_sleep_cycle();
-            controller.will_sleep().await;
+            if cycle.is_none() && begin_sleep_cycle() {
+                cycle = Some(SleepCycleGuard {
+                    abandon: None,
+                    end: Arc::clone(&end_sleep_cycle),
+                });
+            }
+            let (generation, preparation) = controller.will_sleep();
+            if let Some(cycle) = cycle.as_mut() {
+                cycle.abandon = generation.map(|generation| (Arc::clone(&controller), generation));
+            }
+            preparation.await;
             // Releasing the delay inhibitor lets logind continue into sleep.
             inhibitor.take();
         } else {
-            let controller = Arc::clone(&controller);
-            let end_sleep_cycle = Arc::clone(&end_sleep_cycle);
-            let began = cycle_began;
-            cycle_began = false;
+            let cycle = cycle.take().map(|mut cycle| {
+                // Real wake transfers recovery authority before the task can poll.
+                // Later listener loss must not abandon this already-observed wake.
+                cycle.abandon = None;
+                cycle
+            });
+            let recovery = controller.did_wake();
             // Spawn wake recovery before touching logind again: a slow or hung
             // Inhibit call must not delay reconnect/resume. Spawning also keeps
             // the signal loop consuming so a new sleep cycle can abort retries.
             tauri::async_runtime::spawn(async move {
-                controller.did_wake().await;
-                if began {
-                    end_sleep_cycle();
-                }
+                // Keep this cycle's depth until recovery ends, including cancellation.
+                let _cycle = cycle;
+                recovery.await;
             });
             // A failed re-acquire only loses the pre-sleep delay window; keep the
             // listener alive so later sleep/wake cycles are still handled.

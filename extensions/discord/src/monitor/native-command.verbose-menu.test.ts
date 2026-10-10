@@ -1,3 +1,4 @@
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
@@ -7,8 +8,8 @@ import {
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../api.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordNativeCommand } from "./native-command.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -74,7 +75,7 @@ describe("Discord native verbose menu", () => {
         userId: mode === "unauthorized" ? "987654321098765432" : "123456789012345678",
         channelId: "234567890123456789",
       });
-      const dispatch = vi.spyOn(nativeCommandRuntime, "dispatchChannelInboundTurn");
+      const dispatch = vi.spyOn(channelInbound, "dispatchChannelInboundTurn");
       const command = createDiscordNativeCommand({
         command: { name: "verbose", description: "Verbose mode", acceptsArgs: true },
         cfg,
@@ -104,3 +105,5 @@ describe("Discord native verbose menu", () => {
     },
   );
 });
+
+installDiscordIngressTestRuntime();

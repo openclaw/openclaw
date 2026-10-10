@@ -8,7 +8,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, resolveUserProfileId } from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, resolveUserProfileId } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
@@ -101,6 +102,39 @@ it("keeps old person references working after profile merges and counts merge al
     expect(result.people).toHaveLength(1);
   }
 });
+
+it.each(["owned", "created", "involving"] as const)(
+  "resolves %s inventory relationships through profile merges",
+  async (relationship) => {
+    const original = "12345678-a123-4123-8123-123456789abc";
+    const current = "87654321-c123-4123-8123-123456789abc";
+    createProfile(original);
+    createProfile(current);
+    linkEmail(original + "@activity.test", current);
+    for (const profileId of [original, current]) {
+      const result = await listSessionFixture({
+        cfg: {},
+        storePath: stateRoot,
+        store: {
+          "agent:main:merged-profile": {
+            sessionId: "merged-profile",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: original },
+            owner: { actor: { type: "human", id: original } },
+            participants: [{ identity: { type: "profile", id: original } }],
+          },
+        },
+        opts: {
+          profileRelation: { profileId, relationship },
+          ...(relationship === "owned" ? { ownerId: original } : {}),
+          ...(relationship === "created" ? { creatorId: original } : {}),
+        },
+      });
+      expect(result.sessions.map((row) => row.sessionId)).toEqual(["merged-profile"]);
+      expect(result.sessions[0]?.createdActor?.id).toBe(original);
+    }
+  },
+);
 
 it("prefers an exact profile identifier over a UUID prefix", async () => {
   const exact = "deadbeef";

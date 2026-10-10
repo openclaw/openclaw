@@ -28,7 +28,37 @@ const NORMALIZE_SESSION_ICON_CASES: ReadonlyArray<
   ["empty", "", null],
 ];
 
+const SVG_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="teal"/></svg>';
+const SVG_ICON_URL = `data:image/svg+xml,${encodeURIComponent(SVG_ICON)}`;
+
 describe("session icon grammar", () => {
+  it.each([
+    ["SVG markup", SVG_ICON],
+    ["encoded SVG data URL", SVG_ICON_URL],
+    [
+      "base64 SVG data URL",
+      `data:image/svg+xml;base64,${Buffer.from(SVG_ICON).toString("base64")}`,
+    ],
+  ])("normalizes %s to a persistent image URL", (_label, input) => {
+    expect(normalizeSessionIconValue(input)).toBe(SVG_ICON_URL);
+    expect(normalizeSessionIconValue(SVG_ICON_URL)).toBe(SVG_ICON_URL);
+  });
+
+  it.each([
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>html</div></foreignObject></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.com/icon.png"/></svg>',
+    '<!DOCTYPE svg [<!ENTITY x "expansion">]><svg>&x;</svg>',
+    "data:image/svg+xml,%broken",
+    "data:image/svg+xml;base64,%%%",
+    "data:text/html,%3Csvg%3E%3C/svg%3E",
+    "https://example.com/icon.svg",
+    `<svg>${" ".repeat(16 * 1024)}</svg>`,
+  ])("rejects unsupported SVG input %#", (input) => {
+    expect(normalizeSessionIconValue(input)).toBeNull();
+  });
+
   it.each(NORMALIZE_SESSION_ICON_CASES)("normalizes %s", (_label, input, expected) => {
     expect(normalizeSessionIconValue(input)).toBe(expected);
   });

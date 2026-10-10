@@ -31,13 +31,6 @@ type GatewayStartupOutcome =
       reason: GatewayStartupSkippedReason;
     };
 
-type GatewayStartupOutcomePlan = {
-  internalHooks: "configured" | "not-configured" | "hooks-disabled";
-  gatewayStartHooks: boolean;
-  gmailWatcher: "scheduled" | "disabled-by-environment" | "hooks-disabled" | "no-gmail-account";
-  gmailModel: "scheduled" | "not-configured";
-};
-
 export type GatewayStartupOutcomeRecorder = {
   record: (outcome: GatewayStartupOutcome) => void;
   snapshot: () => GatewayStartupOutcome[];
@@ -56,16 +49,17 @@ function skipped(
   return { subsystem, status: "skipped", reason };
 }
 
-function resolveOutcomePlan(
+/** Create the complete initial outcome set; awaited startup work may replace entries later. */
+export function createGatewayStartupOutcomeRecorder(
   params: GatewayStartupOutcomeRecorderParams,
-): GatewayStartupOutcomePlan {
-  const internalHooks: GatewayStartupOutcomePlan["internalHooks"] =
+): GatewayStartupOutcomeRecorder {
+  const internalHooks =
     params.cfg.hooks?.internal?.enabled === false
       ? "hooks-disabled"
       : resolveInternalHookSelection(params.cfg).configured
-        ? "configured"
+        ? "no-handlers-loaded"
         : "not-configured";
-  const gmailWatcher: GatewayStartupOutcomePlan["gmailWatcher"] = !params.cfg.hooks?.enabled
+  const gmailWatcher = !params.cfg.hooks?.enabled
     ? "hooks-disabled"
     : !params.cfg.hooks.gmail?.account
       ? "no-gmail-account"
@@ -73,59 +67,29 @@ function resolveOutcomePlan(
         ? "disabled-by-environment"
         : "scheduled";
 
-  return {
-    internalHooks,
-    gatewayStartHooks: params.gatewayStartHooks,
-    gmailWatcher,
-    gmailModel: params.cfg.hooks?.gmail?.model ? "scheduled" : "not-configured",
-  };
-}
-
-/** Create the complete initial outcome set; awaited startup work may replace entries later. */
-export function createGatewayStartupOutcomeRecorder(
-  params: GatewayStartupOutcomeRecorderParams,
-): GatewayStartupOutcomeRecorder {
-  const plan = resolveOutcomePlan(params);
-  const internalHooks =
-    plan.internalHooks === "configured"
-      ? skipped("internal-hooks", "no-handlers-loaded")
-      : skipped("internal-hooks", plan.internalHooks);
-  const internalStartupHook =
-    plan.internalHooks === "hooks-disabled"
-      ? skipped("internal-startup-hook", "hooks-disabled")
-      : skipped("internal-startup-hook", "no-handlers-loaded");
-  const outcomes = new Map<GatewayStartupSubsystem, GatewayStartupOutcome>([
-    ["internal-hooks", internalHooks],
-    ["internal-startup-hook", internalStartupHook],
-    [
-      "gateway-start-hooks",
-      plan.gatewayStartHooks
-        ? { subsystem: "gateway-start-hooks", status: "scheduled" }
-        : skipped("gateway-start-hooks", "no-handlers-loaded"),
-    ],
-    [
-      "gmail-watcher",
-      plan.gmailWatcher === "scheduled"
-        ? { subsystem: "gmail-watcher", status: "scheduled" }
-        : skipped("gmail-watcher", plan.gmailWatcher),
-    ],
-    [
-      "gmail-model",
-      plan.gmailModel === "scheduled"
-        ? { subsystem: "gmail-model", status: "scheduled" }
-        : skipped("gmail-model", "not-configured"),
-    ],
-  ]);
+  const initial: GatewayStartupOutcome[] = [
+    skipped("internal-hooks", internalHooks),
+    skipped(
+      "internal-startup-hook",
+      internalHooks === "hooks-disabled" ? "hooks-disabled" : "no-handlers-loaded",
+    ),
+    params.gatewayStartHooks
+      ? { subsystem: "gateway-start-hooks", status: "scheduled" }
+      : skipped("gateway-start-hooks", "no-handlers-loaded"),
+    gmailWatcher === "scheduled"
+      ? { subsystem: "gmail-watcher", status: "scheduled" }
+      : skipped("gmail-watcher", gmailWatcher),
+    params.cfg.hooks?.gmail?.model
+      ? { subsystem: "gmail-model", status: "scheduled" }
+      : skipped("gmail-model", "not-configured"),
+  ];
+  const outcomes = new Map(initial.map((outcome) => [outcome.subsystem, outcome]));
 
   return {
     record: (outcome) => {
       outcomes.set(outcome.subsystem, outcome);
     },
-    snapshot: () =>
-      GATEWAY_STARTUP_SUBSYSTEMS.flatMap((subsystem) => {
-        const outcome = outcomes.get(subsystem);
-        return outcome ? [outcome] : [];
-      }),
+    snapshot: () => [...outcomes.values()],
   };
 }
 

@@ -123,3 +123,41 @@ describe("sendMSTeamsActivityWithReference", () => {
     });
   });
 });
+
+describe("stored serviceUrl SDK admission", () => {
+  it.each([
+    {
+      agent: undefined,
+      serviceUrl: undefined,
+      message: "Invalid stored reference: missing agent.id",
+    },
+    {
+      agent: { id: "28:bot" },
+      serviceUrl: undefined,
+      message: "Invalid stored reference: missing serviceUrl",
+    },
+    {
+      agent: { id: "28:bot" },
+      serviceUrl: "https://msteams.botframework.azure.cn/teams/",
+      message:
+        "msteams proactive send blocked for 19:conversation@thread.tacv2: stored conversation serviceUrl (https://msteams.botframework.azure.cn/teams) requires channels.msteams.cloud=China.",
+    },
+  ])("preserves validation order: $message", async ({ agent, serviceUrl, message }) => {
+    clientState.created.length = 0;
+    clientState.create.mockClear();
+    const app = {
+      client: { request: vi.fn() },
+      api: { serviceUrl: "https://smba.trafficmanager.net/teams" },
+    } as unknown as MSTeamsApp;
+    await expect(
+      sendMSTeamsActivityWithReference(
+        app,
+        { agent, serviceUrl, conversation: { id: "19:conversation@thread.tacv2" } },
+        { type: "message", text: "hello" },
+        { serviceUrlBoundary: { cloud: "Public" } },
+      ),
+    ).rejects.toThrow(new Error(message));
+    expect(clientState.created).toEqual([]);
+    expect(clientState.create).not.toHaveBeenCalled();
+  });
+});

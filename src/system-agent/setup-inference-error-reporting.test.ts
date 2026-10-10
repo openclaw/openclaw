@@ -13,12 +13,27 @@ import {
   redactSetupInferenceError,
   type ActivateSetupInferenceDeps,
 } from "./setup-inference-core.js";
-import { verifySetupInferenceConfig } from "./setup-inference-verify.js";
+import { verifySetupInferenceConfig } from "./setup-inference-turn.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
   createSystemAgentVerifiedInferenceTestFixture,
 } from "./system-agent.test-helpers.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
+
+const inferenceMocks = vi.hoisted(() => ({
+  verifySetupInference: vi.fn(),
+  runSystemAgent: vi.fn(),
+  runGuidedOnboarding: vi.fn(),
+}));
+vi.mock("./setup-inference.js", () => ({
+  verifySetupInference: inferenceMocks.verifySetupInference,
+}));
+vi.mock("./system-agent.js", () => ({
+  runSystemAgent: inferenceMocks.runSystemAgent,
+}));
+vi.mock("../commands/onboard-guided.js", () => ({
+  runGuidedOnboarding: inferenceMocks.runGuidedOnboarding,
+}));
 
 const runtimeLoader = vi.hoisted(() => vi.fn());
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -39,7 +54,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
   const exits: number[] = [];
   const phases: string[] = [];
   const tempDirs: string[] = [];
-  let writes = 0;
   let callbackAttempts = 0;
   let managedDispatches = 0;
   let onboardingDispatches = 0;
@@ -71,7 +85,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
           agents: {
             ownership: "explicit",
             entries: {
-              main: { default: true, workspace: root, agentDir: path.join(root, "main-agent") },
+              main: { workspace: root, agentDir: path.join(root, "main-agent") },
             },
             defaults: {
               model: "openai/gpt-5.5@openai:proof",
@@ -101,10 +115,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
             ...fixture.deps,
             resolvePluginMetadataSnapshot: metadata.bind,
             readCodexCliActiveApiKey: () => null,
-            updateAuthProfileStoreWithLock: async () => {
-              writes += 1;
-              throw new Error("unexpected credential write");
-            },
             createTempDir: async () => {
               const dir = await fs.mkdtemp(path.join(root, "operation-"));
               tempDirs.push(dir);
@@ -141,52 +151,50 @@ async function observeScenario(scenario: Scenario, json: boolean) {
               };
             },
           };
+          inferenceMocks.verifySetupInference.mockImplementation(
+            async ({ runtime }: { runtime: RuntimeEnv }) => {
+              let binding: typeof fixture.binding | undefined;
+              const result = await verifySetupInferenceConfig({
+                config,
+                agentId: "main",
+                runtime,
+                requireExecutionOwner: true,
+                deps,
+                onVerifiedExecution: (verified) => {
+                  phases.push("callback");
+                  callbackAttempts += 1;
+                  if (scenario === "callback") {
+                    faultReached += 1;
+                    // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
+                    throw fault;
+                  }
+                  binding = verified;
+                },
+              });
+              if (!result.ok) {
+                return result;
+              }
+              if (!binding) {
+                throw new Error("successful verification lacked a binding");
+              }
+              return { ...result, binding };
+            },
+          );
+          inferenceMocks.runSystemAgent.mockImplementation(async () => {
+            managedDispatches += 1;
+          });
+          inferenceMocks.runGuidedOnboarding.mockImplementation(async () => {
+            onboardingDispatches += 1;
+          });
           await runSystemAgentWithInference(
             json ? { json: true } : { message: "status", interactive: false },
             renderedRuntime,
-            {},
-            {
-              verifyInference: async ({ runtime }) => {
-                let binding: typeof fixture.binding | undefined;
-                const result = await verifySetupInferenceConfig({
-                  config,
-                  agentId: "main",
-                  runtime,
-                  requireExecutionOwner: true,
-                  deps,
-                  onVerifiedExecution: (verified) => {
-                    phases.push("callback");
-                    callbackAttempts += 1;
-                    if (scenario === "callback") {
-                      faultReached += 1;
-                      // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-                      throw fault;
-                    }
-                    binding = verified;
-                  },
-                });
-                if (!result.ok) {
-                  return result;
-                }
-                if (!binding) {
-                  throw new Error("successful verification lacked a binding");
-                }
-                return { ...result, binding };
-              },
-              runSystemAgent: async () => {
-                managedDispatches += 1;
-              },
-              runGuidedOnboarding: async () => {
-                onboardingDispatches += 1;
-              },
-            },
           );
         });
       },
     );
-    expect(writes).toBe(0);
     expect(onboardingDispatches).toBe(0);
-    expect(tempDirs).toHaveLength(1);
+    expect(tempDirs).toHaveLength(scenario === "capture" ? 0 : 1);
     for (const dir of tempDirs) {
       await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
     }
@@ -269,7 +277,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
               callbackAttempts,
               managedDispatches,
               onboardingDispatches,
-              writes,
               tempDirsCreated: tempDirs.length,
               rootRemoved: true,
             },

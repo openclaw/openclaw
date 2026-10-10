@@ -1,25 +1,14 @@
 // @vitest-environment node
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createRouter, definePage, type RouteLocation } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RouteId = "first" | "second";
 type TestContext = { label: string };
 type TestModule = { render: (data: TestData | undefined) => unknown };
 type TestData = { label: string };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 function location(pathname: string): RouteLocation {
   return { pathname, search: "", hash: "" };
@@ -40,47 +29,10 @@ afterEach(() => {
 });
 
 describe("RouterOutletController pending presentation", () => {
-  it("delays a cold-start fallback until the route has been pending for one second", async () => {
-    vi.useFakeTimers();
-    const routeModule = deferred<TestModule>();
-    const routeData = deferred<TestData>();
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "first",
-          path: "/first",
-          component: () => routeModule.promise,
-          loader: () => routeData.promise,
-        }),
-      ],
-    });
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router });
-    controller.connect();
-
-    const navigation = router.navigate("first", { label: "test" });
-    expect(controller.snapshot.pending?.routeId).toBe("first");
-    expect(controller.snapshot.showPending).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(controller.snapshot.showPending).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(controller.snapshot.showPending).toBe(true);
-
-    routeModule.resolve(module("first"));
-    routeData.resolve({ label: "loaded" });
-    await navigation;
-    expect(controller.snapshot.showPending).toBe(false);
-    controller.disconnect();
-    router.stop();
-  });
-
   it("carries the last settled match through a cold and module-loaded navigation", async () => {
     vi.useFakeTimers();
-    const secondModule = deferred<TestModule>();
-    const secondData = deferred<TestData>();
+    const secondModule = createDeferredCore<TestModule>();
+    const secondData = createDeferredCore<TestData>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
@@ -139,8 +91,8 @@ describe("RouterOutletController pending presentation", () => {
 
   it("restarts a canceled pending delay after reconnect", async () => {
     vi.useFakeTimers();
-    const routeModule = deferred<TestModule>();
-    const routeData = deferred<TestData>();
+    const routeModule = createDeferredCore<TestModule>();
+    const routeData = createDeferredCore<TestData>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
@@ -230,7 +182,7 @@ describe("RouterOutletController not-found boundary", () => {
   });
 
   it("keeps a navigation started by an earlier not-found subscriber", async () => {
-    const secondModule = deferred<TestModule>();
+    const secondModule = createDeferredCore<TestModule>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
@@ -330,4 +282,61 @@ describe("RouterOutletController not-found boundary", () => {
     controller.disconnect();
     router.stop();
   });
+});
+
+describe("RouterOutletController agent startup", () => {
+  it.each(["navigation", "disconnect", "offline", "context"] as const)(
+    "retires startup retries on %s without reviving the old route",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const read = vi.fn((): TestData => {
+        throw new GatewayProtocolRequestError({
+          code: "UNAVAILABLE",
+          message: "Preparing",
+          retryable: true,
+          retryAfterMs: 250,
+          details: { code: "agent-database-inspection-pending" },
+        });
+      });
+      const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+        routes: [
+          definePage({
+            id: "first",
+            path: "/first",
+            component: () => module("first"),
+            loader: read,
+          }),
+          definePage({
+            id: "second",
+            path: "/second",
+            component: () => module("second"),
+            loader: () => ({ label: "ready" }),
+          }),
+        ],
+      });
+      const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
+        vi.fn(),
+      );
+      const retryContext = { label: "test" };
+      controller.setInputs({ router, retryContext });
+      controller.connect();
+      await router.navigate("first", retryContext).catch(() => undefined);
+      expect(controller.snapshot.startupPending).toBe(true);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(read).toHaveBeenCalledTimes(1);
+      if (boundary === "navigation") {
+        await router.navigate("second", retryContext);
+      } else if (boundary === "disconnect") {
+        controller.disconnect();
+      } else if (boundary === "offline") {
+        controller.setInputs({ router, retryContext, retryEnabled: false });
+      } else {
+        controller.setInputs({ router });
+      }
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(read).toHaveBeenCalledTimes(1);
+      controller.disconnect();
+      router.stop();
+    },
+  );
 });

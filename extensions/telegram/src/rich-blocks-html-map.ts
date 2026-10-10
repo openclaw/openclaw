@@ -31,6 +31,7 @@ const BLOCK_ISLAND_TAGS = new Set([
   "aside",
   "footer",
   "hr",
+  "pre",
   "tg-math-block",
   "tg-map",
   "tg-collage",
@@ -45,9 +46,9 @@ type HtmlContentRenderer = (nodes: readonly HtmlNode[]) => InputRichBlock[];
 
 // True when a container holds meaningful content outside its allowed children;
 // such islands stay literal instead of silently dropping the stray content.
-function hasStrayContent(nodes: readonly HtmlNode[], allowed: ReadonlySet<string>): boolean {
+function hasStrayContent(nodes: readonly HtmlNode[], allowed?: ReadonlySet<string>): boolean {
   return nodes.some((node) =>
-    node.kind === "text" ? node.text.trim() !== "" : !node.closed || !allowed.has(node.name),
+    node.kind === "text" ? node.text.trim() !== "" : !node.closed || !allowed?.has(node.name),
   );
 }
 
@@ -59,18 +60,14 @@ function mediaBlockFromElement(
   const src = attrs.get("src") ?? "";
   // Media islands are content-free (src only); any authored body — text or
   // nested elements — would be silently lost from rich output and fallback.
-  const hasBody = node.children.some((child) =>
-    child.kind === "text" ? child.text.trim() !== "" : true,
-  );
-  if (!MEDIA_SRC_RE.test(src) || hasBody) {
+  if (!MEDIA_SRC_RE.test(src) || hasStrayContent(node.children)) {
     return undefined;
   }
   const withCaption = caption ? { caption } : {};
   // GIF sources render as looping animations, matching the old rich HTML
   // pipeline where Telegram inferred the media kind from the URL.
-  const isGif = /\.gif(?:[?#]|$)/i.test(src);
   if (node.name === "img" || node.name === "video") {
-    if (isGif) {
+    if (/\.gif(?:[?#]|$)/i.test(src)) {
       return { type: "animation", animation: { type: "animation", media: src }, ...withCaption };
     }
     return node.name === "img"
@@ -97,27 +94,31 @@ function countChildren(nodes: readonly HtmlNode[], name: string): number {
   return nodes.filter((node) => node.kind === "element" && node.name === name).length;
 }
 
-function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | undefined {
-  const figcaption = nodes.find(
+function findClosedChild(nodes: readonly HtmlNode[], name: string) {
+  return nodes.find(
     (node): node is Extract<HtmlNode, { kind: "element" }> =>
-      node.kind === "element" && node.name === "figcaption",
+      node.kind === "element" && node.closed && node.name === name,
   );
-  if (!figcaption) {
-    return undefined;
-  }
-  const cite = figcaption.children.find(
-    (node): node is Extract<HtmlNode, { kind: "element" }> =>
-      node.kind === "element" && node.closed && node.name === "cite",
-  );
-  const textNodes = figcaption.children.filter((node) => node !== cite);
-  const text = htmlNodesToRichText(textNodes);
-  if (text === "" && !cite) {
+}
+
+function captionFromChildren(
+  nodes: readonly HtmlNode[],
+  allowCreditOnly = false,
+): RichBlockCaption | undefined {
+  const cite = findClosedChild(nodes, "cite");
+  const text = htmlNodesToRichText(nodes.filter((node) => node !== cite));
+  if (text === "" && (!allowCreditOnly || !cite)) {
     return undefined;
   }
   return {
     text,
     ...(cite ? { credit: htmlNodesToRichText(cite.children) } : {}),
   };
+}
+
+function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | undefined {
+  const figcaption = findClosedChild(nodes, "figcaption");
+  return figcaption ? captionFromChildren(figcaption.children, true) : undefined;
 }
 
 const FIGURE_CHILDREN = new Set(["img", "video", "audio", "tg-map", "figcaption"]);
@@ -129,22 +130,13 @@ function figureToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichB
   // A figure carries exactly one media element and at most one caption;
   // multiples would silently drop authored content.
   const mediaChildren = node.children.filter(
-    (child) => child.kind === "element" && child.name !== "figcaption",
-  );
-  if (mediaChildren.length > 1 || countChildren(node.children, "figcaption") > 1) {
-    return undefined;
-  }
-  const media = node.children.find(
     (child): child is Extract<HtmlNode, { kind: "element" }> =>
-      child.kind === "element" &&
-      (child.name === "img" ||
-        child.name === "video" ||
-        child.name === "audio" ||
-        child.name === "tg-map"),
+      child.kind === "element" && child.name !== "figcaption",
   );
-  if (!media) {
+  if (mediaChildren.length !== 1 || countChildren(node.children, "figcaption") > 1) {
     return undefined;
   }
+  const media = mediaChildren[0]!;
   const caption = captionFromFigcaption(node.children);
   if (media.name === "tg-map") {
     const map = mapToBlock(media);
@@ -167,7 +159,7 @@ function listToBlock(
   }
   const items: InputRichBlockListItem[] = [];
   for (const child of node.children) {
-    if (child.kind !== "element" || child.name !== "li") {
+    if (child.kind !== "element") {
       continue;
     }
     const checkbox = child.children.find(
@@ -187,23 +179,12 @@ function listToBlock(
         item.is_checked = true;
       }
     }
-    items.push(item);
+    items.push(node.name === "ol" ? { ...item, value: items.length + 1 } : item);
   }
   if (items.length === 0) {
     return undefined;
   }
-  return {
-    type: "list",
-    items: node.name === "ol" ? items.map((item, index) => ({ ...item, value: index + 1 })) : items,
-  };
-}
-
-function resolveTableCellAlign(value: string | undefined): RichBlockTableCell["align"] {
-  return value === "center" || value === "right" ? value : "left";
-}
-
-function resolveTableCellValign(value: string | undefined): RichBlockTableCell["valign"] {
-  return value === "top" || value === "bottom" ? value : "middle";
+  return { type: "list", items };
 }
 
 function tableCellFromElement(
@@ -217,8 +198,8 @@ function tableCellFromElement(
   const align = attrs.get("align")?.toLowerCase();
   const valign = attrs.get("valign")?.toLowerCase();
   return {
-    align: resolveTableCellAlign(align),
-    valign: resolveTableCellValign(valign),
+    align: align === "center" || align === "right" ? align : "left",
+    valign: valign === "top" || valign === "bottom" ? valign : "middle",
     ...(text !== "" ? { text } : {}),
     ...(node.name === "th" || inHeader ? { is_header: true as const } : {}),
     ...(Number.isSafeInteger(colspan) && colspan > 1 ? { colspan } : {}),
@@ -229,15 +210,16 @@ function tableCellFromElement(
 // Live-verified: >20 effective columns → RICH_MESSAGE_TABLE_COLS_TOO_MANY.
 const TABLE_COLUMN_LIMIT = 20;
 
-function tableColumnCount(cells: readonly RichBlockTableCell[][]): number {
+function tableExceedsColumnLimit(cells: readonly RichBlockTableCell[][]): boolean {
   // Rowspans occupy width in later rows too; ignoring the carryover would
   // under-count and emit tables Telegram rejects with TABLE_COLS_TOO_MANY.
   let carryover: Array<{ span: number; rows: number }> = [];
-  let max = 0;
   for (const row of cells) {
     const carried = carryover.reduce((total, cell) => total + cell.span, 0);
     const own = row.reduce((total, cell) => total + (cell.colspan ?? 1), 0);
-    max = Math.max(max, carried + own);
+    if (carried + own > TABLE_COLUMN_LIMIT) {
+      return true;
+    }
     carryover = [
       ...carryover
         .map((cell) => ({ span: cell.span, rows: cell.rows - 1 }))
@@ -247,7 +229,7 @@ function tableColumnCount(cells: readonly RichBlockTableCell[][]): number {
         .map((cell) => ({ span: cell.colspan ?? 1, rows: (cell.rowspan ?? 1) - 1 })),
     ];
   }
-  return max;
+  return false;
 }
 
 const TABLE_CHILDREN = new Set(["caption", "thead", "tbody", "tfoot", "tr"]);
@@ -264,12 +246,8 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   let stray = false;
   const visitRows = (parent: Extract<HtmlNode, { kind: "element" }>, inHeader: boolean) => {
     for (const child of parent.children) {
-      if (child.kind !== "element") {
-        stray ||= child.text.trim() !== "";
-        continue;
-      }
-      if (!child.closed) {
-        stray = true;
+      if (child.kind !== "element" || !child.closed) {
+        stray ||= child.kind === "element" || child.text.trim() !== "";
         continue;
       }
       if (child.name === "caption") {
@@ -291,10 +269,7 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
           continue;
         }
         const row = child.children
-          .filter(
-            (cell): cell is Extract<HtmlNode, { kind: "element" }> =>
-              cell.kind === "element" && (cell.name === "td" || cell.name === "th"),
-          )
+          .filter((cell) => cell.kind === "element")
           .map((cell) => tableCellFromElement(cell, inHeader));
         if (row.length > 0) {
           cells.push(row);
@@ -308,7 +283,7 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   if (stray || cells.length === 0) {
     return undefined;
   }
-  if (tableColumnCount(cells) > TABLE_COLUMN_LIMIT) {
+  if (tableExceedsColumnLimit(cells)) {
     // Mirror the markdown table path: over-wide tables degrade to a readable
     // monospace grid instead of an API-rejected table block.
     const gridRows = cells.map((row) =>
@@ -402,6 +377,30 @@ function collageToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRich
   };
 }
 
+const PRE_CHILDREN = new Set(["code"]);
+const CODE_LANGUAGE_CLASS_RE = /^language-(\S+)$/u;
+
+// Telegram's `<pre>` block, optionally wrapping one `<code class="language-x">`.
+// Tags inside stay literal text (the fragment parser does not match them), and
+// the authored text, including whitespace around the wrapper, is kept as is.
+function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlock | undefined {
+  const elements = node.children.filter(
+    (child): child is Extract<HtmlNode, { kind: "element" }> => child.kind === "element",
+  );
+  const [code] = elements;
+  if (code && (elements.length > 1 || hasStrayContent(node.children, PRE_CHILDREN))) {
+    return undefined;
+  }
+  const text = nodeText(node.children);
+  if (text.trim() === "") {
+    return undefined;
+  }
+  const language = code
+    ? CODE_LANGUAGE_CLASS_RE.exec(parseHtmlAttrs(code.raw).get("class") ?? "")?.[1]
+    : undefined;
+  return language ? { type: "pre", text, language } : { type: "pre", text };
+}
+
 function elementToBlock(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
@@ -412,11 +411,10 @@ function elementToBlock(
   switch (node.name) {
     case "hr":
       return { type: "divider" };
+    case "pre":
+      return preToBlock(node);
     case "details": {
-      const summary = node.children.find(
-        (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.closed && child.name === "summary",
-      );
+      const summary = findClosedChild(node.children, "summary");
       const bodyNodes = node.children.filter((child) => child !== summary);
       const blocks = renderContent(bodyNodes);
       return {
@@ -438,10 +436,7 @@ function elementToBlock(
     case "audio":
       return mediaBlockFromElement(node);
     case "blockquote": {
-      const cite = node.children.find(
-        (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.closed && child.name === "cite",
-      );
+      const cite = findClosedChild(node.children, "cite");
       const blocks = renderContent(node.children.filter((child) => child !== cite));
       if (blocks.length === 0) {
         return undefined;
@@ -452,19 +447,8 @@ function elementToBlock(
         : { type: "blockquote", blocks };
     }
     case "aside": {
-      const cite = node.children.find(
-        (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.closed && child.name === "cite",
-      );
-      const text = htmlNodesToRichText(node.children.filter((child) => child !== cite));
-      if (text === "") {
-        return undefined;
-      }
-      return {
-        type: "pullquote",
-        text,
-        ...(cite ? { credit: htmlNodesToRichText(cite.children) } : {}),
-      };
+      const caption = captionFromChildren(node.children);
+      return caption ? { type: "pullquote", ...caption } : undefined;
     }
     case "footer": {
       const text = htmlNodesToRichText(node.children);
@@ -517,10 +501,6 @@ export function findTelegramHtmlIslands(
     }
     const attrs = parseHtmlAttrs(node.raw);
     // Hrefs and labelled links stay inline so they cannot split a sentence.
-    return (
-      attrs.has("name") &&
-      !attrs.has("href") &&
-      node.children.every((child) => child.kind === "text" && !child.text.trim())
-    );
+    return attrs.has("name") && !attrs.has("href") && !hasStrayContent(node.children);
   });
 }

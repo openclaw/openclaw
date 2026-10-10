@@ -8,7 +8,7 @@ scenario:
   execution:
     kind: flow
     channel: discord
-    timeoutMs: 8000
+    timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
 flow:

@@ -7,25 +7,23 @@ import {
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./memory/index.js";
+import { prepareMemoryManagerReload } from "./memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { classifyWorkspaceMemoryPaths } from "./workspace-path-classifier.js";
 
-export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
+export function createMemoryRuntime(host: MemoryCoreRuntimeHost) {
   if (host.openKeyedStore) {
     configureMemoryCoreDreamingState(host.openKeyedStore);
   }
 
   return {
+    prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
-      const { manager, debug, error } = await getMemorySearchManager({
+      return await getMemorySearchManager({
         ...params,
         ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+        runInBackgroundContext: host.runInBackgroundContext,
       });
-      return {
-        manager,
-        debug,
-        error,
-      };
     },
     resolveMemoryBackendConfig,
     async authorizeSearchHits(params) {
@@ -33,10 +31,9 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
         await import("./session-search-visibility.js");
       return await filterMemorySearchHitsBySessionVisibility(params);
     },
+    supportsWorkspaceMemoryReadSources: true,
     classifyWorkspaceMemoryPaths,
     closeAllMemorySearchManagers,
     closeMemorySearchManager,
   } satisfies MemoryPluginRuntime;
 }
-
-export const memoryRuntime = createMemoryRuntime();

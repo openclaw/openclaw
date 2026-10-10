@@ -284,27 +284,36 @@ describe("buildDiscordInteractiveComponents", () => {
     expect(buildDiscordPresentationComponents(presentation)).toBeUndefined();
   });
 
-  it("preserves authored block order around controls", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          { type: "text", text: "First" },
-          {
-            type: "buttons",
-            buttons: [{ label: "Approve", value: "approve", style: "success" }],
-          },
-          { type: "text", text: "Last" },
-        ],
-      }),
-    ).toEqual({
+  it("renders system-agent approvals as actionable Discord controls", () => {
+    const rendered = buildDiscordPresentationComponents({
       blocks: [
-        { type: "text", text: "First" },
         {
-          type: "actions",
-          buttons: [{ label: "Approve", style: "success", callbackData: "approve" }],
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              action: {
+                type: "approval",
+                approvalId: "change-1",
+                approvalKind: "system-agent",
+                decision: "allow-once",
+              },
+              value: "/approve change-1 allow-once",
+              style: "success",
+            },
+          ],
         },
-        { type: "text", text: "Last" },
       ],
+    });
+
+    const firstBlock = rendered?.blocks?.[0];
+    const customId =
+      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    expect(customId).toBe("execapproval:kind=system-agent;id=change-1;action=allow-once");
+    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+      approvalId: "change-1",
+      approvalKind: "system-agent",
+      action: "allow-once",
     });
   });
 

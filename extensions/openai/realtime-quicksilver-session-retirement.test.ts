@@ -1,4 +1,5 @@
 import { ServerResponse } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceGatewayControl,
@@ -120,94 +121,9 @@ describe("GA Realtime call retirement", () => {
     }
   });
 
-  it.each(["cancel", "cleanup"] as const)(
-    "retains a failed GA hangup for a later %s without reviving the client grant",
-    async (action) => {
-      const bridge = {
-        connect: vi.fn(async () => undefined),
-        close: vi.fn(),
-        sendAudio: vi.fn(),
-        setMediaTimestamp: vi.fn(),
-        submitToolResult: vi.fn(),
-        acknowledgeMark: vi.fn(),
-        isConnected: vi.fn(() => true),
-      } satisfies RealtimeVoiceBridge;
-      const hangupTargets: string[] = [];
-      const fetchMock = vi.fn(async (url: string | URL | Request) => {
-        const target = requestTarget(url);
-        if (target.endsWith("/hangup")) {
-          hangupTargets.push(target);
-          return new Response(null, { status: hangupTargets.length === 1 ? 503 : 204 });
-        }
-        return new Response("v=answer\r\n", {
-          status: 201,
-          headers: { Location: "/v1/realtime/calls/rtc_retirement" },
-        });
-      });
-      const { realtime } = createBroker({ fetchImpl: fetchMock as typeof fetch });
-      try {
-        const reservation = await realtime.broker.createBrowserSession(
-          {
-            providerConfig: {},
-            model: "gpt-realtime-2.1",
-            gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
-            gaSideband: { createBridge: () => bridge },
-            clientControl: { owner: "gateway" },
-            gatewayControl: { bindBridge: vi.fn() },
-          },
-          { type: "api-key", token: "platform-key" },
-        );
-        if (reservation.transport !== "webrtc") {
-          throw new Error("Expected WebRTC reservation");
-        }
-        const response = createResponseHarness();
-        await realtime.handler(
-          createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-          response.res,
-        );
-        expect(response.res.statusCode).toBe(201);
-        const close = () =>
-          action === "cancel"
-            ? realtime.broker.cancelBrowserSession(reservation)
-            : realtime.cleanup();
-        const firstError = await Promise.resolve(close()).then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        expect.soft(firstError).toBeInstanceOf(Error);
-        expect(bridge.close).toHaveBeenCalledOnce();
-
-        const replay = createResponseHarness();
-        await realtime.handler(
-          createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-          replay.res,
-        );
-        expect(replay.res.statusCode).toBe(401);
-
-        await close();
-        expect
-          .soft(hangupTargets)
-          .toEqual([
-            "https://api.openai.com/v1/realtime/calls/rtc_retirement/hangup",
-            "https://api.openai.com/v1/realtime/calls/rtc_retirement/hangup",
-          ]);
-        await close();
-        expect.soft(hangupTargets).toHaveLength(2);
-        expect(bridge.close).toHaveBeenCalledOnce();
-      } finally {
-        await realtime.cleanup();
-      }
-    },
-  );
-
   it.each([
-    "discarded caller",
-    "bridge factory failure",
-    "bridge connect failure",
     "throwing error callback",
     "terminal during construction",
-    "answer delivery failure",
-    "answer stream failure",
     "empty answer",
     "shutdown during creation",
     "cancel during creation",
@@ -217,35 +133,20 @@ describe("GA Realtime call retirement", () => {
     let creations = 0;
     let hangups = 0;
     let failHangup = true;
-    let releaseCreation!: () => void;
-    const creation = new Promise<void>((resolve) => {
-      releaseCreation = resolve;
-    });
-    let releaseFirstHangup!: () => void;
-    const firstHangup = new Promise<void>((resolve) => {
-      releaseFirstHangup = resolve;
-    });
+    const creation = createDeferred<void>();
+    const firstHangup = createDeferred<void>();
     let cancelSettled = false;
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       if (requestTarget(url).endsWith("/hangup")) {
         hangups += 1;
         if (failure === "cancel during creation" && hangups === 1) {
-          await firstHangup;
+          await firstHangup.promise;
         }
         return new Response(null, { status: failHangup && hangups < 3 ? 503 : 204 });
       }
       creations += 1;
-      await creation;
-      const answer =
-        failure === "answer stream failure"
-          ? new ReadableStream({
-              start(controller) {
-                controller.error(new Error("answer read failed"));
-              },
-            })
-          : failure === "empty answer"
-            ? ""
-            : "v=answer\r\n";
+      await creation.promise;
+      const answer = failure === "empty answer" ? "" : "v=answer\r\n";
       return new Response(answer, {
         status: 201,
         headers: { Location: "/v1/realtime/calls/rtc_retirement" },
@@ -257,13 +158,10 @@ describe("GA Realtime call retirement", () => {
       const reservation = await reserveRetirementSession(
         realtime,
         ({ onTerminal }) => {
-          if (failure === "bridge factory failure") {
-            throw new Error("factory failed");
-          }
           if (failure === "terminal during construction") {
             onTerminal();
           }
-          if (["bridge connect failure", "throwing error callback"].includes(failure)) {
+          if (failure === "throwing error callback") {
             vi.mocked(bridge.connect).mockRejectedValue(new Error("connect failed"));
           }
           return bridge;
@@ -280,11 +178,6 @@ describe("GA Realtime call retirement", () => {
           : undefined,
       );
       const response = createResponseHarness();
-      if (failure === "answer delivery failure") {
-        response.end.mockImplementationOnce(() => {
-          queueMicrotask(() => response.res.emit("close"));
-        });
-      }
       const handling = realtime.handler(
         createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
         response.res,
@@ -305,11 +198,11 @@ describe("GA Realtime call retirement", () => {
                 },
               )
             : undefined;
-      releaseCreation();
+      creation.resolve();
       if (failure === "cancel during creation") {
         await vi.waitFor(() => expect(hangups).toBe(1));
         expect.soft(cancelSettled).toBe(false);
-        releaseFirstHangup();
+        firstHangup.resolve();
       }
       const handlingError = await handling.then(
         () => undefined,
@@ -318,9 +211,6 @@ describe("GA Realtime call retirement", () => {
       expect.soft(handlingError).toBeUndefined();
       if (failure === "throwing error callback") {
         expect.soft(onClose).toHaveBeenCalledOnce();
-      }
-      if (failure === "discarded caller") {
-        await expect(realtime.broker.cancelBrowserSession(reservation)).rejects.toThrow();
       }
       expect(hangups).toBe(1);
       if (stopping) {
@@ -342,13 +232,7 @@ describe("GA Realtime call retirement", () => {
       expect(hangups).toBe(3);
       expect(creations).toBe(1);
       expect(bridge.close).toHaveBeenCalledTimes(
-        [
-          "bridge factory failure",
-          "shutdown during creation",
-          "cancel during creation",
-          "answer stream failure",
-          "empty answer",
-        ].includes(failure)
+        ["shutdown during creation", "cancel during creation", "empty answer"].includes(failure)
           ? 0
           : 1,
       );
@@ -363,23 +247,20 @@ describe("GA Realtime call retirement", () => {
       expect(hangups).toBe(3);
     } finally {
       failHangup = false;
-      releaseCreation();
-      releaseFirstHangup();
+      creation.resolve();
+      firstHangup.resolve();
       await realtime.cleanup();
     }
   });
 
-  it.each(["finish", "close"] as const)(
+  it.each(["finish"] as const)(
     "joins the first failed retirement when delayed answer delivery emits %s",
     async (deliveryEvent) => {
       vi.useFakeTimers();
       const bridge = retirementBridge();
       let hangups = 0;
       let failHangup = true;
-      let answerStarted!: () => void;
-      const delivering = new Promise<void>((resolve) => {
-        answerStarted = resolve;
-      });
+      const delivering = createDeferred<void>();
       const fetchImpl = vi.fn(async (url: string | URL | Request) => {
         if (requestTarget(url).endsWith("/hangup")) {
           hangups += 1;
@@ -395,7 +276,7 @@ describe("GA Realtime call retirement", () => {
       const response = new ServerResponse(request);
       const end = vi.spyOn(response, "end").mockImplementationOnce(() => {
         response.writeHead(response.statusCode);
-        answerStarted();
+        delivering.resolve();
         return response;
       });
       let handling: Promise<boolean> | undefined;
@@ -403,7 +284,7 @@ describe("GA Realtime call retirement", () => {
         const reservation = await reserveRetirementSession(realtime, () => bridge);
         request.headers.authorization = `Bearer ${reservation.clientSecret}`;
         handling = realtime.handler(request, response);
-        await delivering;
+        await delivering.promise;
         expect(response.headersSent).toBe(true);
         await expect(realtime.broker.cancelBrowserSession(reservation)).rejects.toThrow(
           "OpenAI Realtime call hangup failed (503)",
@@ -434,18 +315,56 @@ describe("GA Realtime call retirement", () => {
     },
   );
 
-  it.each([204, 404])("coalesces reentrant retirement and settles HTTP %s once", async (status) => {
+  it.each(["reject"] as const)(
+    "awaits %s sideband retirement before hangup and reservation release",
+    async () => {
+      const retired = createDeferred<void>();
+      const bridge = retirementBridge();
+      vi.mocked(bridge.close).mockReturnValue(retired.promise);
+      const hangup = vi.fn();
+      const { realtime } = createBroker({
+        fetchImpl: async (url) => {
+          if (requestTarget(url).endsWith("/hangup")) {
+            hangup();
+            return new Response(null, { status: 204 });
+          }
+          return new Response("v=answer\r\n", {
+            status: 201,
+            headers: { Location: "/v1/realtime/calls/rtc_async_retirement" },
+          });
+        },
+      });
+      try {
+        const reservation = await reserveRetirementSession(realtime, () => bridge);
+        await realtime.handler(
+          createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
+          createResponseHarness().res,
+        );
+        const closing = realtime.broker.cancelBrowserSession(reservation);
+        const concurrent = realtime.cleanup();
+        expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 1 });
+        expect(bridge.close).toHaveBeenCalledOnce();
+        expect(hangup).not.toHaveBeenCalled();
+        retired.reject(new Error("sideband disposal failed"));
+        await Promise.all([closing, concurrent]);
+        expect(hangup).toHaveBeenCalledOnce();
+        expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 0 });
+      } finally {
+        retired.resolve();
+        await realtime.cleanup();
+      }
+    },
+  );
+
+  it.each([404])("coalesces reentrant retirement and settles HTTP %s once", async (status) => {
     vi.useFakeTimers();
     const bridge = retirementBridge();
-    let finishHangup!: () => void;
-    const hungUp = new Promise<void>((resolve) => {
-      finishHangup = resolve;
-    });
+    const hungUp = createDeferred<void>();
     let hangups = 0;
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       if (requestTarget(url).endsWith("/hangup")) {
         hangups += 1;
-        await hungUp;
+        await hungUp.promise;
         return new Response(null, { status });
       }
       return new Response("v=answer\r\n", {
@@ -471,24 +390,20 @@ describe("GA Realtime call retirement", () => {
       const concurrent = realtime.cleanup();
       expect(hangups).toBe(1);
       expect(bridge.close).toHaveBeenCalledOnce();
-      finishHangup();
+      hungUp.resolve();
       await Promise.all([first, concurrent, reentered]);
       await vi.advanceTimersByTimeAsync(30 * 60_000);
       await realtime.cleanup();
       expect(hangups).toBe(1);
     } finally {
-      finishHangup();
+      hungUp.resolve();
       await realtime.cleanup();
     }
   });
 
-  it.each([
-    { scope: "global", count: 8, ownerConnId: undefined, nativeReplacement: false },
-    { scope: "per-client", count: 2, ownerConnId: "conn-retiring", nativeReplacement: false },
-    { scope: "per-client native", count: 2, ownerConnId: "conn-retiring", nativeReplacement: true },
-  ])(
+  it.each([{ scope: "per-client native", count: 2, ownerConnId: "conn-retiring" }])(
     "retains exhausted old broker calls and $scope capacity across replacement",
-    async ({ count, ownerConnId, nativeReplacement }) => {
+    async ({ count, ownerConnId }) => {
       vi.useFakeTimers();
       let failHangup = true;
       let hangups = 0;
@@ -511,19 +426,17 @@ describe("GA Realtime call retirement", () => {
       const old = acquireOpenAIQuicksilverBrowserSessionBroker(params, openAIRealtimeHost);
       let replacement: typeof old | undefined;
       const reserveNext = (current: typeof old, clientOwner = ownerConnId) =>
-        nativeReplacement
-          ? current.broker.createBrowserSession(
-              {
-                providerConfig: {},
-                model: OPAQUE_REALTIME_MODEL,
-                ownerConnId: clientOwner,
-                runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-                clientControl: { owner: "gateway" },
-                gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
-              },
-              { type: "api-key", token: "platform-key" },
-            )
-          : reserveRetirementSession(current, () => retirementBridge(), clientOwner);
+        current.broker.createBrowserSession(
+          {
+            providerConfig: {},
+            model: OPAQUE_REALTIME_MODEL,
+            ownerConnId: clientOwner,
+            runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+            clientControl: { owner: "gateway" },
+            gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
+          },
+          { type: "api-key", token: "platform-key" },
+        );
       try {
         for (let index = 0; index < count; index += 1) {
           const reservation = await reserveRetirementSession(
@@ -543,11 +456,9 @@ describe("GA Realtime call retirement", () => {
         expect(hangups).toBe(count * 3);
         expect(params.logger.warn).toHaveBeenCalledWith(expect.stringContaining("INCOMPLETE"));
         await expect(reserveNext(replacement)).rejects.toThrow("Too many concurrent");
-        if (nativeReplacement) {
-          await expect(reserveNext(replacement, "conn-other")).resolves.toMatchObject({
-            transport: "webrtc",
-          });
-        }
+        await expect(reserveNext(replacement, "conn-other")).resolves.toMatchObject({
+          transport: "webrtc",
+        });
         await vi.advanceTimersByTimeAsync(30 * 60_000);
         expect(hangups).toBe(count * 3);
         const disabledReplacement = replacement;

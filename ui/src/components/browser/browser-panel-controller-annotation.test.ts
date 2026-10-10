@@ -22,11 +22,11 @@ function createOverlay(controller: BrowserPanelController) {
   overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
   for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
     overlay.addEventListener(type, (event) =>
-      controller.handleOverlayPointerUp(event as PointerEvent),
+      controller.input.handleOverlayPointerUp(event as PointerEvent),
     );
   }
   overlay.addEventListener("pointerdown", (event) =>
-    controller.handleOverlayPointerDown(event as PointerEvent),
+    controller.input.handleOverlayPointerDown(event as PointerEvent),
   );
   overlay.addEventListener("pointermove", (event) =>
     controller.handleOverlayPointerMove(event as PointerEvent),

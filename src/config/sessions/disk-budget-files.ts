@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { isMigrationArchiveArtifactName } from "./artifacts.js";
+import { resolveSessionArtifactDirectory } from "./paths.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 
 export type SessionPhysicalDiskUsage = {
@@ -22,6 +25,35 @@ export type SessionsDirFileStat = {
 
 const SESSIONS_DIR_STAT_CONCURRENCY = 8;
 
+// A removed empty file is success; bytes alone cannot signal removal.
+export type FileRemovalResult = Result<number, "not-removed">;
+
+export async function removeFileIfExists(filePath: string): Promise<FileRemovalResult> {
+  const stat = await fs.promises.stat(filePath).catch(() => null);
+  if (!stat?.isFile()) {
+    return err("not-removed");
+  }
+  getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
+  // Forced removal would count paths another cleanup already removed after stat.
+  return fs.promises.rm(filePath).then(
+    () => ok(stat.size),
+    () => err("not-removed"),
+  );
+}
+
+async function readSessionFileStat(filePath: string): Promise<SessionsDirFileStat | null> {
+  const stat = await fs.promises.stat(filePath).catch(() => null);
+  return stat?.isFile()
+    ? {
+        path: filePath,
+        canonicalPath: canonicalizePathForComparison(filePath),
+        name: path.basename(filePath),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      }
+    : null;
+}
+
 export async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
@@ -29,20 +61,7 @@ export async function readSessionsDirFiles(sessionsDir: string): Promise<Session
   // Skip rollback archives before concurrent stats so retained bytes cannot evict live sessions.
   const tasks = dirEntries
     .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
-    .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
-      const filePath = path.join(sessionsDir, dirent.name);
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        return null;
-      }
-      return {
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: dirent.name,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      };
-    });
+    .map((dirent) => () => readSessionFileStat(path.join(sessionsDir, dirent.name)));
   const { results } = await runTasksWithConcurrency({
     tasks,
     limit: SESSIONS_DIR_STAT_CONCURRENCY,
@@ -56,17 +75,10 @@ async function readSqliteDatabaseFiles(
   const files: SessionsDirFileStat[] = [];
   for (const databasePath of databasePaths) {
     for (const filePath of [databasePath, `${databasePath}-wal`]) {
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
+      const file = await readSessionFileStat(filePath);
+      if (file) {
+        files.push(file);
       }
-      files.push({
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: path.basename(filePath),
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      });
     }
   }
   return files;
@@ -76,12 +88,14 @@ async function readSqliteDatabaseFiles(
 export async function readSessionPhysicalDiskUsage(
   storePath: string,
 ): Promise<SessionPhysicalDiskUsage> {
-  const sessionsDirFiles = await readSessionsDirFiles(path.dirname(storePath));
-  const promptBlobFiles = await readSessionPromptBlobFiles(path.dirname(storePath));
-  // Owner inspection may create SQLite SHM files. Preserve its original position
-  // after the artifact inventory so a measurement cannot count its own side effects.
-  const databaseFiles = await readSqliteDatabaseFiles(
-    listDurableSqliteTargetPathsForSessionStorePath(storePath),
+  const sessionsDir = resolveSessionArtifactDirectory(storePath);
+  const sessionsDirFiles = await readSessionsDirFiles(sessionsDir);
+  const coldArchiveFiles = await readSessionsDirFiles(path.join(sessionsDir, "cold"));
+  const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
+  const databasePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
+  const databaseFiles = await readSqliteDatabaseFiles(databasePaths);
+  const databaseSharedMemoryPaths = new Set(
+    databasePaths.map((databasePath) => canonicalizePathForComparison(`${databasePath}-shm`)),
   );
   const databaseMainPaths = new Set(
     databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
@@ -90,8 +104,15 @@ export async function readSessionPhysicalDiskUsage(
     databaseFiles.filter((file) => file.path.endsWith("-wal")).map((file) => file.canonicalPath),
   );
   const uniqueFiles = new Map<string, SessionsDirFileStat>();
-  for (const file of [...sessionsDirFiles, ...promptBlobFiles, ...databaseFiles]) {
-    uniqueFiles.set(file.canonicalPath, file);
+  for (const file of [
+    ...sessionsDirFiles,
+    ...coldArchiveFiles,
+    ...promptBlobFiles,
+    ...databaseFiles,
+  ]) {
+    if (!databaseSharedMemoryPaths.has(file.canonicalPath)) {
+      uniqueFiles.set(file.canonicalPath, file);
+    }
   }
   const databaseMainBytes = [...databaseMainPaths].reduce(
     (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
@@ -132,18 +153,10 @@ export async function readSessionPromptBlobFiles(
       ) {
         continue;
       }
-      const filePath = path.join(prefixDir, blobEntry.name);
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
+      const file = await readSessionFileStat(path.join(prefixDir, blobEntry.name));
+      if (file) {
+        files.push(file);
       }
-      files.push({
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: blobEntry.name,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      });
     }
   }
   return files;

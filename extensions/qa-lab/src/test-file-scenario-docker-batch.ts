@@ -1,7 +1,10 @@
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
+import { toRepoArtifactPath } from "./cli-paths.js";
+import type { QaEvidenceOccurrence } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { shellQuote } from "./shell-quote.js";
 import {
@@ -35,6 +38,34 @@ const dockerCandidateManifestSchema = z.strictObject({
     })
     .nullable(),
 });
+
+export type QaPreparedDockerEvidence = {
+  receipt: QaEvidenceOccurrence["receipts"][number];
+  environment: Readonly<Record<string, string>>;
+};
+
+function candidateEnvironment(env: NodeJS.ProcessEnv) {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (entry): entry is [string, string] =>
+        DOCKER_CANDIDATE_ENV_KEY.test(entry[0]) && entry[1] !== undefined,
+    ),
+  );
+}
+
+export function assertQaPreparedDockerEnvironment(
+  prepared: QaPreparedDockerEvidence,
+  env: NodeJS.ProcessEnv,
+) {
+  const actual = candidateEnvironment(env);
+  const expected = prepared.environment;
+  if (
+    Object.keys(actual).length !== Object.keys(expected).length ||
+    Object.entries(expected).some(([key, value]) => actual[key] !== value)
+  ) {
+    throw new Error("Docker child environment differs from its prepared candidate");
+  }
+}
 
 type QaDockerScenario = QaSeedScenarioWithSource & {
   execution: Extract<QaSeedScenarioWithSource["execution"], { kind: "script" }>;
@@ -81,6 +112,7 @@ export async function prepareDockerE2eEnvironment(params: {
   repoRoot: string;
   runCommand?: typeof runQaScenarioCommandLifecycle;
   scenarios: readonly QaSeedScenarioWithSource[];
+  onPrepared?: (evidence: QaPreparedDockerEvidence) => void;
 }): Promise<Readonly<NodeJS.ProcessEnv> | undefined> {
   const laneNames = [
     ...new Set(params.scenarios.flatMap((scenario) => dockerLaneName(scenario) ?? [])),
@@ -88,7 +120,10 @@ export async function prepareDockerE2eEnvironment(params: {
   if (laneNames.length === 0) {
     return undefined;
   }
-  const prepDir = path.join(params.outputDir, "docker-candidate");
+  const preparationId = randomUUID();
+  const prepRoot = path.join(params.outputDir, "docker-candidate");
+  await fs.mkdir(prepRoot, { recursive: true });
+  const prepDir = path.join(prepRoot, preparationId);
   const manifestPath = path.join(prepDir, "manifest.json");
   const env = { ...params.env };
   for (const key of Object.keys(env)) {
@@ -100,8 +135,9 @@ export async function prepareDockerE2eEnvironment(params: {
       delete env[key];
     }
   }
-  await fs.mkdir(prepDir, { recursive: true });
-  await fs.rm(manifestPath, { force: true });
+  // Each preparation owns its manifest and package paths. Later attempts cannot
+  // overwrite the bytes referenced by an earlier observation's receipt.
+  await fs.mkdir(prepDir);
   const result = await (params.runCommand ?? runQaScenarioCommandLifecycle)({
     command: process.execPath,
     args: ["scripts/test-docker-all.mjs", `--prepare-only=${manifestPath}`],
@@ -118,28 +154,60 @@ export async function prepareDockerE2eEnvironment(params: {
       result.failureMessage || result.stderr.trim() || "Docker candidate prep failed",
     );
   }
-  const manifest = dockerCandidateManifestSchema.parse(
-    JSON.parse(await fs.readFile(manifestPath, "utf8")),
-  );
+  const manifestBytes = await fs.readFile(manifestPath);
+  const manifest = dockerCandidateManifestSchema.parse(JSON.parse(manifestBytes.toString()));
+  const publish = (environment: Readonly<NodeJS.ProcessEnv>) => {
+    params.onPrepared?.({
+      environment: Object.freeze(candidateEnvironment(environment)),
+      receipt: {
+        id: `docker-candidate:${preparationId}`,
+        phase: "prepared",
+        identity: {
+          source: { ref: manifest.sourceSha, integrity: null },
+          runtime: { id: null, version: null },
+          package: manifest.candidate
+            ? {
+                kind: "npm-tarball",
+                spec: manifest.candidate.package.name,
+                version: manifest.candidate.package.version,
+                integrity: `sha256:${manifest.candidate.package.sha256}`,
+              }
+            : null,
+          protocol: null,
+          accountRef: null,
+          proofClass: null,
+        },
+        artifact: {
+          kind: "docker-candidate",
+          source: "script",
+          path: toRepoArtifactPath(params.repoRoot, manifestPath),
+          sha256: createHash("sha256").update(manifestBytes).digest("hex"),
+        },
+      },
+    });
+    return environment;
+  };
   env.OPENCLAW_DOCKER_E2E_REPO_ROOT = params.repoRoot;
   if (manifest.candidate === null) {
-    return Object.freeze(env);
+    return publish(Object.freeze(env));
   }
   const { package: packageCandidate, registry } = manifest.candidate;
-  return Object.freeze(
-    Object.assign(env, {
-      OPENCLAW_DOCKER_E2E_SELECTED_SHA: manifest.sourceSha,
-      OPENCLAW_CURRENT_PACKAGE_TGZ: packageCandidate.path,
-      OPENCLAW_CURRENT_PACKAGE_VERSION: packageCandidate.version,
-      OPENCLAW_CURRENT_PACKAGE_SHA256: packageCandidate.sha256,
-      ...(registry
-        ? {
-            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry.dir,
-            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: registry.candidateVersion,
-            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: registry.manifestSha256,
-          }
-        : {}),
-    }),
+  return publish(
+    Object.freeze(
+      Object.assign(env, {
+        OPENCLAW_DOCKER_E2E_SELECTED_SHA: manifest.sourceSha,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: packageCandidate.path,
+        OPENCLAW_CURRENT_PACKAGE_VERSION: packageCandidate.version,
+        OPENCLAW_CURRENT_PACKAGE_SHA256: packageCandidate.sha256,
+        ...(registry
+          ? {
+              OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry.dir,
+              OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: registry.candidateVersion,
+              OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: registry.manifestSha256,
+            }
+          : {}),
+      }),
+    ),
   );
 }
 
@@ -159,6 +227,25 @@ function laneMatches(
   );
 }
 
+export function splitDockerE2eScenarioBatches(scenarios: readonly QaDockerScenario[]) {
+  const batches: QaDockerScenario[][] = [];
+  const lanes = new Set<string>();
+  for (const scenario of scenarios) {
+    const lane = dockerE2eLaneName(scenario)!;
+    if (lanes.has(lane)) {
+      lanes.clear();
+    }
+    // The downstream scheduler executes a set of lane names. A repeated request
+    // therefore needs another command and its own immutable attempt directory.
+    if (lanes.size === 0) {
+      batches.push([]);
+    }
+    batches.at(-1)!.push(scenario);
+    lanes.add(lane);
+  }
+  return batches;
+}
+
 export async function runDockerE2eBatch(params: {
   commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
@@ -172,7 +259,10 @@ export async function runDockerE2eBatch(params: {
     lane: dockerE2eLaneName(scenario)!,
     scenario,
   }));
-  const laneNames = [...new Set(selected.map(({ lane }) => lane))];
+  const laneNames = selected.map(({ lane }) => lane);
+  if (new Set(laneNames).size !== laneNames.length) {
+    throw new Error("repeated Docker lanes require separate execution batches");
+  }
   const batchId = `${params.commandTimeoutMs}ms`;
   const dockerOutputDir = path.join(params.outputDir, `docker-e2e-${batchId}`);
   const logPath = path.join(params.outputDir, `docker-e2e-batch-${batchId}.log`);

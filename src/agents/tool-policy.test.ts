@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
+import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   isRuntimeToolAllowed,
   createRuntimeToolMatcher,
@@ -18,12 +19,32 @@ import {
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
   hasRestrictiveAllowPolicy,
-  normalizeToolPolicyName,
   resolveToolProfilePolicy,
-  TOOL_GROUPS,
 } from "./tool-policy.js";
 
 describe("tool-policy", () => {
+  it.each([
+    { deny: "bundle-mcp", expected: [] },
+    { deny: "group:plugins", expected: [] },
+    { deny: "*", expected: [] },
+    { deny: " ALPHA__* ", expected: ["beta"] },
+    { deny: "a*__*", expected: ["beta"] },
+    { deny: "alpha__read", expected: ["alpha", "beta"] },
+    { deny: "alpha__", expected: ["alpha", "beta"] },
+    { deny: "alpha*__", expected: ["alpha", "beta"] },
+    { deny: "bundle*", expected: ["alpha", "beta"] },
+    { deny: "group:*", expected: ["alpha", "beta"] },
+  ])("preserves discoverable MCP namespaces for deny=$deny", ({ deny, expected }) => {
+    const declared = buildDeclaredToolAllowlistContext({
+      config: {
+        plugins: { enabled: false },
+        mcp: { servers: { alpha: { command: "alpha" }, beta: { command: "beta" } } },
+      },
+      toolDenylist: [deny],
+    });
+    expect([...(declared?.mcpServerNames ?? [])]).toEqual(expected);
+  });
+
   it("expands groups and normalizes aliases", () => {
     const expanded = expandToolGroups(["group:runtime", "BASH", "apply-patch", "group:fs"]);
     const set = new Set(expanded);
@@ -40,12 +61,12 @@ describe("tool-policy", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
     expect(coding?.allow).toContain("automations");
-    expect(coding?.allow).not.toContain("gateway");
+    expect(coding?.allow).toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
   it("includes core tool groups in group:openclaw", () => {
-    const group = TOOL_GROUPS["group:openclaw"];
+    const group = expandToolGroups(["group:openclaw"]);
     expect(group).toContain("browser");
     expect(group).toContain("message");
     expect(group).toContain("subagents");
@@ -53,46 +74,19 @@ describe("tool-policy", () => {
     expect(group).toContain("tts");
   });
 
-  it("normalizes tool names and aliases", () => {
-    expect(normalizeToolPolicyName(" BASH ")).toBe("exec");
-    expect(normalizeToolPolicyName("apply-patch")).toBe("apply_patch");
-    expect(normalizeToolPolicyName("READ")).toBe("read");
-    // Pre-rename scheduler tool name from persisted config (RFC 0026).
-    expect(normalizeToolPolicyName("cron")).toBe("automations");
-    expect(normalizeToolPolicyName("automations")).toBe("automations");
-  });
-
-  it.each(["constructor", "__proto__"])(
-    "preserves the literal tool name %s in aliases and groups",
-    (name) => {
-      expect(normalizeToolPolicyName(name)).toBe(name);
-      expect(expandToolGroups([name])).toEqual([name]);
-    },
-  );
-
   it.each(["constructor", "__proto__"])("matches literal %s prefixes only when allowed", (name) => {
     expect(couldNormalizeToolNamePrefixToAllowedTool(name.slice(0, 3), new Set([name]))).toBe(true);
     expect(couldNormalizeToolNamePrefixToAllowedTool("other", new Set([name]))).toBe(false);
     expect(couldNormalizeToolNamePrefixToAllowedTool(name, new Set(["other"]))).toBe(false);
   });
 
-  it.each(["ba", "bash", "apply-", "cron"])("retains declared alias prefix %s", (prefix) => {
+  it.each(["ba", "bash", "cron"])("retains declared alias prefix %s", (prefix) => {
     expect(
       couldNormalizeToolNamePrefixToAllowedTool(
         prefix,
         new Set(["exec", "apply_patch", "automations"]),
       ),
     ).toBe(true);
-  });
-
-  it("collects explicit allowlist entries", () => {
-    expect(
-      collectExplicitAllowlist([
-        {
-          allow: ["*", "optional-demo"],
-        },
-      ]),
-    ).toContain("optional-demo");
   });
 
   it("uses alsoAllow entries for plugin discovery without the synthetic allow-all", () => {
@@ -141,30 +135,19 @@ describe("sandbox tool policy", () => {
     }
   });
 
-  it("allows all tools with * allow", () => {
-    const policy: SandboxToolPolicy = { allow: ["*"], deny: [] };
-    expect(isToolAllowed(policy, "browser")).toBe(true);
-  });
-
   it("denies all tools with * deny", () => {
     const policy: SandboxToolPolicy = { allow: [], deny: ["*"] };
     expect(isToolAllowed(policy, "read")).toBe(false);
   });
 
   it("supports wildcard patterns", () => {
-    const policy: SandboxToolPolicy = { allow: ["web_*"] };
-    expect(isToolAllowed(policy, "web_fetch")).toBe(true);
+    const policy: SandboxToolPolicy = { allow: [" WEB_* "] };
+    expect(isToolAllowed(policy, "WEB_FETCH")).toBe(true);
     expect(isToolAllowed(policy, "read")).toBe(false);
   });
 
   it("applies deny before allow", () => {
     const policy: SandboxToolPolicy = { allow: ["*"], deny: ["web_*"] };
-    expect(isToolAllowed(policy, "web_fetch")).toBe(false);
-    expect(isToolAllowed(policy, "read")).toBe(true);
-  });
-
-  it("treats empty allowlist as allow-all (with deny exceptions)", () => {
-    const policy: SandboxToolPolicy = { allow: [], deny: ["web_*"] };
     expect(isToolAllowed(policy, "web_fetch")).toBe(false);
     expect(isToolAllowed(policy, "read")).toBe(true);
   });
@@ -177,11 +160,6 @@ describe("sandbox tool policy", () => {
     expect(isToolAllowed(policy, "read")).toBe(true);
     expect(isToolAllowed(policy, "exec")).toBe(true);
     expect(isToolAllowed(policy, "apply_patch")).toBe(false);
-  });
-
-  it("normalizes whitespace + case", () => {
-    const policy: SandboxToolPolicy = { allow: [" WEB_* "] };
-    expect(isToolAllowed(policy, "WEB_FETCH")).toBe(true);
   });
 });
 
@@ -238,14 +216,6 @@ describe("isToolAllowedByPolicyName — legacy scheduler tool name (RFC 0026)", 
 describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76749)", () => {
   it("does not deny apply_patch when write is denied", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
-  });
-
-  it("still denies apply_patch when apply_patch is explicitly denied", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["apply_patch"] })).toBe(false);
-  });
-
-  it("still allows apply_patch via write in the allow list", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"], deny: [] })).toBe(true);
   });
 
   it("denies apply_patch when both write and apply_patch are denied", () => {

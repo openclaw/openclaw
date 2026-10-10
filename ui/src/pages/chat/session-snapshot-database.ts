@@ -1,9 +1,15 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+
 export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
-const CHAT_SNAPSHOT_DB_VERSION = 2;
+const CHAT_SNAPSHOT_DB_VERSION = 4;
 
-function debugSnapshotDatabase(message: string, error?: unknown): void {
+export function isPersistableChatSnapshotKey(key: string): boolean {
+  return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
+}
+
+export function debugSnapshotStore(message: string, error?: unknown): void {
   if (error === undefined) {
     console.debug(`[chat-snapshot-cache] ${message}`);
   } else {
@@ -15,7 +21,7 @@ function indexedDbFactory(): IDBFactory | null {
   try {
     return globalThis.indexedDB ?? null;
   } catch (error) {
-    debugSnapshotDatabase("IndexedDB is unavailable", error);
+    debugSnapshotStore("IndexedDB is unavailable", error);
     return null;
   }
 }
@@ -23,13 +29,16 @@ function indexedDbFactory(): IDBFactory | null {
 function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);
-    request.addEventListener("upgradeneeded", () => {
+    request.addEventListener("upgradeneeded", (event) => {
       const database = request.result;
-      for (const name of Array.from(database.objectStoreNames)) {
-        database.deleteObjectStore(name);
+      // Unscoped derived transcripts have no provable account owner. Never adopt them.
+      if (event.oldVersion < 4) {
+        for (const name of Array.from(database.objectStoreNames)) {
+          database.deleteObjectStore(name);
+        }
+        database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
+        database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
       }
-      database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
-      database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
     });
     request.addEventListener("success", () => resolve(request.result));
     request.addEventListener("error", () =>
@@ -61,14 +70,14 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   try {
     database = await openIndexedDb(factory);
   } catch (error) {
-    debugSnapshotDatabase("resetting cache after IndexedDB open failure", error);
+    debugSnapshotStore("resetting cache after IndexedDB open failure", error);
     if (!(await deleteIndexedDb(factory))) {
       return null;
     }
     try {
       database = await openIndexedDb(factory);
     } catch (retryError) {
-      debugSnapshotDatabase("IndexedDB cache remains unavailable", retryError);
+      debugSnapshotStore("IndexedDB cache remains unavailable", retryError);
       return null;
     }
   }
@@ -81,7 +90,7 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
     return database;
   }
   database.close();
-  debugSnapshotDatabase("resetting cache after IndexedDB schema mismatch");
+  debugSnapshotStore("resetting cache after IndexedDB schema mismatch");
   if (!(await deleteIndexedDb(factory))) {
     return null;
   }
@@ -90,7 +99,7 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
     fresh.addEventListener("versionchange", () => fresh.close());
     return fresh;
   } catch (error) {
-    debugSnapshotDatabase("IndexedDB cache reset failed", error);
+    debugSnapshotStore("IndexedDB cache reset failed", error);
     return null;
   }
 }
@@ -101,6 +110,9 @@ export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<
     return undefined;
   }
   try {
+    if (!isPersistableChatSnapshotKey(sessionKey)) {
+      return undefined;
+    }
     return await new Promise<unknown>((resolve, reject) => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
       const request = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
@@ -113,7 +125,7 @@ export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<
       );
     });
   } catch (error) {
-    debugSnapshotDatabase("resetting cache after IndexedDB read failure", error);
+    debugSnapshotStore("resetting cache after IndexedDB read failure", error);
     await resetSessionSnapshotDatabase(database);
     return undefined;
   } finally {
@@ -125,11 +137,15 @@ export async function resetSessionSnapshotDatabase(database?: IDBDatabase | null
   database?.close();
   const factory = indexedDbFactory();
   if (factory && !(await deleteIndexedDb(factory))) {
-    debugSnapshotDatabase("IndexedDB cache reset was blocked");
+    debugSnapshotStore("IndexedDB cache reset was blocked");
   }
 }
 
-export async function deleteSessionSnapshotDatabaseRecord(sessionKey: string): Promise<void> {
+export async function deleteSessionSnapshotEntries(
+  key: string,
+  match: "key" | "prefix",
+): Promise<void> {
+  const byPrefix = match === "prefix";
   const database = await openSessionSnapshotDatabase();
   if (!database) {
     return;
@@ -140,13 +156,33 @@ export async function deleteSessionSnapshotDatabaseRecord(sessionKey: string): P
         [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
         "readwrite",
       );
-      transaction.addEventListener("complete", () => resolve());
-      transaction.addEventListener("error", () => resolve());
-      transaction.addEventListener("abort", () => resolve());
-      transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).delete(sessionKey);
-      transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).delete(sessionKey);
+      for (const event of ["complete", "error", "abort"]) {
+        transaction.addEventListener(event, () => resolve(), byPrefix ? { once: true } : undefined);
+      }
+      for (const name of [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME]) {
+        const store = transaction.objectStore(name);
+        if (!byPrefix) {
+          store.delete(key);
+          continue;
+        }
+        const request = store.openKeyCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) {
+            return;
+          }
+          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(key)) {
+            store.delete(cursor.primaryKey);
+          }
+          cursor.continue();
+        };
+      }
     });
-  } catch {
+  } catch (error) {
+    // Scope clearing reports setup failures; single-record invalidation is best effort.
+    if (byPrefix) {
+      throw error;
+    }
   } finally {
     database.close();
   }

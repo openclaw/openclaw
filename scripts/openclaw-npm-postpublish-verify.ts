@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
 import { createHash } from "node:crypto";
 import {
@@ -17,11 +16,19 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, posix as pathPosix, relative, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { collectPackageRootImports } from "../src/infra/package-root-imports.js";
+import { packageActivationRuntimeEntrypoint } from "../src/infra/package-update-activation-runtime-assets.js";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "../src/infra/runtime-dependency-ownership.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+  WORKER_BUNDLE_SQLITE_STORE_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
@@ -32,32 +39,30 @@ import {
   comparePackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "./lib/package-dist-inventory-contract.mts";
-import { collectPackageRootImports } from "./lib/package-root-imports.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
-import { classifyReleaseTrain } from "./lib/release-version.mjs";
-import {
-  readRuntimeDependencyOwnership,
-  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
-  type RuntimeDependencyOwnership,
-} from "./lib/runtime-dependency-ownership-contract.mts";
+import { escapeRegExp } from "./lib/regexp.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
-import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
+  main?: unknown;
+  bin?: unknown;
+  exports?: unknown;
   name?: string;
   version?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 };
 
-type InstalledBundledExtensionPackageJson = {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-};
+type InstalledBundledExtensionPackageJson = Pick<
+  InstalledPackageJson,
+  "dependencies" | "optionalDependencies"
+>;
 
 type InstalledBundledExtensionManifestRecord = {
   id: string;
@@ -82,13 +87,18 @@ const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
-// Keep the dependency scan bounded while allowing headroom for generated root chunks.
+// Keep each generated ownership scope bounded without making independent worker
+// chunks consume the root-runtime budget.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
+const MAX_INSTALLED_WORKER_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
-// The ~69 MB self-contained worker needs extra headroom, but synchronous read/parse stays bounded.
+// Self-contained bundles (the ~69 MB worker, the ~66 MB sealed package-update recovery helper)
+// need extra headroom, but synchronous read/parse stays bounded.
 const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
   `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+  `worker/${WORKER_BUNDLE_SQLITE_STORE_PATH}`,
+  packageActivationRuntimeEntrypoint.distWorkerPath,
 ]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
@@ -119,13 +129,9 @@ type DistJavaScriptFileListResult =
 
 type InstalledRootDistJavaScriptReadResult =
   | { error: string; ok: false }
-  | { ok: true; relativePath: string; source: string };
+  | { ok: true; relativePath: string; source: string | null };
 
-type PublishedInstallScenario = {
-  name: string;
-  installSpecs: string[];
-  expectedVersion: string;
-};
+type PublishedInstallScenario = ReturnType<typeof buildPublishedInstallScenarios>[number];
 
 type OpenClawNpmPostpublishVerifyArgs =
   | {
@@ -156,20 +162,20 @@ export function parseOpenClawNpmPostpublishVerifyArgs(
     throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
   }
   const extraArg = args[1]?.trim();
-  if (extraArg) {
+  if (args.length > 1) {
     throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
   }
   return { help: false, version };
 }
 
-export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
+export function buildPublishedInstallScenarios(version: string) {
   const parsed = parseReleaseVersion(version);
   if (parsed === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
 
   const exactSpec = `openclaw@${version}`;
-  const scenarios: PublishedInstallScenario[] = [
+  const scenarios = [
     {
       name: "fresh-exact",
       installSpecs: [exactSpec],
@@ -188,15 +194,27 @@ export function buildPublishedInstallScenarios(version: string): PublishedInstal
   return scenarios;
 }
 
-type NpmRegistryKey = {
-  key: string;
-  keyid: string;
-};
-
-type NpmRegistrySignature = {
-  keyid: string;
-  sig: string;
-};
+export function resolvePublishedInstallSourceVerification(
+  sourceRoot: string,
+  expectedVersion: string,
+): Pick<
+  Parameters<typeof collectInstalledPackageErrors>[0],
+  "additionalCompanionManifestRoots" | "allowLegacyGeneratedOwnership"
+> {
+  const packageJsonPath = join(sourceRoot, "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  if (packageJson.name !== "openclaw" || packageJson.version !== expectedVersion) {
+    throw new Error(
+      `source checkout version mismatch: expected openclaw@${expectedVersion}, found ${packageJson.name ?? "<missing>"}@${packageJson.version ?? "<missing>"}.`,
+    );
+  }
+  return {
+    additionalCompanionManifestRoots: [join(sourceRoot, "extensions")],
+    allowLegacyGeneratedOwnership: !existsSync(
+      join(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
+    ),
+  };
+}
 
 type NpmRegistryAttestation = {
   bundle?: {
@@ -207,10 +225,7 @@ type NpmRegistryAttestation = {
   predicateType?: string;
 };
 
-type NpmProvenanceVerificationPolicy = {
-  certificateIdentityURI: string;
-  certificateIssuer: string;
-};
+type NpmProvenanceVerificationPolicy = ReturnType<typeof resolveNpmProvenanceVerificationPolicy>;
 
 type VerifyNpmProvenanceBundle = (
   bundle: unknown,
@@ -269,7 +284,7 @@ function resolveNpmProvenanceVerificationPolicy(
     ref?: string;
     sha?: string;
   },
-): NpmProvenanceVerificationPolicy {
+) {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
@@ -422,6 +437,7 @@ export async function verifyNpmProvenanceAttestation(params: {
 
 export function collectInstalledPackageErrors(params: {
   additionalCompanionManifestRoots?: string[];
+  allowLegacyGeneratedOwnership?: boolean;
   expectedVersion: string;
   installedVersion: string;
   packageRoot: string;
@@ -449,6 +465,7 @@ export function collectInstalledPackageErrors(params: {
     ...collectInstalledRootDependencyManifestErrors(
       params.packageRoot,
       params.additionalCompanionManifestRoots,
+      params.allowLegacyGeneratedOwnership,
     ),
   );
 
@@ -512,13 +529,19 @@ export function normalizeInstalledBinaryVersion(output: string): string {
   return versionMatch?.[0] ?? trimmed;
 }
 
-function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScriptFileListResult {
+function listInstalledDistJavaScriptFiles(
+  packageRoot: string,
+  scope: "root" | "worker",
+): DistJavaScriptFileListResult {
   const distDir = join(packageRoot, "dist");
-  if (!existsSync(distDir)) {
+  const scopeDir = scope === "worker" ? join(distDir, "worker") : distDir;
+  if (!existsSync(scopeDir)) {
     return { files: [], limitExceeded: false };
   }
 
-  const pending = [distDir];
+  const limit =
+    scope === "worker" ? MAX_INSTALLED_WORKER_DIST_JS_FILES : MAX_INSTALLED_ROOT_DIST_JS_FILES;
+  const pending = [scopeDir];
   const files: string[] = [];
   while (pending.length > 0) {
     const currentDir = pending.pop();
@@ -535,7 +558,13 @@ function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScri
 
         const entryPath = join(currentDir, entry.name);
         const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
-        if (relativePath === "extensions" || relativePath.startsWith("extensions/")) {
+        if (
+          scope === "root" &&
+          (relativePath === "extensions" ||
+            relativePath.startsWith("extensions/") ||
+            relativePath === "worker" ||
+            relativePath.startsWith("worker/"))
+        ) {
           continue;
         }
         if (entry.isDirectory()) {
@@ -544,10 +573,10 @@ function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScri
         }
         if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
           files.push(entryPath);
-          if (files.length > MAX_INSTALLED_ROOT_DIST_JS_FILES) {
+          if (files.length > limit) {
             return {
               files,
-              limit: MAX_INSTALLED_ROOT_DIST_JS_FILES,
+              limit,
               limitExceeded: true,
             };
           }
@@ -580,22 +609,32 @@ function readInstalledRootDistJavaScriptFile(
       ok: false,
     };
   }
+  if (SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)) {
+    // These artifacts have a dedicated closure/import guard before packaging.
+    // Avoid rebuilding their multi-million-node ASTs in generic root scans.
+    return { ok: true, relativePath, source: null };
+  }
   return { ok: true, relativePath, source: readFileSync(filePath, "utf8") };
 }
 
 export function collectInstalledContextEngineRuntimeErrors(packageRoot: string): string[] {
-  const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
-  if (distFiles.limitExceeded) {
-    return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
+  const rootDistFiles = listInstalledDistJavaScriptFiles(packageRoot, "root");
+  if (rootDistFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("root dist", rootDistFiles.limit)];
+  }
+  const workerDistFiles = listInstalledDistJavaScriptFiles(packageRoot, "worker");
+  if (workerDistFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("worker dist", workerDistFiles.limit)];
   }
 
   // The legacy marker is a root runtime bundling contract; extension assets are plugin-owned.
-  for (const filePath of distFiles.files) {
+  for (const filePath of [...rootDistFiles.files, ...workerDistFiles.files]) {
     const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
     if (!file.ok) {
       return [file.error];
     }
-    if (file.source.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
+    const source = file.source ?? readFileSync(filePath, "utf8");
+    if (source.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
       return [
         "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
       ];
@@ -632,22 +671,52 @@ function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string
   return errors;
 }
 
+type RuntimeImport = { specifier: string; extensionId?: string; kind: "static" | "runtime" };
+
 type ParsedImportSpecifiersResult =
   | {
       ok: true;
-      imports: string[];
+      imports: RuntimeImport[];
     }
   | { ok: false; error: string };
 
-function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifiersResult {
+function extractJavaScriptImportSpecifiers(
+  source: string,
+  legacyOwnership: boolean,
+): ParsedImportSpecifiersResult {
   try {
-    // Keep strict JavaScript validation: TypeScript accepts some invalid JS bindings/contexts.
+    const regions: Array<{ start: number; end: number; extensionId?: string }> = [];
+    const stack: Array<{ start: number; extensionId?: string }> = [];
+    // Published modules need stricter validation than the CommonJS-aware dependency scanner.
     acorn.parse(source, {
       allowHashBang: true,
       ecmaVersion: "latest",
       sourceType: "module",
+      onComment: legacyOwnership
+        ? (block, text, start, end) => {
+            if (block) {
+              return;
+            }
+            if (text.startsWith("#region ")) {
+              const extensionId = /^#region extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(text)?.[1];
+              stack.push({ start: end, extensionId });
+            } else if (text.trim() === "#endregion") {
+              const region = stack.pop();
+              if (region) {
+                regions.push({ ...region, end: start });
+              }
+            }
+          }
+        : undefined,
     });
-    return { ok: true, imports: collectPackageRootImports(source) };
+    const imports: RuntimeImport[] = [];
+    collectPackageRootImports(source, (specifier, start, kind) => {
+      // Inner regions close first. Inspect real comments and full-source bindings;
+      // removing regions can erase a loader that is later called by root code.
+      const region = regions.find((entry) => entry.start <= start && start < entry.end);
+      imports.push({ specifier, extensionId: region?.extensionId, kind });
+    });
+    return { ok: true, imports };
   } catch (error) {
     return { ok: false, error: formatErrorMessage(error) };
   }
@@ -656,6 +725,7 @@ function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifie
 export function collectInstalledRootDependencyManifestErrors(
   packageRoot: string,
   additionalCompanionManifestRoots: string[] = [],
+  allowLegacyGeneratedOwnership = false,
 ): string[] {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
@@ -677,7 +747,7 @@ export function collectInstalledRootDependencyManifestErrors(
     ...Object.keys(rootPackageJson.dependencies ?? {}),
     ...Object.keys(rootPackageJson.optionalDependencies ?? {}),
   ]);
-  const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
+  const distFiles = listInstalledDistJavaScriptFiles(packageRoot, "root");
   if (distFiles.limitExceeded) {
     return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
   }
@@ -697,7 +767,8 @@ export function collectInstalledRootDependencyManifestErrors(
       `installed package runtime dependency ownership is invalid: ${RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
     ];
   }
-  const importsByFile = new Map<string, string[]>();
+  const legacyOwnership = allowLegacyGeneratedOwnership && runtimeDependencyOwnership === null;
+  const importsByFile = new Map<string, RuntimeImport[]>();
   const extensionsByFile = new Map<string, string[]>();
 
   for (const filePath of distFiles.files) {
@@ -705,7 +776,10 @@ export function collectInstalledRootDependencyManifestErrors(
     if (!file.ok) {
       return [file.error];
     }
-    const parsedSpecifiers = extractJavaScriptImportSpecifiers(file.source);
+    if (file.source === null) {
+      continue;
+    }
+    const parsedSpecifiers = extractJavaScriptImportSpecifiers(file.source, legacyOwnership);
     if (!parsedSpecifiers.ok) {
       return [
         `installed package root dist file '${file.relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
@@ -725,18 +799,14 @@ export function collectInstalledRootDependencyManifestErrors(
 
   // Root imports from any build output override plugin evidence, including
   // relative createRequire calls that are absent from the bundler's graph.
-  const pending = [...importsByFile.keys()].filter((file) => !extensionsByFile.has(file));
+  const pending = legacyOwnership
+    ? []
+    : [...importsByFile.keys()].filter((file) => !extensionsByFile.has(file));
   const visited = new Set<string>();
   const distDir = importsByFile.size ? realpathSync(join(packageRoot, "dist")) : "";
-  while (pending.length > 0) {
-    const file = pending.pop()!;
-    if (visited.has(file)) {
-      continue;
-    }
-    visited.add(file);
-    extensionsByFile.delete(file);
+  const enqueueRelativeImports = (file: string, imports: RuntimeImport[]) => {
     const resolveImport = createRequire(pathToFileURL(join(distDir, file))).resolve;
-    for (const specifier of importsByFile.get(file) ?? []) {
+    for (const { specifier } of imports) {
       if (specifier.startsWith(".")) {
         try {
           const importedPath = resolveImport(specifier.replace(/[?#].*$/u, ""));
@@ -749,11 +819,65 @@ export function collectInstalledRootDependencyManifestErrors(
         }
       }
     }
+  };
+  if (legacyOwnership) {
+    // Conservatively include every declared entry target, across conditions and
+    // patterns. The bin launcher also loads entry.js outside the scanned dist tree.
+    const targets: unknown[] = [rootPackageJson.main, rootPackageJson.bin, rootPackageJson.exports];
+    const entryPatterns = ["dist/entry.js"];
+    while (targets.length) {
+      const target = targets.pop();
+      if (typeof target === "string") {
+        entryPatterns.push(target.replace(/^\.\//u, ""));
+      } else if (target && typeof target === "object") {
+        targets.push(...Object.values(target));
+      }
+    }
+    if (typeof rootPackageJson.main === "string" && distDir) {
+      try {
+        const mainPath = createRequire(pathToFileURL(packageJsonPath)).resolve(
+          `./${rootPackageJson.main}`,
+        );
+        const mainFile = relative(distDir, mainPath).replaceAll("\\", "/");
+        if (importsByFile.has(mainFile)) {
+          pending.push(mainFile);
+        }
+      } catch {
+        // Missing main targets are reported by package closure checks.
+      }
+    }
+    // Node export substitutions can include slashes; filesystem globs cannot.
+    const entryMatchers = entryPatterns.map(
+      (pattern) => new RegExp(`^${escapeRegExp(pattern).replaceAll("\\*", ".*")}$`, "u"),
+    );
+    for (const file of importsByFile.keys()) {
+      if (entryMatchers.some((pattern) => pattern.test(`dist/${file}`))) {
+        pending.push(file);
+      }
+    }
+    // Static imports are hoisted out of generated plugin regions and inherit
+    // their chunk's graph ownership. Executable imports retain source placement:
+    // unowned calls revoke ownership of their target and its transitive closure.
+    for (const [file, imports] of importsByFile) {
+      enqueueRelativeImports(
+        file,
+        imports.filter((entry) => entry.kind === "runtime" && !entry.extensionId),
+      );
+    }
+  }
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (visited.has(file)) {
+      continue;
+    }
+    visited.add(file);
+    extensionsByFile.delete(file);
+    enqueueRelativeImports(file, importsByFile.get(file) ?? []);
   }
 
   for (const [file, imports] of importsByFile) {
     const extensions = extensionsByFile.get(file);
-    for (const specifier of imports) {
+    for (const { specifier, extensionId } of imports) {
       const dependencyName = packageNameFromSpecifier(specifier);
       if (
         !dependencyName ||
@@ -762,15 +886,25 @@ export function collectInstalledRootDependencyManifestErrors(
         declaredRuntimeDeps.has(dependencyName) ||
         (extensions?.length &&
           extensions.every(
-            (extensionId) =>
-              bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(extensionId) ||
+            (owner) =>
+              bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(owner) ||
               isInstalledCompanionExtensionOwnedRuntimeImport({
                 dependencyName,
-                extensionId,
+                extensionId: owner,
                 manifestRoots: companionManifestRoots,
                 manifestCache: companionManifestCache,
               }),
-          ))
+          )) ||
+        (legacyOwnership &&
+          !visited.has(file) &&
+          extensionId &&
+          (bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(extensionId) ||
+            isInstalledCompanionExtensionOwnedRuntimeImport({
+              dependencyName,
+              extensionId,
+              manifestCache: companionManifestCache,
+              manifestRoots: companionManifestRoots,
+            })))
       ) {
         continue;
       }
@@ -798,32 +932,24 @@ function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
   for (const manifestRoot of params.manifestRoots) {
     const cacheKey = `${manifestRoot}\0${extensionId}`;
     let manifest = params.manifestCache.get(cacheKey);
-    if (manifest !== undefined) {
-      if (
-        manifest &&
-        (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
-          Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
-      ) {
-        return true;
-      }
-      continue;
-    }
-    const manifestPath = join(manifestRoot, extensionId, "package.json");
-    manifest = null;
-    if (existsSync(manifestPath)) {
-      const stat = lstatSync(manifestPath);
-      if (stat.isFile() && stat.size <= MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
-        try {
-          const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as InstalledPackageJson;
-          if (parsed.name === `@openclaw/${extensionId}`) {
-            manifest = parsed;
+    if (manifest === undefined) {
+      const manifestPath = join(manifestRoot, extensionId, "package.json");
+      manifest = null;
+      if (existsSync(manifestPath)) {
+        const stat = lstatSync(manifestPath);
+        if (stat.isFile() && stat.size <= MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+          try {
+            const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as InstalledPackageJson;
+            if (parsed.name === `@openclaw/${extensionId}`) {
+              manifest = parsed;
+            }
+          } catch {
+            // Invalid companion manifests cannot authorize root runtime imports.
           }
-        } catch {
-          // Invalid companion manifests cannot authorize root runtime imports.
         }
       }
+      params.manifestCache.set(cacheKey, manifest);
     }
-    params.manifestCache.set(cacheKey, manifest);
     if (
       manifest &&
       (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
@@ -850,7 +976,7 @@ function collectBundledExtensionRuntimeDependencyOwners(
   return ownersByDependency;
 }
 
-export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
+function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
   return platform === "win32"
     ? pathWin32.join(prefixDir, "openclaw.cmd")
     : pathPosix.join(prefixDir, "bin", "openclaw");
@@ -860,11 +986,7 @@ export function resolveInstalledBinaryCommandInvocation(
   prefixDir: string,
   args: string[],
   params: { comSpec?: string; platform?: NodeJS.Platform } = {},
-): {
-  args: string[];
-  command: string;
-  windowsVerbatimArguments?: boolean;
-} {
+) {
   const platform = params.platform ?? process.platform;
   const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
   if (platform === "win32") {
@@ -881,10 +1003,7 @@ export function resolveInstalledBinaryCommandInvocation(
   };
 }
 
-function readBundledExtensionPackageJsons(packageRoot: string): {
-  manifests: InstalledBundledExtensionManifestRecord[];
-  errors: string[];
-} {
+function readBundledExtensionPackageJsons(packageRoot: string) {
   const extensionsDir = join(packageRoot, "dist", "extensions");
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
@@ -977,7 +1096,7 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   return { manifests, errors };
 }
 
-function npmExec(args: string[], cwd: string): string {
+export function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
     npmArgs: args,
     npmExecPath: process.env.npm_execpath,
@@ -988,16 +1107,8 @@ function npmExec(args: string[], cwd: string): string {
   return runNpmVerifyCommand(invocation, cwd);
 }
 
-function resolveGlobalRoot(prefixDir: string, cwd: string): string {
-  return npmExec(["root", "-g", "--prefix", prefixDir], cwd);
-}
-
 export function buildPublishedInstallCommandArgs(prefixDir: string, spec: string): string[] {
   return ["install", "-g", "--prefix", prefixDir, spec, "--no-fund", "--no-audit"];
-}
-
-function installSpec(prefixDir: string, spec: string, cwd: string): void {
-  npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), cwd);
 }
 
 export async function fetchRegistryJson(
@@ -1109,11 +1220,11 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
         url?: string;
       };
       integrity?: string;
-      signatures?: NpmRegistrySignature[];
+      signatures?: Parameters<typeof verifyNpmRegistrySignatures>[0]["signatures"];
     };
   };
   const keysDocument = (await fetchRegistryJson(new URL("-/npm/v1/keys", registry).toString())) as {
-    keys?: NpmRegistryKey[];
+    keys?: Parameters<typeof verifyNpmRegistrySignatures>[0]["keys"];
   };
   const integrity = packageDocument.dist?.integrity;
   const signatures = packageDocument.dist?.signatures;
@@ -1172,35 +1283,34 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
   );
 }
 
-async function verifyPublishedRegistryProvenance(version: string): Promise<void> {
-  await retryNpmRegistryProvenanceRead(() => verifyPublishedRegistryProvenanceOnce(version));
-}
-
-function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
-  const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
-  return runNpmVerifyCommand(invocation, cwd);
-}
-
-function verifyScenario(version: string, scenario: PublishedInstallScenario): void {
+function verifyScenario(
+  version: string,
+  scenario: PublishedInstallScenario,
+  sourceVerification: ReturnType<typeof resolvePublishedInstallSourceVerification>,
+): void {
   const workingDir = mkdtempSync(join(tmpdir(), `openclaw-postpublish-${scenario.name}.`));
   const prefixDir = join(workingDir, "prefix");
 
   try {
     for (const spec of scenario.installSpecs) {
-      installSpec(prefixDir, spec, workingDir);
+      npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), workingDir);
     }
 
-    const globalRoot = resolveGlobalRoot(prefixDir, workingDir);
+    const globalRoot = npmExec(["root", "-g", "--prefix", prefixDir], workingDir);
     const packageRoot = join(globalRoot, "openclaw");
     const pkg = JSON.parse(
       readFileSync(join(packageRoot, "package.json"), "utf8"),
     ) as InstalledPackageJson;
     const errors = collectInstalledPackageErrors({
+      ...sourceVerification,
       expectedVersion: scenario.expectedVersion,
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
     });
-    const installedBinaryVersion = readInstalledBinaryVersion(prefixDir, workingDir);
+    const installedBinaryVersion = runNpmVerifyCommand(
+      resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]),
+      workingDir,
+    );
 
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== scenario.expectedVersion) {
       errors.push(
@@ -1231,9 +1341,10 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
   const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
-  await verifyPublishedRegistryProvenance(version);
+  const sourceVerification = resolvePublishedInstallSourceVerification(process.cwd(), version);
+  await retryNpmRegistryProvenanceRead(() => verifyPublishedRegistryProvenanceOnce(version));
   for (const scenario of scenarios) {
-    verifyScenario(version, scenario);
+    verifyScenario(version, scenario, sourceVerification);
   }
 
   console.log(

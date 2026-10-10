@@ -8,6 +8,34 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
+quarantine_browser_cdp_pw_ai_chunks() {
+  local dist_dir="$1"
+  local quarantine_dir="$2"
+  local chunk
+  local -a chunks=()
+  # Keep the shared loader and state chunks; browser registration and raw CDP
+  # must remain available without the optional Playwright AI implementation.
+  for chunk in "$dist_dir"/pw-ai-*.js "$dist_dir"/pw-ai-*.mjs; do
+    [[ -f "$chunk" && ! -L "$chunk" ]] || continue
+    case "${chunk##*/}" in
+      pw-ai-state-*|pw-ai-module-*) continue ;;
+    esac
+    chunks+=("$chunk")
+  done
+  if [[ -z "${chunks[*]-}" ]]; then
+    echo 'no optional Playwright AI snapshot chunk found for raw CDP smoke' >&2
+    return 1
+  fi
+  mkdir -p "$quarantine_dir" || return
+  if ! mv "${chunks[@]}" "$quarantine_dir/"; then
+    echo 'failed to disable Playwright AI snapshot chunk for raw CDP smoke' >&2
+    return 1
+  fi
+  for chunk in "${chunks[@]}"; do
+    printf 'Disabled Playwright AI snapshot chunk: %s\n' "${chunk##*/}"
+  done
+}
+
 BASE_IMAGE="$(docker_e2e_resolve_image "openclaw-browser-cdp-base-e2e" OPENCLAW_BROWSER_CDP_BASE_E2E_IMAGE)"
 if [ -n "${OPENCLAW_BROWSER_CDP_SNAPSHOT_E2E_IMAGE:-}" ]; then
   IMAGE_NAME="$OPENCLAW_BROWSER_CDP_SNAPSHOT_E2E_IMAGE"
@@ -73,16 +101,12 @@ docker_e2e_docker_cmd run -d \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
+$(declare -f quarantine_browser_cdp_pw_ai_chunks)
 source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
 openclaw_e2e_write_state_env
 entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
-mkdir -p /tmp/openclaw-browser-cdp
-find dist -maxdepth 1 -type f \( -name 'pw-ai-*.js' -o -name 'pw-ai-*.mjs' \) ! -name 'pw-ai-state-*' -exec mv {} /tmp/openclaw-browser-cdp/ \;
-if find dist -maxdepth 1 -type f \( -name 'pw-ai-*.js' -o -name 'pw-ai-*.mjs' \) ! -name 'pw-ai-state-*' | grep -q .; then
-  echo 'failed to disable Playwright AI snapshot chunk for raw CDP smoke' >&2
-  exit 1
-fi
+quarantine_browser_cdp_pw_ai_chunks dist /tmp/openclaw-browser-cdp
 PORT=$PORT CDP_PORT=$CDP_PORT node scripts/e2e/lib/fixture.mjs browser-cdp
 FIXTURE_PORT=$FIXTURE_PORT node scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs >/tmp/browser-cdp-fixture.log 2>&1 &
 openclaw_e2e_exec_gateway \"\$entry\" $PORT loopback /tmp/browser-cdp-gateway.log" >/dev/null
@@ -94,9 +118,12 @@ if ! docker_e2e_wait_container_bash "$CONTAINER_NAME" 180 0.5 "
     openclaw_e2e_probe_tcp 127.0.0.1 $PORT
 "; then
   echo "Browser CDP snapshot container failed to become ready"
+  docker_e2e_docker_cmd logs --tail 20 "$CONTAINER_NAME" 2>&1 || true
   docker_e2e_tail_container_file_if_running "$CONTAINER_NAME" "/tmp/browser-cdp-gateway.log /tmp/browser-cdp-fixture.log" 120
   exit 1
 fi
+
+docker_e2e_docker_cmd logs --tail 20 "$CONTAINER_NAME"
 
 echo "Running browser CDP snapshot smoke..."
 if ! docker_e2e_docker_cmd exec "$CONTAINER_NAME" bash -lc "

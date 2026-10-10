@@ -1,8 +1,7 @@
-import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
-import { registerChannelIngressHostOwner } from "../channels/message-access/ingress-host-owner.js";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -10,234 +9,193 @@ import {
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { formatPluginTrustRefusal } from "./plugin-trust.js";
+import { PluginTrustRefusalError } from "./plugin-trust.js";
 import {
-  activatePluginRecordLifecycleEpoch,
-  isPluginRecordLifecycleEpochActive,
-  isPluginRegistryActivated,
-  isPluginRegistryRetired,
-  revokePluginRecordLifecycleEpoch,
+  capturePluginLifecycleAuthority,
+  getPluginRecordRegistry,
+  getPluginRegistryResourceOwner,
+  isPluginRecordActive,
+  isPluginRegistryPreparing,
 } from "./registry-lifecycle.js";
+import { createRegisteredChannelRuntimeResolver } from "./registry-runtime-channel.js";
+import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
 import type { PluginRegistryState } from "./registry-state.js";
-import type { PluginRecord } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
-  getGatewayContextResolver,
-  withPluginRuntimePluginIdScope,
+  ExpiredPluginRegistryScopeError,
+  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
+// A completed reaction must retain only the emptied holder, not the caller's registry closure.
+function createRuntimeRegistryRelease(held: PluginRegistry[]) {
+  return () => {
+    held.length = 0;
+  };
+}
+
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
-  const pluginRuntimeById = new Map<string, PluginRuntime>();
-  const pluginRuntimeRecordById = new Map<string, PluginRecord>();
-  const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
-  const recordChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
-  const registeredChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
-  const registeredRuntimeRecordById = new Map<string, PluginRecord>();
-  const registeredAdmissionOwnerByRecord = new WeakMap<
-    PluginRecord,
-    { isLive: () => boolean; dispose: () => void }
-  >();
+  const pluginRuntimes = new WeakMap<PluginRecord, PluginRuntime>();
 
-  const addPluginRuntimeResolutionContext = (params: {
-    error: unknown;
-    pluginId: string;
-    prop: PropertyKey;
-  }): never => {
-    const { error, pluginId, prop } = params;
-    if (
-      error instanceof Error &&
-      error.message.startsWith("Unable to resolve plugin runtime module") &&
-      !error.message.includes("pluginRuntimeContext=")
-    ) {
-      const record =
-        pluginRuntimeRecordById.get(pluginId) ??
-        registry.plugins.find((entry) => entry.id === pluginId);
-      const propName =
-        typeof prop === "symbol" ? (prop.description ?? prop.toString()) : String(prop);
-      error.message = [
-        error.message,
-        `pluginRuntimeContext=pluginId:${pluginId}`,
-        `property:${propName}`,
-        ...(record?.source ? [`source:${record.source}`] : []),
-      ].join("; ");
-    }
-    throw error;
-  };
-
-  const resolveRecordChannelRuntime = (
-    record: PluginRecord,
-    requireCurrentRuntimeRecord: boolean,
-  ): PluginRuntime["channel"] => {
-    const cache = requireCurrentRuntimeRecord ? recordChannelRuntime : registeredChannelRuntime;
-    const cached = cache.get(record);
-    const cachedOwner = registeredAdmissionOwnerByRecord.get(record);
-    if (cached && (requireCurrentRuntimeRecord || cachedOwner?.isLive() === true)) {
-      return cached;
-    }
-    if (!requireCurrentRuntimeRecord && cachedOwner) {
-      cachedOwner.dispose();
-      registeredAdmissionOwnerByRecord.delete(record);
-    }
-    const channel = (() => {
-      try {
-        return Reflect.get(
-          registryParams.runtime,
-          "channel",
-          registryParams.runtime,
-        ) as PluginRuntime["channel"];
-      } catch (error) {
-        return addPluginRuntimeResolutionContext({
-          error,
-          pluginId: record.id,
-          prop: "channel",
-        });
+  const readRuntimeProperty = (record: PluginRecord, prop: PropertyKey, receiver: unknown) => {
+    try {
+      return Reflect.get(registryParams.runtime, prop, receiver);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Unable to resolve plugin runtime module") &&
+        !error.message.includes("pluginRuntimeContext=")
+      ) {
+        const propName =
+          typeof prop === "symbol" ? (prop.description ?? prop.toString()) : String(prop);
+        error.message = [
+          error.message,
+          `pluginRuntimeContext=pluginId:${record.id}`,
+          `property:${propName}`,
+          ...(record.source ? [`source:${record.source}`] : []),
+        ].join("; ");
       }
-    })();
-    if (record.origin !== "bundled" || requireCurrentRuntimeRecord) {
-      cache.set(record, channel);
-      return channel;
+      throw error;
     }
-    const ownsLiveRegistrySlot = () =>
-      activePluginRuntimeRecords.has(record) &&
-      registeredRuntimeRecordById.get(record.id) === record &&
-      isPluginRegistryActivated(registry) &&
-      !isPluginRegistryRetired(registry) &&
-      registry.plugins.some((candidate) => candidate === record && candidate.status === "loaded");
-    const previousRecord = registeredRuntimeRecordById.get(record.id);
-    if (previousRecord && previousRecord !== record) {
-      registeredAdmissionOwnerByRecord.get(previousRecord)?.dispose();
-      registeredAdmissionOwnerByRecord.delete(previousRecord);
-      revokePluginRecordLifecycleEpoch(registry, previousRecord);
-    }
-    registeredRuntimeRecordById.set(record.id, record);
-    const epoch = activatePluginRecordLifecycleEpoch(registry, record);
-    if (!epoch) {
-      cache.set(record, channel);
-      return channel;
-    }
-    const owner = Object.freeze({
-      channelId: record.id,
-      record,
-      epoch,
-      resolveGatewayContext: getGatewayContextResolver(registryParams.runtime.subagent),
-      isLive: () =>
-        ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch),
-    });
-    const disposeOwner = registerChannelIngressHostOwner(owner);
-    registeredAdmissionOwnerByRecord.set(record, {
-      isLive: owner.isLive,
-      dispose: disposeOwner,
-    });
-    const buildHostContext = createHostChannelInboundEventContextBuilder(
-      channel.inbound.buildContext,
-      owner,
-    );
-    const buildContext = ((
-      params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
-    ) => {
-      // Audit provenance is passive: stale closures still build the message context,
-      // but only the exact live bundled owner may attach participant evidence.
-      return buildHostContext(params as never);
-    }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
-    const scoped = {
-      ...channel,
-      inbound: { ...channel.inbound, buildContext },
-    } satisfies PluginRuntime["channel"];
-    cache.set(record, scoped);
-    return scoped;
   };
+  const channelRuntime = createRegisteredChannelRuntimeResolver(state, (record) =>
+    readRuntimeProperty(record, "channel", registryParams.runtime),
+  );
 
-  const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
-    const cached = pluginRuntimeById.get(pluginId);
+  const resolvePluginRuntime = (record: PluginRecord): PluginRuntime => {
+    const pluginId = record.id;
+    const cached = pluginRuntimes.get(record);
     if (cached) {
       return cached;
     }
+    const currentRegistry = () => getPluginRecordRegistry(registry, record);
+    const currentInvocationRegistry = (selectedRegistry?: PluginRegistry) => {
+      let invocationView = selectedRegistry;
+      if (invocationView === undefined) {
+        try {
+          invocationView = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+        } catch (error) {
+          if (!(error instanceof ExpiredPluginRegistryScopeError)) {
+            throw error;
+          }
+        }
+      }
+      return invocationView ?? currentRegistry();
+    };
+    const currentDecisionRegistry = (candidate?: PluginRegistry) => {
+      const owner = currentRegistry();
+      const invocationView = currentInvocationRegistry(candidate);
+      // An admitted prepared view may borrow a Gateway provider. Keep that exact
+      // composition without accepting an unrelated ambient registry or global owner.
+      return invocationView.plugins.includes(record) &&
+        getPluginRegistryResourceOwner(invocationView) === owner
+        ? invocationView
+        : owner;
+    };
+    const resolveDelegatedRuntime = (ownerPluginId: string) => {
+      const owner = currentRegistry().plugins.find((entry) => entry.id === ownerPluginId);
+      if (!owner) {
+        throw new Error(`Plugin "${ownerPluginId}" runtime is no longer active.`);
+      }
+      return resolvePluginRuntime(owner);
+    };
+    const assertRuntimeCurrent = () => {
+      if (
+        !capturePluginLifecycleAuthority(currentRegistry(), record, {
+          scopedRuntime: registryParams.activateGlobalSideEffects === false,
+          registration: true,
+          admittedRuntime: true,
+        })?.()
+      ) {
+        throw new Error(`Plugin "${pluginId}" runtime is no longer active.`);
+      }
+    };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
     const loadSessionOwnership = createLazyRuntimeSurface(
       () => import("./registry-runtime-session-ownership.js"),
-      (module) => module.createPluginSessionOwnership(state, pluginId),
+      (module) =>
+        module.createPluginSessionOwnership(state, pluginId, currentRegistry, assertRuntimeCurrent),
     );
-    let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
-    const assertTrustedPluginRuntime = (
-      methodName:
-        | "dispatchHookAgentTurn"
-        | "openBlobStore"
-        | "openKeyedStore"
-        | "openSyncKeyedStore"
-        | "openChannelIngressQueue"
-        | "openChannelIngressDrain",
-    ) => {
-      const record =
-        pluginRuntimeRecordById.get(pluginId) ??
-        registry.plugins.find((entry) => entry.id === pluginId);
-      if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
-        throw new Error(
-          formatPluginTrustRefusal({
-            methodName,
-            pluginId,
-            origin: record?.origin,
-            trust: record?.trust,
-          }),
-        );
+    const runWithPluginScope = <T>(
+      run: () => T,
+      requireActive = true,
+      selectedRegistry?: PluginRegistry,
+    ): T => {
+      if (requireActive) {
+        assertRuntimeCurrent();
       }
-    };
-    const runtime = new Proxy(registryParams.runtime, {
-      get(target, prop, receiver) {
-        const runWithPluginScope = <T>(run: () => T): T => {
-          const record =
-            pluginRuntimeRecordById.get(pluginId) ??
-            registry.plugins.find((entry) => entry.id === pluginId);
-          return record?.source
-            ? withPluginRuntimePluginScope(
-                {
-                  pluginId,
-                  pluginSource: record.source,
-                  pluginOrigin: record.origin,
-                  pluginTrustedOfficialInstall: record.trustedOfficialInstall,
-                },
-                run,
-              )
-            : withPluginRuntimePluginScope({ pluginId }, run);
-        };
-        const getRuntimeProperty = () => {
-          try {
-            return Reflect.get(target, prop, receiver);
-          } catch (error) {
-            return addPluginRuntimeResolutionContext({ error, pluginId, prop });
+      const scopedRegistry = selectedRegistry ?? currentRegistry();
+      return withPluginRuntimePluginScope(
+        {
+          pluginId,
+          pluginSource: record.source,
+          pluginOrigin: record.origin,
+          pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+        },
+        () => {
+          const result = run();
+          if (!isPromiseLike(result)) {
+            return result;
           }
-        };
+          // Lazy runtime imports can suspend before the operation acquires its own custody.
+          return Promise.resolve(result).finally(
+            createRuntimeRegistryRelease([scopedRegistry]),
+          ) as T; // SAFETY: Preserve the host operation's resolved value and rejection reason.
+        },
+        scopedRegistry,
+      );
+    };
+    const invokeSelectedRuntime = <T>(run: () => T): T => {
+      assertRuntimeCurrent();
+      return runWithPluginScope(run, false, currentInvocationRegistry());
+    };
+    const runWithCurrentPluginScope = <T>(run: () => Promise<T>): Promise<T> =>
+      runWithPluginScope(async () => {
+        const result = await run();
+        assertRuntimeCurrent();
+        return result;
+      });
+    const facades = createPluginRuntimeFacades(invokeSelectedRuntime);
+    let scopedAgentRuntime:
+      | { source: PluginRuntime["agent"]; value: PluginRuntime["agent"] }
+      | undefined;
+    let scopedChannelRuntime:
+      | { source: PluginRuntime["channel"]; value: PluginRuntime["channel"] }
+      | undefined;
+    const runtime = new Proxy(registryParams.runtime, {
+      get(_target, prop, receiver) {
+        const getRuntimeProperty = () => readRuntimeProperty(record, prop, receiver);
         if (prop === "state") {
           const baseState = getRuntimeProperty();
           return {
             ...baseState,
             openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => {
-              assertTrustedPluginRuntime("openBlobStore");
               return createPluginBlobStore<TMetadata>(pluginId, options);
             },
-            openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
-              assertTrustedPluginRuntime("openKeyedStore");
-              return createPluginStateKeyedStore<T>(pluginId, options);
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+              if (options.retention === "retained") {
+                assertRuntimeCurrent();
+              }
+              return createPluginStateKeyedStore<T>(pluginId, options, assertRuntimeCurrent);
             },
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
-              assertTrustedPluginRuntime("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertTrustedPluginRuntime("openChannelIngressQueue");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
-              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-                ...options,
-                channelId: pluginId,
-                stateDir,
-              });
+              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
+                { ...options, channelId: pluginId, stateDir },
+                assertRuntimeCurrent,
+              );
             },
             openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options: Omit<
@@ -253,15 +211,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 stateDir?: string;
               },
             ) => {
-              assertTrustedPluginRuntime("openChannelIngressDrain");
               const stateDir = options.stateDir ?? baseState.resolveStateDir();
               const queue =
                 options.queue ??
-                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-                  channelId: pluginId,
-                  accountId: options.accountId,
-                  stateDir,
-                });
+                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
+                  { channelId: pluginId, accountId: options.accountId, stateDir },
+                  assertRuntimeCurrent,
+                );
               const {
                 queue: _queue,
                 accountId: _accountId,
@@ -279,46 +235,209 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const config: PluginRuntime["config"] = getRuntimeProperty();
           return {
             ...config,
-            current: () => runWithPluginScope(() => config.current()),
+            current: () => runWithPluginScope(() => config.current(), false),
             mutateConfigFile: (params) => runWithPluginScope(() => config.mutateConfigFile(params)),
             replaceConfigFile: (params) =>
               runWithPluginScope(() => config.replaceConfigFile(params)),
           } satisfies PluginRuntime["config"];
         }
+        if (prop === "system") {
+          const system: PluginRuntime["system"] = getRuntimeProperty();
+          const route = <T>(run: () => T): T => {
+            assertRuntimeCurrent();
+            if (isPluginRegistryPreparing(registry) && !isPluginRecordActive(registry, record)) {
+              throw new Error(
+                `Plugin "${pluginId}" cannot route system events during replacement preparation.`,
+              );
+            }
+            return runWithPluginScope(run);
+          };
+          return {
+            ...system,
+            enqueueSystemEvent: (...args) => route(() => system.enqueueSystemEvent(...args)),
+            requestHeartbeat: (...args) => route(() => system.requestHeartbeat(...args)),
+            requestHeartbeatNow: (...args) => route(() => system.requestHeartbeatNow(...args)),
+            runHeartbeatOnce: (...args) => route(() => system.runHeartbeatOnce(...args)),
+            runCommandWithTimeout: (...args) =>
+              runWithPluginScope(() => system.runCommandWithTimeout(...args)),
+          } satisfies PluginRuntime["system"];
+        }
         if (prop === "channel") {
-          const ownerRecord = pluginRuntimeRecordById.get(pluginId);
-          if (!ownerRecord) {
-            return getRuntimeProperty();
+          const channel = channelRuntime.resolve(record);
+          if (scopedChannelRuntime?.source === channel) {
+            return scopedChannelRuntime.value;
           }
-          return resolveRecordChannelRuntime(ownerRecord, true);
+          const inbound = {
+            ...channel.inbound,
+            run: ((...args: Parameters<typeof channel.inbound.run>) =>
+              invokeSelectedRuntime(() =>
+                channel.inbound.run(...args),
+              )) as typeof channel.inbound.run, // SAFETY: Forward unchanged arguments/results for both generic run overloads.
+            runPreparedReply: (...args) =>
+              invokeSelectedRuntime(() => channel.inbound.runPreparedReply(...args)),
+            dispatch: ((...args: Parameters<typeof channel.inbound.dispatch>) =>
+              invokeSelectedRuntime(() =>
+                channel.inbound.dispatch(...args),
+              )) as typeof channel.inbound.dispatch, // SAFETY: Preserve each routed-turn overload and its result.
+            dispatchReply: (...args) =>
+              invokeSelectedRuntime(() => channel.inbound.dispatchReply(...args)),
+          } satisfies PluginRuntime["channel"]["inbound"];
+          const value = {
+            ...channel,
+            inbound,
+            turn: inbound,
+            outbound: {
+              ...channel.outbound,
+              loadAdapter: (...args) =>
+                invokeSelectedRuntime(() => channel.outbound.loadAdapter(...args)),
+            },
+            threadBindings: {
+              setIdleTimeoutBySessionKey: (...args) =>
+                invokeSelectedRuntime(() =>
+                  channel.threadBindings.setIdleTimeoutBySessionKey(...args),
+                ),
+              setMaxAgeBySessionKey: (...args) =>
+                invokeSelectedRuntime(() => channel.threadBindings.setMaxAgeBySessionKey(...args)),
+              setIdleTimeoutBySessionKeyAsync: (...args) =>
+                invokeSelectedRuntime(() =>
+                  channel.threadBindings.setIdleTimeoutBySessionKeyAsync(...args),
+                ),
+              setMaxAgeBySessionKeyAsync: (...args) =>
+                invokeSelectedRuntime(() =>
+                  channel.threadBindings.setMaxAgeBySessionKeyAsync(...args),
+                ),
+            },
+            reply: {
+              ...channel.reply,
+              dispatchReplyFromConfig: (...args) =>
+                invokeSelectedRuntime(() => channel.reply.dispatchReplyFromConfig(...args)),
+              dispatchReplyWithBufferedBlockDispatcher: (...args) =>
+                invokeSelectedRuntime(() =>
+                  channel.reply.dispatchReplyWithBufferedBlockDispatcher(...args),
+                ),
+            },
+          } satisfies PluginRuntime["channel"];
+          scopedChannelRuntime = { source: channel, value };
+          return value;
+        }
+        if (prop === "decisions") {
+          return {
+            evaluate: async (batch, options) => {
+              assertRuntimeCurrent();
+              const capturedRegistry = currentDecisionRegistry();
+              const { evaluateDecisionInRegistry } = await import("../decisions/runtime.js");
+              assertRuntimeCurrent();
+              const selectedRegistry = currentDecisionRegistry(capturedRegistry);
+              const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
+                evaluateDecisionInRegistry(
+                  batch,
+                  options,
+                  selectedRegistry,
+                  getRuntimeConfig(),
+                  record.id,
+                ),
+              );
+              assertRuntimeCurrent();
+              options.signal.throwIfAborted();
+              return result;
+            },
+          } satisfies PluginRuntime["decisions"];
         }
         if (prop === "llm") {
           const llm = getRuntimeProperty();
           return {
             acquireLocalService: (...args) =>
-              withPluginRuntimePluginIdScope(pluginId, () => llm.acquireLocalService(...args)),
-            complete: (params) =>
-              withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
+              runWithPluginScope(() => llm.acquireLocalService(...args)),
+            complete: (params) => runWithPluginScope(() => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
         }
+        if (
+          prop === "media" ||
+          prop === "imageGeneration" ||
+          prop === "videoGeneration" ||
+          prop === "musicGeneration" ||
+          prop === "webSearch" ||
+          prop === "tts" ||
+          prop === "mediaUnderstanding" ||
+          prop === "modelAuth" ||
+          prop === "modelConfig" ||
+          prop === "sandbox"
+        ) {
+          return facades[prop](getRuntimeProperty());
+        }
         if (prop === "gateway") {
-          const gateway = getRuntimeProperty();
+          const gateway: PluginRuntime["gateway"] = getRuntimeProperty();
+          const withIdentity = gateway.withUserProfileIdentity;
+          const resolveGitHubAccount = gateway.resolveGitHubAccount;
           return {
-            isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
+            isAvailable: () => runWithPluginScope(() => gateway.isAvailable(), false),
             request: async (method, params, options) => {
-              const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();
-              return await runWithPluginScope(async () => {
-                assertGatewaySessionRequestOwned(method, params);
-                return await gateway.request(method, params, options);
-              });
+              const { withPreparedSessionOwnership, assertGatewaySessionRequestOwned } =
+                await loadSessionOwnership();
+              return await runWithPluginScope(() =>
+                withPreparedSessionOwnership(
+                  {
+                    sessionKey:
+                      typeof params?.sessionKey === "string"
+                        ? params.sessionKey
+                        : typeof params?.key === "string"
+                          ? params.key
+                          : undefined,
+                  },
+                  async () => {
+                    assertGatewaySessionRequestOwned(method, params);
+                    return await gateway.request(method, params, options);
+                  },
+                ),
+              );
             },
+            openPluginPanel: (params) =>
+              runWithCurrentPluginScope(() => gateway.openPluginPanel(params)),
+            readSessionFacts: (params) =>
+              runWithCurrentPluginScope(() => gateway.readSessionFacts(params)),
+            withSessionFacts: (select, run) =>
+              runWithCurrentPluginScope(() =>
+                gateway.withSessionFacts(select, (snapshot) => {
+                  assertRuntimeCurrent();
+                  return run(snapshot);
+                }),
+              ),
+            subscribeSessionChanges: (listener) =>
+              runWithPluginScope(() =>
+                gateway.subscribeSessionChanges((event) =>
+                  runWithPluginScope(() => listener(event)),
+                ),
+              ),
+            withUserProfileIdentity: withIdentity
+              ? async (params, run) =>
+                  await runWithCurrentPluginScope(() =>
+                    withIdentity(params, async (assertIdentityCurrent) => {
+                      const assertCurrent = () => {
+                        assertRuntimeCurrent();
+                        assertIdentityCurrent();
+                      };
+                      assertCurrent();
+                      return await run(assertCurrent);
+                    }),
+                  )
+              : undefined,
+            resolveGitHubAccount: resolveGitHubAccount
+              ? (params) => runWithCurrentPluginScope(() => resolveGitHubAccount(params))
+              : undefined,
           } satisfies PluginRuntime["gateway"];
         }
         if (prop === "hooks") {
           const hooks: PluginRuntime["hooks"] = getRuntimeProperty();
           return {
             dispatchHookAgentTurn: async (params) => {
-              assertTrustedPluginRuntime("dispatchHookAgentTurn");
+              if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
+                throw new PluginTrustRefusalError({
+                  pluginId,
+                  source: record.source,
+                  origin: record.origin,
+                  trust: record.trust,
+                });
+              }
               return await runWithPluginScope(() => hooks.dispatchHookAgentTurn(params));
             },
           } satisfies PluginRuntime["hooks"];
@@ -328,200 +447,126 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             list: (params) => runWithPluginScope(() => nodes.list(params)),
             invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
-            openDuplex: (params) =>
-              withPluginRuntimeRegistryScope(registry, () =>
-                runWithPluginScope(() => nodes.openDuplex(params)),
-              ),
+            openDuplex: (params) => runWithPluginScope(() => nodes.openDuplex(params)),
           } satisfies PluginRuntime["nodes"];
         }
         if (prop === "agent") {
-          if (scopedAgentRuntime) {
-            return scopedAgentRuntime;
-          }
           const agent: PluginRuntime["agent"] = getRuntimeProperty();
+          if (scopedAgentRuntime?.source === agent) {
+            return scopedAgentRuntime.value;
+          }
           const session = agent.session;
           const scopedSession = {
             resolveStorePath: session.resolveStorePath,
             getSessionEntry: session.getSessionEntry,
+            getSessionEntryAsync: (params) =>
+              runWithCurrentPluginScope(() => session.getSessionEntryAsync(params)),
+            getSessionEntryByIdAsync: (params) =>
+              runWithCurrentPluginScope(() => session.getSessionEntryByIdAsync(params)),
             listSessionEntries: session.listSessionEntries,
-            createSessionEntry: async (params) => {
-              const { assertOwnedHarness, assertReservedSessionKeyOwned } =
-                await loadSessionOwnership();
-              return await runWithPluginScope(async () => {
-                const runtimeOwnerCount = [
-                  "agentHarnessId" in params.initialEntry,
-                  "cliBackendId" in params.initialEntry,
-                  "acpSessionBinding" in params.initialEntry,
-                ].filter(Boolean).length;
-                if (runtimeOwnerCount !== 1) {
-                  throw new Error(
-                    `Plugin "${pluginId}" session creation requires exactly one runtime owner.`,
-                  );
-                }
-                if ("agentHarnessId" in params.initialEntry) {
-                  // Session ownership follows the registered harness capability,
-                  // independently of whether the caller chooses its reserved namespace.
-                  assertOwnedHarness(params.initialEntry.agentHarnessId, "create its sessions");
-                  assertReservedSessionKeyOwned(params.key, "create");
-                  return await session.createSessionEntry(params);
-                }
-                if ("acpSessionBinding" in params.initialEntry) {
-                  if (!params.key.startsWith(`plugin:${pluginId}:`)) {
-                    throw new Error(
-                      `Plugin "${pluginId}" session keys must start with "plugin:${pluginId}:".`,
-                    );
-                  }
-                  return await session.createSessionEntry({
-                    ...params,
-                    initialEntry: { ...params.initialEntry, pluginOwnerId: pluginId },
+            createSessionEntryListReader: (params) =>
+              runWithPluginScope(async () => {
+                const read = await session.createSessionEntryListReader(params);
+                assertRuntimeCurrent();
+                return async () =>
+                  await runWithPluginScope(async () => {
+                    const result = await read();
+                    assertRuntimeCurrent();
+                    return {
+                      entries: result.entries,
+                      assertCurrent: () => {
+                        assertRuntimeCurrent();
+                        result.assertCurrent();
+                      },
+                    };
                   });
-                }
-                const cliInitial = params.initialEntry;
-                const backend = registry.cliBackends.find(
-                  (entry) => entry.backend.id === cliInitial.cliBackendId,
-                );
-                if (!backend || backend.pluginId !== pluginId) {
-                  throw new Error(
-                    `Plugin "${pluginId}" must own CLI backend "${cliInitial.cliBackendId}" to create its sessions.`,
-                  );
-                }
-                // Plugin-owned sessions stay inside a namespace that no other plugin can claim.
-                if (!params.key.startsWith(`plugin:${pluginId}:`)) {
-                  throw new Error(
-                    `Plugin "${pluginId}" session keys must start with "plugin:${pluginId}:".`,
-                  );
-                }
-                return await session.createSessionEntry({
-                  ...params,
-                  initialEntry: { ...cliInitial, pluginOwnerId: pluginId },
-                });
-              });
+              }),
+            createSessionEntry: async (params) => {
+              const { createSessionEntry } = await loadSessionOwnership();
+              return await runWithPluginScope(() => createSessionEntry(session, params));
             },
             patchSessionEntry: async (params) => {
-              const { assertStoredSessionEntryOwned, assertStoreEntryOwned } =
+              const { withPreparedSessionOwnership, patchSessionEntry } =
                 await loadSessionOwnership();
-              return await runWithPluginScope(async () => {
-                assertStoredSessionEntryOwned({
-                  action: "patch",
-                  sessionKey: params.sessionKey,
-                  ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-                  ...(params.env !== undefined ? { env: params.env } : {}),
-                  ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-                });
-                return await session.patchSessionEntry({
-                  ...params,
-                  update: async (entry, context) => {
-                    const patch = await params.update(entry, context);
-                    if (!patch) {
-                      return patch;
-                    }
-                    const next = params.replaceEntry
-                      ? (patch as SessionEntry)
-                      : ({ ...entry, ...patch } satisfies SessionEntry);
-                    assertStoreEntryOwned({
-                      action: "patch",
-                      before: context.existingEntry ?? entry,
-                      entry: next,
-                      sessionKey: params.sessionKey,
-                    });
-                    return patch;
-                  },
-                });
-              });
+              return await runWithPluginScope(() =>
+                withPreparedSessionOwnership(params, () =>
+                  patchSessionEntry(session, params, assertRuntimeCurrent),
+                ),
+              );
             },
             upsertSessionEntry: async (params) => {
-              const { assertStoredSessionEntryOwned, assertStoreEntryOwned } =
+              const { withPreparedSessionOwnership, upsertSessionEntry } =
                 await loadSessionOwnership();
-              return await runWithPluginScope(async () => {
-                const before = assertStoredSessionEntryOwned({
-                  action: "upsert",
-                  sessionKey: params.sessionKey,
-                  ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-                  ...(params.env !== undefined ? { env: params.env } : {}),
-                  ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-                });
-                assertStoreEntryOwned({
-                  action: "upsert",
-                  before,
-                  entry: params.entry,
-                  sessionKey: params.sessionKey,
-                });
-                await session.upsertSessionEntry(params);
-              });
+              return await runWithPluginScope(() =>
+                withPreparedSessionOwnership(params, () => upsertSessionEntry(session, params)),
+              );
             },
             runWithWorkAdmission: async (params, run) => {
-              const { resolveStoredSessionExecutionOwner } = await loadSessionOwnership();
-              return await runWithPluginScope(async () => {
-                const resolveCurrentExecutionOwner = () =>
-                  resolveStoredSessionExecutionOwner({
-                    action: "admit work on",
-                    sessionKey: params.sessionKey,
-                    storePath: params.storePath,
+              const { withPreparedSessionOwnership, resolveStoredSessionExecutionOwner } =
+                await loadSessionOwnership();
+              return await runWithPluginScope(() =>
+                withPreparedSessionOwnership(params, async () => {
+                  const resolveCurrentExecutionOwner = () =>
+                    resolveStoredSessionExecutionOwner({
+                      action: "admit work on",
+                      sessionKey: params.sessionKey,
+                      storePath: params.storePath,
+                    });
+                  const ownerPluginId = resolveCurrentExecutionOwner();
+                  const admissionSession = ownerPluginId
+                    ? resolveDelegatedRuntime(ownerPluginId).agent.session
+                    : session;
+                  return await admissionSession.runWithWorkAdmission(params, async (signal) => {
+                    // Admission can wait behind another run that changes ownership.
+                    // Recheck delegation inside the admitted callback before plugin work starts.
+                    if (resolveCurrentExecutionOwner() !== ownerPluginId) {
+                      throw new Error(
+                        `Session "${params.sessionKey}" changed execution ownership while starting work.`,
+                      );
+                    }
+                    // The owner supplies the admission primitive, but the caller's
+                    // callback must not inherit the owner's plugin identity.
+                    return await runWithPluginScope(() => run(signal));
                   });
-                const ownerPluginId = resolveCurrentExecutionOwner();
-                const admissionSession = ownerPluginId
-                  ? resolvePluginRuntime(ownerPluginId).agent.session
-                  : session;
-                return await admissionSession.runWithWorkAdmission(params, async (signal) => {
-                  // Admission can wait behind another run that changes ownership.
-                  // Recheck delegation inside the admitted callback before plugin work starts.
-                  if (resolveCurrentExecutionOwner() !== ownerPluginId) {
-                    throw new Error(
-                      `Session "${params.sessionKey}" changed execution ownership while starting work.`,
-                    );
-                  }
-                  // The owner supplies the admission primitive, but the caller's
-                  // callback must not inherit the owner's plugin identity.
-                  return await runWithPluginScope(() => run(signal));
-                });
-              });
+                }),
+              );
             },
             updateSessionStoreEntry: async (params) => {
-              const { assertStoredSessionEntryOwned, assertStoreEntryOwned } =
+              const { withPreparedSessionOwnership, prepareSessionStoreUpdate } =
                 await loadSessionOwnership();
-              return await runWithPluginScope(async () => {
-                assertStoredSessionEntryOwned({
-                  action: "update",
-                  sessionKey: params.sessionKey,
-                  storePath: params.storePath,
-                });
-                return await session.updateSessionStoreEntry({
-                  ...params,
-                  update: async (entry) => {
-                    const patch = await params.update(entry);
-                    if (!patch) {
-                      return patch;
-                    }
-                    assertStoreEntryOwned({
-                      action: "update",
-                      before: entry,
-                      entry: { ...entry, ...patch },
-                      sessionKey: params.sessionKey,
-                    });
-                    return patch;
-                  },
-                });
-              });
+              return await runWithPluginScope(() =>
+                withPreparedSessionOwnership(params, async () => {
+                  const update = prepareSessionStoreUpdate(params, assertRuntimeCurrent);
+                  return await session.updateSessionStoreEntry({ ...params, update });
+                }),
+              );
             },
           } satisfies PluginRuntime["agent"]["session"];
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
             const runParams = { ...params };
-            const { prepareRunSessionExecution } = await loadSessionOwnership();
-            return await runWithPluginScope(async () => {
-              const { ownerPluginId, agentHarnessRuntimeOverride } =
-                prepareRunSessionExecution(runParams);
-              if (agentHarnessRuntimeOverride !== undefined) {
-                runParams.agentHarnessRuntimeOverride = agentHarnessRuntimeOverride;
-              }
-              if (ownerPluginId) {
-                return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams);
-              }
-              // The public runtime adapter owns admission preparation. Passing
-              // host authority through this plugin wrapper is rejected by design.
-              return await agent.runEmbeddedAgent(runParams);
-            });
+            const { withPreparedSessionOwnership, prepareRunSessionExecution } =
+              await loadSessionOwnership();
+            return await runWithPluginScope(() =>
+              withPreparedSessionOwnership(
+                { ...runParams, ...runParams.sessionTarget },
+                async () => {
+                  const { ownerPluginId, agentHarnessRuntimeOverride } =
+                    prepareRunSessionExecution(runParams);
+                  if (agentHarnessRuntimeOverride !== undefined) {
+                    runParams.agentHarnessRuntimeOverride = agentHarnessRuntimeOverride;
+                  }
+                  if (ownerPluginId) {
+                    return await resolveDelegatedRuntime(ownerPluginId).agent.runEmbeddedAgent(
+                      runParams,
+                    );
+                  }
+                  // The public runtime adapter owns admission preparation. Passing
+                  // host authority through this plugin wrapper is rejected by design.
+                  return await agent.runEmbeddedAgent(runParams);
+                },
+              ),
+            );
           };
-          const channelOwnerRecord = pluginRuntimeRecordById.get(pluginId);
           const runCommandFromIngress: PluginRuntime["agent"]["runCommandFromIngress"] = async (
             params,
             commandRuntime,
@@ -531,18 +576,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
             const ingressParams = { ...remainingParams, senderIsOwner, messageChannel };
             if (
-              !channelOwnerRecord ||
               // Community channels may admit guests; trusted provenance is required only for owner elevation.
               (senderIsOwner &&
-                channelOwnerRecord.origin !== "bundled" &&
-                channelOwnerRecord.trustedOfficialInstall !== true) ||
-              pluginRuntimeRecordById.get(pluginId) !== channelOwnerRecord ||
-              !activePluginRuntimeRecords.has(channelOwnerRecord) ||
-              isPluginRegistryRetired(registry) ||
-              !registry.plugins.some(
-                (record) => record === channelOwnerRecord && record.status === "loaded",
-              ) ||
-              !registry.channels.some(
+                record.origin !== "bundled" &&
+                record.trustedOfficialInstall !== true) ||
+              currentRegistry().plugins.find((entry) => entry.id === pluginId) !== record ||
+              !isPluginRecordActive(registry, record) ||
+              !currentRegistry().channels.some(
                 (channel) => channel.pluginId === pluginId && channel.plugin.id === messageChannel,
               )
             ) {
@@ -557,82 +597,78 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),
             Object.getOwnPropertyDescriptors(agent),
+            // SAFETY: cloning the prototype and every own descriptor preserves the complete agent surface.
           ) as PluginRuntime["agent"];
-          Object.defineProperties(scopedAgent, {
-            runCommandFromIngress: {
-              configurable: true,
-              enumerable: true,
-              value: runCommandFromIngress,
-            },
-            runEmbeddedAgent: {
-              configurable: true,
-              enumerable: true,
-              value: runEmbeddedAgent,
-            },
-            session: {
-              configurable: true,
-              enumerable: true,
-              value: scopedSession,
-            },
-          });
-          scopedAgentRuntime = scopedAgent;
-          return scopedAgentRuntime;
+          const overrides = {
+            resolveThinkingDefault: (params: Parameters<typeof agent.resolveThinkingDefault>[0]) =>
+              invokeSelectedRuntime(() => agent.resolveThinkingDefault(params)),
+            resolveCliBackendDispatchEligibility: (
+              params: Parameters<typeof agent.resolveCliBackendDispatchEligibility>[0],
+            ) => invokeSelectedRuntime(() => agent.resolveCliBackendDispatchEligibility(params)),
+            resolveSessionCatalogCreateTarget: (
+              params: Parameters<typeof agent.resolveSessionCatalogCreateTarget>[0],
+            ) => invokeSelectedRuntime(() => agent.resolveSessionCatalogCreateTarget(params)),
+            resolveThinkingPolicy: (params: Parameters<typeof agent.resolveThinkingPolicy>[0]) =>
+              invokeSelectedRuntime(() => agent.resolveThinkingPolicy(params)),
+            runCommandFromIngress,
+            runEmbeddedAgent,
+            session: scopedSession,
+          } satisfies Partial<PluginRuntime["agent"]>;
+          Object.defineProperties(
+            scopedAgent,
+            Object.fromEntries(
+              Object.entries(overrides).map(([key, value]) => [
+                key,
+                { configurable: true, enumerable: true, value },
+              ]),
+            ),
+          );
+          scopedAgentRuntime = { source: agent, value: scopedAgent };
+          return scopedAgent;
         }
         if (prop !== "subagent") {
           return getRuntimeProperty();
         }
-        const subagent = getRuntimeProperty();
+        const subagent: PluginRuntime["subagent"] = getRuntimeProperty();
         return {
-          complete: (params) =>
-            withPluginRuntimePluginIdScope(pluginId, () => subagent.complete(params)),
+          complete: (params) => runWithPluginScope(() => subagent.complete(params)),
           run: async (params) => {
-            const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
-            return await withPluginRuntimePluginIdScope(pluginId, async () => {
-              assertSessionIdentitiesOwned({
-                action: "run",
-                sessionKeys: [params.sessionKey],
-              });
-              return await subagent.run(params);
-            });
+            const { withPreparedSessionOwnership, assertSessionIdentitiesOwned } =
+              await loadSessionOwnership();
+            return await runWithPluginScope(() =>
+              withPreparedSessionOwnership(params, async () => {
+                assertSessionIdentitiesOwned({
+                  action: "run",
+                  sessionKeys: [params.sessionKey],
+                });
+                return await subagent.run(params);
+              }),
+            );
           },
-          waitForRun: (params) =>
-            withPluginRuntimePluginIdScope(pluginId, () => subagent.waitForRun(params)),
+          waitForRun: (params) => runWithPluginScope(() => subagent.waitForRun(params)),
           getSessionMessages: (params) =>
-            withPluginRuntimePluginIdScope(pluginId, () => subagent.getSessionMessages(params)),
+            runWithPluginScope(() => subagent.getSessionMessages(params)),
           deleteSession: async (params) => {
-            const { assertStoredSessionEntryOwned } = await loadSessionOwnership();
-            return await withPluginRuntimePluginIdScope(pluginId, async () => {
-              assertStoredSessionEntryOwned({ action: "delete", sessionKey: params.sessionKey });
-              await subagent.deleteSession(params);
-            });
+            const { withPreparedSessionOwnership, assertStoredSessionEntryOwned } =
+              await loadSessionOwnership();
+            return await runWithPluginScope(() =>
+              withPreparedSessionOwnership(params, async () => {
+                assertStoredSessionEntryOwned({ action: "delete", sessionKey: params.sessionKey });
+                await subagent.deleteSession(params);
+              }),
+            );
           },
         } satisfies PluginRuntime["subagent"];
       },
     });
-    pluginRuntimeById.set(pluginId, runtime);
+    pluginRuntimes.set(record, runtime);
     return runtime;
   };
 
   return {
     resolvePluginRuntime,
-    resolveRegisteredChannelRuntime: (record: PluginRecord) =>
-      resolveRecordChannelRuntime(record, false),
-    setPluginRuntimeRecord: (record: PluginRecord) => {
-      pluginRuntimeRecordById.set(record.id, record);
-      activePluginRuntimeRecords.add(record);
-    },
-    revokePluginRuntimeRecord: (pluginId: string, record?: PluginRecord) => {
-      const ownedRecord = record ?? pluginRuntimeRecordById.get(pluginId);
-      if (ownedRecord) {
-        activePluginRuntimeRecords.delete(ownedRecord);
-        revokePluginRecordLifecycleEpoch(registry, ownedRecord);
-        registeredAdmissionOwnerByRecord.get(ownedRecord)?.dispose();
-        registeredAdmissionOwnerByRecord.delete(ownedRecord);
-        if (registeredRuntimeRecordById.get(pluginId) === ownedRecord) {
-          registeredRuntimeRecordById.delete(pluginId);
-        }
-      }
-    },
+    resolveRegisteredChannelRuntime: channelRuntime.resolve,
+    revokePluginRuntimeRecord: channelRuntime.revoke,
   };
 }
 

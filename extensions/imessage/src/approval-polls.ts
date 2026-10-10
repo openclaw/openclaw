@@ -20,6 +20,7 @@ import {
   buildIMessageApprovalConversationKeyForInbound,
   enumerateApprovalTargetKeys,
   normalizeConversationKey,
+  resolveIMessageApprovalControlActor,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
 import { normalizeIMessageGuid } from "./message-guid.js";
@@ -71,7 +72,9 @@ function readPersistedTarget(value: unknown): IMessageApprovalPollTarget | null 
   if (
     !target ||
     typeof target.approvalId !== "string" ||
-    (target.approvalKind !== "exec" && target.approvalKind !== "plugin") ||
+    (target.approvalKind !== "exec" &&
+      target.approvalKind !== "plugin" &&
+      target.approvalKind !== "system-agent") ||
     !Array.isArray(target.optionDecisions)
   ) {
     return null;
@@ -157,7 +160,7 @@ export function mapSentPollOptionsToDecisions(params: {
   return seenDecisions.size === params.requested.length ? mapped : [];
 }
 
-function registerIMessageApprovalPollTarget(params: {
+async function registerIMessageApprovalPollTarget(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
@@ -165,7 +168,7 @@ function registerIMessageApprovalPollTarget(params: {
   approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   expiresAtMs: number;
-}): boolean {
+}): Promise<boolean> {
   const accountId = params.accountId.trim();
   const approvalId = params.approvalId.trim();
   const expiresAtMs = asDateTimestampMs(params.expiresAtMs);
@@ -193,49 +196,54 @@ function registerIMessageApprovalPollTarget(params: {
     approvalKind: params.approvalKind,
     optionDecisions: params.optionDecisions,
   };
-  for (const key of keys) {
-    pollTargets.register(key, target, { ttlMs });
-    // The poll balloon outlives the approval and stays tappable. Keep its
-    // ownership marker for the full balloon lifetime even if the live target
-    // expires while the gateway is stopped.
-    pollTombstones.register(key, { approvalId }, { ttlMs: TOMBSTONE_TTL_MS });
-  }
+  await Promise.all(
+    keys.flatMap((key) => [
+      pollTargets.register(key, target, { ttlMs }),
+      // The poll balloon outlives the approval and stays tappable. Keep its
+      // ownership marker for the full balloon lifetime even if the live target
+      // expires while the gateway is stopped.
+      pollTombstones.register(key, { approvalId }, { ttlMs: TOMBSTONE_TTL_MS }),
+    ]),
+  );
   return true;
 }
 
-function unregisterIMessageApprovalPollTarget(params: {
+async function unregisterIMessageApprovalPollTarget(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   optionDecisions?: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   approvalId?: string;
-}): void {
-  for (const key of enumeratePollTargetKeys({
+}): Promise<void> {
+  const keys = enumeratePollTargetKeys({
     accountId: params.accountId,
     conversation: params.conversation,
     pollGuid: params.pollGuid,
     optionIds: params.optionDecisions?.map(([optionId]) => optionId),
-  })) {
-    pollTargets.delete(key);
-    pollTombstones.register(
-      key,
-      { approvalId: params.approvalId ?? "" },
-      { ttlMs: TOMBSTONE_TTL_MS },
-    );
-  }
+  });
+  await Promise.all(
+    keys.flatMap((key) => [
+      pollTargets.delete(key),
+      pollTombstones.register(
+        key,
+        { approvalId: params.approvalId ?? "" },
+        { ttlMs: TOMBSTONE_TTL_MS },
+      ),
+    ]),
+  );
 }
 
 /**
  * Consume votes for a poll that was created but could not be safely bound.
  * Messages has no reliable retract primitive for this balloon.
  */
-function registerIMessageApprovalPollTombstone(params: {
+async function registerIMessageApprovalPollTombstone(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   optionIds?: readonly string[];
   approvalId: string;
-}): boolean {
+}): Promise<boolean> {
   const keys = enumeratePollTargetKeys({
     accountId: params.accountId,
     conversation: params.conversation,
@@ -245,9 +253,11 @@ function registerIMessageApprovalPollTombstone(params: {
   if (keys.length === 0) {
     return false;
   }
-  for (const key of keys) {
-    pollTombstones.register(key, { approvalId: params.approvalId }, { ttlMs: TOMBSTONE_TTL_MS });
-  }
+  await Promise.all(
+    keys.map((key) =>
+      pollTombstones.register(key, { approvalId: params.approvalId }, { ttlMs: TOMBSTONE_TTL_MS }),
+    ),
+  );
   return true;
 }
 
@@ -300,21 +310,7 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
       (typeof poll.poll_guid === "string" && poll.poll_guid) ||
       "",
   );
-  // chat.db authenticates received rows through sender. Released imsg fills an
-  // empty sender from destination_caller_id before serialization, so reject a
-  // received row when those identities are equal: its remote actor is
-  // indistinguishable from the local-account fallback. Paired-device self-sends
-  // may use destination_caller_id only when is_from_me is authoritative.
-  const sender = normalizeIMessageHandle((message.sender ?? "").trim());
-  const destinationCallerId = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
-  const receivedSenderIsLocalFallback =
-    message.is_from_me !== true &&
-    Boolean(sender) &&
-    Boolean(destinationCallerId) &&
-    sender === destinationCallerId;
-  const actorHandle =
-    (receivedSenderIsLocalFallback ? "" : sender) ||
-    (message.is_from_me === true ? destinationCallerId : "");
+  const actorHandle = resolveIMessageApprovalControlActor(message);
   if (!pollGuid || !actorHandle) {
     return null;
   }
@@ -347,13 +343,7 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
       },
     ];
   });
-  const conversation = buildIMessageApprovalConversationKeyForInbound({
-    chatGuid: message.chat_guid,
-    chatIdentifier: message.chat_identifier,
-    chatId: message.chat_id,
-    isGroup: message.is_group,
-    actorHandle,
-  });
+  const conversation = buildIMessageApprovalConversationKeyForInbound(message, actorHandle);
   if (!normalizeConversationKey(conversation)) {
     return null;
   }
@@ -366,19 +356,22 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
   };
 }
 
-async function lookupPollTarget(params: {
-  accountId: string;
-  conversation: IMessageApprovalConversationKey;
-  pollGuid: string;
-  optionIds: readonly string[];
-}): Promise<IMessageApprovalPollTarget | null> {
+async function lookupPollRecord<T>(
+  store: { lookup: (key: string) => Promise<T | null> },
+  params: {
+    accountId: string;
+    conversation: IMessageApprovalConversationKey;
+    pollGuid: string;
+    optionIds: readonly string[];
+  },
+): Promise<T | null> {
   for (const key of enumeratePollTargetKeys({
     accountId: params.accountId,
     conversation: params.conversation,
     pollGuid: params.pollGuid,
     optionIds: params.optionIds,
   })) {
-    const target = await pollTargets.lookup(key);
+    const target = await store.lookup(key);
     if (target) {
       return target;
     }
@@ -386,45 +379,22 @@ async function lookupPollTarget(params: {
   return null;
 }
 
-async function hasTombstone(params: {
-  accountId: string;
-  conversation: IMessageApprovalConversationKey;
-  pollGuid: string;
-  optionIds: readonly string[];
-}): Promise<boolean> {
-  for (const key of enumeratePollTargetKeys({
-    accountId: params.accountId,
-    conversation: params.conversation,
-    pollGuid: params.pollGuid,
-    optionIds: params.optionIds,
-  })) {
-    if (await pollTombstones.lookup(key)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /**
  * Outcomes for votes we own are logged at info, not verbose: an approval
  * decision is security-relevant, and diagnosing "the tap did nothing" must not
  * require re-running the gateway in debug.
  */
-function info(message: string, fields: Record<string, unknown>): void {
+function logPollVote(
+  level: "info" | "warn",
+  message: string,
+  fields: Record<string, unknown>,
+): void {
   try {
-    getOptionalIMessageRuntime()
-      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-polls" })
-      .info(message, fields);
-  } catch {
-    // Logger surface is optional in tests; never let logging mask the outcome.
-  }
-}
-
-function warn(message: string, fields: Record<string, unknown>): void {
-  try {
-    getOptionalIMessageRuntime()
-      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-polls" })
-      .warn(message, fields);
+    const logger = getOptionalIMessageRuntime()?.logging.getChildLogger({
+      plugin: "imessage",
+      feature: "approval-polls",
+    });
+    logger?.[level](message, fields);
   } catch {
     // Logger surface is optional in tests; never let logging mask the outcome.
   }
@@ -452,15 +422,15 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     pollGuid: event.pollGuid,
     optionIds: event.votes.map((vote) => vote.optionId),
   };
-  const target = await lookupPollTarget(lookupKey);
+  const target = await lookupPollRecord(pollTargets, lookupKey);
   if (!target) {
     // Resolved/expired approval polls stay tappable; swallow late taps so they
     // do not reach the agent as chat messages.
-    return await hasTombstone(lookupKey);
+    return Boolean(await lookupPollRecord(pollTombstones, lookupKey));
   }
 
   if (event.malformedVotes) {
-    warn("approval poll vote ignored: malformed complete vote set", {
+    logPollVote("warn", "approval poll vote ignored: malformed complete vote set", {
       approvalId: target.approvalId,
       actorHandle: event.actorHandle,
     });
@@ -477,7 +447,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
         ? event.votes
         : [];
   if (actorVotes.length === 0) {
-    warn("approval poll vote participants did not identify the transport actor", {
+    logPollVote("warn", "approval poll vote participants did not identify the transport actor", {
       approvalId: target.approvalId,
       actorHandle: event.actorHandle,
     });
@@ -487,7 +457,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   // An un-vote is owned but never resolves: it must not emit "removed their
   // vote" prose while the approval is still pending.
   if (selectedVotes.length === 0) {
-    info("approval poll deselect ignored; first selection decides", {
+    logPollVote("info", "approval poll deselect ignored; first selection decides", {
       approvalId: target.approvalId,
     });
     return true;
@@ -497,7 +467,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     decision: target.optionDecisions.find(([optionId]) => optionId === vote.optionId)?.[1],
   }));
   if (selectedDecisions.some((entry) => !entry.decision)) {
-    warn("approval poll vote ignored: selected option not bound to a decision", {
+    logPollVote("warn", "approval poll vote ignored: selected option not bound to a decision", {
       approvalId: target.approvalId,
       optionIds: selectedDecisions.map((entry) => entry.optionId),
     });
@@ -505,7 +475,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   }
   const decisions = [...new Set(selectedDecisions.map((entry) => entry.decision))];
   if (decisions.length !== 1) {
-    warn("approval poll vote ignored: ambiguous selected decisions", {
+    logPollVote("warn", "approval poll vote ignored: ambiguous selected decisions", {
       approvalId: target.approvalId,
       decisions,
     });
@@ -516,7 +486,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     return true;
   }
   if (getIMessageApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }).length === 0) {
-    info("approval poll vote denied: no explicit approvers configured", {
+    logPollVote("info", "approval poll vote denied: no explicit approvers configured", {
       approvalId: target.approvalId,
     });
     return true;
@@ -529,7 +499,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     approvalKind: target.approvalKind,
   });
   if (!auth.authorized) {
-    info("approval poll vote denied: sender not an approver", {
+    logPollVote("info", "approval poll vote denied: sender not an approver", {
       approvalId: target.approvalId,
       actorHandle: event.actorHandle,
     });
@@ -549,12 +519,12 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     });
-    unregisterIMessageApprovalPollTarget({
+    await unregisterIMessageApprovalPollTarget({
       ...lookupKey,
       optionDecisions: target.optionDecisions,
       approvalId: target.approvalId,
     });
-    info(`approval poll vote ${result.applied ? "resolved" : "already resolved"}`, {
+    logPollVote("info", `approval poll vote ${result.applied ? "resolved" : "already resolved"}`, {
       approvalId: target.approvalId,
       actorHandle: event.actorHandle,
       decision,
@@ -562,19 +532,19 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     return true;
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
-      unregisterIMessageApprovalPollTarget({
+      await unregisterIMessageApprovalPollTarget({
         ...lookupKey,
         optionDecisions: target.optionDecisions,
         approvalId: target.approvalId,
       });
-      info("approval poll vote ignored: approval already gone", {
+      logPollVote("info", "approval poll vote ignored: approval already gone", {
         approvalId: target.approvalId,
       });
       return true;
     }
     // Keep the binding on a transient gateway/network failure so a retry can
     // still land; only terminal and not-found outcomes clear it.
-    warn("approval poll vote failed", {
+    logPollVote("warn", "approval poll vote failed", {
       approvalId: target.approvalId,
       senderId: event.actorHandle,
       error: String(error),

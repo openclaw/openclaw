@@ -1,4 +1,4 @@
-// Normalizes tool result content for chat transcript rendering.
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const TOOL_USE_ID_FIELDS = [
@@ -8,10 +8,8 @@ const TOOL_USE_ID_FIELDS = [
   "tool_use_id",
   "toolUseId",
 ] as const;
-type ToolUseIdField = (typeof TOOL_USE_ID_FIELDS)[number];
-
 /** Provider-agnostic chat content block shape used before SDK-specific narrowing. */
-export type ToolContentBlock = Record<string, unknown> & Partial<Record<ToolUseIdField, unknown>>;
+export type ToolContentBlock = Record<string, unknown>;
 
 function normalizeToolContentType(value: unknown): string {
   return typeof value === "string" ? value.toLowerCase() : "";
@@ -53,4 +51,54 @@ export function resolveToolUseId(block: ToolContentBlock): string | undefined {
     }
   }
   return undefined;
+}
+
+export function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined {
+  const raw = value.isError ?? value.is_error;
+  return typeof raw === "boolean" ? raw : undefined;
+}
+
+const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
+const MAX_ERROR_DETECT_CHARS = 20_000;
+const TOOL_ERROR_STATUSES = new Set(["error", "failed", "timeout"]);
+
+function hasToolErrorStatus(value: unknown): boolean {
+  return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
+}
+
+export function isToolErrorOutput(outputText: string | undefined): boolean {
+  const trimmed = outputText?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (TOOL_NOT_FOUND_PATTERN.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.length > MAX_ERROR_DETECT_CHARS) {
+    return false;
+  }
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  const obj = safeParseJsonRecord(trimmed);
+  if (!obj) {
+    return false;
+  }
+  const explicitErrorFlag = readToolErrorFlag(obj);
+  if (explicitErrorFlag !== undefined) {
+    return explicitErrorFlag;
+  }
+  if ("error" in obj) {
+    const value = obj.error;
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (value && typeof value === "object") {
+      return true;
+    }
+  }
+  return hasToolErrorStatus(obj.status);
 }

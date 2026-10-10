@@ -78,7 +78,7 @@ export type GeneratedPublisherOptions = {
   overlapPolicy?: string;
   stalePrHeadOnce?: boolean;
   stalePrViewHeadOnce?: boolean;
-  updateSource?: boolean;
+  updateSource?: boolean | string;
 };
 export function prepareGeneratedPublisherFixture(
   root: string,
@@ -132,10 +132,13 @@ export function prepareGeneratedPublisherFixture(
       );
     }
     if (options.updateSource) {
-      writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
+      const sourcePath =
+        typeof options.updateSource === "string" ? options.updateSource : "source/input.txt";
+      mkdirSync(path.dirname(path.join(updater, sourcePath)), { recursive: true });
+      writeFileSync(path.join(updater, sourcePath), "newer-input\n", "utf8");
     }
     if (!options.updateSourceBeforeAutoMerge) {
-      runGit(updater, ["add", "generated", "source"]);
+      runGit(updater, ["add", "--all"]);
       runGit(updater, ["commit", "-m", "update base"]);
       runGit(updater, ["push", "origin", "main"]);
     }

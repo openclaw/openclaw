@@ -5,7 +5,7 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it } from "vitest";
-import { createMemorySearchTool } from "../tools.js";
+import { createMemorySearchToolOrThrow } from "../tools.test-helpers.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -147,13 +147,23 @@ describe("memory source temporal ranking", () => {
       });
       if (ftsUnavailable) {
         await manager.close();
+        // Matching row counts must not make a non-FTS view look like an available index.
         openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
           DROP TABLE memory_index_chunks_fts;
           CREATE VIEW memory_index_chunks_fts AS
             SELECT text, id, path, source, model, start_line, end_line FROM memory_index_chunks;
         `);
         manager = await fixture.getFreshManager(cfg, "cli");
-        expect(manager.status().fts).toMatchObject({ enabled: true, available: false });
+        expect(manager.status().fts).toMatchObject({
+          enabled: true,
+          available: false,
+          error: expect.stringContaining("view"),
+        });
+        expect(
+          openOpenClawAgentDatabase({ agentId: "main" })
+            .db.prepare("SELECT type FROM sqlite_schema WHERE name = ?")
+            .get("memory_index_chunks_fts"),
+        ).toEqual({ type: "view" });
       }
 
       const searchOptions = {
@@ -194,14 +204,11 @@ describe("memory source temporal ranking", () => {
       ).toBe(`sessions/main/${freshSession.fileName}`);
 
       if (!lexicalOnly && !archived) {
-        const tool = createMemorySearchTool({
+        const tool = createMemorySearchToolOrThrow({
           config: cfg,
           agentId: "main",
           agentSessionKey: "agent:main:memory:z-fresh",
         });
-        if (!tool) {
-          throw new Error("Expected memory_search tool");
-        }
         const result = await tool.execute("source-recency", {
           query,
           corpus: "sessions",

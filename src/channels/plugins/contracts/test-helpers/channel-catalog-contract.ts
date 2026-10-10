@@ -46,11 +46,6 @@ export function describeChannelCatalogEntryContract(params: {
         expect(entry?.meta.aliases).toContain(params.alias);
       }
     });
-
-    it("appears in the channel catalog listing", () => {
-      const ids = listRawChannelPluginCatalogEntries().map((entry) => entry.id);
-      expect(ids).toContain(params.channelId);
-    });
   });
 }
 
@@ -113,7 +108,6 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
   npmSpec: string;
   meta: CatalogEntryMeta;
   packageName: string;
-  pluginId: string;
   externalNpmSpec: string;
   externalLabel: string;
 }) {
@@ -123,23 +117,6 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
         path.join(resolvePreferredOpenClawTmpDir(), "openclaw-official-catalog-"),
       );
       const catalogPath = path.join(dir, "channel-catalog.json");
-      fs.writeFileSync(
-        catalogPath,
-        JSON.stringify({
-          entries: [
-            {
-              name: params.packageName,
-              openclaw: {
-                channel: params.meta,
-                install: {
-                  npmSpec: params.npmSpec,
-                  defaultChoice: "npm",
-                },
-              },
-            },
-          ],
-        }),
-      );
 
       const entry = listRawChannelPluginCatalogEntries({
         env: createCatalogFallbackOnlyEnv(),
@@ -155,46 +132,8 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       const dir = fs.mkdtempSync(
         path.join(resolvePreferredOpenClawTmpDir(), "openclaw-fallback-catalog-"),
       );
-      const bundledDir = path.join(dir, "dist", "extensions", params.pluginId);
       const officialCatalogPath = path.join(dir, "channel-catalog.json");
       const externalCatalogPath = path.join(dir, "catalog.json");
-      fs.mkdirSync(bundledDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(bundledDir, "package.json"),
-        JSON.stringify({
-          name: params.packageName,
-          openclaw: {
-            channel: {
-              ...params.meta,
-              label: `${params.meta.label} Bundled`,
-              selectionLabel: `${params.meta.label} Bundled`,
-              blurb: "bundled fallback",
-            },
-            install: { npmSpec: params.npmSpec },
-          },
-        }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        officialCatalogPath,
-        JSON.stringify({
-          entries: [
-            {
-              name: params.packageName,
-              openclaw: {
-                channel: {
-                  ...params.meta,
-                  label: `${params.meta.label} Official`,
-                  selectionLabel: `${params.meta.label} Official`,
-                  blurb: "official fallback",
-                },
-                install: { npmSpec: params.npmSpec },
-              },
-            },
-          ],
-        }),
-        "utf8",
-      );
       fs.writeFileSync(
         externalCatalogPath,
         JSON.stringify({

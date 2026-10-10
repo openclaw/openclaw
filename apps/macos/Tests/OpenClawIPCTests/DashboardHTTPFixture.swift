@@ -1,11 +1,22 @@
 import Foundation
 import Network
 import Security
+import Testing
 
 /// A test owns the listener until `stop()`, after closing its dashboard windows.
 @MainActor
 final class DashboardHTTPFixture {
     static let html = "<!doctype html><html><head><title>Dashboard fixture</title></head><body>Ready</body></html>"
+
+    struct RawResponse: Sendable {
+        let data: Data
+        let keepConnectionOpen: Bool
+
+        init(data: Data, keepConnectionOpen: Bool = false) {
+            self.data = data
+            self.keepConnectionOpen = keepConnectionOpen
+        }
+    }
 
     private let server: DashboardHTTPFixtureServer
     nonisolated let port: UInt16
@@ -22,7 +33,9 @@ final class DashboardHTTPFixture {
         contentSecurityPolicy: String = "default-src 'none'",
         beforeResponse: (@MainActor () async -> Void)? = nil,
         tlsIdentity: sec_identity_t? = nil,
-        requestHandler: (@MainActor (String) -> String?)? = nil) async throws -> DashboardHTTPFixture
+        requestHandler: (@MainActor (String) -> String?)? = nil,
+        rawResponseHandler: (@MainActor (String) -> RawResponse?)? = nil,
+        onPostResponseData: (@Sendable (Data) -> Void)? = nil) async throws -> DashboardHTTPFixture
     {
         let parameters: NWParameters
         if let tlsIdentity {
@@ -34,38 +47,45 @@ final class DashboardHTTPFixture {
         }
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
+        let responseHandler: (@MainActor (String) -> RawResponse?)? = if let rawResponseHandler {
+            rawResponseHandler
+        } else if let requestHandler {
+            { request in
+                requestHandler(request).map { RawResponse(data: Data($0.utf8)) }
+            }
+        } else {
+            nil
+        }
         let server = DashboardHTTPFixtureServer(
             listener: listener,
             html: html,
             contentSecurityPolicy: contentSecurityPolicy,
             beforeResponse: beforeResponse,
-            requestHandler: requestHandler)
+            requestHandler: responseHandler,
+            onPostResponseData: onPostResponseData)
         server.start()
         do {
-            let deadline = ContinuousClock.now + .seconds(5)
-            while true {
-                try Task.checkCancellation()
+            try await server.changes.wait("dashboard fixture listener") {
                 switch listener.state {
-                case .ready:
-                    guard let port = listener.port, port.rawValue != 0 else {
-                        throw URLError(.cannotFindHost)
-                    }
-                    return DashboardHTTPFixture(
-                        server: server,
-                        port: port.rawValue,
-                        usesTLS: tlsIdentity != nil)
-                case let .failed(error):
-                    throw error
-                case .cancelled:
-                    throw CancellationError()
-                default:
-                    guard ContinuousClock.now < deadline else {
-                        throw URLError(.timedOut, userInfo: [
-                            NSLocalizedDescriptionKey: "Dashboard HTTP fixture listener timed out: \(listener.state)",
-                        ])
-                    }
-                    try await Task.sleep(for: .milliseconds(10))
+                case .ready, .failed, .cancelled: true
+                default: false
                 }
+            }
+            switch listener.state {
+            case .ready:
+                guard let port = listener.port, port.rawValue != 0 else {
+                    throw URLError(.cannotFindHost)
+                }
+                return DashboardHTTPFixture(
+                    server: server,
+                    port: port.rawValue,
+                    usesTLS: tlsIdentity != nil)
+            case let .failed(error):
+                throw error
+            case .cancelled:
+                throw CancellationError()
+            default:
+                throw URLError(.cannotFindHost)
             }
         } catch {
             server.stop()
@@ -81,6 +101,16 @@ final class DashboardHTTPFixture {
         URL(string: "\(self.usesTLS ? "wss" : "ws")://127.0.0.1:\(self.port)\(path)")!
     }
 
+    var activeConnectionCount: Int {
+        self.server.activeConnectionCount
+    }
+
+    func waitUntilIdle(_ stage: String, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await self.server.changes.wait(stage, sourceLocation: sourceLocation) {
+            self.server.activeConnectionCount == 0
+        }
+    }
+
     func stop() {
         self.server.stop()
     }
@@ -88,11 +118,14 @@ final class DashboardHTTPFixture {
 
 /// All mutable transport state belongs to queue; UI tests may block the main actor.
 private final class DashboardHTTPFixtureServer: @unchecked Sendable {
+    let changes = AsyncTestSignal()
+
     private struct Client {
         let connection: NWConnection
         let timeout: DispatchWorkItem
         var request = Data()
         var responseTask: Task<Void, Never>?
+        var didRespond = false
     }
 
     private let queue = DispatchQueue(label: "DashboardHTTPFixture")
@@ -100,7 +133,8 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
     private let responseHTML: String
     private let contentSecurityPolicy: String
     private let beforeResponse: (@MainActor () async -> Void)?
-    private let requestHandler: (@MainActor (String) -> String?)?
+    private let requestHandler: (@MainActor (String) -> DashboardHTTPFixture.RawResponse?)?
+    private let onPostResponseData: (@Sendable (Data) -> Void)?
     private var clients: [UUID: Client] = [:]
     private var stopped = false
 
@@ -109,13 +143,16 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
         html: String,
         contentSecurityPolicy: String,
         beforeResponse: (@MainActor () async -> Void)?,
-        requestHandler: (@MainActor (String) -> String?)?)
+        requestHandler: (@MainActor (String) -> DashboardHTTPFixture.RawResponse?)?,
+        onPostResponseData: (@Sendable (Data) -> Void)?)
     {
         self.listener = listener
         self.responseHTML = html
         self.contentSecurityPolicy = contentSecurityPolicy
         self.beforeResponse = beforeResponse
         self.requestHandler = requestHandler
+        self.onPostResponseData = onPostResponseData
+        self.listener.stateUpdateHandler = { [changes = self.changes] _ in changes.notify() }
         // Network.framework requires the connection handler before listener.start.
         self.listener.newConnectionHandler = { [weak self] connection in
             guard let self else {
@@ -128,6 +165,10 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
 
     func start() {
         self.listener.start(queue: self.queue)
+    }
+
+    var activeConnectionCount: Int {
+        self.queue.sync { self.clients.count }
     }
 
     func stop() {
@@ -147,7 +188,7 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
             return
         }
         let id = UUID()
-        let timeout = DispatchWorkItem { [weak self] in self?.close(id) }
+        let timeout = DispatchWorkItem { [weak self] in self?.expire(id) }
         self.clients[id] = Client(connection: connection, timeout: timeout)
         connection.start(queue: self.queue)
         self.queue.asyncAfter(deadline: .now() + 5, execute: timeout)
@@ -163,6 +204,15 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
             maximumLength: 8192 - client.request.count)
         { [weak self] data, _, complete, error in
             guard let self, var client = self.clients[id] else { return }
+            if client.didRespond {
+                if let data { self.onPostResponseData?(data) }
+                if error != nil || complete {
+                    self.close(id)
+                } else {
+                    self.receive(id)
+                }
+                return
+            }
             if let data { client.request.append(data) }
             self.clients[id] = client
             if client.request.range(of: Data("\r\n\r\n".utf8)) != nil {
@@ -190,7 +240,7 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
         }
     }
 
-    private func respond(_ id: UUID, response: String? = nil) {
+    private func respond(_ id: UUID, response: DashboardHTTPFixture.RawResponse? = nil) {
         guard let client = self.clients[id] else { return }
         let body = Data(self.responseHTML.utf8)
         // Existing callers stay inert; navigation tests explicitly opt into
@@ -203,14 +253,28 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
             "Content-Security-Policy: \(self.contentSecurityPolicy)",
             "Connection: close",
         ].joined(separator: "\r\n") + "\r\n\r\n"
-        let content = response.map { Data($0.utf8) } ?? (Data(headers.utf8) + body)
-        client.connection.send(content: content, completion: .contentProcessed { [weak self] _ in
-            self?.close(id)
+        let content = response?.data ?? (Data(headers.utf8) + body)
+        self.clients[id]?.didRespond = true
+        self.clients[id]?.request = Data()
+        client.connection.send(content: content, completion: .contentProcessed { [weak self] error in
+            if error == nil, response?.keepConnectionOpen == true {
+                self?.receive(id)
+            } else {
+                self?.close(id)
+            }
         })
+    }
+
+    private func expire(_ id: UUID) {
+        guard let client = self.clients[id] else { return }
+        // Complete requests held by a test's response hook belong to that test's lifetime.
+        guard client.responseTask == nil || client.didRespond else { return }
+        self.close(id)
     }
 
     private func close(_ id: UUID) {
         guard let client = self.clients.removeValue(forKey: id) else { return }
+        self.changes.notify()
         client.timeout.cancel()
         client.responseTask?.cancel()
         client.connection.cancel()

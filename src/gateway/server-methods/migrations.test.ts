@@ -15,12 +15,20 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
-  resolvePluginMigrationProviders: vi.fn(() => mocks.providers),
+  withPluginMigrationProviders: async (
+    _params: unknown,
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run(mocks.providers),
 }));
 
 vi.mock("../../commands/migrate/apply.js", () => ({
-  runMigrationApply: mocks.runMigrationApply,
+  runMigrationApply: async (
+    params: Parameters<typeof import("../../commands/migrate/apply.js").runMigrationApply>[0],
+  ) => {
+    const result = await mocks.runMigrationApply(params);
+    params.onApplyCompleted?.();
+    return result;
+  },
 }));
 
 import { migrationsHandlers } from "./migrations.js";
@@ -36,10 +44,10 @@ function createConfig() {
   return {
     agents: {
       defaults: { workspace: "/tmp/workspace-main" },
-      list: [
-        { id: "main", default: true },
-        { id: "research", workspace: "/tmp/workspace-research" },
-      ],
+      entries: {
+        main: {},
+        research: { workspace: "/tmp/workspace-research" },
+      },
     },
   } as never;
 }
@@ -508,9 +516,9 @@ describe("memory migration gateway handlers", () => {
   it("rejects apply when the selected agent workspace changed after preview", async () => {
     const planFingerprint = await loadPlanFingerprint();
     const mutableConfig = config as {
-      agents: { list: Array<{ id: string; workspace?: string }> };
+      agents: { entries: Record<string, { workspace?: string }> };
     };
-    const research = mutableConfig.agents.list.find((agent) => agent.id === "research");
+    const research = mutableConfig.agents.entries.research;
     if (!research) {
       throw new Error("expected research agent");
     }

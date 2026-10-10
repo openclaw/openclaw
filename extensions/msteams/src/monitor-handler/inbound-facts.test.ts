@@ -54,7 +54,7 @@ describe("msteams inbound facts", () => {
       }),
     });
 
-    expect(assembleMSTeamsInboundFacts({ entry, mediaMaxBytes: 1024 }).rawBody).toBe(expected);
+    expect(assembleMSTeamsInboundFacts(entry).rawBody).toBe(expected);
   });
 
   it("strips native mentions from card text when HTML has no visible text", async () => {
@@ -90,7 +90,7 @@ describe("msteams inbound facts", () => {
       }),
     });
 
-    const facts = assembleMSTeamsInboundFacts({ entry, mediaMaxBytes: 1024 });
+    const facts = assembleMSTeamsInboundFacts(entry);
 
     expect(facts.rawConversationId).toBe("19:channel@thread.tacv2;messageid=thread-root");
     expect(facts.conversationId).toBe("19:channel@thread.tacv2");

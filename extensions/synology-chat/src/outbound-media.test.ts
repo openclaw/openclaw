@@ -10,6 +10,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
@@ -48,7 +49,8 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 const testStateDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
   });
@@ -143,7 +145,8 @@ function utf32Buffer(value: string, endian: "le" | "be", includeBom = true): Buf
 }
 
 describe("Synology Chat hosted outbound media", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     fs.mkdirSync(testStateDir, { recursive: true });
@@ -552,30 +555,48 @@ describe("Synology Chat hosted outbound media", () => {
     }
   });
 
-  it("keeps serving limits when a fresh runtime reopens persisted capabilities", async () => {
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
-    installRuntime();
-    const requestUrl = internalCapabilityUrl(prepared.url);
-    const stalled = Array.from({ length: 5 }, () => makeRes({ finishOnEnd: false }));
-
-    for (const response of stalled) {
+  it("does not release a new runtime's serving slot when an old response finishes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const previous = makeRes({ finishOnEnd: false });
+    const current = Array.from({ length: 4 }, () => makeRes({ finishOnEnd: false }));
+    try {
+      const account = createAccount();
+      const prepared = await prepareSynologyHostedMedia({
+        account,
+        mediaUrl: "https://files.example.com/report.pdf",
+      });
+      const requestUrl = internalCapabilityUrl(prepared.url);
       await tryHandleSynologyHostedMediaRequest(
         makeReq("GET", "", { url: requestUrl }),
-        response,
+        previous,
         account,
       );
-    }
+      expect(previous.statusCode).toBe(200);
+      installRuntime();
+      for (const response of current) {
+        await tryHandleSynologyHostedMediaRequest(
+          makeReq("GET", "", { url: requestUrl }),
+          response,
+          account,
+        );
+        expect(response.statusCode).toBe(200);
+      }
+      previous.emit("finish");
 
-    expect(stalled.slice(0, 4).map((response) => response.statusCode)).toEqual([
-      200, 200, 200, 200,
-    ]);
-    expect(stalled[4]?.statusCode).toBe(503);
-    for (const response of stalled.slice(0, 4)) {
-      response.emit("close");
+      const blocked = makeRes();
+      await tryHandleSynologyHostedMediaRequest(
+        makeReq("GET", "", { url: requestUrl }),
+        blocked,
+        account,
+      );
+      expect(blocked.statusCode).toBe(503);
+    } finally {
+      previous.emit("close");
+      for (const response of current) {
+        response.emit("close");
+      }
+      vi.useRealTimers();
     }
   });
 

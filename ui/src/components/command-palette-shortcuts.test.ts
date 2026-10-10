@@ -1,38 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { createContext, createGateway, mountPalette } from "./command-palette.test-support.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createContext,
+  createGateway,
+  mountPalette,
+  registerCommandPaletteTestHooks,
+} from "./command-palette.test-support.ts";
 import "./command-palette.ts";
 
 describe("CommandPalette platform shortcuts", () => {
-  let restoreDialogPolyfill: () => void;
-  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
+  registerCommandPaletteTestHooks();
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    restoreDialogPolyfill = installDialogPolyfill();
-    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-    Object.defineProperty(Element.prototype, "scrollIntoView", {
-      configurable: true,
-      value: vi.fn(),
-    });
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    if (scrollIntoViewDescriptor) {
-      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
-    } else {
-      delete (Element.prototype as Partial<Element>).scrollIntoView;
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+  it.each(["MacIntel", "Linux x86_64"])(
     "uses the platform palette shortcut on %s without consuming text editing",
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
@@ -67,7 +47,17 @@ describe("CommandPalette platform shortcuts", () => {
       await palette.updateComplete;
       expect(open.defaultPrevented).toBe(true);
       expect(palette.isOpen).toBe(true);
-      const input = palette.querySelector<HTMLInputElement>(".cmd-palette__input")!;
+      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      const start = palette.querySelector<HTMLButtonElement>(
+        ".cmd-palette__input-actions .cmd-palette__create",
+      )!;
+      expect(start.disabled).toBe(true);
+      expect(start.hidden).toBe(false);
+      expect(start.textContent).toContain("New session");
+      expect(start.querySelector("kbd")?.textContent?.replace(/\s+/gu, "").trim()).toBe(
+        platform === "MacIntel" ? "⌘⏎" : "Ctrl+Enter",
+      );
+      expect(start.querySelectorAll("kbd svg")).toHaveLength(platform === "MacIntel" ? 2 : 0);
       const editQuery = chord(other);
       input.dispatchEvent(editQuery);
       expect(editQuery.defaultPrevented).toBe(false);

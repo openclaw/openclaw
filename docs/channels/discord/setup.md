@@ -202,7 +202,7 @@ channel. Discord omits user-authored content from other guild messages in this m
 <Note>
 Token resolution is account-aware. Config token values win over the env fallback, and `DISCORD_BOT_TOKEN` is only used for the default account.
 If two enabled Discord accounts resolve to the same bot token, OpenClaw starts only one gateway monitor for that token: a config-sourced token wins over the env fallback; otherwise the first enabled account wins and the duplicate account is reported disabled with reason `duplicate bot token`.
-For advanced outbound calls (message tool/channel actions), an explicit per-call `token` is used for that call. This applies to send and read/probe-style actions (read/search/fetch/thread/pins/permissions). Account policy/retry settings still come from the selected account in the active runtime snapshot.
+For advanced outbound calls (message tool/channel actions), an explicit per-call `token` is used for that call. This applies to send and read/check-style actions (read/search/fetch/thread/pins/permissions). Account policy/retry settings still come from the selected account in the active runtime snapshot.
 </Note>
 
 ## Recommended: Set up a guild workspace
@@ -243,7 +243,7 @@ Once DMs work, you can turn your server into a full workspace where each channel
   <Step title="Allow responses without @mention">
     By default, the agent only responds in guild channels when @mentioned. On a private server you probably want it to respond to every message.
 
-    In guild channels, normal replies post automatically by default. For shared always-on rooms, opt into `messages.groupChat.visibleReplies: "message_tool"` so the agent can lurk and only post when it decides a channel reply is useful. This works best with latest-generation, tool-reliable models such as GPT-5.6 Sol. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
+    In guild channels, normal replies post automatically by default. For shared always-on rooms, opt into `messages.groupChat.visibleReplies: "message_tool"` so the agent can lurk and only post when it decides a channel reply is useful. This works best with latest-generation, tool-reliable models such as GPT-6 Astra. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
 
     If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or opted into message-tool visible replies.
 

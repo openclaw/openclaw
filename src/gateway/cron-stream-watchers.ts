@@ -1,4 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { assertCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
@@ -46,10 +48,9 @@ export function resolveStreamStopReason(input: {
 
 /** Supervise line-producing cron sources through one serialized owner per job. */
 export function createCronStreamWatchers(
-  params: Omit<CronStreamOwnerParams, "minIntervalMs" | "nowMs"> & {
+  params: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
     /** Test seams; production uses the built-in cadence and retry schedules. */
     minIntervalMs?: number;
-    nowMs?: () => number;
   },
 ): CronStreamWatchers {
   const owners = new Map<string, CronStreamJobOwner>();
@@ -83,16 +84,8 @@ export function createCronStreamWatchers(
   };
 
   const ownerParams: CronStreamOwnerParams = {
-    getProcessSupervisor: params.getProcessSupervisor,
+    ...params,
     minIntervalMs: params.minIntervalMs ?? resolveCronTriggerMinIntervalMs(),
-    retryBackoffMs: params.retryBackoffMs,
-    updateState: params.updateState,
-    retireSource: params.retireSource,
-    ...(params.updateCounters ? { updateCounters: params.updateCounters } : {}),
-    recordFailure: params.recordFailure,
-    fireBatch: params.fireBatch,
-    logger: params.logger,
-    nowMs: params.nowMs ?? Date.now,
   };
 
   const retainCounterSeed = (owner: CronStreamJobOwner): void => {
@@ -196,6 +189,15 @@ export function createCronStreamWatchers(
     if (!isCronStreamJob(job)) {
       await stop(job.id, "schedule-update");
       return;
+    }
+    try {
+      assertCanonicalCronDeliveryMode(job.delivery);
+      resolveCronJobEffectiveAgentId(job, params.getDefaultAgentId?.());
+    } catch (error) {
+      if (owners.has(job.id)) {
+        await stop(job.id, "disabled", job);
+      }
+      throw error;
     }
     const owner = await getOrCreateOwner(job, isCurrent);
     if (!owner || !isCurrent()) {

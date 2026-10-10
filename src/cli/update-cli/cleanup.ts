@@ -1,5 +1,5 @@
 /** Local recovery retirement. This handler never invokes update or Doctor repair. */
-import { confirm, isCancel } from "@clack/prompts";
+import { confirm } from "@clack/prompts";
 import {
   inspectSessionSqliteRecovery,
   type RecoveryCleanupReport,
@@ -18,6 +18,16 @@ function renderCleanup(report: RecoveryCleanupReport): void {
   defaultRuntime.log(
     `Candidates: ${report.totals.candidateBytes} bytes; verification required: ${report.totals.verificationRequiredBytes}; protected: ${report.totals.protectedBytes}; blocked: ${report.totals.blockedBytes}.`,
   );
+  const captures = report.artifacts.filter((item) => item.kind === "update-capture");
+  if (captures.length > 0) {
+    const sum = (outcome?: string) =>
+      captures
+        .filter((item) => outcome === undefined || item.outcome === outcome)
+        .reduce((bytes, item) => bytes + item.bytes, 0);
+    defaultRuntime.log(
+      `Update captures: ${captures.length} (${sum()} bytes); candidates: ${sum("candidate")} bytes; protected: ${sum("protected")} bytes.`,
+    );
+  }
   defaultRuntime.log(
     "Retiring originals permanently loses rollback, including pre-repair branches and metadata. Logical bytes are not a promise of physical space reclaimed.",
   );
@@ -38,8 +48,10 @@ export async function updateCleanupCommand(options: {
 }): Promise<void> {
   let report: RecoveryCleanupReport | undefined;
   try {
-    const readConfig = () => readSourceConfigBestEffort();
-    report = inspectSessionSqliteRecovery({ cfg: await readConfig(), env: process.env });
+    report = inspectSessionSqliteRecovery({
+      cfg: await readSourceConfigBestEffort(),
+      env: process.env,
+    });
     if (!options.dryRun) {
       if (report.artifacts.length === 0 && !options.yes) {
         report.status = "complete";
@@ -49,7 +61,7 @@ export async function updateCleanupCommand(options: {
         report = await retireSessionSqliteRecovery({
           env: process.env,
           preview: report,
-          readConfig,
+          readConfig: readSourceConfigBestEffort,
           confirm: async (verified) => {
             if (options.yes || verified.artifacts.length === 0) {
               return true;
@@ -60,7 +72,7 @@ export async function updateCleanupCommand(options: {
               initialValue: false,
               output: process.stderr,
             });
-            return !isCancel(answer) && answer;
+            return answer === true;
           },
         });
       }

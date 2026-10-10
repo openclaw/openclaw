@@ -1,6 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+
+const forkableClaudeCliBackend = {
+  id: "claude-cli",
+  pluginId: "anthropic",
+  modelProvider: "anthropic",
+  config: { command: "claude", forkArg: "--fork-session", resumeAtArg: "--resume-session-at" },
+  bundleMcp: false,
+  ownsNativeCompaction: false,
+} satisfies ReturnType<
+  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
+
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
+});
 
 describe("buildForkedGatewaySessionEntry", () => {
   it("preserves adopted node ancestry and links the replaced generation", () => {
@@ -15,7 +31,10 @@ describe("buildForkedGatewaySessionEntry", () => {
     const forked = buildForkedGatewaySessionEntry(
       previous,
       { sessionId: "next-generation", sessionFile: "/tmp/next-generation.jsonl" },
-      { sessionKey: "agent:main:new-parent", sessionId: "new-parent-generation" },
+      {
+        sessionKey: "agent:main:new-parent",
+        entry: { sessionId: "new-parent-generation", updatedAt: 1 },
+      },
       previous,
     );
 
@@ -33,7 +52,10 @@ describe("buildForkedGatewaySessionEntry", () => {
     const forked = buildForkedGatewaySessionEntry(
       entry,
       { sessionId: "forked", sessionFile: "/tmp/forked.jsonl" },
-      { sessionKey: "agent:main:parent", sessionId: "parent-generation" },
+      {
+        sessionKey: "agent:main:parent",
+        entry: { sessionId: "parent-generation", updatedAt: 1 },
+      },
     );
 
     expect(forked.forkSource).toEqual({
@@ -42,4 +64,93 @@ describe("buildForkedGatewaySessionEntry", () => {
     });
     expect(forked.previousSessionId).toBeUndefined();
   });
+
+  it("branches the parent native CLI sessions into the child with a one-shot fork resume", () => {
+    const parent: SessionEntry = {
+      sessionId: "parent-generation",
+      updatedAt: 1,
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "native-parent",
+          cwdHash: "cwd",
+          resumeCheckpointId: "parent-checkpoint",
+          forceReuse: true,
+          reseedReceipt: {
+            version: 1,
+            promptHash: "a".repeat(64),
+            localSessionId: "parent-generation",
+            userTurnDisposition: "omitted",
+          },
+        },
+      },
+      cliSessionIds: { "codex-cli": "codex-parent" },
+    };
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [forkableClaudeCliBackend],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+    const forked = buildForkedGatewaySessionEntry(
+      {
+        sessionId: "provisional",
+        updatedAt: 1,
+        cliSessionIds: { "claude-cli": "stale-target" },
+        claudeCliSessionId: "stale-target",
+      },
+      { sessionId: "forked", sessionFile: "/tmp/forked.jsonl" },
+      { sessionKey: "agent:main:parent", entry: parent },
+    );
+
+    expect(forked.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "native-parent",
+        cwdHash: "cwd",
+        resumeCheckpointId: "parent-checkpoint",
+        forkNextResume: true,
+      },
+    });
+    expect(forked.cliSessionIds).toBeUndefined();
+    expect(forked.claudeCliSessionId).toBeUndefined();
+    expect(parent.cliSessionBindings?.["claude-cli"]?.forkNextResume).toBeUndefined();
+  });
+
+  it.each(["checkpoint", "fork support", "checkpoint resume support"])(
+    "starts the child fresh without %s",
+    (missing) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            ...forkableClaudeCliBackend,
+            config: {
+              ...forkableClaudeCliBackend.config,
+              forkArg: missing === "fork support" ? undefined : "--fork-session",
+              resumeAtArg:
+                missing === "checkpoint resume support" ? undefined : "--resume-session-at",
+            },
+          },
+        ],
+        resolvePluginSetupCliBackend: () => undefined,
+      });
+      const forked = buildForkedGatewaySessionEntry(
+        { sessionId: "provisional", updatedAt: 1 },
+        { sessionId: "forked", sessionFile: "/tmp/forked.jsonl" },
+        {
+          sessionKey: "agent:main:parent",
+          entry: {
+            sessionId: "parent-generation",
+            updatedAt: 1,
+            cliSessionBindings: {
+              "claude-cli": {
+                sessionId: "native-parent",
+                cwdHash: "cwd",
+                ...(missing === "checkpoint" ? {} : { resumeCheckpointId: "parent-checkpoint" }),
+              },
+            },
+          },
+        },
+      );
+
+      // Both capabilities and a recorded checkpoint are required for an isolated stable branch.
+      expect(forked.cliSessionBindings).toBeUndefined();
+    },
+  );
 });

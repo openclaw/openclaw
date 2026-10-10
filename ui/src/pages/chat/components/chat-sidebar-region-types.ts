@@ -1,13 +1,12 @@
 import { nothing, type TemplateResult } from "lit";
+import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import type { SidebarSlotId } from "../sidebar-layout.ts";
-
-export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult | typeof nothing>>;
 
 export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
   label: string;
   icon: TemplateResult;
-  shortcut?: string;
+  shortcut?: KeyboardShortcutCombo;
   available: boolean;
   content: TemplateResult | typeof nothing | null;
   loading: TemplateResult;
@@ -20,6 +19,7 @@ export type SidebarPanelDefinition = {
 
 export type SidebarRegionCallbacks = {
   activatePanel: (panelId: string) => void;
+  togglePanelExpanded: (panelId: string) => void;
   closeSlot: (slot: SidebarSlotId) => void;
   openSlot: (slot: SidebarSlotId) => void;
   reorderPanel: (panelId: string, targetPanelId: string, placement: "before" | "after") => void;

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 351659,
-  "reason": "PR #141121 (Control UI warm reload) measures 351659 B startup gzip in Linux CI at 491b8bf880a (+1282 B, 0.37% over the 350377 B baseline; current main measures about 350640 B in the same CI). The boot record, roster-cache lifecycle, and transcript prewarm join the boot path after deferring the roster and snapshot readers. Fixed 358400 B cap and existing growth allowance retained.",
-  "updatedAt": "2026-09-08"
+  "startupJsGzipBytes": 374285,
+  "reason": "Personal backgrounds: Peter authorized fix and landing on 2026-10-10 after the scoped 1,407 B (0.38%) cap proposal. Paired candidate measured 374,285 B before the final deferred-drain repair and 374,327 B afterward; the 42 B difference stays within the existing 512 B growth allowance. Retain the 64 B build-variance allowance and all request, CSS, asset, and route budgets.",
+  "updatedAt": "2026-10-10"
 }

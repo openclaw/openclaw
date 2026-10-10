@@ -22,11 +22,17 @@ export function copyDockerSchedulerHarness(root: string) {
     "docker-e2e-scenarios.mts",
     "local-check-runtime.mts",
     "managed-child-process.mts",
+    "managed-cleanup-handoff.mts",
     "vitest-resource-ownership.mts",
     "official-external-channel-catalog.json",
+    "official-external-provider-catalog.json",
+    "record-shared.mjs",
     "release-version.mjs",
+    "update-compat-inventory.json",
+    "update-first-hop-lanes.mjs",
     "sleep.mjs",
     "upgrade-survivor-policy.mjs",
+    "upgrade-survivor-scenarios.json",
     "windows-taskkill.mjs",
   ]) {
     copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));

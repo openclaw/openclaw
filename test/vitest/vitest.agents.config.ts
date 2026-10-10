@@ -7,6 +7,7 @@ export function createAgentsVitestConfig(env?: Record<string, string | undefined
   return createScopedVitestConfig(owner.include, {
     dir: owner.dir,
     env,
+    exclude: owner.exclude,
     name: owner.name,
   });
 }

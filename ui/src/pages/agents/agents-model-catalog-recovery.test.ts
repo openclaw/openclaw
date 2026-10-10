@@ -2,12 +2,13 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
-  deferred,
+  emitCatalogChanged,
   setPageGateway,
   snapshot,
   type TestAgentsPage,
@@ -23,11 +24,14 @@ describe("agent model catalog recovery", () => {
     render(
       renderAgents(
         createProps({
-          modelCatalogStatus: {
-            error: "model catalog unavailable",
-            hasLoaded: true,
-            stale: true,
-            awaitingGateway: false,
+          overview: {
+            ...createProps().overview,
+            modelCatalogStatus: {
+              error: "model catalog unavailable",
+              hasLoaded: true,
+              stale: true,
+              awaitingGateway: false,
+            },
           },
         }),
       ),
@@ -68,8 +72,8 @@ describe("agent model catalog recovery", () => {
       setPageGateway(page, client);
       page.agentsSelectedId = "main";
       page.loadActivePanelData();
-      await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
-      page.ensureModelCatalog({ refresh: true });
+      await waitForFast(() => expect(page.modelCatalog.models).toEqual(oldModels));
+      emitCatalogChanged(page.context.gateway);
       if (!lateFailure) {
         pending.reject(error);
         await waitForFast(() =>
@@ -80,7 +84,7 @@ describe("agent model catalog recovery", () => {
           }),
         );
       }
-      expect(page.chatModelCatalog).toEqual(oldModels);
+      expect(page.modelCatalog.models).toEqual(oldModels);
 
       for (const suspensionPhase of ["draining", "accepting", "accepting"] as const) {
         page.gateway.applySnapshot(
@@ -92,7 +96,7 @@ describe("agent model catalog recovery", () => {
         expect(request).toHaveBeenCalledTimes(2);
         pending.reject(error);
       }
-      await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
+      await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
       expect(page.chatModelCatalogStatus).toMatchObject({ error: null, awaitingGateway: false });
       expect(request).toHaveBeenCalledTimes(3);
     },

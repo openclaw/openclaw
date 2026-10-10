@@ -4,7 +4,11 @@ import {
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderOptions,
+} from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 
 // Remote embedding provider factory for OpenAI-compatible embeddings APIs.
@@ -36,8 +40,7 @@ export function createRemoteEmbeddingProvider(params: {
 
   const embedMany = async (
     input: string[],
-    signal?: AbortSignal,
-    kind: "query" | "document" = "document",
+    options?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
@@ -47,9 +50,10 @@ export function createRemoteEmbeddingProvider(params: {
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
-      signal,
+      signal: options?.signal,
+      onUsage: options?.onUsage,
       body: {
-        ...params.buildRequestFields?.(kind),
+        ...params.buildRequestFields?.(options?.inputType === "query" ? "query" : "document"),
         model: client.model,
         input,
       },
@@ -61,30 +65,20 @@ export function createRemoteEmbeddingProvider(params: {
     id: params.id,
     model: client.model,
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
-    ...(typeof params.maxInputsPerRequest === "number"
-      ? { maxInputsPerRequest: params.maxInputsPerRequest }
-      : {}),
+    maxInputsPerRequest: params.maxInputsPerRequest,
     embed: async (input, options) => {
       const text = typeof input === "string" ? input : input.text;
-      const [vec] = await embedMany(
-        [text],
-        options?.signal,
-        options?.inputType === "query" ? "query" : "document",
-      );
+      const [vec] = await embedMany([text], options);
       return vec ?? [];
     },
     embedBatch: async (inputs, options) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
       if (options?.inputType === "query" && params.batchQueryInputs !== true) {
         return await Promise.all(
-          texts.map(async (text) => (await embedMany([text], options.signal, "query"))[0] ?? []),
+          texts.map(async (text) => (await embedMany([text], options))[0] ?? []),
         );
       }
-      return await embedMany(
-        texts,
-        options?.signal,
-        options?.inputType === "query" ? "query" : "document",
-      );
+      return await embedMany(texts, options);
     },
   };
 }
@@ -92,12 +86,14 @@ export function createRemoteEmbeddingProvider(params: {
 /** Resolve a normalized remote embedding client from provider config and model options. */
 export async function resolveRemoteEmbeddingClient(params: {
   provider: RemoteEmbeddingProviderId;
+  capability?: string;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
   const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: params.provider,
+    capability: params.capability,
     options: params.options,
     defaultBaseUrl: params.defaultBaseUrl,
   });

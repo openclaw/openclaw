@@ -8,7 +8,7 @@ import type { AgentSession } from "../../sessions/index.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 
 const hoisted = vi.hoisted(() => ({
   installContextEngineLoopHook: vi.fn(),
@@ -134,27 +134,18 @@ describe("installEmbeddedAttemptContextGuards", () => {
     const input = createInput();
     const originalTransform = input.activeSession.agent.transformContext;
     const guards = installEmbeddedAttemptContextGuards(input as never);
-    const guardOptions = hoisted.installToolResultContextGuard.mock.calls[0]?.[0];
-    const request: MidTurnPrecheckRequest = {
-      route: "compact_then_truncate",
-      estimatedPromptTokens: 1_200,
-      promptBudgetBeforeReserve: 1_024,
-      overflowTokens: 176,
-      toolResultReducibleChars: 800,
-      effectiveReserveTokens: 64,
-    };
-    guardOptions.midTurnPrecheck.onMidTurnPrecheck(request);
-
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBe(request);
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
-    expect(guardOptions).toMatchObject({
-      contextWindowTokens: 1_024,
-      midTurnPrecheck: {
-        enabled: true,
-        contextTokenBudget: 1_024,
-        toolResultMaxChars: expect.any(Number),
-      },
+    expect(() =>
+      guards.checkMidTurnPrecheck({
+        context: {
+          messages: [{ role: "user", content: "x".repeat(8_000), timestamp: 1 }],
+        },
+      }),
+    ).toThrow(MidTurnPrecheckSignal);
+    expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
+      route: "compact_only",
+      promptBudgetBeforeReserve: 960,
     });
+    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
 
     const messages: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
@@ -228,6 +219,38 @@ describe("installEmbeddedAttemptContextGuards", () => {
     guards.remove();
   });
 
+  it.each([true, false, undefined])(
+    "passes resolved route opt-in %s to pruning eligibility",
+    (optIn) => {
+      const input = createInput();
+      const model = {
+        ...cacheModel,
+        contextWindow: 2_048,
+        provider: "openai",
+        id: "gpt-4o",
+        api: "openai-responses" as const,
+        baseUrl: "https://proxy.example/v1",
+        compat: { supportsPromptCacheKey: optIn },
+        headers: { "x-test-private": "not-for-provider-hooks" },
+      };
+      input.attempt = {
+        ...input.attempt,
+        provider: "openai",
+        modelId: model.id,
+        model,
+        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
+      };
+      const guards = installEmbeddedAttemptContextGuards(input as never);
+      expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
+        "openai",
+        "gpt-4o",
+        "openai-responses",
+        { baseUrl: model.baseUrl, supportsPromptCacheKey: optIn },
+      );
+      guards.remove();
+    },
+  );
+
   it("does not install cache-TTL pruning for an ineligible provider", async () => {
     const input = createInput();
     input.attempt = {
@@ -243,6 +266,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       "provider-1",
       "model-1",
       "anthropic-messages",
+      { baseUrl: undefined, supportsPromptCacheKey: undefined },
     );
     expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
     const messages: AgentMessage[] = [
@@ -337,9 +361,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
           expect(() => wrapped(cacheModel, { messages: [] })).toThrow("failed before dispatch");
         } else {
           const stream = await wrapped(cacheModel, { messages: [] });
-          for await (const _ of stream) {
-            // Consume the provider completion.
-          }
           if (outcome !== "empty") {
             await stream.result();
           }
@@ -437,6 +458,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
         "anthropic",
         "claude-sonnet-4-6",
         "anthropic-messages",
+        { baseUrl: undefined, supportsPromptCacheKey: undefined },
       );
       expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
         input.sessionManager,

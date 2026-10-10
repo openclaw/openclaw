@@ -4,18 +4,19 @@ import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/ses
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 describe("creator namespace upgrades", () => {
   it("qualifies only proven historical seams atomically and keeps a restorable backup", async () => {
@@ -60,6 +61,8 @@ describe("creator namespace upgrades", () => {
       const migrate = () =>
         ensureOpenClawAgentDatabaseSchema(db, { ...options, path: databasePath });
       try {
+        restoreEmptyV21StorageForHistoricalFixture(db);
+        removeCanonicalValidationFromHistoricalAgentFixture(db);
         db.exec(
           `UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdBy', json('{"id":"old-id","label":"Legacy label"}')) WHERE session_key = 'agent:main:legacy'`,
         );
@@ -69,7 +72,7 @@ describe("creator namespace upgrades", () => {
         expect(migrate).toThrow(/maintenance/);
         const execute = db.exec.bind(db);
         const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
-          if (sql === "PRAGMA user_version = 19;") {
+          if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
             throw new Error("injected commit failure");
           }
           return execute(sql);
@@ -91,11 +94,13 @@ describe("creator namespace upgrades", () => {
             .every((row) => row.source === null),
         ).toBe(true);
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => migrate());
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         expect(
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
             ?.schema_version,
-        ).toBe(19);
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
         expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
         expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       } finally {
@@ -148,7 +153,7 @@ describe("creator namespace upgrades", () => {
       initial.db
         .exec(`UPDATE cron_jobs SET job_json = json_remove(job_json, '$.createdActor.source');
         PRAGMA user_version = 13; UPDATE schema_meta SET schema_version = 13;`);
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       const reopened = openOpenClawStateDatabase({ env: state.env });
       expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,

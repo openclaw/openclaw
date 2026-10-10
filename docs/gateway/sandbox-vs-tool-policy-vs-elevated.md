@@ -60,7 +60,7 @@ For a per-agent configuration with several host folders, access modes, and the e
 
 ## Tool policy: which tools exist/are callable
 
-Two layers matter:
+Five layers matter:
 
 - **Tool profile**: `tools.profile` and `agents.entries.*.tools.profile` (base allowlist)
 - **Provider tool profile**: `tools.byProvider[provider].profile` and `agents.entries.*.tools.byProvider[provider].profile`
@@ -96,21 +96,19 @@ Tool policies (global, agent, sandbox) support `group:*` entries that expand to 
 
 Available groups:
 
-| Group              | Tools                                                                                                                                                                                                                                                    |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                                                                                                                          |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                                                                                                                   |
-| `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task` |
-| `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
-| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
-| `group:ui`         | `browser`, `screen`, `terminal`, `canvas`, `progress_card`, `show_widget`                                                                                                                                                                                |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
-| `group:messaging`  | `message`                                                                                                                                                                                                                                                |
-| `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                     |
-| `group:openclaw`   | most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins)                                                                                               |
-| `group:plugins`    | all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
+- `group:runtime`: `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)
+- `group:fs`: `read`, `write`, `edit`, `apply_patch`
+- `group:sessions`: `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task`
+- `group:memory`: `memory_search`, `memory_get`
+- `group:web`: `web_search`, `x_search`, `web_fetch`
+- `group:ui`: `browser`, `screen`, `terminal`, `canvas`, `progress_card`, `show_widget`
+- `group:automation`: `heartbeat_respond`, `cron`, `gateway`
+- `group:messaging`: `message`
+- `group:nodes`: `nodes`, `computer`
+- `group:agents`: `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`
+- `group:media`: `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`, `pdf`
+- `group:openclaw`: most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins)
+- `group:plugins`: all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`
 
 For read-only agents, deny `group:runtime` as well as mutating filesystem tools unless sandbox filesystem policy or a separate host boundary enforces the read-only constraint.
 
@@ -158,3 +156,4 @@ In `"non-main"` mode, group/channel keys are _not_ main. Use the main session ke
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Elevated Mode](/tools/elevated)
+- [OpenShell](/gateway/openshell) — a managed sandbox backend that runs the sandbox layer over SSH

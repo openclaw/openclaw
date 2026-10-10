@@ -7,6 +7,7 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
@@ -14,12 +15,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
-
-type ModelOverrideSelection = {
-  provider: string;
-  model: string;
-  isDefault?: boolean;
-};
 
 function resolvePinnedAuthProfileProvider(params: {
   cfg: OpenClawConfig;
@@ -42,6 +37,8 @@ type SessionAuthProfilePreservationParams = {
   currentProvider: string;
   provider: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  /** Presence records completed preparation, including authoritative credential absence. */
+  recordedProvider?: { provider: string | undefined };
 };
 
 /** Checks whether a pinned session auth profile can authenticate the selected provider. */
@@ -53,7 +50,10 @@ export function shouldPreserveSessionAuthProfileOverride(
   if (!profileOverride || !provider) {
     return false;
   }
-  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
+  const resolvesToTargetProvider = (
+    rawProvider: string | undefined,
+    storedCredential = false,
+  ): boolean => {
     const candidate = normalizeOptionalLowercaseString(rawProvider);
     const lookupParams = {
       config: params.cfg,
@@ -61,24 +61,26 @@ export function shouldPreserveSessionAuthProfileOverride(
     };
     return Boolean(
       candidate &&
-      resolveProviderIdForAuth(candidate, lookupParams) ===
+      resolveProviderIdForAuth(candidate, { ...lookupParams, storedCredential }) ===
         resolveProviderIdForAuth(provider, lookupParams),
     );
   };
-  const recordedProvider = resolvePinnedAuthProfileProvider({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileId: profileOverride,
-  });
+  const recordedProvider = params.recordedProvider
+    ? (params.recordedProvider.provider ?? params.cfg.auth?.profiles?.[profileOverride]?.provider)
+    : resolvePinnedAuthProfileProvider({
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        profileId: profileOverride,
+      });
   if (recordedProvider) {
-    return resolvesToTargetProvider(recordedProvider);
+    return resolvesToTargetProvider(recordedProvider, true);
   }
   const delimiterIndex = profileOverride.indexOf(":");
   // Missing personal IDs carry no provider; admission must report the unavailable account, not replace it.
   if (delimiterIndex < 0 || isUserModelAuthProfileId(profileOverride)) {
     return resolvesToTargetProvider(params.currentProvider);
   }
-  return resolvesToTargetProvider(profileOverride.slice(0, delimiterIndex));
+  return resolvesToTargetProvider(profileOverride.slice(0, delimiterIndex), true);
 }
 
 /** Missing credentials preserve explicit same-provider intent until authentication reports recovery. */
@@ -95,37 +97,27 @@ export function shouldPreserveUnavailableSessionAuthProfileOverride(
 }
 
 /** Applies a user model selection without dropping a compatible pinned auth profile. */
-export function applyModelOverrideWithAuthProfileCompatibility(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  entry: SessionEntry;
-  currentProvider: string;
-  selection: ModelOverrideSelection;
-  profileOverride?: string;
-  profileOverrideSource?: "auto" | "user";
-  selectionSource?: "auto" | "user";
-  explicitDefaultSelection?: boolean;
-  markLiveSwitchPending?: boolean;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): { updated: boolean } {
+export function applyModelOverrideWithAuthProfileCompatibility(
+  params: Omit<SessionAuthProfilePreservationParams, "provider"> &
+    Omit<Parameters<typeof applyModelOverrideToSessionEntry>[0], "preserveAuthProfileOverride">,
+): { updated: boolean } {
   return applyModelOverrideToSessionEntry({
     entry: params.entry,
     selection: params.selection,
-    ...(params.profileOverride ? { profileOverride: params.profileOverride } : {}),
-    ...(params.profileOverrideSource
-      ? { profileOverrideSource: params.profileOverrideSource }
-      : {}),
-    ...(params.selectionSource ? { selectionSource: params.selectionSource } : {}),
-    ...(params.explicitDefaultSelection
-      ? { explicitDefaultSelection: params.explicitDefaultSelection }
-      : {}),
-    ...(params.markLiveSwitchPending !== undefined
-      ? { markLiveSwitchPending: params.markLiveSwitchPending }
-      : {}),
+    profileOverride: params.profileOverride,
+    profileOverrideSource: params.profileOverrideSource || undefined,
+    selectionSource: params.selectionSource || undefined,
+    explicitDefaultSelection: params.explicitDefaultSelection,
+    markLiveSwitchPending: params.markLiveSwitchPending,
     preserveAuthProfileOverride:
       !params.profileOverride &&
       shouldPreserveSessionAuthProfileOverride({
-        cfg: params.cfg,
+        cfg: resolveModelProviderAuthConfig({
+          config: params.cfg,
+          provider: params.selection.provider,
+          modelId: params.selection.model,
+          metadataSnapshot: params.metadataSnapshot,
+        }),
         agentDir: params.agentDir,
         entry: params.entry,
         currentProvider: params.currentProvider,

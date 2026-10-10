@@ -1,17 +1,17 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
-  type createCrabboxVersionResolver,
-  supportsCrabboxWsl2,
-} from "./crabbox-worker-doctor-runtime.js";
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeOptionalString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   type CrabboxMachineShape,
   type CrabboxOperatingSystem,
   CRABBOX_ENROLLABLE_TARGETS,
   CRABBOX_OS_LABELS,
   listCrabboxMachineOptions,
-  nonEmptyString,
   parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
 import { CRABBOX_MACHINE_CATALOG_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -23,9 +23,8 @@ type CrabboxCatalog = {
 type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 
 type CrabboxMachineOptionsResolverDependencies = {
-  resolveBinary: (explicit?: string) => string;
+  resolveBinary: (explicit?: string) => Promise<string>;
   runCommand: CrabboxCommandRunner;
-  resolveVersion: ReturnType<typeof createCrabboxVersionResolver>;
   warn: (message: string) => void;
 };
 
@@ -105,33 +104,19 @@ export function createCrabboxMachineOptionsResolver(
 
   const resolveCatalog = async (profile: WorkerProfile) => {
     const parsed = parseCrabboxProfile(profile);
-    const binary = dependencies.resolveBinary(parsed.binary);
+    const binary = await dependencies.resolveBinary(parsed.binary);
     // Cache successful metadata per binary; different builds may advertise different sizes.
     // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
     if (!shapes) {
       shapes = loadMachineShapes(binary).catch((error: unknown) => {
         machineShapesByBinary.delete(binary);
-        dependencies.warn(
-          `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        dependencies.warn(`Crabbox machine shapes unavailable: ${coerceErrorMessage(error)}`);
         return new Map();
       });
       machineShapesByBinary.set(binary, shapes);
     }
     const catalog = (await shapes).get(parsed.provider);
-    if (catalog?.operatingSystems.includes("windows/wsl2")) {
-      const version = await dependencies.resolveVersion(binary);
-      if (version.status === "indeterminate" || !supportsCrabboxWsl2(version.version)) {
-        return {
-          parsed,
-          catalog: {
-            operatingSystems: catalog.operatingSystems.filter((os) => os !== "windows/wsl2"),
-            machines: catalog.machines.filter((machine) => machine.os !== "windows/wsl2"),
-          },
-        };
-      }
-    }
     return { parsed, catalog };
   };
   return {

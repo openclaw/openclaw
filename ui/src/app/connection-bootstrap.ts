@@ -1,101 +1,125 @@
 /** Coordinates automatic Control UI bootstrap work for one Gateway connection epoch. */
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 
-export type ConnectionBootstrapCoordinator = {
-  reset: () => void;
-  run: (key: string, task: () => Promise<unknown>) => Promise<void>;
-  synchronize: (params: { client: object | null; connected: boolean }) => void;
-};
+export type ConnectionBootstrapCoordinator = ReturnType<
+  typeof createConnectionBootstrapCoordinator
+>;
 
 const MAX_CONNECTION_BOOTSTRAP_CONCURRENCY = 2;
 
 type QueuedBootstrapTask = {
-  generation: number;
-  key: string;
+  promise: Promise<void>;
+  background: boolean;
+  started: boolean;
   resolve: () => void;
   run: () => Promise<unknown>;
 };
 
 /** Owns the queue and revokes pending work synchronously with its connection epoch. */
-export function createConnectionBootstrapCoordinator(): ConnectionBootstrapCoordinator {
+export function createConnectionBootstrapCoordinator() {
   let client: object | null = null;
   let generation = 0;
   let active = 0;
-  const queued: QueuedBootstrapTask[] = [];
-  const tasks = new Map<string, Promise<void>>();
+  let foregroundRoute: string | null | undefined = null;
+  let foregroundPane:
+    | { owner: object; sessionKey: string; client: object | null; ready: boolean }
+    | undefined;
+  const tasks = new Map<string | object, QueuedBootstrapTask>();
 
   const drain = () => {
-    while (active < MAX_CONNECTION_BOOTSTRAP_CONCURRENCY) {
-      const task = queued.shift();
-      if (!task) {
+    // The map owns both ordering and deduplication; route prerequisites can pass held bulk jobs.
+    for (const [key, task] of tasks) {
+      if (!client || active >= MAX_CONNECTION_BOOTSTRAP_CONCURRENCY) {
         return;
       }
-      if (task.generation !== generation) {
-        task.resolve();
+      const foregroundPending =
+        foregroundRoute !== null &&
+        (!foregroundPane?.ready ||
+          foregroundPane.client !== client ||
+          foregroundPane.sessionKey !== foregroundRoute);
+      if (task.started || (foregroundPending && task.background)) {
         continue;
       }
-      if (!client) {
-        queued.unshift(task);
-        return;
-      }
+      task.started = true;
       active++;
+      const taskGeneration = generation;
       const finish = () => {
-        if (task.generation === generation) {
-          tasks.delete(task.key);
+        if (taskGeneration === generation) {
+          tasks.delete(key);
+          active--;
         }
         task.resolve();
-      };
-      void task
-        .run()
-        .then(finish, finish)
-        .finally(() => {
-          active--;
+        if (taskGeneration === generation) {
           drain();
-        });
+        }
+      };
+      try {
+        void task.run().then(finish, finish);
+      } catch {
+        finish();
+      }
     }
   };
 
   const reset = () => {
     generation += 1;
     client = null;
-    queued.splice(0).forEach((task) => task.resolve());
+    active = 0;
+    foregroundPane = undefined;
+    for (const task of tasks.values()) {
+      if (!task.started) {
+        task.resolve();
+      }
+    }
     tasks.clear();
   };
 
   return {
     reset,
-    synchronize(params) {
+    synchronize(this: void, params: { client: object | null; connected: boolean }) {
       const nextClient = params.connected ? params.client : null;
-      if (nextClient === client) {
-        // A connected snapshot can publish before this coordinator's listener
-        // runs. A later disconnected snapshot invalidates that queued work.
-        if (!nextClient && queued.length) {
-          reset();
-        }
-        return;
-      }
-      if (!nextClient) {
-        reset();
-        return;
-      }
-      if (client) {
+      if (!nextClient || (client && client !== nextClient)) {
         reset();
       }
       client = nextClient;
       drain();
     },
-    run(key, task) {
+    /** Undefined is unresolved native navigation; null leaves background work unblocked. */
+    setForegroundRoute(this: void, sessionKey: string | null | undefined) {
+      foregroundRoute = sessionKey;
+      drain();
+    },
+    setForegroundPane(
+      this: void,
+      owner: object,
+      state: { sessionKey: string; client: object | null; ready: boolean } | null,
+    ) {
+      if (state && (foregroundRoute === undefined || state.sessionKey === foregroundRoute)) {
+        foregroundPane = { owner, ...state };
+      } else if (!state && foregroundPane?.owner === owner) {
+        foregroundPane = undefined;
+      }
+      drain();
+    },
+    run(
+      this: void,
+      key: string | object,
+      task: () => Promise<unknown>,
+      options?: { background?: boolean },
+    ) {
       const current = tasks.get(key);
       if (current) {
-        return current;
+        return current.promise;
       }
-      let resolve!: () => void;
-      const scheduled = new Promise<void>((resolveTask) => {
-        resolve = resolveTask;
+      const completion = createDeferredCore();
+      tasks.set(key, {
+        ...completion,
+        run: task,
+        started: false,
+        background: options?.background === true,
       });
-      tasks.set(key, scheduled);
-      queued.push({ generation, key, resolve, run: task });
       drain();
-      return scheduled;
+      return completion.promise;
     },
   };
 }

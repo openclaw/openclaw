@@ -1,5 +1,5 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 const mocks = vi.hoisted(() => ({ callGatewayFromCli: vi.fn() }));
 
@@ -7,12 +7,15 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   callGatewayFromCli: mocks.callGatewayFromCli,
 }));
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as RuntimeEnv["exit"],
-  };
+async function verify() {
+  const runtime = createRuntimeSpies();
+  const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
+  await verifyBuzzAfterSetup({
+    accountId: "default",
+    target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
+    runtime,
+  });
+  return runtime;
 }
 
 describe("verifyBuzzAfterSetup", () => {
@@ -39,14 +42,7 @@ describe("verifyBuzzAfterSetup", () => {
           ],
         },
       });
-    const runtime = createRuntime();
-    const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
-
-    await verifyBuzzAfterSetup({
-      accountId: "default",
-      target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
-      runtime,
-    });
+    await verify();
 
     expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
     expect(mocks.callGatewayFromCli.mock.calls[0]?.[0]).toBe("config.get");
@@ -73,14 +69,7 @@ describe("verifyBuzzAfterSetup", () => {
       .mockResolvedValueOnce({
         channelAccounts: { buzz: [{ accountId: "default" }] },
       });
-    const runtime = createRuntime();
-    const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
-
-    await verifyBuzzAfterSetup({
-      accountId: "default",
-      target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
-      runtime,
-    });
+    const runtime = await verify();
 
     expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith(
@@ -96,14 +85,7 @@ describe("verifyBuzzAfterSetup", () => {
         code: 1006,
       }),
     );
-    const runtime = createRuntime();
-    const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
-
-    await verifyBuzzAfterSetup({
-      accountId: "default",
-      target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
-      runtime,
-    });
+    const runtime = await verify();
 
     expect(runtime.log).toHaveBeenCalledWith(
       "Buzz config was saved. Start OpenClaw to connect: openclaw gateway",
@@ -118,14 +100,7 @@ describe("verifyBuzzAfterSetup", () => {
         code: 1006,
       }),
     );
-    const runtime = createRuntime();
-    const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
-
-    await verifyBuzzAfterSetup({
-      accountId: "default",
-      target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
-      runtime,
-    });
+    const runtime = await verify();
 
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("post-setup verification did not complete"),

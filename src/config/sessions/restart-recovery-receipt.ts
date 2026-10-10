@@ -1,9 +1,17 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  hasActiveRestartRecoverySourceClaim,
+  hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
+  normalizeRestartRecoveryTerminalRunIds,
 } from "./restart-recovery-state.js";
-import { loadSessionEntry, updateSessionEntry } from "./session-accessor.js";
+import { updateSessionEntry } from "./session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionBinding,
+} from "./session-incognito-binding.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { SessionEntry } from "./types.js";
 
 export type RestartRecoveryTerminalDeliveryScope = {
@@ -14,10 +22,19 @@ export type RestartRecoveryTerminalDeliveryScope = {
   toolCallId: string;
 };
 
-function hasActiveClaim(entry: SessionEntry, scope: RestartRecoveryTerminalDeliveryScope): boolean {
+type RestartRecoveryTerminalDeliveryDisposition =
+  | "startable"
+  | "already-delivered"
+  | "delivery-ambiguous"
+  | "stale"
+  | "not-applicable";
+
+function hasActiveClaim(
+  entry: SessionEntry,
+  scope: Pick<RestartRecoveryTerminalDeliveryScope, "sessionId" | "sourceTurnId">,
+): boolean {
   return (
-    entry.sessionId === scope.sessionId &&
-    hasActiveRestartRecoverySourceClaim(entry, scope.sourceTurnId)
+    entry.sessionId === scope.sessionId && hasRestartRecoverySourceClaim(entry, scope.sourceTurnId)
   );
 }
 
@@ -32,7 +49,7 @@ function hasExactDeliveryClaim(
 
 function hasClaimlessLiveDeliveryState(
   entry: SessionEntry,
-  scope: RestartRecoveryTerminalDeliveryScope,
+  scope: Pick<RestartRecoveryTerminalDeliveryScope, "sessionId">,
 ): boolean {
   return (
     entry.sessionId === scope.sessionId &&
@@ -43,27 +60,112 @@ function hasClaimlessLiveDeliveryState(
   );
 }
 
-function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry | undefined {
-  return loadSessionEntry({
-    sessionKey: scope.sessionKey,
-    storePath: scope.storePath,
-    readConsistency: "latest",
+/** Terminal sends and steering share the same source-ownership decision. */
+function resolveRestartRecoveryTerminalDeliveryDisposition(
+  entry: SessionEntry | null | undefined,
+  scope: Pick<RestartRecoveryTerminalDeliveryScope, "sessionId" | "sourceTurnId">,
+): RestartRecoveryTerminalDeliveryDisposition {
+  if (entry) {
+    if (
+      entry.sessionId === scope.sessionId &&
+      hasRestartRecoveryTerminalRun(entry, scope.sourceTurnId)
+    ) {
+      return "already-delivered";
+    }
+    if (hasClaimlessLiveDeliveryState(entry, scope)) {
+      return "not-applicable";
+    }
+  }
+  if (!entry || !hasActiveClaim(entry, scope)) {
+    return "stale";
+  }
+  if (entry.restartRecoveryDeliveryReceiptState || entry.restartRecoveryDeliveryToolCallId) {
+    return entry.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+      ? "already-delivered"
+      : "delivery-ambiguous";
+  }
+  return "startable";
+}
+
+/** Keep steering eligibility aligned with terminal-send ownership, using the exact active source. */
+export function resolveRestartRecoverySteeringBlockReason(
+  entry: SessionEntry | null | undefined,
+  sessionId: string,
+  sourceTurnId: string,
+):
+  | "terminal-pending"
+  | "delivered-terminal"
+  | "unresolved-terminal-tool"
+  | "unknown-source-with-terminal-history"
+  | "already-delivered"
+  | "delivery-ambiguous"
+  | "stale-claim"
+  | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  if (entry.restartRecoveryDeliveryReceiptState) {
+    return entry.restartRecoveryDeliveryReceiptState;
+  }
+  if (entry.restartRecoveryDeliveryToolCallId) {
+    return "unresolved-terminal-tool";
+  }
+  const normalizedSourceTurnId = normalizeOptionalString(sourceTurnId) ?? "";
+  const disposition = resolveRestartRecoveryTerminalDeliveryDisposition(entry, {
+    sessionId,
+    sourceTurnId: normalizedSourceTurnId,
   });
+  if (disposition === "not-applicable") {
+    // Without a known active source, any retained tombstone could belong to it.
+    if (
+      normalizedSourceTurnId === "" &&
+      (normalizeRestartRecoveryTerminalRunIds(entry.restartRecoveryTerminalRunIds)?.length ?? 0) > 0
+    ) {
+      return "unknown-source-with-terminal-history";
+    }
+    return undefined;
+  }
+  return disposition === "already-delivered" || disposition === "delivery-ambiguous"
+    ? disposition
+    : disposition === "stale"
+      ? "stale-claim"
+      : undefined;
+}
+
+function captureCurrent(input: RestartRecoveryTerminalDeliveryScope) {
+  const source = captureIncognitoSessionSource(input);
+  const ownerPath = source && ("kind" in source ? source.path : source.actor.path);
+  const scope = {
+    ...input,
+    storePath: ownerPath ?? path.resolve(input.storePath),
+    env: captureSessionTranscriptStorageEnvironment(
+      ownerPath ? { OPENCLAW_STATE_DIR: path.resolve(ownerPath, "../../../..") } : process.env,
+    ),
+  };
+  return {
+    scope,
+    absent: source && "kind" in source,
+    read() {
+      const read = () => readSessionEntryReadOnlyInWorker({ ...scope, readConsistency: "latest" });
+      return source && !("kind" in source) ? withIncognitoSessionBinding(source, read) : read();
+    },
+  };
 }
 
 /** Persists ambiguity before a terminal external send is allowed to start. */
 export async function beginRestartRecoveryTerminalDelivery(
-  scope: RestartRecoveryTerminalDeliveryScope,
+  input: RestartRecoveryTerminalDeliveryScope,
 ): Promise<"started" | "already-delivered" | "delivery-ambiguous" | "stale" | "not-applicable"> {
+  const current = captureCurrent(input);
+  const scope = current.scope;
+  if (current.absent) {
+    return "stale";
+  }
   let started = false;
   const updated = await updateSessionEntry(
-    { sessionKey: scope.sessionKey, storePath: scope.storePath },
+    current.scope,
     (entry) => {
-      if (
-        !hasActiveClaim(entry, scope) ||
-        entry.restartRecoveryDeliveryReceiptState ||
-        entry.restartRecoveryDeliveryToolCallId
-      ) {
+      if (resolveRestartRecoveryTerminalDeliveryDisposition(entry, scope) !== "startable") {
         return null;
       }
       started = true;
@@ -83,37 +185,25 @@ export async function beginRestartRecoveryTerminalDelivery(
   ) {
     return "started";
   }
-  const current = loadCurrent(scope);
-  // A terminal tombstone means the source already finished even though active claim fields are gone.
-  if (
-    current?.sessionId === scope.sessionId &&
-    hasRestartRecoveryTerminalRun(current, scope.sourceTurnId)
-  ) {
-    return "already-delivered";
+  const disposition = resolveRestartRecoveryTerminalDeliveryDisposition(
+    await current.read(),
+    scope,
+  );
+  if (disposition === "startable") {
+    throw new Error("failed to persist terminal delivery intent");
   }
-  // The gateway already verified a short-lived current-turn capability. Room
-  // events intentionally persist no running recovery state, so only durable
-  // claim/receipt/tombstone fields can decide whether this live send is stale.
-  if (current && hasClaimlessLiveDeliveryState(current, scope)) {
-    return "not-applicable";
-  }
-  if (!current || !hasActiveClaim(current, scope)) {
-    return "stale";
-  }
-  if (current.restartRecoveryDeliveryReceiptState || current.restartRecoveryDeliveryToolCallId) {
-    return current.restartRecoveryDeliveryReceiptState === "delivered-terminal"
-      ? "already-delivered"
-      : "delivery-ambiguous";
-  }
-  throw new Error("failed to persist terminal delivery intent");
+  return disposition;
 }
 
-/** Resolves a pre-send ambiguity only after the provider confirms delivery. */
-export async function completeRestartRecoveryTerminalDelivery(
-  scope: RestartRecoveryTerminalDeliveryScope,
-): Promise<"recorded" | "stale"> {
-  const updated = await updateSessionEntry(
-    { sessionKey: scope.sessionKey, storePath: scope.storePath },
+function updatePendingTerminalDelivery(
+  scope: RestartRecoveryTerminalDeliveryScope & { env?: NodeJS.ProcessEnv },
+  patch: Pick<
+    SessionEntry,
+    "restartRecoveryDeliveryReceiptState" | "restartRecoveryDeliveryToolCallId"
+  >,
+) {
+  return updateSessionEntry(
+    scope,
     (entry) => {
       if (
         !hasExactDeliveryClaim(entry, scope) ||
@@ -121,13 +211,24 @@ export async function completeRestartRecoveryTerminalDelivery(
       ) {
         return null;
       }
-      return {
-        restartRecoveryDeliveryReceiptState: "delivered-terminal",
-        updatedAt: Date.now(),
-      };
+      return { ...patch, updatedAt: Date.now() };
     },
     { skipMaintenance: true, takeCacheOwnership: true },
   );
+}
+
+/** Resolves a pre-send ambiguity only after the provider confirms delivery. */
+export async function completeRestartRecoveryTerminalDelivery(
+  input: RestartRecoveryTerminalDeliveryScope,
+): Promise<"recorded" | "stale"> {
+  const source = captureCurrent(input);
+  const scope = source.scope;
+  if (source.absent) {
+    return "stale";
+  }
+  const updated = await updatePendingTerminalDelivery(source.scope, {
+    restartRecoveryDeliveryReceiptState: "delivered-terminal",
+  });
   if (
     updated !== null &&
     hasExactDeliveryClaim(updated, scope) &&
@@ -135,7 +236,7 @@ export async function completeRestartRecoveryTerminalDelivery(
   ) {
     return "recorded";
   }
-  const current = loadCurrent(scope);
+  const current = await source.read();
   if (!current || !hasActiveClaim(current, scope)) {
     return "stale";
   }
@@ -150,25 +251,17 @@ export async function completeRestartRecoveryTerminalDelivery(
 
 /** Clears the pre-send intent only when the provider proves no delivery occurred. */
 export async function cancelRestartRecoveryTerminalDelivery(
-  scope: RestartRecoveryTerminalDeliveryScope,
+  input: RestartRecoveryTerminalDeliveryScope,
 ): Promise<"cleared" | "stale"> {
-  const updated = await updateSessionEntry(
-    { sessionKey: scope.sessionKey, storePath: scope.storePath },
-    (entry) => {
-      if (
-        !hasExactDeliveryClaim(entry, scope) ||
-        entry.restartRecoveryDeliveryReceiptState !== "terminal-pending"
-      ) {
-        return null;
-      }
-      return {
-        restartRecoveryDeliveryReceiptState: undefined,
-        restartRecoveryDeliveryToolCallId: undefined,
-        updatedAt: Date.now(),
-      };
-    },
-    { skipMaintenance: true, takeCacheOwnership: true },
-  );
+  const source = captureCurrent(input);
+  const scope = source.scope;
+  if (source.absent) {
+    return "stale";
+  }
+  const updated = await updatePendingTerminalDelivery(source.scope, {
+    restartRecoveryDeliveryReceiptState: undefined,
+    restartRecoveryDeliveryToolCallId: undefined,
+  });
   if (
     updated !== null &&
     hasActiveClaim(updated, scope) &&
@@ -177,7 +270,7 @@ export async function cancelRestartRecoveryTerminalDelivery(
   ) {
     return "cleared";
   }
-  const current = loadCurrent(scope);
+  const current = await source.read();
   if (!current || !hasActiveClaim(current, scope)) {
     return "stale";
   }

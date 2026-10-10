@@ -6,6 +6,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import {
   SIDEBAR_SESSION_PAGE_SIZE,
+  type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -25,13 +26,15 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
+  sections?: SidebarSessionSection<SidebarRecentSession>[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
   selfOwnerId?: string | null;
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
-  hideEmptyGroups: boolean;
+  emptyGroupsMode: SidebarEmptyGroupsMode;
+  ownerFiltered: boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -54,7 +57,6 @@ export type SidebarVisibleSections = {
     collapsedVisibleRowCount: number;
     renderHeader: boolean;
   })[];
-  expandedRows: SidebarRecentSession[];
   visibleRows: SidebarRecentSession[];
 };
 
@@ -69,8 +71,16 @@ function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
 }
 
 export class SidebarSessionProjection {
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  constructor(
+    private readonly now: () => number = () => Date.now(),
+    private readonly host?: { readonly isConnected: boolean; requestUpdate(): void },
+  ) {}
 
+  revision = 0;
+  createdOrderRevision = 0;
+  private observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
+  private subtitleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private subtitleDeadline = Infinity;
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
@@ -90,12 +100,24 @@ export class SidebarSessionProjection {
   }
 
   observeRows(results: readonly { sessions: readonly { key: string }[] }[]): void {
+    if (
+      results.length === this.observedResults.length &&
+      results.every((value, index) => Object.is(value, this.observedResults[index]))
+    ) {
+      return;
+    }
+    this.observedResults = results;
+    const previousOrder = this.nextCreatedOrder;
     for (const result of results) {
       for (const { key } of result.sessions) {
         if (key && !this.observedOrder.has(key)) {
           this.observedOrder.set(key, this.nextCreatedOrder++);
         }
       }
+    }
+    if (previousOrder !== this.nextCreatedOrder) {
+      this.createdOrderRevision += 1;
+      this.revision += 1;
     }
     // Paging gaps must retain their tie-break index; evict absent keys only
     // when the sidebar-lifetime registry actually exceeds its memory bound.
@@ -128,10 +150,15 @@ export class SidebarSessionProjection {
     }
     this.observedOrder.set(key, 0);
     this.nextCreatedOrder = Math.max(this.nextCreatedOrder, 1);
+    this.createdOrderRevision += 1;
+    this.revision += 1;
     return true;
   }
 
   project(input: SidebarProjectionInput): SidebarVisibleSections {
+    // Record the state published by this pass, including sticky membership and subtitles.
+    this.revision += 1;
+    this.clearSubtitleTimer();
     const previous = this.previousInput;
     const scopeChanged =
       previous !== null &&
@@ -192,17 +219,23 @@ export class SidebarSessionProjection {
     }
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
-    const sections = groupSidebarSessionRows(input.rows, {
-      grouping,
-      knownGroups,
-      selfOwnerId,
-      sectionOrder,
-      catalogIds,
-    }).filter(
-      (section) =>
-        section.id !== "pinned" &&
-        !(input.hideEmptyGroups && section.category && section.rows.length === 0),
-    );
+    const hideEmptyGroups =
+      input.emptyGroupsMode === "always" ||
+      (input.emptyGroupsMode === "filtering" && input.ownerFiltered);
+    const sections =
+      input.sections ??
+      groupSidebarSessionRows(input.rows, {
+        grouping,
+        knownGroups,
+        selfOwnerId,
+        sectionOrder,
+        catalogIds,
+      }).filter(
+        (section) =>
+          section.id !== "pinned" &&
+          // Catalog rows have their own projection; these sections are placeholders.
+          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
+      );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {
       if (!sectionIds.has(sectionId)) {
@@ -221,15 +254,17 @@ export class SidebarSessionProjection {
         (section) =>
           section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
       );
-    const expandedRows: SidebarRecentSession[] = [];
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
       // totalRowCount is the pre-pagination size: headers and empty-zone
       // checks must not mistake a page-filtered section for an empty one.
       const totalRowCount = section.rows.length;
-      const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
-      const collapsed = renderHeader && input.collapsedSections.has(section.id);
+      const renderHeader =
+        !section.id.startsWith("agent:") && (section.id !== "ungrouped" || ungroupedHasPeerHeader);
+      const collapsed =
+        (renderHeader || section.id.startsWith("agent:")) &&
+        input.collapsedSections.has(section.id);
       const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.pinned),
@@ -241,7 +276,6 @@ export class SidebarSessionProjection {
       );
       let visibleRowCount = 0;
       if (!collapsed) {
-        expandedRows.push(...section.rows);
         let optionalSlots = Math.max(0, visibleLimit - requiredRowCount);
         let retainedSlots = visibleLimit;
         const sticky = this.stickySections.get(section.id);
@@ -275,10 +309,11 @@ export class SidebarSessionProjection {
         }),
       );
     }
-    return { sections: limitedSections, expandedRows, visibleRows };
+    return { sections: limitedSections, visibleRows };
   }
 
   resetMembership(sectionId?: string): void {
+    this.revision += 1;
     if (sectionId === undefined) {
       this.stickySections.clear();
     } else {
@@ -296,6 +331,7 @@ export class SidebarSessionProjection {
   }
 
   toggleChildren(session: SidebarRecentSession): { expanded: boolean } {
+    this.revision += 1;
     if (this.isChildrenExpanded(session.key)) {
       // The explicit closed mode prevents a still-active descendant from
       // immediately undoing the user's collapse on the next update pass.
@@ -309,16 +345,49 @@ export class SidebarSessionProjection {
   showMoreChildren(key: string): void {
     if (this.isChildrenExpanded(key)) {
       this.childModes.set(key, "expanded-fully");
+      this.revision += 1;
     }
   }
 
-  resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
-    if (!params.session.hasActiveRun || !params.showPreview) {
-      return resolveSidebarSessionSubtitle(params);
+  dispose(): void {
+    this.clearSubtitleTimer();
+    this.revision += 1;
+  }
+
+  private clearSubtitleTimer(): void {
+    if (this.subtitleTimer !== null) {
+      globalThis.clearTimeout(this.subtitleTimer);
     }
+    this.subtitleTimer = null;
+    this.subtitleDeadline = Infinity;
+  }
+
+  private scheduleSubtitleUpdate(deadline: number): void {
+    if (!this.host?.isConnected || this.subtitleDeadline <= deadline) {
+      return;
+    }
+    this.clearSubtitleTimer();
+    this.subtitleDeadline = deadline;
+    this.subtitleTimer = globalThis.setTimeout(
+      () => {
+        this.subtitleTimer = null;
+        this.subtitleDeadline = Infinity;
+        this.revision += 1;
+        this.host?.requestUpdate();
+      },
+      Math.max(0, deadline - this.now()),
+    );
+  }
+
+  resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
     // While a run is live the held value is the display: observeSubtitle
     // refreshed it this update pass, applying the minimum-display floor.
-    const held = this.heldSubtitles.get(params.session.key);
+    // Tool identity and its prepared progress must advance together; the
+    // ambient narration hold must not pair a new glyph with an old tool label.
+    const held =
+      params.session.hasActiveRun && params.showPreview && !params.toolActivity
+        ? this.heldSubtitles.get(params.session.key)
+        : undefined;
     if (!held) {
       return resolveSidebarSessionSubtitle(params);
     }
@@ -341,7 +410,6 @@ export class SidebarSessionProjection {
     const params = {
       session,
       hasDisplay: false,
-      displaySubtitle: undefined,
       sidebarLiveActivity: environment.sidebarLiveActivity,
       showPreview: environment.showPreview,
       narrationLine: environment.narrationLines.get(session.key),
@@ -349,7 +417,7 @@ export class SidebarSessionProjection {
     } satisfies SidebarSubtitleParams;
     const value = resolveSidebarSessionSubtitle(params);
     if (!value.subtitle) {
-      if (session.attention.kind === "question") {
+      if (session.attention.kind === "question" || session.attention.kind === "error") {
         this.heldSubtitles.delete(session.key);
       }
       // Transient gaps between event updates keep the last shown line; the
@@ -364,6 +432,7 @@ export class SidebarSessionProjection {
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
       !isOperatorCriticalSubtitle(session)
     ) {
+      this.scheduleSubtitleUpdate(held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS);
       return;
     }
     const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });

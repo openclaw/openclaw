@@ -77,6 +77,11 @@ Each `configSignals` entry supports:
 | `requiredAny`    | No       | `string[]` | Dot paths inside the effective config where at least one must have a configured value.                                                                                                    |
 | `mode`           | No       | `object`   | Optional string mode guard inside the effective config. Use this when config-only availability applies only to one mode.                                                                  |
 
+Config signals inspect canonical SecretRefs for provider and environment availability.
+Other nonempty objects are configured metadata; an object containing only `source`
+and `id` is not interpreted as a SecretRef. Doctor repairs legacy refs on declared
+credential paths without rewriting opaque plugin data.
+
 Each `mode` guard supports:
 
 | Field        | Required | Type       | What it means                                                                      |
@@ -186,8 +191,8 @@ Use `providerRequest` for cheap request-compatibility metadata that generic requ
 
 Provider fields:
 
-| Field                 | Type         | What it means                                                                          |
-| --------------------- | ------------ | -------------------------------------------------------------------------------------- |
-| `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics. |
-| `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.              |
-| `openAICompletions`   | `object`     | OpenAI-compatible completions request flags, currently `supportsStreamingUsage`.       |
+| Field                 | Type         | What it means                                                                           |
+| --------------------- | ------------ | --------------------------------------------------------------------------------------- |
+| `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics.  |
+| `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.               |
+| `openAICompletions`   | `object`     | OpenAI-compatible completions request flags. `supportsStreamingUsage` is the only flag. |

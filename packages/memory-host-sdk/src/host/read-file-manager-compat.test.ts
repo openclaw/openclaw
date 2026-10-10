@@ -302,7 +302,7 @@ describe("MemoryIndexManager.readFile", () => {
         extraPaths: [],
         relPath: "NOTES.md",
       }),
-    ).rejects.toThrow("path required");
+    ).rejects.toThrow("path is not an allowed Markdown memory file");
   });
 
   it("allows additional memory paths and blocks symlinks", async () => {
@@ -353,7 +353,7 @@ describe("MemoryIndexManager.readFile", () => {
           extraPaths: [extraDir],
           relPath: "extra/linked.md",
         }),
-      ).rejects.toThrow("path required");
+      ).rejects.toThrow("path is not an allowed Markdown memory file");
     }
   });
 });

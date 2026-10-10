@@ -7,7 +7,8 @@ import postcss from "postcss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import { controlUiHoverGuardPlugin } from "../../config/control-ui-hover-guard.ts";
-import { dockPanelStyles } from "../components/dock-layout-controller.ts";
+import { dockPanelStyles } from "../components/dock-panel-styles.ts";
+import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -86,8 +87,11 @@ function readUiCss(): string {
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/skill-workshop.css",
+    "ui/src/styles/rail-header.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
     "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
     "ui/src/styles/chat/composer.css",
     "ui/src/styles/chat/split-view.css",
     "ui/src/styles/chat/text.css",
@@ -252,12 +256,18 @@ describeCursorPolicy("Control UI cursor policy", () => {
     { theme: "light", hasTouch: true },
     { theme: "dark", hasTouch: true },
   ])("underlines content, not controls ($theme, touch=$hasTouch)", async ({ theme, hasTouch }) => {
-    const page = await tabBrowser.newPage({ hasTouch });
-    try {
+    await withBrowserPage(tabBrowser.newPage({ hasTouch }), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       await page.evaluate((mode) => {
         document.documentElement.dataset.themeMode = mode;
       }, theme);
+      expect(
+        await page.locator("#new-tab-link").evaluate((element) => getComputedStyle(element).color),
+      ).toBe(
+        await page
+          .locator("#new-tab-button")
+          .evaluate((element) => getComputedStyle(element).color),
+      );
       const people = await page.locator(".sidebar-online__person").all();
       expect(people).toHaveLength(2);
       for (const person of people) {
@@ -283,6 +293,7 @@ describeCursorPolicy("Control UI cursor policy", () => {
             ".person-activity-link",
             ".markdown-github-item",
             ".markdown-file-link",
+            ".chat-position-rail__preview-copy a",
           ],
         ],
         [
@@ -292,8 +303,7 @@ describeCursorPolicy("Control UI cursor policy", () => {
             "#docs-link",
             "#chat-content-link",
             "#sidebar-content-link",
-            ".markdown-bare-url",
-            "#preview-github-link",
+            ".markdown-bare-url:not(.chat-position-rail__preview-copy a)",
             ".activity-entry__run-link",
             ".settings-row__value",
             ".memory-page__link",
@@ -315,6 +325,13 @@ describeCursorPolicy("Control UI cursor policy", () => {
         }
       }
       const personLink = page.locator("#person-link");
+      for (const link of await page.locator(".chat-position-rail__preview-copy a").all()) {
+        expect(await link.evaluate((element) => getComputedStyle(element).color)).toBe(
+          await page
+            .locator(".chat-position-rail__preview-copy")
+            .evaluate((element) => getComputedStyle(element).color),
+        );
+      }
       if (!hasTouch) {
         await personLink.hover();
         expect(
@@ -343,27 +360,21 @@ describeCursorPolicy("Control UI cursor policy", () => {
       expect(
         await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
       ).toBe("none");
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
   it("uses semantic cursors in a browser tab", async () => {
-    const page = await tabBrowser.newPage();
-    try {
+    await withBrowserPage(tabBrowser.newPage(), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       const probe = await probeWindow(page);
 
       expect(probe.displayMode).toBe("browser");
       expect(probe.cursors).toEqual(expectedCursors());
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
   it("uses the same semantic cursors in a native app host", async () => {
-    const page = await tabBrowser.newPage();
-    try {
+    await withBrowserPage(tabBrowser.newPage(), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       // The macOS dashboard is a plain web view, so it reports display-mode
       // browser and marks itself with these classes at document end instead.
@@ -374,9 +385,7 @@ describeCursorPolicy("Control UI cursor policy", () => {
 
       expect(probe.displayMode).toBe("browser");
       expect(probe.cursors).toEqual(expectedCursors());
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
   it("uses the same semantic cursors in an installed window", async () => {

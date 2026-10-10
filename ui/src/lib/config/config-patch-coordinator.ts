@@ -1,7 +1,8 @@
+import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import {
-  adoptConfigPatchAck,
   patchConfig,
   type ConfigPatchBuildResult,
+  type ConfigSubmissionObserver,
 } from "./config-gateway-operations.ts";
 import {
   currentConfigConnectionEpoch,
@@ -11,10 +12,8 @@ import {
 
 export function createConfigPatchCoordinator(options: {
   state: RuntimeConfigState;
-  dispatch: (task: () => Promise<boolean>) => Promise<boolean>;
-  invalidateConfigLoad: () => void;
-  cancelAppliedRefresh: () => void;
-  reconcileAppliedRefresh: () => void;
+  dispatch: (task: (onSubmitted: ConfigSubmissionObserver) => Promise<boolean>) => Promise<boolean>;
+  appliedRefresh: AppliedConfigRefresh;
   reconcileDraft: () => void;
   scheduleAutoSave: () => void;
 }) {
@@ -23,11 +22,11 @@ export function createConfigPatchCoordinator(options: {
   // draft. The write owner clears it when that connection or intent is retired.
   let failedPatch: (() => ConfigPatchBuildResult) | null = null;
   const queue = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
-    options.cancelAppliedRefresh();
+    options.appliedRefresh.cancel();
     return options
-      .dispatch(async () => {
+      .dispatch(async (onSubmitted) => {
         // A drained autosave can start its own refresh while this patch waits.
-        options.cancelAppliedRefresh();
+        options.appliedRefresh.cancel();
         const client = state.client;
         const epoch = currentConfigConnectionEpoch(state);
         try {
@@ -41,10 +40,7 @@ export function createConfigPatchCoordinator(options: {
           if (!client || !state.configSnapshot || resolved.options.canDispatch?.() === false) {
             return false;
           }
-          const patched = await patchConfig(state, resolved.options, (ack, snapshotAtDispatch) => {
-            options.invalidateConfigLoad();
-            adoptConfigPatchAck(state, ack, snapshotAtDispatch);
-          });
+          const patched = await patchConfig(state, resolved.options, onSubmitted);
           if (isCurrentConfigConnection(state, client, epoch)) {
             failedPatch = patched ? null : resolveOptions;
             if (patched) {
@@ -53,7 +49,7 @@ export function createConfigPatchCoordinator(options: {
           }
           return patched;
         } finally {
-          options.reconcileAppliedRefresh();
+          options.appliedRefresh.reconcile();
         }
       })
       .finally(options.scheduleAutoSave);

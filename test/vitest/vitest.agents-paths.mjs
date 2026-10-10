@@ -1,4 +1,7 @@
 // Canonical agent project ownership for focused runs, full suites, and CI.
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+
 const agentsRoot = "src/agents";
 const embeddedRoot = `${agentsRoot}/embedded-agent-runner`;
 const spawnProductionBoundaryFiles = [
@@ -19,23 +22,14 @@ const coreIsolatedFiles = [
   "src/agents/model-catalog-visibility.test.ts",
   "src/agents/model-auth-env.provider-aliases.test.ts",
   "src/agents/model-selection.plugin-runtime.test.ts",
-  "src/agents/models-config.runtime-source-snapshot.test.ts",
   "src/agents/openai-transport-stream.streaming.test.ts",
+  "src/agents/subagents/announce/subagent-announce.test.ts",
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
-  "src/agents/subagents/registry/subagent-registry-restart-recovery-notice.test.ts",
+  "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
-  "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
 ];
-const incompleteTurnFiles = [
-  `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.payload-resolution.test.ts`,
-];
-const overflowCompactionFiles = [
-  `${embeddedRoot}/run.overflow-compaction.test.ts`,
-  `${embeddedRoot}/run.prepared-harness-source-delivery.integration.test.ts`,
-];
+const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.classification.test.ts`];
+const overflowCompactionFiles = [`${embeddedRoot}/run.overflow-compaction.test.ts`];
 
 export const agentVitestProjectOwners = {
   all: {
@@ -45,7 +39,7 @@ export const agentVitestProjectOwners = {
     root: agentsRoot,
     dir: agentsRoot,
     include: [`${agentsRoot}/**/*.test.ts`],
-    exclude: [],
+    exclude: [...databaseWorkerCoreTestFiles, ...cliProcessTestFiles],
   },
   spawnProductionBoundary: {
     kind: "agentsSpawnProductionBoundary",
@@ -72,7 +66,12 @@ export const agentVitestProjectOwners = {
     root: agentsRoot,
     dir: agentsRoot,
     include: [`${agentsRoot}/*.test.ts`],
-    exclude: [...spawnProductionBoundaryFiles, ...coreIsolatedFiles],
+    exclude: [
+      ...spawnProductionBoundaryFiles,
+      ...coreIsolatedFiles,
+      ...databaseWorkerCoreTestFiles,
+      ...cliProcessTestFiles,
+    ],
   },
   embedded: {
     kind: "agentEmbedded",
@@ -81,7 +80,7 @@ export const agentVitestProjectOwners = {
     root: embeddedRoot,
     dir: agentsRoot,
     include: [`${embeddedRoot}/*.test.ts`],
-    exclude: [...incompleteTurnFiles, ...overflowCompactionFiles],
+    exclude: [...incompleteTurnFiles, ...overflowCompactionFiles, ...databaseWorkerCoreTestFiles],
   },
   embeddedIncompleteTurn: {
     kind: "agentEmbeddedIncompleteTurn",
@@ -108,7 +107,7 @@ export const agentVitestProjectOwners = {
     root: `${embeddedRoot}/run`,
     dir: `${embeddedRoot}/run`,
     include: [`${embeddedRoot}/run/**/*.test.ts`],
-    exclude: [],
+    exclude: databaseWorkerCoreTestFiles,
   },
   support: {
     kind: "agentSupport",
@@ -118,6 +117,7 @@ export const agentVitestProjectOwners = {
     dir: agentsRoot,
     include: [`${agentsRoot}/*/**/*.test.ts`],
     exclude: [
+      ...databaseWorkerCoreTestFiles,
       ...spawnProductionBoundaryFiles,
       ...coreIsolatedFiles,
       `${embeddedRoot}/**`,
@@ -131,7 +131,7 @@ export const agentVitestProjectOwners = {
     root: `${agentsRoot}/tools`,
     dir: agentsRoot,
     include: [`${agentsRoot}/tools/**/*.test.ts`],
-    exclude: [],
+    exclude: databaseWorkerCoreTestFiles,
   },
 };
 

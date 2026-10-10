@@ -19,38 +19,43 @@ describe("agent directory filesystem identity", () => {
       expect(
         findDuplicateAgentDirs({
           agents: {
-            list: [
-              { id: "upper", agentDir: upper },
-              { id: "lower", agentDir: lower },
-            ],
+            entries: { upper: { agentDir: upper }, lower: { agentDir: lower } },
           },
         }),
       ).toHaveLength(0);
     });
   });
 
-  it("rejects aliases that resolve to the same directory", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withTestDir({ prefix: "openclaw-agent-dirs-alias-" }, async (root) => {
-      const target = path.join(root, "target");
-      const alias = path.join(root, "alias");
-      await fs.mkdir(target);
-      await fs.symlink(target, alias);
+  it.each(["existing", "missing-child", "dangling"])(
+    "rejects aliases that resolve to the same %s directory",
+    async (kind) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      await withTestDir({ prefix: "openclaw-agent-dirs-alias-" }, async (root) => {
+        const target = path.join(root, "target [literal]");
+        const alias = path.join(root, "alias");
+        if (kind !== "dangling") {
+          await fs.mkdir(target);
+        }
+        await fs.symlink(path.basename(target), alias);
+        const suffix = kind === "missing-child" ? "future\\state" : "";
+        const targetDir = path.join(target, suffix);
+        const aliasDir = path.join(alias, suffix);
 
-      expect(
-        findDuplicateAgentDirs({
-          agents: {
-            list: [
-              { id: "target", agentDir: target },
-              { id: "alias", agentDir: alias },
-            ],
-          },
-        }),
-      ).toEqual([{ agentDir: target, agentIds: ["target", "alias"] }]);
-    });
-  });
+        expect(
+          findDuplicateAgentDirs({
+            agents: {
+              entries: { target: { agentDir: targetDir }, alias: { agentDir: aliasDir } },
+            },
+          }),
+        ).toEqual([{ agentDir: targetDir, agentIds: ["target", "alias"] }]);
+        if (kind !== "existing") {
+          await expect(fs.stat(targetDir)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      });
+    },
+  );
 
   it("does not create configured missing directories or leave probe entries", async () => {
     await withTestDir({ prefix: "openclaw-agent-dirs-missing-" }, async (root) => {
@@ -59,10 +64,7 @@ describe("agent directory filesystem identity", () => {
 
       findDuplicateAgentDirs({
         agents: {
-          list: [
-            { id: "upper", agentDir: upper },
-            { id: "lower", agentDir: lower },
-          ],
+          entries: { upper: { agentDir: upper }, lower: { agentDir: lower } },
         },
       });
 
