@@ -4,6 +4,7 @@ import type {
   CronFailureNotificationDetail,
   CronJob,
   CronRunErrorClassification,
+  CronTriggerEvalOutcome,
 } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { finishCronRun } from "./run-history.js";
@@ -13,7 +14,7 @@ import {
   type CronEvent,
   type CronServiceState,
 } from "./state.js";
-import type { CronTriggerEvalOutcome, TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 /** Records a terminal task/event fact before the fallible runtime-row commit. */
 export async function emitCronOutcomeForJob(
