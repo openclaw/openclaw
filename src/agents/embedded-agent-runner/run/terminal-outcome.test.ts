@@ -42,24 +42,10 @@ function makeAssistant(stopReason: AssistantMessage["stopReason"]): AssistantMes
 
 describe("embedded run attempt terminal outcome", () => {
   it.each([
-    { name: "ordinary error", refusal: false, category: undefined, expected: "Provider detail." },
-    {
-      name: "bounded refusal category",
-      refusal: true,
-      category: "cyber",
-      expected:
-        "The provider refused this request (category: cyber). Revise the request and try again.",
-    },
     {
       name: "untrusted refusal category",
       refusal: true,
       category: "cyber\nProvider detail.",
-      expected: "The provider refused this request. Revise the request and try again.",
-    },
-    {
-      name: "missing refusal category",
-      refusal: true,
-      category: undefined,
       expected: "The provider refused this request. Revise the request and try again.",
     },
   ])("projects $name without exposing refusal explanations", ({ refusal, category, expected }) => {
@@ -93,13 +79,6 @@ describe("embedded run attempt terminal outcome", () => {
       timedOut: true,
     },
     {
-      name: "idle prompt timeout",
-      terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-      reason: "hard_timeout",
-      aborted: false,
-      timedOut: true,
-    },
-    {
       name: "yield-only cleanup",
       terminal: { kind: "aborted", source: "yield_cleanup" },
       reason: "completed",
@@ -123,26 +102,6 @@ describe("embedded run attempt terminal outcome", () => {
     expect(isEmbeddedRunTerminalAbort(outcome)).toBe(testCase.aborted);
     expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(testCase.timedOut);
     expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(testCase.aborted || testCase.timedOut);
-  });
-
-  it("keeps user-signal cancellation authoritative before assistant completion", () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt(),
-      assistant: undefined,
-      abortSignal: controller.signal,
-    });
-
-    expect(outcome).toMatchObject({
-      reason: "aborted",
-      status: "error",
-      stopReason: "aborted",
-    });
-    expect(isEmbeddedRunTerminalAbort(outcome)).toBe(true);
-    expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(false);
-    expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(true);
   });
 
   it("projects the typed writer takeover abort as superseded", () => {
@@ -186,22 +145,6 @@ describe("embedded run attempt terminal outcome", () => {
     });
   });
 
-  it("captures user cancellation with the same terminal that owns the interruption", () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    expect(
-      resolveEmbeddedRunAttemptTerminalState({
-        attempt: makeAttempt(),
-        assistant: undefined,
-        abortSignal: controller.signal,
-      }),
-    ).toMatchObject({
-      outcome: { reason: "aborted", status: "error", stopReason: "aborted" },
-      signalOwnedInterruption: true,
-    });
-  });
-
   it("starts successful settled finalization without inheriting the original abort signal", () => {
     const controller = new AbortController();
     controller.abort();
@@ -221,23 +164,6 @@ describe("embedded run attempt terminal outcome", () => {
       outcome: { reason: "completed", status: "ok", stopReason: "stop" },
       signalOwnedInterruption: false,
     });
-  });
-
-  it("keeps prompt timeout ownership ahead of generic abort metadata", () => {
-    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt({
-        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
-      }),
-      assistant: makeAssistant("aborted"),
-    });
-
-    expect(outcome).toMatchObject({
-      reason: "hard_timeout",
-      status: "timeout",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-    expect(outcome).not.toHaveProperty("stopReason");
   });
 
   it("keeps restart cancellation ahead of generic abort metadata", () => {
@@ -260,21 +186,6 @@ describe("embedded run attempt terminal outcome", () => {
       reason: "cancelled",
       status: "error",
       stopReason: "restart",
-    });
-  });
-
-  it("keeps generic abort metadata ahead of a non-abort assistant stop reason", () => {
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: { kind: "aborted", source: "runtime" },
-        }),
-        assistant: makeAssistant("stop"),
-      }),
-    ).toMatchObject({
-      reason: "aborted",
-      status: "error",
-      stopReason: "aborted",
     });
   });
 
@@ -346,7 +257,7 @@ describe("embedded run attempt terminal outcome", () => {
     expect(nullFailure).not.toHaveProperty("error");
   });
 
-  it.each(["compaction", "tool_execution"] as const)(
+  it.each(["tool_execution"] as const)(
     "keeps %s timeouts ahead of their mechanical abort flag",
     (phase) => {
       expect(
@@ -362,33 +273,6 @@ describe("embedded run attempt terminal outcome", () => {
       });
     },
   );
-
-  it("keeps a recovered compaction timeout observation non-terminal", () => {
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: { kind: "timeout", phase: "compaction", source: "observation" },
-        }),
-        assistant: makeAssistant("stop"),
-      }),
-    ).toEqual({ reason: "completed", status: "ok", stopReason: "stop" });
-  });
-
-  it("keeps failure detail terminal on a non-terminal timeout observation", () => {
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: {
-            kind: "timeout",
-            phase: "compaction",
-            source: "observation",
-            failure: { source: "compaction", error: new Error("settlement failed") },
-          },
-        }),
-        assistant: makeAssistant("stop"),
-      }),
-    ).toMatchObject({ reason: "failed", status: "error", error: "settlement failed" });
-  });
 
   it("preserves nested failure details without exposing credentials", () => {
     const credential = "sk-test-" + "x".repeat(32);

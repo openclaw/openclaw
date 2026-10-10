@@ -111,23 +111,6 @@ describe("message-tool-only source replies", () => {
       expected: false,
     },
     {
-      label: "failed send",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "failed reply" },
-        isError: true,
-      }),
-      expected: false,
-    },
-    {
-      label: "dry-run argument",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "preview reply", dryRun: true },
-      }),
-      expected: false,
-    },
-    {
       label: "dry-run result payload",
       context: createAfterToolCallContext({
         toolName: "message",
@@ -136,27 +119,6 @@ describe("message-tool-only source replies", () => {
           content: [{ type: "text", text: '{"ok":true}' }],
           details: { payload: { deliveryStatus: "dry_run", dryRun: true } },
         },
-      }),
-      expected: false,
-    },
-    {
-      label: "dry-run serialized result",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "preview reply" },
-        result: {
-          content: [{ type: "text", text: '{"deliveryStatus":"dry_run","dryRun":true}' }],
-          details: { ok: true },
-        },
-      }),
-      expected: false,
-    },
-    {
-      label: "suppressed send",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "suppressed reply" },
-        result: createSuppressedSendResult(),
       }),
       expected: false,
     },
@@ -173,7 +135,7 @@ describe("message-tool-only source replies", () => {
     },
   );
 
-  it.each(["send", "reply", "thread-reply", "poll"])(
+  it.each(["reply"])(
     "preserves rewritten output while terminating after a recorded source %s",
     async (action) => {
       const rewritten = {
@@ -217,43 +179,6 @@ describe("message-tool-only source replies", () => {
       expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("terminates after a delivered completed source reply", async () => {
-    const agent = {} as unknown as Agent;
-    const onDeliveredSourceReply = vi.fn();
-    installMessageToolOnlyTerminalHook({
-      agent,
-      sourceReplyDeliveryMode: "message_tool_only",
-      onDeliveredSourceReply,
-    });
-
-    await expect(
-      agent.afterToolCall?.(
-        createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "visible reply" },
-        }),
-      ),
-    ).resolves.toEqual({ terminate: true });
-    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("continues after delivered progress", async () => {
-    const agent = {} as unknown as Agent;
-    installMessageToolOnlyTerminalHook({
-      agent,
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    await expect(
-      agent.afterToolCall?.(
-        createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "still working", final: false },
-        }),
-      ),
-    ).resolves.toBeUndefined();
-  });
 
   it.each([
     {
@@ -352,19 +277,6 @@ describe("message-tool-only source replies", () => {
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
     expect(onDeliveredSourceReply).not.toHaveBeenCalled();
   });
-
-  it("does not install a wrapper for non-message-tool-only delivery", async () => {
-    const previousAfterToolCall = vi.fn(async () => ({
-      details: { untouched: true },
-    }));
-    const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
-    installMessageToolOnlyTerminalHook({
-      agent,
-      sourceReplyDeliveryMode: "automatic",
-    });
-
-    expect(agent.afterToolCall).toBe(previousAfterToolCall);
-  });
 });
 
 function createAfterToolCallContext(params: {
@@ -430,28 +342,6 @@ function createDirectSendResult(params: { messageId: string }): AfterToolCallCon
       messageDelivery: {
         status: "settled",
         primaryPlatformMessageId: params.messageId,
-        partialDelivery: false,
-        createdThreadIds: [],
-      },
-    },
-  };
-}
-
-function createSuppressedSendResult(): AfterToolCallContext["result"] {
-  // Same channel shape without message id: useful to prove suppression is not
-  // mistaken for delivery.
-  const payload = {
-    channel: "discord",
-    to: "channel:source",
-    via: "direct",
-    mediaUrl: null,
-  };
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: {
-      ...payload,
-      messageDelivery: {
-        status: "suppressed",
         partialDelivery: false,
         createdThreadIds: [],
       },

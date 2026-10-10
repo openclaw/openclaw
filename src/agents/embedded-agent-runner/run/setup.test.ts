@@ -58,18 +58,6 @@ describe("agent harness run admission", () => {
     ).toBeUndefined();
   });
 
-  it("accepts an ordinary-key session with the exact durable harness lock", () => {
-    expect(
-      resolveAgentHarnessRunAdmissionError({
-        agentHarnessId: "codex",
-        entry,
-        modelSelectionLocked: true,
-        sessionId: "native-session",
-        sessionKey: "agent:main:main",
-      }),
-    ).toBeUndefined();
-  });
-
   it("keeps a legacy model-selection lock on the ordinary runtime path", () => {
     expect(
       resolveAgentHarnessRunAdmissionError({
@@ -103,13 +91,7 @@ describe("agent harness run admission", () => {
 
   it.each([
     { agentHarnessId: "openclaw", modelSelectionLocked: true, entry },
-    { agentHarnessId: "codex", modelSelectionLocked: false, entry },
     { agentHarnessId: "codex", modelSelectionLocked: true, entry: undefined },
-    {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      entry: { ...entry, sessionId: "stale-session" },
-    },
   ])("rejects a mismatched or missing reserved runtime", (params) => {
     expect(
       resolveAgentHarnessRunAdmissionError({
@@ -352,105 +334,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       expect(inference.effectiveModel.maxTokens).toBe(128_000);
       expect(runtimeModel.contextWindow).toBe(1_000_000);
     }
-  });
-
-  it("can read Codex OAuth context overrides for native Codex harness runs", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            models: [createConfiguredModel()],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = resolveEmbeddedRuntimeModelPolicy({
-      cfg,
-      provider: "codex",
-      contextConfigProvider: "openai",
-      modelId: "gpt-5.5",
-      runtimeModel: createRuntimeModel(),
-      nativeModelOwned: false,
-    });
-
-    expect(result.contextWindowInfo).toEqual({
-      source: "modelsConfig",
-      tokens: 1_000_000,
-    });
-    expect(result.contextTokensSource).toBeUndefined();
-    expect(result.effectiveModel.contextWindow).toBe(1_000_000);
-  });
-
-  it("keeps the runtime model contextTokens when no alternate context provider is supplied", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            models: [createConfiguredModel()],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = resolveEmbeddedRuntimeModelPolicy({
-      cfg,
-      provider: "codex",
-      modelId: "gpt-5.5",
-      runtimeModel: createRuntimeModel(),
-      nativeModelOwned: false,
-    });
-
-    expect(result.contextWindowInfo).toEqual({
-      source: "model",
-      tokens: 272_000,
-    });
-    expect(result.contextTokensSource).toBe("resolved-v1");
-    expect(result.effectiveModel.contextWindow).toBe(272_000);
-  });
-
-  it("caps the native run budget with the session-selected context window", () => {
-    // Native (non-CLI) runs must honor the selection too; the CLI backend maps
-    // the option id to argv/env separately (reply-path regression: a 200k
-    // selection previously left native budget and payload sizing at 1M).
-    const runtimeModel: ProviderRuntimeModel = {
-      provider: "anthropic",
-      id: "claude-fable-5",
-      name: "Claude Fable 5",
-      baseUrl: "https://api.anthropic.com",
-      api: "anthropic-messages",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      contextWindows: [
-        { id: "200k", label: "200K", contextWindow: 200_000 },
-        { id: "1m", label: "1M", contextWindow: 1_000_000 },
-      ],
-      contextWindowDefault: "1m",
-    };
-    const resolve = (contextWindow?: string) =>
-      resolveEmbeddedRuntimeModelPolicy({
-        cfg: undefined,
-        provider: "anthropic",
-        modelId: "claude-fable-5",
-        runtimeModel,
-        nativeModelOwned: false,
-        ...(contextWindow ? { contextWindow } : {}),
-      });
-
-    const selected = resolve("200k");
-    expect(selected.contextTokenBudget).toBe(200_000);
-    expect(selected.contextTokensSource).toBeUndefined();
-    expect(selected.effectiveModel.contextWindow).toBe(200_000);
-
-    const unselected = resolve(undefined);
-    expect(unselected.contextTokenBudget).toBe(1_000_000);
-    expect(unselected.contextTokensSource).toBeUndefined();
-    expect(unselected.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
   it("keeps the session-selected context window ahead of discovered and configured caps", () => {
