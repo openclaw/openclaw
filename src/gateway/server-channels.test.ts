@@ -956,48 +956,51 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("serializes overlapping stops until the last teardown settles", async () => {
+  it("joins overlapping stops without repeating teardown", async () => {
     const releaseTask = createDeferred();
-    const stopHooks = [createDeferred(), createDeferred()];
+    const releaseStop = createDeferred();
     const startAccount = vi.fn(async () => await releaseTask.promise);
-    const stopAccount = vi.fn(async () => {
-      const callIndex = stopAccount.mock.calls.length - 1;
-      await stopHooks[callIndex]?.promise;
-      if (callIndex === 1) {
-        throw new Error("second stop failed");
-      }
-    });
+    const stopAccount = vi.fn(async () => await releaseStop.promise);
     installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
     const manager = createManager();
 
     await manager.startChannels();
     const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
     const secondStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
-    const secondFailure = expect(secondStop).rejects.toThrow("second stop failed");
-
     releaseTask.resolve();
-    stopHooks[0]?.resolve();
-    await expect(firstStop).resolves.toBeUndefined();
     await flushMicrotasks();
-    expect(stopAccount).toHaveBeenCalledTimes(2);
-
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    expect(startAccount).toHaveBeenCalledTimes(1);
-
-    stopHooks[1]?.resolve();
-    await secondFailure;
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    expect(startAccount).toHaveBeenCalledTimes(1);
-    expect(readAccount(manager)).toMatchObject({
-      running: true,
-      restartPending: false,
-      lastError: "second stop failed",
-    });
-
-    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    expect(stopAccount).toHaveBeenCalledTimes(3);
+    expect(stopAccount).toHaveBeenCalledOnce();
+    releaseStop.resolve();
+    await Promise.all([firstStop, secondStop]);
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(startAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports unfinished work to a strict caller joining a non-strict stop", async () => {
+    const releaseTask = createDeferred();
+    const stopAccount = vi.fn(async () => {});
+    installTestRegistry(
+      createTestPlugin({ startAccount: async () => releaseTask.promise, stopAccount }),
+    );
+    const manager = createManager();
+    await manager.startChannels();
+    await flushMicrotasks();
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const strictStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      strict: true,
+    });
+    const rejected = expect(strictStop).rejects.toThrow("still owns running work");
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await firstStop;
+      await rejected;
+      expect(stopAccount).toHaveBeenCalledOnce();
+    } finally {
+      releaseTask.resolve();
+      await flushMicrotasks();
+      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    }
   });
 
   it("keeps a timed-out stop hook failure authoritative after late task settlement", async () => {
@@ -2589,7 +2592,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves a failed replacement pause across cancelled retries until publication", async () => {
+  it("releases a failed replacement pause and retains captured diagnostics until publication", async () => {
     const startAccount = vi.fn(stayRunning);
     const plugin = createTestPlugin({ startAccount });
     const inspection = { name: "captured account" };
@@ -2597,8 +2600,6 @@ describe("server-channels auto restart", () => {
     plugin.config.inspectAccount = inspectAccount;
     let registry = installTestRegistry(plugin);
     const manager = createManager({ getPluginRegistry: () => registry });
-    const firstPause = manager.pauseChannelStarts(["discord"]);
-    firstPause("rollback");
     await manager.startChannel("discord", "default");
     await waitForImmediate();
     expect(startAccount).toHaveBeenCalledOnce();
@@ -2607,46 +2608,18 @@ describe("server-channels auto restart", () => {
     inspectAccount.mockImplementation(() => {
       throw new Error("paused plugin must not be inspected");
     });
-    const cancelledRetry = manager.pauseChannelStarts(["discord"]);
-    cancelledRetry("rollback");
-    const context = firstStartAccountContext(startAccount);
-    context.setStatus({ accountId: "default", enabled: false, configured: false });
-    const disabled = manager.getRuntimeSnapshot();
-    expect(disabled.reloadingChannels?.has("discord")).toBe(true);
-    expect(disabled.channelAccounts.discord?.default).toMatchObject({
-      name: "captured account",
-      enabled: false,
-      configured: false,
-      running: false,
-      stateReason: "disabled",
-    });
-    context.setStatus({ accountId: "default", enabled: true, configured: true });
+    expect(manager.getRuntimeSnapshot().reloadingChannels?.has("discord")).toBe(true);
+    expect(readAccount(manager)?.name).toBe("captured account");
     await manager.stopChannel("discord", "default");
-    expect(readAccount(manager)).toMatchObject({
-      name: "captured account",
-      enabled: true,
-      configured: true,
-      running: false,
-      lifecycle: "stopped",
-    });
-    await expect(manager.startChannel("discord", "default")).rejects.toThrow(
-      "plugins are reloading; retry",
-    );
+    failedPause("failed");
+    expect(manager.getRuntimeSnapshot().reloadingChannels?.has("discord")).toBe(false);
+    expect(readAccount(manager)?.name).toBe("captured account");
     const publishedRetry = manager.pauseChannelStarts(["discord"]);
     registry = installTestRegistry(createTestPlugin({ startAccount }));
     publishedRetry("published");
-    // Late settlement cannot reinstate an old pause or release a newer one.
-    publishedRetry("rollback");
-    cancelledRetry("rollback");
     await manager.startChannel("discord", "default");
     await waitForImmediate();
     expect(startAccount).toHaveBeenCalledTimes(2);
-    const latestPause = manager.pauseChannelStarts(["discord"]);
-    failedPause("published");
-    await expect(manager.startChannel("discord", "default")).rejects.toThrow(
-      "plugins are reloading; retry",
-    );
-    latestPause("rollback");
   });
 
   it.each(["list-accounts", "runtime"] as const)(

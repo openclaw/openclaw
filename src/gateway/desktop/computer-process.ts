@@ -232,9 +232,6 @@ export function startComputerHostProcess(params: {
       }
       request.signal?.addEventListener("abort", abort, { once: true });
       try {
-        assertActive();
-        request.assertCurrent();
-        request.signal?.throwIfAborted();
         send({
           type: "invoke",
           id,

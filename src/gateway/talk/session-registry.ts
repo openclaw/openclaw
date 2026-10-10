@@ -1,6 +1,4 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   prepareClientVoiceSessionClose,
@@ -70,53 +68,40 @@ function runTalkConnectionCleanup(
   connId: string,
   kind: TalkConnectionCleanupKind,
   cleanup: TalkConnectionCleanup,
-): void | Promise<void> {
+): Promise<void> {
   if (cleanup.pending) {
     return cleanup.pending;
   }
   if (talkConnectionCleanups.get(connId)?.get(kind) !== cleanup) {
-    return;
+    return Promise.resolve();
   }
-  // A cleanup callback can reenter shutdown before returning its own promise.
-  const completion = createDeferredCore();
-  cleanup.pending = completion.promise;
-  const completed = (): void | Promise<void> => {
-    cleanup.pending = undefined;
-    cleanup.failed = false;
-    const cleanups = talkConnectionCleanups.get(connId);
-    if (cleanups?.get(kind) === cleanup) {
-      if (cleanup.nextRun) {
-        cleanup.run = cleanup.nextRun;
-        cleanup.nextRun = undefined;
-        return runTalkConnectionCleanup(connId, kind, cleanup);
-      }
-      cleanups.delete(kind);
-      if (cleanups.size === 0 && talkConnectionCleanups.get(connId) === cleanups) {
-        talkConnectionCleanups.delete(connId);
-      }
-    }
-  };
-  const failed = (error: unknown): never => {
-    cleanup.pending = undefined;
-    cleanup.failed = true;
-    throw error;
-  };
-  try {
-    const run = cleanup.run;
-    const result = run();
-    if (isPromiseLike(result)) {
-      completion.resolve(Promise.resolve(result).then(completed, failed));
-      return completion.promise;
-    }
-    const next = completed();
-    completion.resolve(next);
-    return next;
-  } catch (error) {
-    completion.reject(error);
-    // The caller observes the synchronous throw; a reentrant drain may also join this promise.
-    void completion.promise.catch(() => {});
-    return failed(error);
-  }
+  // One promise owns callback execution and its shutdown join, including synchronous callbacks.
+  cleanup.pending = Promise.resolve()
+    .then(cleanup.run)
+    .then(
+      () => {
+        cleanup.pending = undefined;
+        cleanup.failed = false;
+        const cleanups = talkConnectionCleanups.get(connId);
+        if (cleanups?.get(kind) === cleanup) {
+          if (cleanup.nextRun) {
+            cleanup.run = cleanup.nextRun;
+            cleanup.nextRun = undefined;
+            return runTalkConnectionCleanup(connId, kind, cleanup);
+          }
+          cleanups.delete(kind);
+          if (cleanups.size === 0 && talkConnectionCleanups.get(connId) === cleanups) {
+            talkConnectionCleanups.delete(connId);
+          }
+        }
+      },
+      (error: unknown) => {
+        cleanup.pending = undefined;
+        cleanup.failed = true;
+        throw error;
+      },
+    );
+  return cleanup.pending;
 }
 
 /** Keeps failed cleanup under its original owner until a successful retry. */
@@ -158,14 +143,7 @@ export function cleanupTalkConnection(
         `failed to run ${kind} Talk cleanup after connection disconnect: ${formatError(error)}`,
       );
     };
-    try {
-      const pending = runTalkConnectionCleanup(connId, kind, cleanup);
-      if (pending) {
-        void pending.catch(report);
-      }
-    } catch (error) {
-      report(error);
-    }
+    void runTalkConnectionCleanup(connId, kind, cleanup).catch(report);
   }
 }
 
@@ -214,11 +192,7 @@ async function closeTalkConnections(connIds: Iterable<string>): Promise<void> {
   for (const connId of connIds) {
     const cleanups = [...(talkConnectionCleanups.get(connId) ?? [])];
     for (const [kind, cleanup] of cleanups) {
-      try {
-        pending.push(Promise.resolve(runTalkConnectionCleanup(connId, kind, cleanup)));
-      } catch (error) {
-        pending.push(Promise.reject(error instanceof Error ? error : new Error(String(error))));
-      }
+      pending.push(runTalkConnectionCleanup(connId, kind, cleanup));
     }
   }
   const results = await Promise.allSettled(pending);
