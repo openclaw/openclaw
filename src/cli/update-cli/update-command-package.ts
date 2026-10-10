@@ -26,6 +26,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import {
   createUpdateFailureFact,
   normalizeUpdateFailureFacts,
@@ -124,6 +125,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   await createUpdateConfigSnapshot(doctorEnv);
   const candidateHostVersion = await readPackageVersion(params.root);
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+  const sectionTiming = createUpdateDoctorSectionTiming();
   // Service ownership stays with the finalizer while the retained package
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
@@ -166,6 +168,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     failure?: { error: unknown },
   ) => {
     let completionFailure = failure;
+    sectionTiming.annotate(doctorStep);
     const databaseReceipt = context?.databaseBackup
       ? recordUpdateDatabaseWrites(context.databaseBackup, doctorResult?.databaseWrites, doctorStep)
       : undefined;
@@ -349,10 +352,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
           serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
           compatibilityHostVersion: candidateHostVersion,
         }),
+        ...sectionTiming.env,
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
       },
       timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
-      ...(runCommand ? { runCommand } : {}),
+      runCommand: sectionTiming.wrap(runCommand ?? runCommandWithTimeout),
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
   try {

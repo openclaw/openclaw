@@ -36,6 +36,17 @@ describe("update run ledger compaction", () => {
         "global update",
         "global update (omit optional)",
         "candidate-doctor-lint",
+        // Phase timing explains the validating and activation windows.
+        "candidate-state-snapshot",
+        "candidate-doctor",
+        "candidate-gateway-startup",
+        "candidate-state-cleanup",
+        "post-stop-checks",
+        "git-checkout",
+        "git-runtime-activation",
+        "openclaw doctor",
+        "pre-plugin doctor",
+        "post-plugin doctor",
       ].map((step) => ({
         step,
         status:
