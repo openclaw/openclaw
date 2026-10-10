@@ -21,6 +21,7 @@ import {
   type PinnedDirectory,
 } from "../infra/directory-durability.js";
 import {
+  FsSafeError,
   canonicalPathFromExistingAncestor,
   ensureAbsoluteDirectory,
   isPathInside,
@@ -170,7 +171,11 @@ class LocalSqliteSnapshotProvider {
         await createPrivateSqliteDirectory(snapshotDir);
         snapshotDirectoryCreated = true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        const alreadyExists =
+          process.platform === "win32"
+            ? error instanceof FsSafeError && error.code === "already-exists"
+            : (error as NodeJS.ErrnoException).code === "EEXIST";
+        if (alreadyExists) {
           throw new Error(`SQLite snapshot directory already exists: ${snapshotDir}`, {
             cause: error,
           });
@@ -628,7 +633,7 @@ async function ensurePrivateDirectory(
           await createPrivateSqliteDirectory(targetPath);
           return;
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          if (!(error instanceof FsSafeError) || error.code !== "already-exists") {
             throw error;
           }
         }
