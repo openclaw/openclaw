@@ -728,7 +728,7 @@ export function writeSessionEntry(
         session_key:
           canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
             ? actor.window.session_key
-            : sessionRow.session_key,
+            : written.sessionRow.session_key,
       };
     }
   }
