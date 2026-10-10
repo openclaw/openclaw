@@ -10,10 +10,8 @@ export const previousReleaseInventory = readUpdateCompatibilityInventory(
   fileURLToPath(new URL("../../scripts/lib/update-compat-inventory.json", import.meta.url)),
 );
 
-/** A compiler-shaped candidate for the recorded release ABI, without loading a Gateway. */
-export function writeUpdateCompatibilityBuildFixture(rootDir: string): void {
-  const distDir = path.join(rootDir, "dist");
-  fs.mkdirSync(distDir, { recursive: true });
+/** Prepare schema-bearing source before capturing a fixture's committed identity. */
+export function writeUpdateCompatibilitySourceFixture(rootDir: string): void {
   const schemas = { state: 20, agent: 25 };
   const manifestFile = path.join(rootDir, "package.json");
   const manifest = fs.existsSync(manifestFile)
@@ -21,9 +19,18 @@ export function writeUpdateCompatibilityBuildFixture(rootDir: string): void {
     : {};
   fs.writeFileSync(
     manifestFile,
-    JSON.stringify({ ...manifest, openclaw: { schemaVersions: schemas } }),
+    JSON.stringify({ ...manifest, openclaw: { ...manifest.openclaw, schemaVersions: schemas } }),
   );
-  const hashed = new Set(listUpdateCompatibilityChunkPaths(previousReleaseInventory, schemas));
+}
+
+/** Build outputs never mutate the source manifest or invalidate its committed identity. */
+export function writeUpdateCompatibilityBuildFixture(rootDir: string): void {
+  const distDir = path.join(rootDir, "dist");
+  fs.mkdirSync(distDir, { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+  const hashed = new Set(
+    listUpdateCompatibilityChunkPaths(previousReleaseInventory, manifest.openclaw.schemaVersions),
+  );
   const symbols = new Map<string, { alias: string; file: string }>();
   const modules = new Map<string, { file: string; lines: string[] }>();
   const stableTargets = new Map<string, Map<string, string>>();

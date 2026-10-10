@@ -55,6 +55,7 @@ import {
   runStatusCommand,
   runQaCommand,
 } from "../../test/scripts/run-node.test-support.js";
+import { writeUpdateCompatibilitySourceFixture } from "../../test/scripts/update-compat-chunks.test-support.js";
 
 beforeEach(() => {
   const fence = vi
@@ -156,6 +157,7 @@ describe("run-node script", () => {
   );
 
   it("routes local build stdout to stderr before JSON command output", async ({ tmp }) => {
+    writeUpdateCompatibilitySourceFixture(tmp);
     await writeRuntimePostBuildScaffold(tmp);
     const outputPath = path.join(tmp, ".artifacts", "run-node", "output.log");
     const spawn = (_cmd: string, args: string[]) => {

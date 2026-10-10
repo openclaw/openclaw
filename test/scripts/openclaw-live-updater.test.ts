@@ -47,6 +47,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
+  writeUpdateCompatibilitySourceFixture,
 } from "./update-compat-chunks.test-support.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -189,7 +190,8 @@ function initializeFixture(root: string) {
   git(seed, "config", "user.email", "test@example.com");
   writeFileSync(path.join(seed, "README.md"), "one\n");
   writeFileSync(path.join(seed, ".gitignore"), "dist/\nnode_modules/\n");
-  git(seed, "add", "README.md", ".gitignore");
+  writeUpdateCompatibilitySourceFixture(seed);
+  git(seed, "add", "README.md", ".gitignore", "package.json");
   git(seed, "commit", "-m", "initial");
   git(seed, "remote", "add", "origin", "../origin.git");
   git(seed, "push", "-u", "origin", "main");
@@ -1087,6 +1089,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
     writeFileSync(path.join(seed, "package.json"), '{"name":"openclaw"}\n');
+    writeUpdateCompatibilitySourceFixture(seed);
     git(seed, "add", "package.json");
     const changedPath = "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
     pushFixtureChange(seed, changedPath);

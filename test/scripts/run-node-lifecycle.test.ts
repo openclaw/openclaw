@@ -40,6 +40,7 @@ import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
+  writeUpdateCompatibilitySourceFixture,
 } from "./update-compat-chunks.test-support.js";
 
 let receipts: FixtureReceiptChannel;
@@ -119,6 +120,7 @@ function prepareRunnerEnv(env: NodeJS.ProcessEnv, implementations: string[] = []
 }
 
 function writePrebuiltRuntime(root: string) {
+  writeUpdateCompatibilitySourceFixture(root);
   writeUpdateCompatibilityBuildFixture(root);
   writeUpdateCompatibilityChunks({
     distDir: path.join(root, "dist"),

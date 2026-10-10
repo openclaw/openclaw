@@ -28,6 +28,7 @@ export function copyDockerSchedulerHarness(root: string) {
     "official-external-provider-catalog.json",
     "record-shared.mjs",
     "release-version.mjs",
+    "update-compat-contract.mjs",
     "update-compat-inventory.json",
     "update-first-hop-lanes.mjs",
     "sleep.mjs",

@@ -44,6 +44,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/update-compat-contract.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",

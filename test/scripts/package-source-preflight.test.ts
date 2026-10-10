@@ -310,6 +310,7 @@ function runReleaseInputCapture(params: {
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/official-external-provider-catalog.json",
       "scripts/lib/record-shared.mjs",
+      "scripts/lib/update-compat-contract.mjs",
       "scripts/lib/update-compat-inventory.json",
       "scripts/lib/update-first-hop-lanes.mjs",
       "scripts/lib/upgrade-survivor-policy.mjs",

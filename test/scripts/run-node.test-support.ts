@@ -36,6 +36,7 @@ vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => 
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
+  writeUpdateCompatibilitySourceFixture,
 } from "./update-compat-chunks.test-support.js";
 export const it = baseIt.extend<{ tmp: string }>({
   tmp: async ({ task: _task }, use) => {
@@ -292,6 +293,7 @@ export async function setupTrackedProject(
   const { [ROOT_PACKAGE]: rootPackage, ...files } = { ...BASE_PROJECT_FILES, ...options.files };
   // The compiler fixture owns schema facts; apply caller metadata before it attaches them.
   await writeProjectFiles(tmp, { [ROOT_PACKAGE]: rootPackage });
+  writeUpdateCompatibilitySourceFixture(tmp);
   await writeRuntimePostBuildScaffold(tmp);
   await writeProjectFiles(tmp, files);
   await touchProjectFiles(tmp, options.oldPaths ?? [], OLD_TIME);

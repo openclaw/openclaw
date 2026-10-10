@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
+import { writeUpdateCompatibilitySourceFixture } from "./update-compat-chunks.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 export const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -114,6 +115,7 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
               "test:docker:all": `node ${quote(path.join(harness, "scripts/test-docker-all.mjs"))}`,
             },
     });
+    writeUpdateCompatibilitySourceFixture(dir);
     // Keep pnpm in this miniature workspace, away from the host repo's toolchain pin.
     writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages: []\n");
   }

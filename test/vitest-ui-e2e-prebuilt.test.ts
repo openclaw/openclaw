@@ -17,6 +17,7 @@ import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
+  writeUpdateCompatibilitySourceFixture,
 } from "./scripts/update-compat-chunks.test-support.js";
 import { assertPrebuiltUiE2eRuntime } from "./vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
 
@@ -48,6 +49,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
   write(".gitignore", "dist/\n");
   write("package.json", '{"name":"prebuilt-ui-fixture","private":true}\n');
+  writeUpdateCompatibilitySourceFixture(root);
   git("init", "--quiet");
   git("add", ".");
   git(

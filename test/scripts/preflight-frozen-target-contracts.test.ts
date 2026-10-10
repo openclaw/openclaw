@@ -30,6 +30,7 @@ const closure = [
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/record-shared.mjs",
+  "scripts/lib/update-compat-contract.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -114,12 +115,7 @@ function fixture(
     cpSync(join(repo, "scripts/e2e/lib"), join(toolingRoot, "scripts/e2e/lib"), {
       recursive: true,
     });
-    for (const file of [
-      "update-compat-contract.mjs",
-      "openclaw-e2e-instance.sh",
-      "docker-e2e-watchdog.mjs",
-      "direct-run.mjs",
-    ]) {
+    for (const file of ["openclaw-e2e-instance.sh", "docker-e2e-watchdog.mjs", "direct-run.mjs"]) {
       copyFileSync(join(repo, "scripts/lib", file), join(toolingRoot, "scripts/lib", file));
     }
   }

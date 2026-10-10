@@ -43,6 +43,7 @@ const testNodeExecPath = resolveTestNodeExecPath();
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
+  writeUpdateCompatibilitySourceFixture,
 } from "./update-compat-chunks.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -98,6 +99,7 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
 describe("runtime postbuild static assets", () => {
   it("closes private CLI diagnostic imports without adding public-build companions", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-cli-");
+    writeUpdateCompatibilitySourceFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
     const companions = [
       "cli-process-diagnostics.test-support.cjs",
@@ -146,6 +148,7 @@ describe("runtime postbuild static assets", () => {
 
   it("copies bundled hook metadata without replacing compiled handlers", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
+    writeUpdateCompatibilitySourceFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
     const sourceHookDir = path.join(rootDir, "src", "hooks", "bundled", "session-memory");
     const distHookDir = path.join(rootDir, "dist", "bundled", "session-memory");
@@ -394,6 +397,8 @@ describe("runtime postbuild static assets", () => {
       await fs.writeFile(path.join(packageDir, source), contents);
     }
 
+    writeUpdateCompatibilitySourceFixture(rootDir);
+
     writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
       cwd: rootDir,
@@ -418,6 +423,7 @@ describe("runtime postbuild static assets", () => {
   it("writes every phase beneath the cwd-only caller root", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
     await writeExportHtmlBuildFixture(rootDir);
+    writeUpdateCompatibilitySourceFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
     const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");
     await fs.mkdir(path.dirname(runner), { recursive: true });
@@ -458,6 +464,7 @@ describe("runtime postbuild static assets", () => {
     const cwd = createTempDir("openclaw-runtime-postbuild-rejected-cwd-");
     const repoRoot = createTempDir("openclaw-runtime-postbuild-rejected-repo-");
     await writeExportHtmlBuildFixture(rootDir);
+    writeUpdateCompatibilitySourceFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
 
     runRuntimePostBuild({
@@ -531,6 +538,8 @@ describe("runtime postbuild static assets", () => {
     );
     await fs.writeFile(path.join(distPluginDir, output), "console.log('viewer');\n", "utf8");
 
+    writeUpdateCompatibilitySourceFixture(rootDir);
+
     writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
       cwd: rootDir,
@@ -544,6 +553,7 @@ describe("runtime postbuild static assets", () => {
 
   it("can skip static asset copies for minimal runtime builds", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    writeUpdateCompatibilitySourceFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
     const warn = vi.fn();
     const output = "assets/viewer-runtime.js";
@@ -1109,6 +1119,7 @@ describe("runtime postbuild static assets", () => {
 
   it("keeps every recorded previous-release lazy import loadable after replacement", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-update-compat-");
+    writeUpdateCompatibilitySourceFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
       rootDir,

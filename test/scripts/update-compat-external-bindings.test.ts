@@ -10,6 +10,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
+  writeUpdateCompatibilitySourceFixture,
 } from "./update-compat-chunks.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -34,6 +35,7 @@ it.each([
 ])("keeps published updater bridges usable beside %s", async (external) => {
   const root = createTempDir("update-compat-external-");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+  writeUpdateCompatibilitySourceFixture(root);
   writeUpdateCompatibilityBuildFixture(root);
   fs.writeFileSync(
     path.join(root, "dist/unrelated-worker.mjs"),
@@ -54,6 +56,7 @@ it.each([namedExport, namespaceImport])(
   "refuses a required updater implementation replaced with an external $kind",
   ({ source: template }) => {
     const root = createTempDir("update-compat-required-external-");
+    writeUpdateCompatibilitySourceFixture(root);
     writeUpdateCompatibilityBuildFixture(root);
     const origin = chunk.exports[0]!.origin;
     const source = path.join(root, origin.module);
