@@ -107,7 +107,7 @@ function resolverLabel(item: TerminalApprovalSnapshot): string {
 function EmptyRow(props: { columns: number; label: string }) {
   return (
     <tr>
-      <td colSpan={props.columns} class="data-table-empty-cell">
+      <td colspan={props.columns} class="data-table-empty-cell">
         <div class="data-table-empty-state" role="status" aria-live="polite">
           {props.label}
         </div>

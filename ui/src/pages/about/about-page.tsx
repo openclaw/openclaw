@@ -1,6 +1,7 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
-import { connectShellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { createEffect, createSignal, onCleanup } from "solid-js";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -22,17 +23,9 @@ function AboutPageContent() {
   );
   const [copyState, setCopyState] = createSignal<AboutCommitCopyState>("idle");
   const [clawdWaving, setClawdWaving] = createSignal(false);
-  let host!: HTMLElement;
   let disposed = false;
   let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let waveResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onSettled(() =>
-    connectShellLayoutTraits(host, {
-      toolbarHeader: true,
-      settingsWorkspace: true,
-      settingsPage: true,
-    }),
-  );
   onCleanup(() => {
     disposed = true;
     globalThis.clearTimeout(copyResetTimer);
@@ -76,28 +69,23 @@ function AboutPageContent() {
 
   return (
     <>
-      <section
-        class="content-header"
-        ref={(element) => {
-          host = element;
-        }}
-      >
-        <div>
-          <h1 class="page-title">{t("tabs.about")}</h1>
-        </div>
-      </section>
-      <section class="settings-workspace">
-        <div class="settings-workspace__body">
-          <AboutView
-            buildInfo={CONTROL_UI_BUILD_INFO}
-            gatewayVersion={gatewayVersion()}
-            copyState={copyState()}
-            onCopyCommit={() => void copyCommit()}
-            clawdWaving={clawdWaving()}
-            onPokeClawd={pokeClawd}
-          />
-        </div>
-      </section>
+      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+        <section class="content-header">
+          <div>
+            <h1 class="page-title">{t("tabs.about")}</h1>
+          </div>
+        </section>
+      </ShellLayoutBoundary>
+      <SettingsWorkspace>
+        <AboutView
+          buildInfo={CONTROL_UI_BUILD_INFO}
+          gatewayVersion={gatewayVersion()}
+          copyState={copyState()}
+          onCopyCommit={() => void copyCommit()}
+          clawdWaving={clawdWaving()}
+          onPokeClawd={pokeClawd}
+        />
+      </SettingsWorkspace>
     </>
   );
 }

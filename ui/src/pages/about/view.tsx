@@ -1,16 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { TemplateResult } from "lit";
 import { For, createMemo } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
-import { brandIcons } from "../../components/brand-icons.ts";
-import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
   lobsterLookStyle,
   renderLobsterSvg,
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import {
+  BrandIcon,
+  Icon,
+  type BrandIconName,
+  type IconName,
+} from "../../components/solid/icon.tsx";
+import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
 import { renderThemeBrandIcon } from "../../components/theme-brand-icon.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
@@ -38,19 +42,30 @@ type AboutProps = {
 
 const SHORT_COMMIT_LENGTH = 12;
 // Docs-first where a docs page exists; GitHub/Discord match the native About screens.
-const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; labelKey: string }> = [
-  { href: "https://openclaw.ai", icon: icons.globe, labelKey: "aboutPage.linkWebsite" },
-  { href: "https://docs.openclaw.ai", icon: icons.book, labelKey: "aboutPage.linkDocs" },
+type AboutLink = { href: string; labelKey: string } & (
+  | { kind: "icon"; name: IconName }
+  | { kind: "brand"; name: BrandIconName }
+);
+const ABOUT_LINKS: readonly AboutLink[] = [
+  { href: "https://openclaw.ai", kind: "icon", name: "globe", labelKey: "aboutPage.linkWebsite" },
+  { href: "https://docs.openclaw.ai", kind: "icon", name: "book", labelKey: "aboutPage.linkDocs" },
   {
     href: "https://github.com/openclaw/openclaw",
-    icon: brandIcons.github,
+    kind: "brand",
+    name: "github",
     labelKey: "aboutPage.linkGitHub",
   },
-  { href: COMMUNITY_DISCORD_URL, icon: brandIcons.discord, labelKey: "aboutPage.linkDiscord" },
-  { href: "https://x.com/openclaw", icon: brandIcons.x, labelKey: "aboutPage.linkX" },
+  {
+    href: COMMUNITY_DISCORD_URL,
+    kind: "brand",
+    name: "discord",
+    labelKey: "aboutPage.linkDiscord",
+  },
+  { href: "https://x.com/openclaw", kind: "brand", name: "x", labelKey: "aboutPage.linkX" },
   {
     href: "https://docs.openclaw.ai/releases",
-    icon: icons.scrollText,
+    kind: "icon",
+    name: "scrollText",
     labelKey: "aboutPage.linkChangelog",
   },
 ];
@@ -106,7 +121,7 @@ function Commit(props: AboutProps) {
               onClick={() => props.onCopyCommit()}
             >
               <span aria-hidden="true">
-                <LitContent content={props.copyState === "copied" ? icons.check : icons.copy} />
+                <Icon name={props.copyState === "copied" ? "check" : "copy"} />
               </span>
             </button>
           </openclaw-tooltip>
@@ -139,7 +154,7 @@ export function AboutView(props: AboutProps) {
     ),
   );
   return (
-    <div class="settings-page">
+    <SettingsPage>
       <section class="about-hero">
         {branding.read().brandIcon !== "claw" ? (
           <span class="about-hero__mark--neutral" aria-hidden="true">
@@ -173,7 +188,11 @@ export function AboutView(props: AboutProps) {
                 rel={buildExternalLinkRel()}
               >
                 <span class="about-hero__link-icon" aria-hidden="true">
-                  <LitContent content={link.icon} />
+                  {link.kind === "brand" ? (
+                    <BrandIcon name={link.name} />
+                  ) : (
+                    <Icon name={link.name} />
+                  )}
                 </span>
                 <span>{t(link.labelKey)}</span>
               </a>
@@ -181,80 +200,71 @@ export function AboutView(props: AboutProps) {
           </For>
         </nav>
       </section>
-      <section class="settings-section">
-        <div class="settings-section__header">
-          <div class="settings-section__copy">
-            <h2 class="settings-section__heading">{t("aboutPage.artifactTitle")}</h2>
-            <p class="settings-section__desc">{t("aboutPage.artifactSubtitle")}</p>
-          </div>
-        </div>
-        <div class="settings-group">
-          <dl class="settings-kv about-build-grid" aria-label={t("aboutPage.artifactDetails")}>
-            <dt>{t("aboutPage.version")}</dt>
-            <dd>
-              {props.buildInfo.version ? (
-                <code dir="ltr" title={props.buildInfo.version}>
-                  {props.buildInfo.version}
+      <SettingsSection
+        title={t("aboutPage.artifactTitle")}
+        description={t("aboutPage.artifactSubtitle")}
+      >
+        <dl class="settings-kv about-build-grid" aria-label={t("aboutPage.artifactDetails")}>
+          <dt>{t("aboutPage.version")}</dt>
+          <dd>
+            {props.buildInfo.version ? (
+              <code dir="ltr" title={props.buildInfo.version}>
+                {props.buildInfo.version}
+              </code>
+            ) : (
+              <Unavailable />
+            )}
+          </dd>
+          <dt>{t("aboutPage.commit")}</dt>
+          <dd>
+            <Commit {...props} />
+          </dd>
+          {props.buildInfo.branch && (
+            <>
+              <dt>{t("aboutPage.branch")}</dt>
+              <dd>
+                <code dir="ltr" title={props.buildInfo.branch}>
+                  {props.buildInfo.branch}
+                  {props.buildInfo.dirty === true ? "*" : ""}
+                </code>
+              </dd>
+            </>
+          )}
+          <dt>{t("aboutPage.built")}</dt>
+          <dd>
+            {buildDate() && props.buildInfo.builtAt ? (
+              <time dir="auto" datetime={props.buildInfo.builtAt} title={props.buildInfo.builtAt}>
+                {buildDate()}
+              </time>
+            ) : (
+              <Unavailable />
+            )}
+          </dd>
+        </dl>
+      </SettingsSection>
+      <SettingsSection>
+        <SettingsRow
+          title={t("aboutPage.gatewayVersion")}
+          description={t("aboutPage.gatewayVersionHint")}
+          control={
+            <span
+              class={[
+                "settings-row__value",
+                { "settings-row__value--mono": Boolean(props.gatewayVersion) },
+              ]}
+            >
+              {props.gatewayVersion ? (
+                <code dir="ltr" title={props.gatewayVersion}>
+                  {props.gatewayVersion}
                 </code>
               ) : (
-                <Unavailable />
+                t("aboutPage.unavailable")
               )}
-            </dd>
-            <dt>{t("aboutPage.commit")}</dt>
-            <dd>
-              <Commit {...props} />
-            </dd>
-            {props.buildInfo.branch && (
-              <>
-                <dt>{t("aboutPage.branch")}</dt>
-                <dd>
-                  <code dir="ltr" title={props.buildInfo.branch}>
-                    {props.buildInfo.branch}
-                    {props.buildInfo.dirty === true ? "*" : ""}
-                  </code>
-                </dd>
-              </>
-            )}
-            <dt>{t("aboutPage.built")}</dt>
-            <dd>
-              {buildDate() && props.buildInfo.builtAt ? (
-                <time dir="auto" datetime={props.buildInfo.builtAt} title={props.buildInfo.builtAt}>
-                  {buildDate()}
-                </time>
-              ) : (
-                <Unavailable />
-              )}
-            </dd>
-          </dl>
-        </div>
-      </section>
-      <section class="settings-section">
-        <div class="settings-group">
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__title">{t("aboutPage.gatewayVersion")}</span>
-              <span class="settings-row__desc">{t("aboutPage.gatewayVersionHint")}</span>
-            </div>
-            <div class="settings-row__control">
-              <span
-                class={[
-                  "settings-row__value",
-                  { "settings-row__value--mono": Boolean(props.gatewayVersion) },
-                ]}
-              >
-                {props.gatewayVersion ? (
-                  <code dir="ltr" title={props.gatewayVersion}>
-                    {props.gatewayVersion}
-                  </code>
-                ) : (
-                  t("aboutPage.unavailable")
-                )}
-              </span>
-            </div>
-          </div>
-        </div>
-      </section>
+            </span>
+          }
+        />
+      </SettingsSection>
       <p class="about-footer">{t("aboutPage.license")}</p>
-    </div>
+    </SettingsPage>
   );
 }

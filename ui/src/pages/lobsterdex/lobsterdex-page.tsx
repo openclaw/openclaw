@@ -1,8 +1,9 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { connectShellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -14,7 +15,8 @@ import { PageLayout } from "../page-layout.tsx";
 import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
 import "../../styles/settings.css";
 
-function LobsterdexPageContent() {
+function LobsterdexPageContent(props: { host: HTMLElement }) {
+  const host = untrack(() => props.host);
   const context = useApplication();
   const branding = projectSource(context.theme, {
     read: (theme) => theme.branding,
@@ -27,7 +29,6 @@ function LobsterdexPageContent() {
   );
   const entries = projectLobsterdex();
   const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);
-  let host!: HTMLElement;
   let disposed = false;
   let copyAttempt = 0;
   let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
@@ -36,7 +37,6 @@ function LobsterdexPageContent() {
     copyAttempt += 1;
     globalThis.clearTimeout(copyResetTimer);
   });
-  onSettled(() => connectShellLayoutTraits(host, { toolbarHeader: true, settingsWorkspace: true }));
   onSettled(() => {
     const prefix = "#lobsterdex-";
     if (!location.hash.startsWith(prefix)) {
@@ -45,9 +45,7 @@ function LobsterdexPageContent() {
     const palette = LOBSTER_PET_PALETTES.find(
       (entry) => entry.id === location.hash.slice(prefix.length),
     );
-    const card = palette
-      ? host.parentElement?.querySelector<HTMLElement>(`#lobsterdex-${palette.id}`)
-      : null;
+    const card = palette ? host.querySelector<HTMLElement>(`#lobsterdex-${palette.id}`) : null;
     if (!card) {
       return;
     }
@@ -90,41 +88,36 @@ function LobsterdexPageContent() {
 
   return (
     <>
-      <section
-        class="content-header"
-        ref={(element) => {
-          host = element;
-        }}
-      >
-        <h1 class="page-title">{t("tabs.lobsterdex")}</h1>
-      </section>
-      <section class="settings-workspace">
-        <div class="settings-workspace__body">
-          {branding.read().lobsterdex ? (
-            <LobsterdexView
-              entries={entries.read()}
-              copyFeedback={copyFeedback()}
-              onCopyLink={(paletteId) => void copyLink(paletteId)}
-            />
-          ) : (
-            <section class="settings-section" role="status">
-              <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
-              <a
-                class="btn btn--sm"
-                href={pathForRoute("appearance", context.basePath)}
-                onClick={(event) => {
-                  if (shouldHandleNavigationClick(event)) {
-                    event.preventDefault();
-                    context.navigate("appearance");
-                  }
-                }}
-              >
-                {t("tabs.appearance")}
-              </a>
-            </section>
-          )}
-        </div>
-      </section>
+      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+        <section class="content-header">
+          <h1 class="page-title">{t("tabs.lobsterdex")}</h1>
+        </section>
+      </ShellLayoutBoundary>
+      <SettingsWorkspace>
+        {branding.read().lobsterdex ? (
+          <LobsterdexView
+            entries={entries.read()}
+            copyFeedback={copyFeedback()}
+            onCopyLink={(paletteId) => void copyLink(paletteId)}
+          />
+        ) : (
+          <section class="settings-section" role="status">
+            <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
+            <a
+              class="btn btn--sm"
+              href={pathForRoute("appearance", context.basePath)}
+              onClick={(event) => {
+                if (shouldHandleNavigationClick(event)) {
+                  event.preventDefault();
+                  context.navigate("appearance");
+                }
+              }}
+            >
+              {t("tabs.appearance")}
+            </a>
+          </section>
+        )}
+      </SettingsWorkspace>
     </>
   );
 }
@@ -133,7 +126,7 @@ export const LobsterdexPage = defineSolidBridge(
   "openclaw-lobsterdex-page",
   (_props, host) => (
     <PageLayout host={host}>
-      <LobsterdexPageContent />
+      <LobsterdexPageContent host={host} />
     </PageLayout>
   ),
   { properties: {} },

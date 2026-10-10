@@ -64,15 +64,6 @@ class ShellLayoutTraitsDirective extends AsyncDirective {
 
 export const shellLayoutTraits = directive(ShellLayoutTraitsDirective);
 
-/** Solid page hosts publish through the same layout owner as Lit directives. */
-export function connectShellLayoutTraits(host: Element, traits: ShellLayoutTraits): () => void {
-  const content = host.closest("main.content");
-  const controller = content ? contentControllers.get(content) : undefined;
-  const token = {};
-  controller?.record(token, host, traits);
-  return () => controller?.clear(token);
-}
-
 export class ShellLayoutController implements ReactiveController {
   private readonly reporters = new Map<object, { host: Element; traits: ShellLayoutTraits }>();
   private content?: Element;

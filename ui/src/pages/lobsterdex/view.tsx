@@ -1,5 +1,4 @@
 import { For, createMemo } from "solid-js";
-import { icons } from "../../components/icons.ts";
 import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import {
@@ -9,6 +8,7 @@ import {
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
@@ -90,12 +90,12 @@ export function LobsterdexView(props: LobsterdexViewProps) {
                   onClick={() => props.onCopyLink?.(palette.id)}
                 >
                   <span aria-hidden="true">
-                    <LitContent
-                      content={
+                    <Icon
+                      name={
                         props.copyFeedback?.status === "copied" &&
                         props.copyFeedback.paletteId === palette.id
-                          ? icons.check
-                          : icons.link
+                          ? "check"
+                          : "link"
                       }
                     />
                   </span>

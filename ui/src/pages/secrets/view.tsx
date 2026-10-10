@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -15,6 +15,21 @@ import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreDraft } from "../../lib/secrets-store/index.ts";
 import "../../styles/secrets-store.css";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "wa-dropdown": HTMLAttributes<HTMLElement> & {
+        placement: "bottom-end";
+        "onWa-select"?: (event: CustomEvent<{ item: { value?: string } }>) => void;
+      };
+      "wa-dropdown-item": HTMLAttributes<HTMLElement> & {
+        value: string;
+        variant?: "danger";
+      };
+    }
+  }
+}
 
 export type SecretsDialogMode = "add" | "edit" | null;
 
@@ -88,7 +103,7 @@ function TextAreaField(props: { view: SecretsStoreViewProps; field: "value" | "h
           props.field === "hosts" ? t("secretsStore.allowedHostsPlaceholder") : undefined
         }
         disabled={props.view.busy}
-        prop:value={value()}
+        value={value()}
         onInput={(event) => input(event.currentTarget.value)}
       />
       <Show when={props.field === "hosts"}>
@@ -241,7 +256,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
 function SecretDialog(props: {
   view: SecretsStoreViewProps;
   bulk?: boolean;
-  children: JSX.Element;
+  children: SolidJSX.Element;
 }) {
   const title = () =>
     t(
@@ -316,7 +331,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
             autofocus
             readonly={props.dialogMode === "edit"}
             disabled={props.busy}
-            prop:value={props.draft.name}
+            value={props.draft.name}
             onInput={(event) => props.onDraftChange({ name: event.currentTarget.value })}
           />
         </label>
@@ -338,7 +353,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
                   type="radio"
                   name="access-mode"
                   value={kind()}
-                  prop:checked={props.draft.kind === kind()}
+                  checked={props.draft.kind === kind()}
                   disabled={props.busy}
                   onChange={() => props.onDraftChange({ kind: kind() })}
                 />
@@ -383,7 +398,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
         <label class="secrets-store-checkbox">
           <input
             type="checkbox"
-            prop:checked={props.bulkAutoDetect}
+            checked={props.bulkAutoDetect}
             disabled={props.busy}
             onChange={(event) => props.onBulkAutoDetectChange(event.currentTarget.checked)}
           />
@@ -430,7 +445,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                   class="btn btn--sm"
                   type="button"
                   disabled={props.busy}
-                  onClick={props.onOpenBulk}
+                  onClick={() => props.onOpenBulk()}
                 >
                   {t("secretsStore.bulk")}
                 </button>
@@ -438,7 +453,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                   class="btn btn--sm primary"
                   type="button"
                   disabled={props.busy}
-                  onClick={props.onOpenAdd}
+                  onClick={() => props.onOpenAdd()}
                 >
                   <Icon name="plus" /> {t("secretsStore.add")}
                 </button>
