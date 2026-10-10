@@ -4,7 +4,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { capturePluginRegistryLifecycleEpoch } from "../../plugins/registry-lifecycle.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 import {
   SESSION_CATALOG_LIST_LIFETIME_MS,
@@ -26,7 +25,6 @@ type CatalogListOperation = {
 
 type CatalogListOperations = {
   registrations: CatalogRegistrationSnapshot;
-  epoch: ReturnType<typeof capturePluginRegistryLifecycleEpoch>;
   gatewaySignal?: AbortSignal;
   connectionSignal?: AbortSignal;
   pending: Map<string, CatalogListOperation>;
@@ -94,19 +92,10 @@ export function getSessionCatalogListOperations(
   client?: GatewayClient | null,
 ): CatalogListOperations {
   let state = catalogListsByConfig.get(config);
-  const epoch = registrations.registry
-    ? capturePluginRegistryLifecycleEpoch(registrations.registry)
-    : undefined;
-  if (
-    !state ||
-    state.registrations !== registrations ||
-    state.epoch !== epoch ||
-    state.gatewaySignal !== gatewaySignal
-  ) {
+  if (!state || state.registrations !== registrations || state.gatewaySignal !== gatewaySignal) {
     state?.retirement.abort();
     state = {
       registrations,
-      epoch,
       gatewaySignal,
       pending: new Map(),
       providers: new Map(),
@@ -125,7 +114,6 @@ export function getSessionCatalogListOperations(
   if (!caller) {
     caller = {
       registrations,
-      epoch,
       gatewaySignal,
       connectionSignal: client.connectionSignal
         ? AbortSignal.any([state.retirement.signal, client.connectionSignal])
