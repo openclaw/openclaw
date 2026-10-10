@@ -2,7 +2,7 @@
 // host-owned session manager (skill Workshop review shape): the isolated
 // tool-free finalizer must keep the borrowed manager custody through the real
 // run loop, built-in harness selection, provider stream, tool execution, and
-// session transcript writer path.
+// session transcript writer path; only provider transport is deterministic.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
