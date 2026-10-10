@@ -13,7 +13,6 @@ import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
-import { selectModelCatalogRuntimeEntry } from "../../agents/model-catalog-view.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
@@ -96,11 +95,8 @@ type ModelSelectionState = {
   hasConfiguredThinkingDefault?: boolean;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: (selection?: ThinkingDefaultSelection) => Promise<"on" | "off">;
-  modelContextRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
   modelContextWindow?: number;
-  modelContextWindowSource?: "synthetic";
   modelContextTokens?: number;
-  nativeRuntime?: string;
 };
 
 const modelCatalogRuntimeLoader = createLazyImportLoader(
@@ -207,7 +203,6 @@ export async function createModelSelectionState(params: {
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
   let modelCatalog: ModelCatalog | null = null;
-  let catalogSnapshot = params.preparedModelCatalog;
   // Whether the loaded catalog is a complete/live snapshot. A degraded catalog
   // (discovery threw, static/empty fallback) must not destroy a pinned override.
   let catalogAuthoritative = true;
@@ -279,7 +274,7 @@ export async function createModelSelectionState(params: {
   const staleDirectStoredOverride = isStaleStoredOverride(sessionEntry, directStoredModelOverride);
 
   if (needsModelCatalog) {
-    catalogSnapshot = await loadRuntimeCatalogSnapshot();
+    const catalogSnapshot = await loadRuntimeCatalogSnapshot();
     modelCatalog = catalogSnapshot.entries;
     // Only an explicit false is degraded; absent means authoritative.
     catalogAuthoritative = catalogSnapshot.authoritative !== false;
@@ -650,26 +645,11 @@ export async function createModelSelectionState(params: {
       model: selection.model,
       catalog: await resolveThinkingCatalog(selection),
     });
-  const { agentRuntime } = resolveThinkingSelection({ provider, model });
   const selectedCatalogEntry = findSelectedCatalogEntry({
     catalog: visibilityPolicy.catalog,
     provider,
     model,
   });
-  const runtimeCatalogEntry = selectedCatalogEntry
-    ? selectModelCatalogRuntimeEntry({
-        entry: selectedCatalogEntry,
-        routeVariants: catalogSnapshot?.routeVariants ?? visibilityPolicy.catalog,
-        runtimeId: agentRuntime,
-      }).entry
-    : undefined;
-  const capacityCatalogEntry =
-    runtimeCatalogEntry &&
-    (agentRuntime === "openclaw"
-      ? !runtimeCatalogEntry.nativeRuntime
-      : runtimeCatalogEntry.nativeRuntime === agentRuntime)
-      ? runtimeCatalogEntry
-      : undefined;
   return {
     provider,
     model,
@@ -688,10 +668,7 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     hasConfiguredThinkingDefault,
     resolveDefaultReasoningLevel,
-    modelContextRoute: capacityCatalogEntry,
-    nativeRuntime: agentRuntime,
-    modelContextWindow: capacityCatalogEntry?.contextWindow,
-    modelContextWindowSource: capacityCatalogEntry?.contextWindowSource,
-    modelContextTokens: capacityCatalogEntry?.contextTokens,
+    modelContextWindow: selectedCatalogEntry?.contextWindow,
+    modelContextTokens: selectedCatalogEntry?.contextTokens,
   };
 }

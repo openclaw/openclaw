@@ -120,10 +120,11 @@ Custom live builders can use `runLiveProviderCatalog` at their catalog hook
 to report successful acquisition and convert acquisition errors into outcomes.
 Returning provider configuration alone does not establish a live discovery outcome.
 
-Catalog model declarations may include `contextWindows` choices and a
-`contextWindowDefault` choice ID. Live and static hooks preserve these fields,
-just as manifest catalogs do. They are catalog metadata; the authored
-`models.providers.*.models` configuration schema does not accept them.
+For an unknown-model estimate only, set `contextWindowSource: "synthetic"`.
+Accepted account discovery can then replace that estimate for the same provider,
+exact model ID, and transport API (and endpoint, when the fallback binds one).
+Do not mark curated static limits or authored caps as synthetic. Failed discovery
+keeps the estimate unless the catalog owner can retain the same account's inventory.
 
 For compatibility, nonempty rows returned by a legacy catalog hook without an
 outcome survive provider-wide failures under the same credentials. This does not
@@ -303,10 +304,14 @@ The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle
 owner. Supply the trusted seed, provider routes, metadata and model-list
 endpoints, discovery and starter-model audit labels, static-entry eligibility,
 and any model decoration. An optional
-`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
+`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh,
+and an optional `projectRows` replaces the default selection of listed rows
+(`projectProviderCatalogSnapshotRows`) when the plugin admits listed IDs the
+metadata does not describe. Model-list requests carry the provider's attribution
+headers from the same owner inference uses.
 The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
 `buildLiveProvider`; credentials belong to each build call. Live builds refresh
-metadata before deriving static eligibility and intersecting advertised IDs.
+metadata before deriving static eligibility and projecting advertised IDs.
 Metadata acquisition failure retains the previous snapshot; model-list failures
 and empty results remain strict. `refreshMetadata` returns `undefined` when the
 feed lacks the provider, so explicit model preparation cannot mistake retained

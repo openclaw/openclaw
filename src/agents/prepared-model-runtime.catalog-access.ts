@@ -24,10 +24,7 @@ import {
   prepareInitialModelCatalogAuth,
   replacePreparedModelCatalogAuth,
 } from "./prepared-model-runtime.catalog-auth.js";
-import type {
-  PreparedModelRuntimeCatalogAccessParams,
-  PreparedModelRuntimeCatalogAccess,
-} from "./prepared-model-runtime.catalog-contract.js";
+import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
   preparedProviderCatalogCredentials,
@@ -40,12 +37,13 @@ import {
   preparedModelInventoryKey,
 } from "./prepared-model-runtime.facts.js";
 import {
+  type PreparedModelRuntimeCatalogAccess,
   filterPreparedProviderCatalog,
-  prepareModelCatalogPublication,
   mergePreparedModelCatalogInventory,
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
   mergePreparedNativeCatalog,
+  prepareModelCatalogPublication,
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";

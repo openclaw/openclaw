@@ -8,11 +8,30 @@ import {
 import { UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 
+// Automatic CI admits these compositions only when the test itself changes.
+export const RELEASE_ONLY_UI_TEST_FILES: ReadonlySet<string> = new Set([
+  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
+  "ui/src/components/app-sidebar.stress.browser.test.ts",
+  "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
+]);
+
 function isOwnerSelectedUiE2eTest(file: string): boolean {
   return (
     controlUiE2eTestGlobs.some((glob) => matchesGlob(file, glob)) &&
     !uiE2eRealGatewayTestFiles.includes(file) &&
-    !UI_E2E_SMOKE_TEST_FILES.includes(file)
+    !UI_E2E_SMOKE_TEST_FILES.includes(file) &&
+    !RELEASE_ONLY_UI_TEST_FILES.has(file)
   );
 }
 
@@ -2447,7 +2466,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/config-reload.activation.integration.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
-  "src/gateway/control-ui-asset-retention.publication.test.ts",
   "src/gateway/control-ui-github-api.identity.test.ts",
   "src/gateway/control-ui-github-api.test.ts",
   "src/gateway/control-ui-session-pr-access.test.ts",

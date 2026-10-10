@@ -6,9 +6,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import { buildModelAliasIndex, type ModelAliasIndex } from "../../agents/model-selection.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
-import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
-import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -242,74 +240,6 @@ describe("mixed inline directives", () => {
 
     await applyMixedDirectives(selection);
     expect(lifecycleEvents).toHaveLength(1);
-  });
-
-  it("continues a committed account change with its catalog instead of cached thinking facts", async () => {
-    const provider = "openai";
-    const model = "fixture-model";
-    const old: ModelCatalogEntry = {
-      provider,
-      id: model,
-      name: "Previous account",
-      nativeRuntime: "codex",
-      contextWindow: 1_000_000,
-    };
-    const committed: ModelCatalogEntry = {
-      ...old,
-      name: "Selected account",
-      contextWindow: 64_000,
-    };
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: `${provider}/${model}`,
-          models: { [`${provider}/${model}`]: { agentRuntime: { id: "codex" } } },
-        },
-      },
-    };
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([committed]);
-    vi.spyOn(authProfileStore, "findPersistedAuthProfileCredential").mockReturnValue({
-      type: "api_key",
-      provider,
-      key: "synthetic-fixture-key",
-    });
-    const sessionEntry = createSessionEntry({
-      providerOverride: provider,
-      modelOverride: model,
-      agentRuntimeOverride: "codex",
-      authProfileOverride: "openai:previous",
-      authProfileOverrideSource: "user",
-    });
-    const { result, sessionStore } = await applyMixedDirectives({
-      body: `please reply /model ${provider}/${model}@openai:next -s`,
-      cfg,
-      provider,
-      model,
-      defaultProvider: provider,
-      defaultModel: model,
-      sessionEntry,
-      storePath: "/tmp/sessions.json",
-      allowedModels: [old],
-      resolveThinkingCatalog: async () => [old],
-    });
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledOnce();
-    const current = sessionStore["agent:main:dm:1"];
-    expect(current).toMatchObject({
-      authProfileOverride: "openai:next",
-      authProfileOverrideSource: "user",
-    });
-    expect(resolveSessionModelRef(cfg, current, "main")).toEqual({ provider, model });
-    expect(
-      resolveEffectiveAgentRuntime({
-        cfg,
-        provider,
-        modelId: model,
-        agentId: "main",
-        sessionEntry: current,
-      }),
-    ).toBe("codex");
-    expect(result).toMatchObject({ kind: "continue", provider, model, contextTokens: 64_000 });
   });
 
   it("persists a directive-only reasoning setting and publishes the committed change", async () => {

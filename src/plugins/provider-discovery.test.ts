@@ -1,5 +1,4 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import type { ModelCatalogModel } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
@@ -318,28 +317,7 @@ describe("runProviderCatalog", () => {
 });
 
 describe("normalizePluginDiscoveryResult", () => {
-  const windowedModel: ModelDefinitionConfig &
-    Pick<ModelCatalogModel, "contextWindows" | "contextWindowDefault"> = {
-    ...makeModel("windowed-model"),
-    contextWindow: 1_000_000,
-    contextTokens: 872_000,
-    contextWindows: [
-      { id: "200k", label: "200K", contextWindow: 200_000 },
-      { id: "1m", label: "1M", contextWindow: 1_000_000 },
-    ],
-    contextWindowDefault: "1m",
-  };
   const cases: NormalizePluginDiscoveryResultCase[] = [
-    {
-      name: "preserves catalog context window choices and their default",
-      provider: makeProvider({ id: "windowed" }),
-      result: {
-        provider: makeModelProviderConfig({ models: [windowedModel] }),
-      },
-      expected: {
-        windowed: makeModelProviderConfig({ models: [windowedModel] }),
-      },
-    },
     {
       name: "maps a single provider result to the plugin id",
       provider: makeProvider({ id: "Ollama" }),

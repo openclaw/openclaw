@@ -1,11 +1,10 @@
 import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
-import { resolveContextTokenBudgetForModel } from "../../agents/context.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
-import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -163,7 +162,6 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives, provider, model, contextTokens, contextTokenProjection } = params;
   let directiveAck: ReplyPayload | undefined;
   let selectionCatalog = modelState.allowedModelCatalog;
-  let committedCatalog: typeof selectionCatalog | undefined;
 
   // Fire on the reason, not the boolean: a temporarily-unavailable override
   // surfaces a notice without destroying the pin, so resetModelOverride stays false.
@@ -477,68 +475,30 @@ export async function applyInlineDirectiveOverrides(params: {
       return directiveRejection("session-directive-rejected", persistenceState.outcome.errorText);
     }
     ({ provider, model } = persistenceState.outcome);
-    committedCatalog = persistenceState.outcome.modelCatalog;
-    selectionCatalog = committedCatalog ?? selectionCatalog;
+    selectionCatalog = persistenceState.outcome.modelCatalog ?? selectionCatalog;
   }
 
-  const runtimeModelEntry = selectionCatalog.find(
+  const selectedCatalogEntry = selectionCatalog.find(
     (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
   );
-  const agentRuntime = resolveEffectiveAgentRuntime({
+  contextTokenProjection = resolveModelContextTokenProjection({
     cfg,
-    provider,
-    modelId: model,
-    modelApi: runtimeModelEntry?.api,
-    modelBaseUrl: runtimeModelEntry?.baseUrl,
-    agentId,
-    sessionKey,
-    sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
-  });
-  assertReplyPreprocessingActive(params.abortSignal);
-  const contextCatalog =
-    committedCatalog ??
-    (await racePromiseWithAbortSignal(
-      modelState.resolveThinkingCatalog({ provider, model, agentRuntime }),
-      params.abortSignal,
-    ));
-  assertReplyPreprocessingActive(params.abortSignal);
-  const selectedCatalogEntry = contextCatalog?.find(
-    (entry) =>
-      modelKey(entry.provider, entry.id) === modelKey(provider, model) &&
-      (agentRuntime === "openclaw" ? !entry.nativeRuntime : entry.nativeRuntime === agentRuntime),
-  );
-  const currentSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
-  contextTokenProjection = await racePromiseWithAbortSignal(
-    resolveContextTokenBudgetForModel({
-      cfg,
-      agentId,
-      agentDir,
-      workspaceDir: params.workspaceDir,
-      provider: resolveContextConfigProviderForRuntime({
+    allowAsyncLoad: false,
+    provider: resolveContextConfigProviderForRuntime({
+      provider,
+      runtimeId: resolveAgentHarnessPolicy({
         provider,
-        runtimeId: agentRuntime,
+        modelId: model,
         config: cfg,
-      }),
-      model,
-      profileId: currentSessionEntry.authProfileOverride,
-      contextWindow: currentSessionEntry.contextWindow,
-      route: selectedCatalogEntry,
-      nativeRuntime: agentRuntime,
-      modelContextWindow: selectedCatalogEntry?.contextWindow,
-      modelContextWindowSource: selectedCatalogEntry?.contextWindowSource,
-      modelContextTokens: selectedCatalogEntry?.contextTokens,
-      knownContextBudget: resolveProjectedSessionContextTokenBudget({
-        entry: currentSessionEntry,
-        provider,
-        model,
-        agentHarnessId: agentRuntime,
-        authProfileId: currentSessionEntry.authProfileOverride,
-        resolvedContextTokens: undefined,
-      }),
+        agentId,
+        sessionKey,
+      }).runtime,
+      config: cfg,
     }),
-    params.abortSignal,
-  );
-  assertReplyPreprocessingActive(params.abortSignal);
+    model,
+    modelContextWindow: selectedCatalogEntry?.contextWindow,
+    modelContextTokens: selectedCatalogEntry?.contextTokens,
+  });
   contextTokens = contextTokenProjection.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
 
   const perMessageQueueMode =

@@ -6,7 +6,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.snapshot.js";
+import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import type {
   PreparedConfiguredRuntimeModel,
   PreparedModelRuntimeSnapshot,

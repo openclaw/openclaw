@@ -45,7 +45,6 @@ import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
-    candidateAgentRuntime: string;
     lifecycleGeneration: string;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
@@ -58,9 +57,7 @@ export async function runCliFallbackCandidate(
       : undefined);
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
-    (params.candidateRun.thinkingCatalog ?? []).filter(
-      (entry) => entry.nativeRuntime === params.candidateAgentRuntime,
-    ),
+    params.candidateRun.thinkingCatalog ?? [],
     params.provider,
     params.model,
   );
@@ -383,9 +380,7 @@ export async function runCliFallbackCandidate(
             modelProvider: params.provider,
             requesterModel: { provider: params.provider, model: params.model },
             modelHasVision,
-            nativeRuntime: params.candidateAgentRuntime,
             modelContextWindow: selectedModelEntry?.contextWindow,
-            modelContextWindowSource: selectedModelEntry?.contextWindowSource,
             modelContextTokens: selectedModelEntry?.contextTokens,
             contextWindow: sessionEntry?.contextWindow,
             provider: params.cliExecutionProvider,

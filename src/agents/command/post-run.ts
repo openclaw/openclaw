@@ -161,7 +161,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     lifecycle,
     terminal,
     lifecycleGeneration,
-    maintenanceAuthProfile: maintenanceAuth,
   } = params.attempt;
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
   const interruptedForRestart = () =>
@@ -237,7 +236,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
         agentId: sessionAgentId,
         cfg,
         agentDir,
-        authProfileId: maintenanceAuth ? (maintenanceAuth.authProfileId ?? null) : undefined,
         sessionId: effectiveSessionId,
         sessionKey,
         storePath,
@@ -396,7 +394,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const embeddedMaintenance =
       transcriptPersistenceRunner === "embedded" &&
       agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
-      maintenanceAuth !== undefined &&
+      params.attempt.maintenanceAuthProfile !== undefined &&
       !fallbackExhausted &&
       terminal.outcome.status === "ok" &&
       !resultErrorPayload &&
@@ -424,7 +422,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               provider: agentMeta?.provider ?? fallbackProvider,
               model: agentMeta?.model ?? fallbackModel,
               thinkLevel: effectiveTurnThinkLevel,
-              auth: maintenanceAuth,
+              auth: params.attempt.maintenanceAuthProfile,
               senderIsOwner: params.opts.senderIsOwner,
             }),
             sessionId: runOwnedSessionId,

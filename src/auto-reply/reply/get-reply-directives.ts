@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { resolveContextTokenBudgetForModel } from "../../agents/context.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -12,10 +12,8 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
@@ -56,7 +54,6 @@ import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
 
@@ -401,36 +398,16 @@ export async function resolveReplyDirectives(params: {
   }
   ({ provider, model } = modelState);
 
-  assertReplyPreprocessingActive(opts?.abortSignal);
   const contextTokenProjection = useFastReplyRuntime
     ? undefined
-    : await racePromiseWithAbortSignal(
-        resolveContextTokenBudgetForModel({
-          cfg,
-          agentId,
-          agentDir: params.agentDir,
-          workspaceDir,
-          provider,
-          model,
-          profileId: targetSessionEntry.authProfileOverride,
-          contextWindow: targetSessionEntry.contextWindow,
-          route: modelState.modelContextRoute,
-          nativeRuntime: modelState.nativeRuntime,
-          modelContextWindow: modelState.modelContextWindow,
-          modelContextWindowSource: modelState.modelContextWindowSource,
-          modelContextTokens: modelState.modelContextTokens,
-          knownContextBudget: resolveProjectedSessionContextTokenBudget({
-            entry: targetSessionEntry,
-            provider,
-            model,
-            agentHarnessId: modelState.nativeRuntime,
-            authProfileId: targetSessionEntry.authProfileOverride,
-            resolvedContextTokens: undefined,
-          }),
-        }),
-        opts?.abortSignal,
-      );
-  assertReplyPreprocessingActive(opts?.abortSignal);
+    : resolveModelContextTokenProjection({
+        cfg,
+        allowAsyncLoad: false,
+        provider,
+        model,
+        modelContextWindow: modelState.modelContextWindow,
+        modelContextTokens: modelState.modelContextTokens,
+      });
   let contextTokens = contextTokenProjection?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
 
   const initialModelLabel = `${provider}/${model}`;

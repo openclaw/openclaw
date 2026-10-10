@@ -3,15 +3,18 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "../llm/types.js";
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
+import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { discoverModels } from "./agent-model-discovery.js";
+import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
 import {
   buildInlineProviderModels,
   completeInlineProviderModel,
 } from "./embedded-agent-runner/model.inline-provider.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
+import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import {
   enrichHarnessRows,
@@ -31,6 +34,7 @@ import {
   getPreparedModelFullCatalogAuth,
   hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
+  bindPreparedModelRuntimeAuth,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
@@ -38,13 +42,20 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
+import {
+  completeConfiguredRuntimeModels,
+  prepareConfiguredModelAliases,
+} from "./prepared-model-runtime.configured-completion.js";
+import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimeSnapshot,
+  PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
@@ -669,5 +680,111 @@ export const isPreparedModelCatalogFull = (snapshot: ModelCatalogSnapshot): bool
 /** Restores process-local provenance after a complete catalog crosses a worker boundary. */
 export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): ModelCatalogSnapshot {
   fullModelCatalogSnapshots.add(snapshot);
+  return snapshot;
+}
+
+export type PreparedModelRuntimeCatalogAccess = Readonly<{
+  initialAuth: PreparedModelCatalogAuth;
+  accountCatalog?: NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>;
+  isCurrent: () => boolean;
+  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
+  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
+  recheckNativeLogin: () => void;
+  refreshExpiredModelCatalog: () => void;
+  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
+  loadFullModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadFullModelCatalog"]>;
+  loadNativeModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>;
+  loadAuth: NonNullable<Parameters<typeof bindPreparedModelRuntimeAuth>[1]["load"]>;
+}>;
+export function createPreparedModelRuntimeSnapshot(
+  catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
+  agentFacts: PreparedModelRuntimeAgentFacts,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  catalogFacts: PreparedModelRuntimeCatalogFacts,
+  catalogAccess: PreparedModelRuntimeCatalogAccess,
+  publishedConfig = agentFacts.input.config,
+): PreparedModelRuntimeSnapshot {
+  const { credentials, input } = agentFacts;
+  const {
+    mediaCapabilityProviders,
+    mediaCapabilityProviderSource,
+    messageToolCatalog,
+    pluginMetadataSnapshot,
+    pluginRegistry,
+  } = pluginGeneration;
+  const { configuredRuntimeModels, inlineProviderModels, templateModelRegistry } = catalogFacts;
+  const modelCatalog = materializePreparedModelCatalog(
+    catalogFacts.modelCatalog,
+    agentFacts.runtimeCapabilityModels,
+    input.config.models?.mode === "replace"
+      ? []
+      : configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
+  );
+  prepareModelCatalogThinkingPolicies({
+    catalog: modelCatalog,
+    metadataSnapshot: pluginMetadataSnapshot,
+    pluginRegistry,
+  });
+  const createStores = (): PreparedModelRuntimeStores => {
+    // Runtime API keys and session extensions mutate these objects. Fork them per run while the
+    // credential map and parsed catalog remain owned by the lifecycle snapshot.
+    const authStorage = AuthStorage.inMemory(credentials);
+    return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
+  };
+  const snapshot: PreparedModelRuntimeSnapshot = Object.freeze({
+    catalogOwner,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    agentDir: input.agentDir,
+    activeProjectKeys: [],
+    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
+    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    config: publishedConfig,
+    observationConfig: input.config,
+    isCurrent: catalogAccess.isCurrent,
+    accountCatalog: catalogAccess.accountCatalog,
+    authModes: catalogAccess.initialAuth.authModes,
+    metadataSnapshot: pluginMetadataSnapshot,
+    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+    ...(pluginRegistry ? { pluginRegistry } : {}),
+    ...(messageToolCatalog ? { messageToolCatalog } : {}),
+    ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
+    ...(mediaCapabilityProviderSource && mediaCapabilityProviders
+      ? {
+          acquireMediaCapabilityProviders: () =>
+            acquirePreparedMediaCapabilityProviders(
+              mediaCapabilityProviderSource,
+              mediaCapabilityProviders,
+              pluginRegistry ?? mediaCapabilityProviderSource.registry,
+            ),
+        }
+      : {}),
+    modelCatalog: catalogAccess.withRefreshStatus(modelCatalog),
+    readFullModelCatalog: catalogAccess.readFullModelCatalog,
+    recheckNativeLogin: catalogAccess.recheckNativeLogin,
+    refreshExpiredModelCatalog: catalogAccess.refreshExpiredModelCatalog,
+    readPublishedModels: catalogAccess.readPublishedModels,
+    loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
+    loadNativeModelCatalog: catalogAccess.loadNativeModelCatalog,
+    configuredRuntimeModels,
+    configuredModelAliases: prepareConfiguredModelAliases(
+      agentFacts,
+      pluginGeneration,
+      templateModelRegistry,
+      configuredRuntimeModels,
+    ),
+    findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+      configuredRuntimeModels,
+      pluginMetadataSnapshot,
+    ),
+    inlineProviderModels,
+    createStores,
+    routeModelResolutionMemo: new Map<string, Promise<Model>>(),
+  });
+  bindPreparedModelRuntimeAuth(snapshot, {
+    labels: catalogAccess.initialAuth.providerAuthLabels,
+    store: catalogAccess.initialAuth.authStore,
+    load: catalogAccess.loadAuth,
+    materializations: Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
+  });
   return snapshot;
 }

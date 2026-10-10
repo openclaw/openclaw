@@ -78,16 +78,15 @@ export function resolveCopilotTransportApi(modelId: string): CopilotRuntimeApi {
 
 export function resolveCopilotModelCompat(
   modelId: string,
-  api?: CopilotRuntimeApi,
+  api: CopilotRuntimeApi = resolveCopilotTransportApi(modelId),
 ): ModelDefinitionConfig["compat"] | undefined {
   const normalized = normalizeOptionalLowercaseString(modelId) ?? "";
-  const runtimeApi = api ?? resolveCopilotTransportApi(normalized);
-  if (runtimeApi === "openai-completions") {
+  if (api === "openai-completions") {
     return { ...COPILOT_CHAT_COMPLETIONS_COMPAT };
   }
   // Copilot's Claude 4.5 endpoints reject Anthropic's eager tool extension,
   // while current Claude 4.6+ endpoints accept it.
-  if (runtimeApi === "anthropic-messages" && isCopilotClaude45ModelId(normalized)) {
+  if (isCopilotClaude45ModelId(normalized)) {
     return { supportsEagerToolInputStreaming: false };
   }
   return undefined;

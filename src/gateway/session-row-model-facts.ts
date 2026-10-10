@@ -66,28 +66,18 @@ export function readSessionRowModelFacts(params: {
     preparedAcpMeta: params.preparedAcpMeta,
     modelCatalog:
       rowModelCatalog ?? (lightweight || metadataSnapshot !== undefined ? [] : undefined),
-    modelCatalogRouteVariants: preparedCatalog?.routeVariants ?? rowModelCatalog,
+    modelCatalogRouteVariants: preparedCatalog?.routeVariants,
     metadataSnapshot,
     rowContext,
     providerPolicySource:
       preparedCatalog?.pluginRegistry ??
       (lightweight || metadataSnapshot !== undefined ? "active" : undefined),
   });
-  const catalogEntry =
-    rowModelCatalog && provider && model ? thinkingProjection.catalogEntry : undefined;
-  const nativeRuntime = thinkingProjection.agentRuntime.id;
   return {
     selectedModel,
     rowModelIdentity,
     thinkingProjection,
-    // Thinking may borrow API capabilities; context capacity remains runtime-owned.
     catalogEntry:
-      nativeRuntime === "openclaw"
-        ? catalogEntry?.nativeRuntime
-          ? undefined
-          : catalogEntry
-        : catalogEntry?.nativeRuntime === nativeRuntime
-          ? catalogEntry
-          : undefined,
+      rowModelCatalog && provider && model ? thinkingProjection.catalogEntry : undefined,
   };
 }

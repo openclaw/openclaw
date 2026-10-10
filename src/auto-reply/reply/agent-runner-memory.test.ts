@@ -59,9 +59,6 @@ import {
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
 import {
-  createReplyOperation,
-  createCompactionLifecycle,
-  loadMainSessionEntry,
   createMemoryFlushPlan,
   createModifiedMemoryFlushPlan,
   createMemoryRunEntryMockImplementation,
@@ -75,10 +72,11 @@ import {
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
-import { waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
+import { waitForReplyRunSuccessorAdmission, type ReplyOperation } from "./reply-run-registry.js";
 import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const {
   compactEmbeddedAgentSessionMock,
@@ -185,6 +183,36 @@ function registerClaudeCliBackend(ownsNativeCompaction = false): void {
       },
     ],
   });
+}
+
+type TestReplyOperation = ReplyOperation & {
+  setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
+  updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
+};
+
+function createReplyOperation(): TestReplyOperation {
+  const { replyOperation } = createMockReplyOperation({ key: "test" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
+    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
+    updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
+  });
+}
+
+function createCompactionLifecycle(replyOperation: ReplyOperation) {
+  return {
+    abortSignal: replyOperation.abortSignal,
+    onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+    onSessionIdChanged: (sessionId: string) => replyOperation.updateSessionId(sessionId),
+  };
+}
+
+function loadMainSessionEntry(storePath: string): SessionEntry {
+  const entry = loadSessionEntry({ storePath, sessionKey: "main" });
+  if (!entry) {
+    throw new Error("expected persisted main session entry");
+  }
+  return entry;
 }
 
 function usageEvent(
@@ -596,31 +624,6 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.compactionCount).toBe(1);
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
-
-  it.each([
-    ["deepseek", "deepseek-v4-flash", 1_000_000],
-    ["openai", "gpt-5.4-mini", 400_000],
-  ] as const)(
-    "uses bundled %s capacity at maintenance plan admission",
-    async (provider, model, expected) => {
-      const seen: Array<number | undefined> = [];
-      registerMemoryCapability("third-party-memory", {
-        flushPlanResolver: (params) => {
-          seen.push(params.contextWindowTokens);
-          return createModifiedMemoryFlushPlan({ reserveTokensFloor: 1_000 });
-        },
-      });
-      await runDefaultMemoryFlush(
-        createFlushSessionEntry({ totalTokens: 1_000, agentRuntimeOverride: "openclaw" }),
-        {
-          modelContextTokens: undefined,
-          followupRun: createTestFollowupRun({ provider, model }),
-          defaultModel: `${provider}/${model}`,
-        },
-      );
-      expect(seen).toContain(expected);
-    },
-  );
 
   it("does not increment memory-flush failures for user aborts (regression: #80755)", async () => {
     const storePath = path.join(rootDir, "sessions.json");

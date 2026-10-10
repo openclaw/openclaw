@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "./context-budget.test-support.js";
 import {
   resolveProjectedSessionContextTokens,
-  resolveProjectedSessionContextTokenBudget,
   resolveProjectedSessionContextBudgetStatus,
+  resolveTrustedSessionContextTokens,
 } from "./context-token-provenance.js";
-import type { SessionEntry } from "./types.js";
 
 const currentSelection = {
   provider: "openai",
@@ -13,19 +12,18 @@ const currentSelection = {
   agentHarnessId: "codex",
 };
 
-describe("session context projection without current model capacity", () => {
+describe("resolveTrustedSessionContextTokens", () => {
   it("trusts only runtime telemetry from the exact producing selection", () => {
     expect(
-      resolveProjectedSessionContextTokens({
+      resolveTrustedSessionContextTokens({
         entry: {
           modelProvider: "OpenAI",
-          model: "gpt-5.6-sol",
+          model: "GPT-5.6-SOL",
           agentHarnessId: "Codex",
           contextTokens: 272_000,
           contextTokensSource: "runtime",
         },
         ...currentSelection,
-        resolvedContextTokens: undefined,
       }),
     ).toBe(272_000);
   });
@@ -43,7 +41,7 @@ describe("session context projection without current model capacity", () => {
     { name: "different model", patch: { model: "gpt-5.5" } },
   ])("rejects $name", ({ patch }) => {
     expect(
-      resolveProjectedSessionContextTokens({
+      resolveTrustedSessionContextTokens({
         entry: {
           modelProvider: "openai",
           model: "gpt-5.6-sol",
@@ -53,20 +51,18 @@ describe("session context projection without current model capacity", () => {
           ...patch,
         },
         ...currentSelection,
-        resolvedContextTokens: undefined,
       }),
     ).toBeUndefined();
   });
 
   it("preserves the native window owned by a locked legacy session", () => {
     expect(
-      resolveProjectedSessionContextTokens({
+      resolveTrustedSessionContextTokens({
         entry: {
           modelSelectionLocked: true,
           contextTokens: 272_000,
         },
         ...currentSelection,
-        resolvedContextTokens: undefined,
       }),
     ).toBe(272_000);
   });
@@ -76,7 +72,7 @@ describe("session context projection without current model capacity", () => {
     { name: "model", patch: { model: "gpt-5.5" } },
   ])("rejects a locked window owned by a different $name", ({ patch }) => {
     expect(
-      resolveProjectedSessionContextTokens({
+      resolveTrustedSessionContextTokens({
         entry: {
           modelProvider: "openai",
           model: "gpt-5.6-sol",
@@ -85,7 +81,6 @@ describe("session context projection without current model capacity", () => {
           ...patch,
         },
         ...currentSelection,
-        resolvedContextTokens: undefined,
       }),
     ).toBeUndefined();
   });
@@ -106,10 +101,7 @@ describe("resolveProjectedSessionContextTokens", () => {
         entry: matchingRuntimeEntry,
         ...currentSelection,
         resolvedContextTokens: 1_000_000,
-        configuredContextTokenLimits: {
-          effectiveConfiguredTokens: 1_000_000,
-          authoredContextTokenCap: 1_000_000,
-        },
+        authoredContextTokens: 1_000_000,
       }),
     ).toBe(1_000_000);
   });
@@ -191,10 +183,7 @@ describe("resolveProjectedSessionContextTokens", () => {
         },
         ...currentSelection,
         resolvedContextTokens: 272_000,
-        configuredContextTokenLimits: {
-          effectiveConfiguredTokens: 272_000,
-          authoredContextTokenCap: 272_000,
-        },
+        authoredContextTokens: 272_000,
       }),
     ).toBe(1_000_000);
   });
@@ -212,7 +201,6 @@ describe("resolveProjectedSessionContextBudgetStatus", () => {
 
   it.each([
     { name: "model", current: { model: "qwen3:4b" } },
-    { name: "model ID case", current: { model: "Qwen3:8b" } },
     { name: "missing model", current: { model: undefined } },
     { name: "missing provider", current: { provider: undefined } },
     { name: "unknown cap", current: { contextTokens: undefined } },
@@ -267,70 +255,4 @@ describe("resolveProjectedSessionContextBudgetStatus", () => {
       }),
     ).toEqual(entry.contextBudgetStatus);
   });
-});
-
-describe("source-bearing synthetic fallback budgets", () => {
-  const producer = {
-    modelProvider: "openai",
-    model: "gpt-5.6-sol",
-    agentHarnessId: "codex",
-  };
-  const cases: Array<{
-    name: string;
-    entry?: Pick<
-      SessionEntry,
-      | "modelProvider"
-      | "model"
-      | "agentHarnessId"
-      | "contextTokens"
-      | "contextTokensSource"
-      | "modelSelectionLocked"
-    >;
-    authoredContextTokens?: number;
-    contextTokens: number;
-    contextTokensSource: SessionEntry["contextTokensSource"];
-  }> = [
-    { name: "unreported owner", contextTokens: 128_000, contextTokensSource: "synthetic" },
-    {
-      name: "authored budget",
-      authoredContextTokens: 200_000,
-      contextTokens: 200_000,
-      contextTokensSource: "resolved",
-    },
-    {
-      name: "matching runtime",
-      entry: { ...producer, contextTokens: 272_000, contextTokensSource: "runtime" },
-      contextTokens: 272_000,
-      contextTokensSource: "runtime",
-    },
-    {
-      name: "matching effective resolution",
-      entry: { ...producer, contextTokens: 272_000, contextTokensSource: "resolved-v1" },
-      contextTokens: 272_000,
-      contextTokensSource: "resolved-v1",
-    },
-    {
-      name: "locked native window",
-      entry: { ...producer, contextTokens: 272_000, modelSelectionLocked: true },
-      contextTokens: 272_000,
-      contextTokensSource: undefined,
-    },
-  ];
-  it.each(cases)(
-    "preserves $name authority over an estimated window",
-    ({ entry, authoredContextTokens, contextTokens, contextTokensSource }) => {
-      expect(
-        resolveProjectedSessionContextTokenBudget({
-          entry,
-          ...currentSelection,
-          resolvedContextTokens: 128_000,
-          resolvedContextTokensSource: "synthetic",
-          configuredContextTokenLimits: {
-            effectiveConfiguredTokens: authoredContextTokens,
-            authoredContextTokenCap: authoredContextTokens,
-          },
-        }),
-      ).toEqual({ contextTokens, contextTokensSource });
-    },
-  );
 });

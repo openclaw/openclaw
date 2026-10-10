@@ -1,14 +1,7 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import {
-  getContextWindowCaches,
-  providerContextTokenCacheKey,
-} from "../../agents/context-cache.js";
-import { resetContextWindowCacheForTest } from "../../agents/context.test-support.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
-import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -17,18 +10,13 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
-import { resolveContextTokens } from "./model-selection-context.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
 }));
 
-beforeEach(() => resetContextWindowCacheForTest());
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-  resetContextWindowCacheForTest();
-});
+afterEach(() => resetPluginRuntimeStateForTest());
 
 test("keeps thinking defaults separate for distinct literal model IDs", async () => {
   await withStateDirEnv("reply-thinking-identities-", async () => {
@@ -323,130 +311,3 @@ test.each<SelectionCase>([
     );
   });
 });
-
-test.each([
-  {
-    name: "native Synthetic window",
-    runtime: "codex",
-    window: 128_000,
-    synthetic: true,
-    prompt: undefined,
-    expected: 128_000,
-  },
-  {
-    name: "native genuine window",
-    runtime: "codex",
-    window: 64_000,
-    synthetic: false,
-    prompt: undefined,
-    expected: 64_000,
-  },
-  {
-    name: "native reported prompt",
-    runtime: "codex",
-    window: 128_000,
-    synthetic: true,
-    prompt: 777_000,
-    expected: 777_000,
-  },
-  {
-    name: "native selection without native inventory",
-    runtime: "codex",
-    window: undefined,
-    synthetic: false,
-    prompt: undefined,
-    expected: 200_000,
-  },
-  {
-    name: "API selection beside native inventory",
-    runtime: "openclaw",
-    window: 128_000,
-    synthetic: true,
-    prompt: undefined,
-    expected: 1_000_000,
-  },
-])(
-  "prepares $name context from the current runtime",
-  async ({ runtime, window, synthetic, prompt, expected }) => {
-    await withStateDirEnv("reply-context-runtime-", async () => {
-      const provider = "openai";
-      const model = "directive-capacity-fixture";
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
-        agents: {
-          defaults: { model: `${provider}/${model}`, models: { [`${provider}/${model}`]: {} } },
-        },
-      };
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const entry: SessionEntry = {
-        sessionId: "runtime-context",
-        updatedAt: 1,
-        providerOverride: provider,
-        modelOverride: model,
-        agentRuntimeOverride: runtime,
-        agentHarnessId: "previous-native-runtime",
-      };
-      const sessionKey = "agent:main:runtime-context";
-      expect(resolveSessionModelRef(cfg, entry, "main")).toEqual({ provider, model });
-      expect(
-        resolveEffectiveAgentRuntime({
-          cfg,
-          agentId: "main",
-          provider,
-          modelId: model,
-          sessionKey,
-          sessionEntry: entry,
-        }),
-      ).toBe(runtime);
-      const api: ModelCatalogEntry = {
-        provider,
-        id: model,
-        name: "API fixture",
-        contextWindow: 1_000_000,
-      };
-      const native: ModelCatalogEntry | undefined =
-        window === undefined
-          ? undefined
-          : {
-              provider,
-              id: model,
-              name: "Native fixture",
-              nativeRuntime: "codex",
-              contextWindow: window,
-              ...(synthetic ? { contextWindowSource: "synthetic" } : {}),
-              ...(prompt === undefined ? {} : { contextTokens: prompt }),
-            };
-      const entries = native ? (runtime === "openclaw" ? [native, api] : [native]) : [api];
-      getContextWindowCaches().discoveredTokenCache.set(
-        providerContextTokenCacheKey(provider, model),
-        1_000_000,
-      );
-      const state = await createModelSelectionState({
-        cfg,
-        agentId: "main",
-        agentCfg: cfg.agents?.defaults,
-        sessionEntry: entry,
-        sessionStore: { [sessionKey]: entry },
-        sessionKey,
-        defaultProvider: provider,
-        defaultModel: model,
-        provider,
-        model,
-        hasModelDirective: false,
-        preparedModelCatalog: { entries: [api], routeVariants: entries, authoritative: true },
-      });
-      expect({ provider: state.provider, model: state.model }).toEqual({ provider, model });
-      expect(
-        resolveContextTokens({
-          cfg,
-          provider: state.provider,
-          model: state.model,
-          nativeRuntime: state.nativeRuntime,
-          modelContextWindow: state.modelContextWindow,
-          modelContextWindowSource: state.modelContextWindowSource,
-          modelContextTokens: state.modelContextTokens,
-        }),
-      ).toBe(expected);
-    });
-  },
-);

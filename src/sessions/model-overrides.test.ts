@@ -332,50 +332,30 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(withFlagEntry.liveModelSwitchPending).toBe(true);
   });
 
-  it.each([
-    { name: "account change", profile: "newprofile", contextTokens: undefined },
-    { name: "source promotion", profile: "oldprofile", contextTokens: 888_000 },
-    { name: "account removal", profile: undefined, contextTokens: undefined },
-  ])(
-    "marks profile-only $name as pending and qualifies its context",
-    ({ profile, contextTokens }) => {
-      const entry: SessionEntry = {
-        sessionId: "sess-profile-switch",
-        updatedAt: Date.now() - 5_000,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-        authProfileOverride: "oldprofile",
-        authProfileOverrideSource: "auto",
-        contextTokens: 888_000,
-        contextTokensSource: "resolved-v1",
-        contextBudgetStatus: contextBudgetStatus({
-          updatedAt: 1,
-          provider: "openai",
-          model: "gpt-5.4",
-          contextTokenBudget: 888_000,
-        }),
-      };
+  it("marks profile-only switches as pending when requested", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-profile-switch",
+      updatedAt: Date.now() - 5_000,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      authProfileOverride: "oldprofile",
+      authProfileOverrideSource: "user",
+    };
 
-      const result = applyModelOverrideToSessionEntry({
-        entry,
-        selection: {
-          provider: "openai",
-          model: "gpt-5.4",
-        },
-        profileOverride: profile,
-        markLiveSwitchPending: true,
-      });
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      profileOverride: "newprofile",
+      markLiveSwitchPending: true,
+    });
 
-      expect(result.updated).toBe(true);
-      expect(entry.authProfileOverride).toBe(profile);
-      expect(entry.liveModelSwitchPending).toBe(true);
-      expect(entry.contextTokens).toBe(contextTokens);
-      expect(entry.contextTokensSource).toBe(
-        contextTokens === undefined ? undefined : "resolved-v1",
-      );
-      expect(entry.contextBudgetStatus?.contextTokenBudget).toBe(contextTokens);
-    },
-  );
+    expect(result.updated).toBe(true);
+    expect(entry.authProfileOverride).toBe("newprofile");
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
 
   it.each([
     { preserveAuthProfileOverride: undefined, expectedProfile: undefined },

@@ -1,4 +1,3 @@
-import type { ModelCatalogModel } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { z } from "zod";
 import type { ModelDataMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
 import type { OpenAICompletionsCompat, RawModelCostConfig } from "../llm/types.js";
@@ -78,10 +77,7 @@ export type ModelProviderConfig = Omit<
 };
 
 /** Fully materialized provider declaration emitted by provider catalog plugins. */
-export type ModelProviderDeclarationConfig = Omit<ModelProviderConfig, "models"> & {
-  models: (ModelDefinitionConfig &
-    Pick<ModelCatalogModel, "contextWindows" | "contextWindowDefault">)[];
-};
+export type ModelProviderDeclarationConfig = ModelProviderConfig;
 
 /** User config input shape before provider defaults/models are materialized. */
 export type ModelProviderConfigInput = Partial<ModelProviderConfig>;

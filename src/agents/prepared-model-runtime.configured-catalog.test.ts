@@ -1,29 +1,23 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
 import {
   prepareProviderStaticCatalog,
   resolvePreparedProviderStaticConfigs,
 } from "../plugins/provider-discovery.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
-import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
-import { resolveModelContextTokenProjectionFromCache } from "./context-resolution.js";
-import { resetContextWindowCacheForTest } from "./context.test-support.js";
+import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
-import { mergeProviderModels } from "./models-config.merge.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import {
   materializePreparedModelCatalog,
   prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
-import { createSessionContextCapacityResolver } from "./session-context-capacity.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 describe("configured catalog registry composition", () => {
@@ -407,7 +401,6 @@ describe("configured catalog registry composition", () => {
 });
 
 describe("synthetic configured context publication", () => {
-  afterEach(resetContextWindowCacheForTest);
   const fallback = {
     provider: "fixture",
     id: "new-model",
@@ -432,7 +425,7 @@ describe("synthetic configured context publication", () => {
     providerAuthLabels: new Map(),
     credentials: { fixture: { type: "api_key" as const, key: account } },
   });
-  async function budget(
+  function budget(
     entries: ModelCatalogEntry[] = [discovered],
     staticEntry: ModelCatalogEntry = fallback,
     config: OpenClawConfig = {},
@@ -461,131 +454,31 @@ describe("synthetic configured context publication", () => {
       ) ??
       catalog.entries.find((entry) => entry.provider === "fixture" && entry.id === "new-model");
     expect(selected).toBeDefined();
-    return resolveModelContextTokenProjectionFromCache(
-      {
-        cfg: config,
+    return resolveEmbeddedRuntimeModelPolicy({
+      cfg: config,
+      provider: "fixture",
+      modelId: "new-model",
+      nativeModelOwned: false,
+      runtimeModel: {
+        id: "new-model",
+        name: "New model",
+        api: "openai-responses",
         provider: "fixture",
-        model: "new-model",
-        modelContextTokens: selected?.contextTokens,
-        modelContextWindow: selected?.contextWindow,
-        modelContextWindowSource: selected?.contextWindowSource,
+        baseUrl: discovered.baseUrl,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        maxTokens: 4096,
+        ...selected,
       },
-      () => undefined,
-      () => undefined,
-    ).contextTokens;
+    }).contextTokenBudget;
   }
   it("preserves provider synthetic provenance through the catalog row projection", () => {
     expect(modelCatalogRowToEntry(fallback)).toHaveProperty("contextWindowSource", "synthetic");
   });
-  it("uses accepted account prompt limits instead of the superseded synthetic window", async () => {
-    expect(await budget()).toBe(872_000);
-    expect(await budget()).toBe(872_000);
-    const status = buildStatusMessageParts({
-      config: {},
-      agent: {},
-      includeTranscriptUsage: false,
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-      resolvedHarness: "openclaw",
-      modelRefs: statusModelRefs({ provider: "fixture", model: "new-model" }),
-      selectedContextWindow: 1_000_000,
-      selectedContextTokens: 872_000,
-      thinkingCatalog: [discovered],
-    });
-    expect(status.text).toContain("/872k");
+  it("uses accepted account prompt limits instead of the superseded synthetic window", () => {
+    expect(budget()).toBe(872_000);
   });
-  it.each([
-    {
-      name: "declared default",
-      selected: undefined,
-      expected: 64_000,
-      promptCap: undefined,
-      choices: true,
-    },
-    {
-      name: "selected small window",
-      selected: "small",
-      expected: 64_000,
-      promptCap: undefined,
-      choices: true,
-    },
-    {
-      name: "selected wide window",
-      selected: "wide",
-      expected: 872_000,
-      promptCap: undefined,
-      choices: true,
-    },
-    {
-      name: "prompt cap with choices",
-      selected: "wide",
-      expected: 64_000,
-      promptCap: 64_000,
-      choices: true,
-    },
-    {
-      name: "prompt cap without choices",
-      selected: undefined,
-      expected: 64_000,
-      promptCap: 64_000,
-      choices: false,
-    },
-    {
-      name: "larger prompt cap",
-      selected: "wide",
-      expected: 872_000,
-      promptCap: 1_000_000,
-      choices: true,
-    },
-  ])(
-    "preserves $name when accepted capacity supersedes an estimate",
-    ({ selected, expected, promptCap, choices }) => {
-      const options = [
-        { id: "small", label: "Small", contextWindow: 64_000 },
-        { id: "wide", label: "Wide", contextWindow: 1_000_000 },
-      ];
-      const publication = prepareModelCatalogPublication(
-        {
-          entries: [discovered],
-          routeVariants: [discovered],
-          providerOutcomes: [{ provider: "fixture", status: "ready" }],
-        },
-        new Map(),
-        undefined,
-        auth("account-a"),
-        (provider) => provider,
-        new Map(),
-      );
-      const catalog = materializePreparedModelCatalog(
-        publication.catalog,
-        [],
-        [
-          {
-            ...fallback,
-            baseUrl: discovered.baseUrl,
-            ...(promptCap !== undefined ? { contextTokens: promptCap } : {}),
-            ...(choices ? { contextWindows: options, contextWindowDefault: "small" } : {}),
-          },
-        ],
-        new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
-      );
-      const capacity = createSessionContextCapacityResolver({
-        isCurrent: () => true,
-        modelCatalog: catalog,
-      });
-      expect(capacity("fixture", "new-model", { contextWindow: selected })).toMatchObject({
-        state: "ready",
-        contextTokens: expected,
-        synthetic: false,
-      });
-      const retained = catalog.staticEntries?.[0];
-      if (promptCap !== undefined) {
-        expect(retained?.contextTokens).toBe(Math.min(promptCap, discovered.contextTokens));
-      }
-      expect(retained?.contextWindows).toEqual(choices ? options : undefined);
-      expect(retained?.contextWindowDefault).toBe(choices ? "small" : undefined);
-    },
-  );
   it.each([
     ["matching physical route", discovered, false],
     ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
@@ -619,29 +512,40 @@ describe("synthetic configured context publication", () => {
     ["curated static", { ...fallback, contextWindowSource: undefined }],
     ["other API", { ...fallback, api: "openai-completions" as const }],
     ["other endpoint", { ...fallback, baseUrl: "https://other.example/v1" }],
-  ])("preserves %s limits", async (_name, row) => {
-    expect(await budget([discovered], row)).toBe(128_000);
+  ])("preserves %s limits", (_name, row) => {
+    expect(budget([discovered], row)).toBe(128_000);
   });
-  it("preserves explicit authored prompt and native-window caps", async () => {
+  it("preserves explicit authored prompt and native-window caps", () => {
     for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
       const config: OpenClawConfig = {
         models: {
           providers: {
             fixture: {
               baseUrl: discovered.baseUrl,
-              models: [{ id: "new-model", ...limits } as never],
+              models: [
+                {
+                  id: "new-model",
+                  name: "New model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: discovered.contextWindow,
+                  maxTokens: 4096,
+                  ...limits,
+                },
+              ],
             },
           },
         },
       };
-      expect(await budget([discovered], fallback, config)).toBe(64_000);
+      expect(budget([discovered], fallback, config)).toBe(64_000);
     }
   });
-  it("keeps fallback for empty discovery and a same-id different provider", async () => {
-    expect(await budget([])).toBe(128_000);
-    expect(await budget([{ ...discovered, provider: "other" }])).toBe(128_000);
+  it("keeps fallback for empty discovery and a same-id different provider", () => {
+    expect(budget([])).toBe(128_000);
+    expect(budget([{ ...discovered, provider: "other" }])).toBe(128_000);
   });
-  it("does not promote a static starter after first-load discovery failure", async () => {
+  it("does not promote a static starter after first-load discovery failure", () => {
     const publication = prepareModelCatalogPublication(
       {
         entries: [],
@@ -666,7 +570,7 @@ describe("synthetic configured context publication", () => {
     expect(catalog.entries).toContainEqual(expect.objectContaining(discovered));
   });
 
-  it("retains only same-account inventory after failure", async () => {
+  it("retains only same-account inventory after failure", () => {
     const accepted = prepareModelCatalogPublication(
       {
         entries: [discovered],
@@ -698,33 +602,6 @@ describe("synthetic configured context publication", () => {
         [fallback],
         new Set(failed.discoveryOrigins.map(({ provider }) => provider)),
       );
-      const resolveCapacity = createSessionContextCapacityResolver({
-        modelCatalog: catalog,
-        isCurrent: () => true,
-      });
-      expect(
-        resolveCapacity("fixture", "new-model", { profileId: "a", route: discovered }),
-      ).toMatchObject(
-        account === "account-a"
-          ? { state: "ready", contextTokens: 872_000, synthetic: false }
-          : { state: "unavailable" },
-      );
-      expect(
-        resolveCapacity("fixture", "new-model", { profileId: "other", route: discovered }),
-      ).toEqual({ state: "unavailable" });
-      expect(
-        resolveCapacity("fixture", "new-model", {
-          profileId: "a",
-          route: { ...discovered, baseUrl: "https://other.example/v1" },
-        }),
-      ).toEqual({ state: "unavailable" });
-      expect(
-        createSessionContextCapacityResolver({ modelCatalog: catalog, isCurrent: () => false })(
-          "fixture",
-          "new-model",
-          { profileId: "a", route: discovered },
-        ),
-      ).toEqual({ state: "unavailable" });
       if (account === "account-a") {
         expect(catalog.entries).toContainEqual(discovered);
         expect(catalog.staticEntries).not.toContainEqual(fallback);
@@ -735,270 +612,5 @@ describe("synthetic configured context publication", () => {
         expect(failed.discoveryOrigins).toEqual([]);
       }
     }
-  });
-
-  describe("account /models rows without a reported native window", () => {
-    // What the Copilot /models mapping publishes when max_context_window_tokens is
-    // absent/invalid but max_prompt_tokens is real.
-    const missingNative = {
-      ...discovered,
-      contextWindow: 777_000,
-      contextWindowSource: "synthetic" as const,
-      contextTokens: 777_000,
-    };
-
-    it("(a) keeps the estimate synthetic across the provider-result copy and merge", () => {
-      const [[, copied]] = copyProviderCatalogResultEntries({
-        providerId: "fixture",
-        result: { provider: { baseUrl: discovered.baseUrl, models: [missingNative] } } as never,
-      }) as unknown as [[string, { models: Array<Record<string, unknown>> }]];
-      expect(copied.models[0]).toMatchObject({
-        contextWindowSource: "synthetic",
-        contextTokens: 777_000,
-      });
-      const merged = mergeProviderModels(
-        { models: [missingNative] },
-        { models: [{ id: "new-model", name: "New model" } as never] },
-        { providerId: "fixture" },
-      );
-      expect(merged.models?.[0]).toHaveProperty("contextWindowSource", "synthetic");
-      expect(modelCatalogRowToEntry(missingNative)).toHaveProperty(
-        "contextWindowSource",
-        "synthetic",
-      );
-    });
-
-    it("(a) uses the real prompt limit but does not become authoritative native capacity", async () => {
-      // The accepted prompt limit supersedes the 128k fallback...
-      expect(await budget([missingNative])).toBe(777_000);
-      // ...but a row that only carries a synthetic native estimate grants no replacement.
-      const estimateOnly = { ...missingNative, contextTokens: undefined, contextWindow: 128_000 };
-      expect(await budget([estimateOnly], { ...fallback, contextWindow: 64_000 })).toBe(64_000);
-    });
-
-    it("(b) preserves a genuinely reported native 128k window as a real constraint", async () => {
-      const reported = { ...discovered, contextWindow: 128_000, contextTokens: undefined };
-      expect(await budget([reported])).toBe(128_000);
-      // A real reported 128k row is authority to replace the synthetic fallback row.
-      expect(await budget([reported], { ...fallback, contextWindow: 200_000 })).toBe(128_000);
-    });
-
-    it.each([
-      { name: "prompt cap", limits: { contextTokens: 64_000 }, synthetic: true },
-      { name: "native window", limits: { contextWindow: 64_000 }, synthetic: false },
-    ])(
-      "(c) preserves authored $name sizing and native-window provenance",
-      async ({ limits, synthetic }) => {
-        const authored: ModelDefinitionConfig = {
-          id: "new-model",
-          name: "New model",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          maxTokens: 8_192,
-          ...limits,
-        };
-        const merged = mergeProviderModels(
-          { models: [missingNative] },
-          { models: [authored] },
-          { providerId: "fixture" },
-        );
-        if (synthetic) {
-          expect(merged.models?.[0]).toHaveProperty("contextWindowSource", "synthetic");
-        } else {
-          expect(merged.models?.[0]).not.toHaveProperty("contextWindowSource");
-        }
-        const config: OpenClawConfig = {
-          models: {
-            providers: {
-              fixture: { baseUrl: discovered.baseUrl, models: [authored] },
-            },
-          },
-        };
-        expect(await budget([missingNative], fallback, config)).toBe(64_000);
-      },
-    );
-
-    it("(c) applies a prompt-only authored cap through the prepared catalog without trusting the native estimate", async () => {
-      const authored: ModelDefinitionConfig = {
-        id: "new-model",
-        name: "New model",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        maxTokens: 8_192,
-        contextTokens: 200_000,
-      };
-      const config: OpenClawConfig = {
-        models: {
-          providers: {
-            fixture: { api: "openai-responses", baseUrl: discovered.baseUrl, models: [authored] },
-          },
-        },
-      };
-      const metadataSnapshot = createPluginMetadataSnapshotFixture();
-      const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
-        config,
-        includePluginCatalogs: false,
-        pluginMetadataSnapshot: metadataSnapshot,
-        modelsJsonContents: JSON.stringify({
-          providers: {
-            fixture: {
-              api: "openai-responses",
-              baseUrl: discovered.baseUrl,
-              models: [
-                {
-                  ...missingNative,
-                  contextWindow: 128_000,
-                  maxTokens: 8_192,
-                  reasoning: false,
-                  input: ["text"],
-                },
-              ],
-            },
-          },
-        }),
-      });
-      const modelCatalog = await buildPreparedModelCatalogSnapshot({
-        config,
-        agentDir: "captured:agent",
-        authCredentials: {},
-        models: registry.getAll(),
-        metadataSnapshot,
-        includeProviderPluginAugmentation: false,
-      });
-      const capacity = createSessionContextCapacityResolver({
-        isCurrent: () => true,
-        modelCatalog,
-      });
-      expect(capacity("fixture", "new-model")).toEqual({
-        state: "ready",
-        contextTokens: 200_000,
-        synthetic: false,
-        contextTokenLimit: 200_000,
-      });
-    });
-
-    it("(d) failed discovery, another account, API, endpoint or provider supply no authority", async () => {
-      // other API / endpoint / provider
-      expect(await budget([{ ...missingNative, api: "openai-completions" as const }])).toBe(
-        128_000,
-      );
-      // A fallback bound to another endpoint is not this account's route.
-      expect(
-        await budget([missingNative], { ...fallback, baseUrl: "https://other.example/v1" }),
-      ).toBe(128_000);
-      expect(await budget([{ ...missingNative, provider: "other" }])).toBe(128_000);
-      // failed first discovery: no accepted origin
-      const failed = prepareModelCatalogPublication(
-        {
-          entries: [],
-          routeVariants: [],
-          staticEntries: [missingNative],
-          providerOutcomes: [{ provider: "fixture", status: "unavailable" }],
-        },
-        new Map(),
-        undefined,
-        auth("account-a"),
-        (provider) => provider,
-        new Map(),
-      );
-      expect(failed.discoveryOrigins).toEqual([]);
-      const catalog = materializePreparedModelCatalog(failed.catalog, [], [fallback], new Set());
-      expect(
-        catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic"),
-      ).toBe(true);
-      expect(catalog.staticEntries).toContainEqual(fallback);
-      expect(catalog.entries).toContainEqual(expect.objectContaining(missingNative));
-    });
-
-    it("(d) a retained inventory from another account cannot replace the fallback", async () => {
-      const accepted = prepareModelCatalogPublication(
-        {
-          entries: [missingNative],
-          routeVariants: [],
-          providerOutcomes: [{ provider: "fixture", status: "ready", profileId: "a" }],
-        },
-        new Map(),
-        undefined,
-        auth("account-a"),
-        (provider) => provider,
-        new Map(),
-      );
-      const failedOtherAccount = prepareModelCatalogPublication(
-        {
-          entries: [],
-          routeVariants: [],
-          providerOutcomes: [{ provider: "fixture", status: "unavailable", profileId: "a" }],
-        },
-        new Map(),
-        { ...accepted, providers: new Map() },
-        auth("account-b"),
-        (provider) => provider,
-        new Map(),
-      );
-      const catalog = materializePreparedModelCatalog(
-        failedOtherAccount.catalog,
-        [],
-        [fallback],
-        new Set(failedOtherAccount.discoveryOrigins.map(({ provider }) => provider)),
-      );
-      expect(failedOtherAccount.discoveryOrigins).toEqual([]);
-      expect(catalog.entries).not.toContainEqual(missingNative);
-      expect(catalog.staticEntries).toContainEqual(fallback);
-    });
-  });
-
-  describe("existing-session status recovery", () => {
-    const sessionEntry = (contextTokensSource: "synthetic" | "runtime") => ({
-      sessionId: "s-1",
-      updatedAt: 1,
-      modelProvider: "fixture",
-      model: "new-model",
-      agentHarnessId: "openclaw",
-      contextTokens: 128_000,
-      contextTokensSource,
-    });
-    const ownerOf = (entries: ModelCatalogEntry[], current = () => true) =>
-      createSessionContextCapacityResolver({
-        isCurrent: current,
-        modelCatalog: { entries: [] },
-        readFullModelCatalog: () => ({ entries }),
-      });
-    async function status(
-      contextTokensSource: "synthetic" | "runtime",
-      resolveOwnerContextCapacity?: ReturnType<typeof createSessionContextCapacityResolver>,
-    ) {
-      return buildStatusMessageParts({
-        config: {},
-        agent: {},
-        includeTranscriptUsage: false,
-        modelAuth: "api-key",
-        activeModelAuth: "api-key",
-        resolvedHarness: "openclaw",
-        modelRefs: statusModelRefs({ provider: "fixture", model: "new-model" }),
-        sessionEntry: sessionEntry(contextTokensSource) as never,
-        thinkingCatalog: [discovered],
-        ...(resolveOwnerContextCapacity ? { resolveOwnerContextCapacity } : {}),
-      }).text;
-    }
-
-    it("a synthetic persisted 128k reaches the owner's accepted limit without restart", async () => {
-      expect(await status("synthetic", ownerOf([discovered]))).toContain("/872k");
-    });
-
-    it("genuine persisted 128k telemetry stays conservative", async () => {
-      expect(await status("runtime", ownerOf([discovered]))).toContain("/128k");
-    });
-
-    it("an unavailable owner renders unknown instead of stale or borrowed capacity", async () => {
-      const text = await status(
-        "synthetic",
-        ownerOf([discovered], () => false),
-      );
-      expect(text).toContain("?/?");
-      expect(text).not.toContain("/128k");
-      expect(text).not.toContain("/872k");
-    });
   });
 });

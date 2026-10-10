@@ -154,6 +154,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;
+  contextTokensSource?: "resolved-v1";
   effectiveModel: ProviderRuntimeModel;
 } {
   if (params.nativeModelOwned) {
@@ -177,8 +178,10 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
       : params.runtimeModel.contextWindowSource,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
-  // Authored budgets can exceed the session-selected window. Apply that
-  // selection after the guard combines genuine model prompt and native caps.
+  // resolveContextWindowInfo ranks the passed selection below both the
+  // discovered model cap and models.providers.*.models[].contextTokens, so a
+  // 200k session would keep budgeting against the wider window. Only an
+  // effective option caps here; the bare catalog scalar stays subordinate.
   const ctxInfo =
     contextWindowProfile.contextWindow &&
     contextWindowProfile.contextTokens !== undefined &&
@@ -229,6 +232,14 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   return {
     contextWindowInfo,
     contextTokenBudget,
+    // Cold readers match only provider/model/harness, so removable caps and
+    // session-selectable windows cannot become persisted model facts.
+    contextTokensSource:
+      contextWindowInfo.source === "model" &&
+      contextWindowInfo.referenceTokens === undefined &&
+      !params.runtimeModel.contextWindows?.length
+        ? "resolved-v1"
+        : undefined,
     effectiveModel,
   };
 }

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -7,24 +6,11 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 const mocks = vi.hoisted(() => ({
   persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
-  scalarContextTokens: undefined as number | undefined,
-  preparedContextTokensSource: undefined as ModelContextTokenProjection["contextTokensSource"],
   resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
 
-// mock-isolation: Isolate catalog discovery while checking accounting of prepared facts.
 vi.mock("../../agents/context.js", () => ({
-  resolveModelContextTokenProjection: () => ({
-    contextTokens: mocks.scalarContextTokens,
-    configuredContextTokenLimits: undefined,
-    source: mocks.scalarContextTokens === undefined ? "fallback" : "model",
-  }),
-  resolveContextTokenBudgetForModel: async () => ({
-    contextTokensSource: mocks.preparedContextTokensSource,
-    contextTokens: mocks.resolveContextTokensForModel(),
-    configuredContextTokenLimits: undefined,
-    source: "model",
-  }),
+  resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -184,8 +170,6 @@ function createParams(
 describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.scalarContextTokens = undefined;
-    mocks.preparedContextTokensSource = undefined;
     mocks.resolveContextTokensForModel.mockReturnValue(200_000);
   });
 
@@ -240,21 +224,6 @@ describe("accountFollowupTurn", () => {
     );
   });
 
-  it("accounts for a prepared selectable budget instead of an already-known model scalar", async () => {
-    mocks.scalarContextTokens = 1_000_000;
-    mocks.preparedContextTokensSource = "resolved";
-    const params = createParams();
-    const current = params.turn.session.current();
-    if (!current) {
-      throw new Error("expected current test session");
-    }
-    params.turn.session.adopt({ ...current, contextWindow: "small" });
-    await accountFollowupTurn(params);
-    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ contextTokensUsed: 200_000, contextTokensSource: "resolved" }),
-    );
-  });
-
   it("marks a successful current model lookup with versioned resolved provenance", async () => {
     const params = createParams();
 
@@ -268,47 +237,15 @@ describe("accountFollowupTurn", () => {
     );
   });
 
-  it("retains exact model-owned capacity when the current owner is unavailable", async () => {
-    mocks.resolveContextTokensForModel.mockReturnValue(undefined);
-    const params = createParams();
-    params.turn.session.adopt({
-      sessionId: "session-1",
-      updatedAt: 1,
-      modelProvider: "openai",
-      model: "gpt-4o",
-      agentHarnessId: "codex",
-      contextTokens: 272_000,
-      contextTokensSource: "resolved-v1",
-    });
-    const result = params.execution.execution.outcome;
-    if (result.kind !== "settled") {
-      throw new Error("expected settled test execution");
-    }
-    result.result.meta.agentMeta = {
-      sessionId: "session-1",
-      provider: "openai",
-      model: "gpt-4o",
-      agentHarnessId: "codex",
-    };
-    await accountFollowupTurn(params);
-    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextTokensUsed: 272_000,
-        contextTokensSource: "resolved-v1",
-      }),
-    );
-  });
-
   it("does not label a prior context fallback as a current resolution after a model switch", async () => {
     mocks.resolveContextTokensForModel.mockReturnValueOnce(undefined);
     const params = createParams();
-    const session = params.turn.session;
-    const current = session.current();
-    if (!current) {
-      throw new Error("expected current test session");
-    }
+    const session = params.turn.session as unknown as {
+      current: () => SessionEntry;
+      adopt: (entry: SessionEntry) => void;
+    };
     session.adopt({
-      ...current,
+      ...session.current(),
       modelProvider: "anthropic",
       model: "claude",
       agentHarnessId: "openclaw",
@@ -333,8 +270,8 @@ describe("accountFollowupTurn", () => {
         providerUsed: "openai",
         modelUsed: "gpt-4o",
         agentHarnessId: "codex",
-        contextTokensUsed: 200_000,
-        contextTokensSource: "resolved",
+        contextTokensUsed: 272_000,
+        contextTokensSource: undefined,
       }),
     );
   });

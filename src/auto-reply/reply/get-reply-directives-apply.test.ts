@@ -1,17 +1,7 @@
 // Tests applying parsed directives to get-reply execution options.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  getContextWindowCaches,
-  providerContextTokenCacheKey,
-} from "../../agents/context-cache.js";
-import { resetContextWindowCacheForTest } from "../../agents/context.test-support.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as sandboxRuntime from "../../agents/sandbox.js";
-import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
@@ -51,13 +41,11 @@ vi.mock("../../model-picker/apply-session-model-selection.js", async (importOrig
 }));
 
 beforeEach(() => {
-  resetContextWindowCacheForTest();
   mocks.handleDirective.mockReset();
   mocks.applyModelSelection.mockReset();
   mocks.systemEvent.mockReset();
 });
 
-afterEach(() => resetContextWindowCacheForTest());
 async function runRuntimePolicyDirective(
   params: Pick<HandleDirectiveOnlyParams, "cfg" | "agentId" | "sessionKey" | "ctx">,
   assertRuntime: (runtime: ReturnType<typeof sandboxRuntime.resolveSandboxRuntimeStatus>) => void,
@@ -502,130 +490,3 @@ describe("applyInlineDirectiveOverrides", () => {
     expect(mocks.handleDirective).not.toHaveBeenCalled();
   });
 });
-
-it.each([
-  {
-    name: "native Synthetic window",
-    runtime: "codex",
-    window: 128_000,
-    synthetic: true,
-    prompt: undefined,
-    expected: 128_000,
-  },
-  {
-    name: "native genuine window",
-    runtime: "codex",
-    window: 64_000,
-    synthetic: false,
-    prompt: undefined,
-    expected: 64_000,
-  },
-  {
-    name: "native reported prompt",
-    runtime: "codex",
-    window: 128_000,
-    synthetic: true,
-    prompt: 777_000,
-    expected: 777_000,
-  },
-  {
-    name: "native selection without native inventory",
-    runtime: "codex",
-    window: undefined,
-    synthetic: false,
-    prompt: undefined,
-    expected: 200_000,
-  },
-  {
-    name: "API selection beside native inventory",
-    runtime: "openclaw",
-    window: 128_000,
-    synthetic: true,
-    prompt: undefined,
-    expected: 1_000_000,
-  },
-])(
-  "continues mixed directives with $name from the committed runtime",
-  async ({ runtime, window, synthetic, prompt, expected }) => {
-    const provider = "openai";
-    const model = "directive-capacity-fixture";
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      commands: { text: true },
-      agents: {
-        defaults: { model: `${provider}/${model}`, models: { [`${provider}/${model}`]: {} } },
-      },
-    };
-    const sessionKey = "agent:main:runtime-context";
-    const freshEntry: SessionEntry = {
-      sessionId: "runtime-context",
-      updatedAt: 2,
-      providerOverride: provider,
-      modelOverride: model,
-      agentRuntimeOverride: runtime,
-      agentHarnessId: "previous-native-runtime",
-    };
-    const api: ModelCatalogEntry = {
-      provider,
-      id: model,
-      name: "API fixture",
-      contextWindow: 1_000_000,
-    };
-    const native: ModelCatalogEntry | undefined =
-      window === undefined
-        ? undefined
-        : {
-            provider,
-            id: model,
-            name: "Native fixture",
-            nativeRuntime: "codex",
-            contextWindow: window,
-            ...(synthetic ? { contextWindowSource: "synthetic" } : {}),
-            ...(prompt === undefined ? {} : { contextTokens: prompt }),
-          };
-    const entries = native ? (runtime === "openclaw" ? [native, api] : [native]) : [api];
-    getContextWindowCaches().discoveredTokenCache.set(
-      providerContextTokenCacheKey(provider, model),
-      1_000_000,
-    );
-    mocks.handleDirective.mockImplementation(async (params) => {
-      if (!params.persistenceState) {
-        throw new Error("Expected mixed directive persistence");
-      }
-      params.sessionStore[params.sessionKey] = freshEntry;
-      params.persistenceState.outcome = { kind: "applied", provider, model, modelCatalog: entries };
-      return undefined;
-    });
-    const { result, sessionStore } = await applyMixedDirectives({
-      body: "hello /verbose on",
-      cfg,
-      sessionKey,
-      provider,
-      model,
-      defaultProvider: provider,
-      defaultModel: model,
-      allowedModels: entries,
-      sessionEntry: {
-        ...freshEntry,
-        updatedAt: 1,
-        agentRuntimeOverride: runtime === "codex" ? "openclaw" : "codex",
-      },
-    });
-    expect(sessionStore[sessionKey]).toBe(freshEntry);
-    expect(resolveSessionModelRef(cfg, sessionStore[sessionKey], "main")).toEqual({
-      provider,
-      model,
-    });
-    expect(
-      resolveEffectiveAgentRuntime({
-        cfg,
-        agentId: "main",
-        provider,
-        modelId: model,
-        sessionKey,
-        sessionEntry: sessionStore[sessionKey],
-      }),
-    ).toBe(runtime);
-    expect(result).toMatchObject({ kind: "continue", provider, model, contextTokens: expected });
-  },
-);

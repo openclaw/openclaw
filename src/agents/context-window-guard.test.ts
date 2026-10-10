@@ -148,14 +148,7 @@ describe("context-window-guard", () => {
       Infinity,
       200_000,
     ],
-    [
-      "uses genuine native capacity when its override is sub-token",
-      "custom",
-      "tiny",
-      0.5,
-      16_000,
-      8_000,
-    ],
+    ["ignores a sub-token native window", "custom", "tiny", 0.5, 16_000, 16_000],
     ["keeps whole-token guard normalization", "custom", "tiny", 32_000.9, 16_000.9, 16_000],
   ] as const)(
     "resolves configured context limits (%s)",
@@ -446,43 +439,3 @@ describe("context-window-guard", () => {
     ).toBe(`Model context window too small (3000 tokens; source=model). Minimum is 4000.`);
   });
 });
-
-it.each([
-  [undefined, 128_000, "default"],
-  [777_000, 777_000, "model"],
-] as const)(
-  "classifies an estimated native window separately from reported capacity %s",
-  (modelContextTokens, tokens, source) => {
-    expect(
-      resolveContextWindowInfo({
-        cfg: {},
-        provider: "fixture-provider",
-        modelId: "estimated",
-        modelContextWindow: 128_000,
-        modelContextWindowSource: "synthetic",
-        modelContextTokens,
-        defaultTokens: 200_000,
-      }),
-    ).toEqual({ tokens, source });
-  },
-);
-
-it.each([
-  [undefined, 128_000],
-  [777_000, 128_000],
-  [64_000, 64_000],
-] as const)(
-  "respects genuine native capacity with reported prompt capacity %s",
-  (modelContextTokens, tokens) => {
-    expect(
-      resolveContextWindowInfo({
-        cfg: {},
-        provider: "fixture-provider",
-        modelId: "native",
-        modelContextWindow: 128_000,
-        modelContextTokens,
-        defaultTokens: 200_000,
-      }),
-    ).toEqual({ tokens, source: "model" });
-  },
-);

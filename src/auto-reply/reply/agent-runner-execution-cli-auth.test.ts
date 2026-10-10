@@ -112,15 +112,7 @@ describe("executeAgentTurn: CLI credential selection", () => {
     followupRun.run.model = model;
     followupRun.run.authProfileId = testCase.selected;
     followupRun.run.authProfileIdSource = testCase.source;
-    followupRun.run.thinkingCatalog = [
-      {
-        provider: testCase.provider,
-        id: model,
-        input: ["text"],
-        contextWindow: 128_000,
-        contextTokens: 120_000,
-      },
-    ];
+    followupRun.run.thinkingCatalog = [{ provider: testCase.provider, id: model, input: ["text"] }];
     const profiles = Object.fromEntries(testCase.profiles.map((id) => [id, credentials[id]]));
     followupRun.run.config = {
       auth: {
@@ -183,8 +175,6 @@ describe("executeAgentTurn: CLI credential selection", () => {
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI credential handoff", {
       provider: testCase.backend,
       authProfileId: testCase.expected,
-      modelContextWindow: undefined,
-      modelContextTokens: undefined,
     });
   });
 

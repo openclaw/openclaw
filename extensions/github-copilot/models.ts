@@ -80,13 +80,13 @@ type CopilotApiModelEntry = {
   name?: string;
   object?: string;
   vendor?: string;
-  supported_endpoints?: unknown;
   preview?: boolean;
   model_picker_enabled?: boolean;
   model_picker_category?: string;
   policy?: {
     state?: string;
   };
+  supported_endpoints?: string[];
   capabilities?: {
     type?: string;
     limits?: {
@@ -184,37 +184,30 @@ type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   input: ProviderRuntimeModel["input"];
 };
 
-const COPILOT_TRANSPORT_ENDPOINTS = {
-  "anthropic-messages": "/messages",
-  "openai-completions": "/chat/completions",
-  "openai-responses": "/responses",
-} as const;
+const COPILOT_LISTED_ENDPOINT_APIS = [
+  ["/v1/messages", "anthropic-messages"],
+  ["/responses", "openai-responses"],
+  ["/chat/completions", "openai-completions"],
+] as const;
 
-function resolveCopilotApi(
+// Keep the family transport when the account lists its endpoint; otherwise use
+// an endpoint the account does list (e.g. Chat Completions-only models).
+function resolveCopilotListedApi(
   entry: CopilotApiModelEntry,
-): ReturnType<typeof resolveCopilotTransportApi> {
+  modelId: string,
+): "anthropic-messages" | "openai-completions" | "openai-responses" {
   const preferred =
     entry.vendor?.toLowerCase() === "anthropic"
       ? "anthropic-messages"
-      : resolveCopilotTransportApi(entry.id ?? "");
-  const endpoints = new Set(
-    Array.isArray(entry.supported_endpoints)
-      ? entry.supported_endpoints
-          .filter((endpoint): endpoint is string => typeof endpoint === "string")
-          .map((endpoint) =>
-            endpoint
-              .trim()
-              .replace(/^\/v1(?=\/)/, "")
-              .replace(/\/+$/, ""),
-          )
-      : [],
-  );
-  // Account discovery owns supported transports; naming is only a preference or missing-data fallback.
-  return (
-    ([preferred, "openai-responses", "openai-completions", "anthropic-messages"] as const).find(
-      (api) => endpoints.has(COPILOT_TRANSPORT_ENDPOINTS[api]),
-    ) ?? preferred
-  );
+      : resolveCopilotTransportApi(modelId);
+  const endpoints = entry.supported_endpoints;
+  if (!Array.isArray(endpoints)) {
+    return preferred;
+  }
+  const listed = COPILOT_LISTED_ENDPOINT_APIS.filter(([endpoint]) =>
+    endpoints.includes(endpoint),
+  ).map(([, api]) => api);
+  return listed.includes(preferred) ? preferred : (listed[0] ?? preferred);
 }
 
 function mergeCopilotCompat(
@@ -270,7 +263,7 @@ function mapCopilotApiModelToDefinition(
   // must not clamp a real, larger prompt limit. Below 128k the historic estimate stands.
   const contextWindow = nativeContextWindow ?? Math.max(contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const api = resolveCopilotApi(entry);
+  const api = resolveCopilotListedApi(entry, id);
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
   // Copilot lists effort levels instead of Anthropic's capability tree. Only
   // adaptive-thinking Claude models offer xhigh, so a listed Claude id that

@@ -185,7 +185,6 @@ export function readSessionRowInputs(params: {
     lastMessagePreview = (params.includeLastMessage && fields.lastMessagePreview) || undefined;
   }
 
-  const nativeRuntime = thinkingProjection.agentRuntime.id;
   const contextWindowProfile = resolveModelContextWindowProfile({
     catalogEntry,
     selected: entry?.contextWindow,
@@ -194,31 +193,11 @@ export function readSessionRowInputs(params: {
     cfg,
     provider,
     model,
-    nativeRuntime,
     modelContextTokens: catalogEntry?.contextTokens,
     modelContextWindow: contextWindowProfile.contextTokens,
-    modelContextWindowSource: contextWindowProfile.contextWindow
-      ? undefined
-      : catalogEntry?.contextWindowSource,
     allowAsyncLoad: false,
   });
   const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
-  const projectedContextTokens = resolveProjectedSessionContextTokens({
-    entry,
-    provider,
-    model,
-    agentHarnessId: thinkingProjection.agentRuntime.id,
-    resolvedContextTokens:
-      modelContext.source === "fallback" ? undefined : resolvedModelContextTokens,
-    configuredContextTokenLimits: modelContext.configuredContextTokenLimits,
-  });
-  const selectedContextTokens = contextWindowProfile.contextWindow
-    ? asPositiveFiniteNumber(contextWindowProfile.contextTokens)
-    : undefined;
-  const contextTokens =
-    projectedContextTokens !== undefined && selectedContextTokens !== undefined
-      ? Math.min(projectedContextTokens, selectedContextTokens)
-      : projectedContextTokens;
 
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
@@ -272,7 +251,19 @@ export function readSessionRowInputs(params: {
       hasAutomation: sessionHasAutomation(key, cfg, agentId) ? true : undefined,
       rowModelIdentity,
       selectedModel,
-      contextTokens,
+      contextTokens: resolveProjectedSessionContextTokens({
+        entry,
+        provider,
+        model,
+        agentHarnessId: thinkingProjection.agentRuntime.id,
+        resolvedContextTokens: contextWindowProfile.contextTokens
+          ? Math.min(
+              resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
+              contextWindowProfile.contextTokens,
+            )
+          : resolvedModelContextTokens,
+        authoredContextTokens: asPositiveFiniteNumber(modelContext.authoredContextTokens),
+      }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,
       childLinks:

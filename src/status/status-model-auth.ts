@@ -4,20 +4,12 @@ import { prepareModelCatalogDecisions } from "../agents/model-catalog-decisions.
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { getPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
-import {
-  createSessionContextCapacityResolver,
-  type SessionContextCapacity,
-} from "../agents/session-context-capacity.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 
-type StatusModelResolution = {
-  authLabel?: string;
-  endpoint?: string;
-  ownerCapacity?: SessionContextCapacity;
-};
+type StatusModelResolution = { authLabel?: string; endpoint?: string };
 
 /** Status borrows the account and route selected by the prepared model owner. */
 export function createStatusModelResolver(params: {
@@ -29,7 +21,6 @@ export function createStatusModelResolver(params: {
   owner?: PreparedModelRuntimeSnapshot;
 }) {
   const { owner, sessionEntry } = params;
-  const resolveCapacity = createSessionContextCapacityResolver(owner);
   const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
   const preparation =
     owner && authStore
@@ -85,7 +76,7 @@ export function createStatusModelResolver(params: {
           })
         : "unknown";
     if (!decisions?.isCurrent() || !authStore) {
-      return { authLabel, ownerCapacity: { state: "unavailable" } };
+      return { authLabel };
     }
     const entry = findModelInCatalog(decisions.snapshot.entries, provider, model);
     const variants = decisions.snapshot.routeVariants.filter(
@@ -98,26 +89,18 @@ export function createStatusModelResolver(params: {
     );
     const evaluation = entry ? decisions.evaluateNative(entry, host, runtimeId) : host;
     if (!decisions.isCurrent() || evaluation.availability !== true) {
-      return { authLabel, ownerCapacity: { state: "unavailable" } };
+      return { authLabel };
     }
     if (evaluation.runtimeAuth && evaluation.runtimeAuth.id !== runtimeId) {
-      return { authLabel, ownerCapacity: { state: "unavailable" } };
+      return { authLabel };
     }
-    const nativeRuntime =
-      runtimeId && runtimeId !== "openclaw" && runtimeId !== "auto" ? runtimeId : undefined;
-    const ownerCapacity = resolveCapacity(provider, model, {
-      profileId: evaluation.selectedProfileId ?? (evaluation.runtimeAuth ? undefined : null),
-      route: nativeRuntime ? undefined : (evaluation.selectedRoute ?? entry),
-      contextWindow: sessionEntry?.contextWindow,
-      ...(nativeRuntime ? { nativeRuntime } : {}),
-    });
     const endpoint = evaluation.selectedRoute?.baseUrl
       ? formatModelEndpointUrl(evaluation.selectedRoute.baseUrl)
       : undefined;
     // A selected route and its auth must describe the same decision. Provider-wide
     // labels can prefer another stored credential over an explicitly configured key.
     if (hasAuthOverride || (usesHostAuth && !evaluation.selectedRoute)) {
-      return { authLabel, endpoint, ownerCapacity };
+      return { authLabel, endpoint };
     }
     const mode =
       evaluation.selectedAuthMode === "api_key" ? "api-key" : evaluation.selectedAuthMode;
@@ -126,18 +109,13 @@ export function createStatusModelResolver(params: {
       const label = isUserModelAuthProfileId(profileId)
         ? "personal account"
         : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store: authStore, profileId });
-      return {
-        authLabel: mode ? mode + (label ? " (" + label + ")" : "") : "unknown",
-        endpoint,
-        ownerCapacity,
-      };
+      return { authLabel: mode ? mode + (label ? " (" + label + ")" : "") : "unknown", endpoint };
     }
     return {
       authLabel: evaluation.runtimeAuth
         ? (mode ?? "native") + " (" + runtimeId + ")"
         : (mode ?? "unknown"),
       endpoint,
-      ownerCapacity,
     };
   };
 }

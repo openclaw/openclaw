@@ -31,11 +31,11 @@ import {
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
 import {
+  createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
   prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
-import { createPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.snapshot.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 

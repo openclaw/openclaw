@@ -1,7 +1,10 @@
 // Isolated run test harness builds cron run inputs, mocks, and assertions.
-import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
-import type { ContextTokenResolutionParams } from "../../agents/context-resolution.js";
+import {
+  type ContextTokenResolutionParams,
+  resolveAuthoredModelContextTokens,
+} from "../../agents/context-resolution.js";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
@@ -10,7 +13,6 @@ import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { createCronContextRuntimeFixture } from "./run.test-context.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -39,6 +41,17 @@ type SessionAccessorModule = typeof import("../../config/sessions/session-access
 let actualReplaceSessionEntry: SessionAccessorModule["replaceSessionEntry"];
 let actualLoadSessionEntry: SessionAccessorModule["loadSessionEntry"];
 
+function normalizeModelSelectionForTest(value: unknown): string | undefined {
+  const direct = normalizeOptionalString(value);
+  if (direct) {
+    return direct;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return normalizeOptionalString((value as { primary?: unknown }).primary);
+}
+
 function usesRealAccessorStore(storePath?: string): boolean {
   return Boolean(storePath && storePath !== "/tmp/store.json");
 }
@@ -65,8 +78,6 @@ export const runEmbeddedAgentMock = vi.fn();
 export const runCliAgentMock = vi.fn();
 export const lookupModelContextTokensMock =
   vi.fn<(params: ContextTokenResolutionParams) => number | undefined>();
-export const lookupModelContextBudgetTokensMock =
-  vi.fn<NonNullable<Parameters<typeof createCronContextRuntimeFixture>[1]>>();
 export const getCliSessionBindingMock = vi.fn();
 export const loadSessionEntryMock = vi.fn();
 const replaceSessionEntryMock = vi.fn();
@@ -175,10 +186,12 @@ vi.mock("./run-external-content.runtime.js", () => ({
   detectSuspiciousPatterns: detectSuspiciousPatternsMock,
 }));
 
-// mock-isolation: Isolate model discovery while exercising cron orchestration.
-vi.mock("./run-context.runtime.js", () =>
-  createCronContextRuntimeFixture(lookupModelContextTokensMock, lookupModelContextBudgetTokensMock),
-);
+vi.mock("./run-context.runtime.js", () => ({
+  resolveModelContextTokenProjection: (params: ContextTokenResolutionParams) => ({
+    contextTokens: lookupModelContextTokensMock(params),
+    authoredContextTokens: resolveAuthoredModelContextTokens(params),
+  }),
+}));
 
 vi.mock("../../web-search/runtime.js", () => ({
   hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
@@ -222,8 +235,7 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   },
 }));
 
-vi.mock("./run-model-selection.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./run-model-selection.runtime.js")>()),
+vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
   loadPreparedModelCatalogSnapshot: async (params: unknown) => ({
@@ -237,7 +249,7 @@ vi.mock("./run-model-selection.runtime.js", async (importOriginal) => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
-  normalizeModelSelection: resolvePrimaryStringValue,
+  normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
@@ -253,7 +265,7 @@ vi.mock("./run-model-selection.runtime.js", async (importOriginal) => ({
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
       { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
-      if (resolvePrimaryStringValue(candidate.raw)) {
+      if (normalizeModelSelectionForTest(candidate.raw)) {
         return candidate;
       }
     }
@@ -482,7 +494,7 @@ function resetRunConfigMocks(): void {
       | { model?: unknown; subagents?: { model?: unknown } }
       | undefined;
     const resolveOverride = (raw: unknown): string[] | undefined => {
-      const primary = resolvePrimaryStringValue(raw);
+      const primary = normalizeModelSelectionForTest(raw);
       if (!raw) {
         return undefined;
       }
@@ -509,7 +521,7 @@ function resetRunConfigMocks(): void {
       (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
         ?.subagents?.model,
       agentConfig?.model,
-    ].find((raw) => resolvePrimaryStringValue(raw));
+    ].find((raw) => normalizeModelSelectionForTest(raw));
     return resolveOverride(selectedConfig);
   });
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
@@ -602,8 +614,6 @@ function resetRunExecutionMocks(): void {
 }
 
 function resetRunOutcomeMocks(): void {
-  lookupModelContextBudgetTokensMock.mockReset();
-  lookupModelContextBudgetTokensMock.mockImplementation(lookupModelContextTokensMock);
   lookupModelContextTokensMock.mockReset();
   lookupModelContextTokensMock.mockReturnValue(undefined);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();

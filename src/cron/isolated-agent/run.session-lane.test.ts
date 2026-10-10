@@ -39,7 +39,6 @@ function completedTurn() {
         provider: "openai",
         model: "gpt-5.4",
         contextTokens: 128_000,
-        contextTokensSource: "resolved" as const,
       },
     },
   };

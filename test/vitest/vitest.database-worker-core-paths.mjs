@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
   "src/state/openclaw-agent-db.checkonce.test.ts",
   "src/state/openclaw-state-db-checkonce.test.ts",
@@ -8,6 +9,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db.open-timing.test.ts",
   "src/state/openclaw-state-db-read-connection.cache.test.ts",
   "src/agents/auth-profiles.sqlite-read-pool.test.ts",
+  "src/agents/openclaw-tools.session-status.gateway-model.test.ts",
   "src/state/openclaw-state-db-cron-delivery-migration.test.ts",
   "src/state/openclaw-quarantine-store.test.ts",
   "src/state/openclaw-agent-db-readonly-scope.test.ts",
@@ -40,6 +42,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods/sessions-reactions.test.ts",
   "src/gateway/server-plugin-in-process-dispatch.commit-guards.test.ts",
   "src/gateway/session-row-transcript-backfill.test.ts",
+  "src/gateway/user-background-http.test.ts",
+  "src/gateway/user-background-http.authority.test.ts",
   "src/gateway/talk/handlers/target.test.ts",
   "src/gateway/talk/relay/cancellation-recovery.test.ts",
   "src/gateway/talk/relay/confirmation.test.ts",
@@ -754,6 +758,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/media/generated-html-provenance.test.ts",
   "src/media/web-media.test.ts",
   "src/state/agent-provenance.test.ts",
+  "src/state/user-background.test.ts",
   "src/state/user-profiles.avatar-worker.test.ts",
   "src/state/user-channel-identities.test.ts",
   "src/state/user-profiles.schema.test.ts",

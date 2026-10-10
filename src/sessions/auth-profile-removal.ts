@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { findPersistedAuthProfileCredential } from "../agents/auth-profiles/store.js";
 import { clearRemovedQueuedAuthProfiles } from "../auto-reply/reply/queue.js";
-import { SESSION_CONTEXT_CAPACITY_CLEAR_PATCH } from "../config/sessions/context-token-provenance.js";
 import { patchSessionEntryTarget } from "../config/sessions/session-accessor.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
@@ -128,9 +127,6 @@ export async function clearRemovedSessionAuthProfiles(params: {
                       return null;
                     }
                     return {
-                      ...(clearCurrent && !current.modelSelectionLocked
-                        ? SESSION_CONTEXT_CAPACITY_CLEAR_PATCH
-                        : {}),
                       ...(clearCurrent
                         ? {
                             authProfileOverride: undefined,

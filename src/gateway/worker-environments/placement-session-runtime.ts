@@ -1,4 +1,5 @@
 import { resolveEffectiveAgentDir } from "../../agents/agent-scope-config.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -144,10 +145,12 @@ export function projectWorkerPlacementAgentRuntime(
   devicePlacement?: NonNullable<GatewayAgentRuntime["devicePlacement"]>;
   devicePlacementSupported: boolean;
 } {
-  const { source, ...identity } = runtime;
+  const { source, workspaceEnvironment: _previousEnvironment, ...identity } = runtime;
   const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(runtime.id);
+  const workspaceEnvironment = getRegisteredAgentHarness(runtime.id)?.harness.workspaceEnvironment;
   return {
     ...identity,
+    ...(workspaceEnvironment ? { workspaceEnvironment } : {}),
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
     ...(devicePlacement ? { devicePlacement } : {}),

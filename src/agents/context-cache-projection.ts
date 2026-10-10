@@ -1,11 +1,7 @@
 import { setImmediate as yieldToGateway } from "node:timers/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  type ContextWindowCacheState,
-  minPositiveContextTokens,
-  providerContextTokenCacheKey,
-} from "./context-cache.js";
+import { type ContextWindowCacheState, providerContextTokenCacheKey } from "./context-cache.js";
 import { type ModelsConfig, resolveAnthropicFixedContextWindow } from "./context-resolution.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -16,8 +12,6 @@ type ContextWindowModelEntry = {
   provider?: string;
   contextWindow?: number;
   contextTokens?: number;
-  contextWindowSource?: "synthetic";
-  nativeRuntime?: string;
 };
 
 export type ContextWindowCatalog = {
@@ -54,16 +48,15 @@ function applyDiscoveredContextWindow(
   cache: Map<string, number>,
   model: ContextWindowModelEntry,
 ): void {
-  const nativeRuntime = normalizeLowercaseStringOrEmpty(model.nativeRuntime);
-  if (!model?.id || (nativeRuntime && nativeRuntime !== "openclaw")) {
+  if (!model?.id) {
     return;
   }
-  const discoveredContextTokens = minPositiveContextTokens(
-    typeof model.contextTokens === "number" ? Math.trunc(model.contextTokens) : undefined,
-    model.contextWindowSource !== "synthetic" && typeof model.contextWindow === "number"
-      ? Math.trunc(model.contextWindow)
-      : undefined,
-  );
+  const discoveredContextTokens =
+    typeof model.contextTokens === "number"
+      ? Math.trunc(model.contextTokens)
+      : typeof model.contextWindow === "number"
+        ? Math.trunc(model.contextWindow)
+        : undefined;
   const contextTokens =
     resolveDiscoveredAnthropicFixedContextWindow(model) ?? discoveredContextTokens;
   if (!contextTokens || contextTokens <= 0) {

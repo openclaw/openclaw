@@ -256,6 +256,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextWindowInfo).toEqual({ source: "default", tokens: 200_000 });
+    expect(result.contextTokensSource).toBeUndefined();
   });
 
   it("rejects an authored context window below the floor despite a larger contextTokens cap", () => {
@@ -346,6 +347,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
         nativeModelOwned: false,
       });
       expect(inference.contextTokenBudget).toBe(contextTokens);
+      expect(inference.contextTokensSource).toBe("resolved-v1");
       expect(inference.effectiveModel.contextWindow).toBe(contextTokens);
       expect(inference.effectiveModel.maxTokens).toBe(128_000);
       expect(runtimeModel.contextWindow).toBe(1_000_000);
@@ -377,6 +379,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "modelsConfig",
       tokens: 1_000_000,
     });
+    expect(result.contextTokensSource).toBeUndefined();
     expect(result.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -404,6 +407,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "model",
       tokens: 272_000,
     });
+    expect(result.contextTokensSource).toBe("resolved-v1");
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
 
@@ -440,10 +444,12 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const selected = resolve("200k");
     expect(selected.contextTokenBudget).toBe(200_000);
+    expect(selected.contextTokensSource).toBeUndefined();
     expect(selected.effectiveModel.contextWindow).toBe(200_000);
 
     const unselected = resolve(undefined);
     expect(unselected.contextTokenBudget).toBe(1_000_000);
+    expect(unselected.contextTokensSource).toBeUndefined();
     expect(unselected.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -482,6 +488,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const discovered = resolve({ contextWindow: "200k" });
     expect(discovered.contextTokenBudget).toBe(200_000);
+    expect(discovered.contextTokensSource).toBeUndefined();
     expect(discovered.effectiveModel.contextWindow).toBe(200_000);
 
     const configured = resolve({
@@ -498,6 +505,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       } satisfies OpenClawConfig,
     });
     expect(configured.contextTokenBudget).toBe(200_000);
+    expect(configured.contextTokensSource).toBeUndefined();
     expect(configured.effectiveModel.contextWindow).toBe(200_000);
 
     // Without a selection the declared default resolves to the wider option, so
@@ -525,11 +533,8 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const capped = resolve([createConfiguredModel({ contextTokens: 32_000 })]);
     expect(capped.contextTokenBudget).toBe(32_000);
+    expect(capped.contextTokensSource).toBeUndefined();
     expect(capped.authoredContextTokenCap).toBe(32_000);
-
-    const nativeWindow = resolve([createConfiguredModel({ contextWindow: 64_000 })]);
-    expect(nativeWindow.contextTokenBudget).toBe(64_000);
-    expect(nativeWindow.authoredContextTokenCap).toBe(64_000);
 
     const discovered = resolve([]);
     expect(discovered.contextTokenBudget).toBe(272_000);
@@ -555,6 +560,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextTokenBudget).toBe(32_000);
+    expect(result.contextTokensSource).toBeUndefined();
     expect(result.contextWindowInfo).toEqual({
       source: "model",
       tokens: 32_000,
@@ -645,143 +651,6 @@ describe("actual setup native prompt coherence", () => {
         },
       });
       expect(result.contextTokenBudget).toBe(expected);
-    },
-  );
-});
-
-describe("actual setup authored prompt coherence", () => {
-  it.each([
-    { source: undefined, authoredWindow: undefined, expected: 128_000 },
-    { source: "synthetic" as const, authoredWindow: undefined, expected: 777_000 },
-    { source: undefined, authoredWindow: 1_000_000, expected: 777_000 },
-  ])(
-    "bounds authored prompt with native source $source and override $authoredWindow",
-    ({ source, authoredWindow, expected }) => {
-      const model = createRuntimeModel();
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://example.invalid",
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "Fixture",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 4096,
-                  contextTokens: 777_000,
-                  ...(authoredWindow === undefined ? {} : { contextWindow: authoredWindow }),
-                },
-              ],
-            },
-          },
-        },
-      };
-      const runtimeModel = {
-        ...model,
-        contextWindow: authoredWindow ?? 128_000,
-        contextTokens: 777_000,
-        contextWindowSource: source,
-      };
-      const projected = resolveContextTokens({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.5",
-        modelContextWindow: runtimeModel.contextWindow,
-        modelContextWindowSource: source,
-        modelContextTokens: runtimeModel.contextTokens,
-      });
-      const result = resolveEmbeddedRuntimeModelPolicy({
-        cfg,
-        provider: "openai",
-        modelId: "gpt-5.5",
-        nativeModelOwned: false,
-        runtimeModel,
-      });
-      expect(result.contextTokenBudget).toBe(expected);
-      expect(projected).toBe(expected);
-    },
-  );
-});
-
-describe("actual setup fixed provider context", () => {
-  it.each([
-    {
-      name: "reported fixed window",
-      prompt: 1_000_000,
-      authored: undefined,
-      selected: undefined,
-      expected: 1_000_000,
-    },
-    {
-      name: "smaller reported prompt",
-      prompt: 64_000,
-      authored: undefined,
-      selected: undefined,
-      expected: 64_000,
-    },
-    {
-      name: "authored prompt cap",
-      prompt: 1_000_000,
-      authored: 64_000,
-      selected: undefined,
-      expected: 64_000,
-    },
-    {
-      name: "selected declared window",
-      prompt: 1_000_000,
-      authored: undefined,
-      selected: "small",
-      expected: 200_000,
-    },
-  ])(
-    "preserves $name beside materialized native metadata",
-    ({ prompt, authored, selected, expected }) => {
-      const provider = "anthropic",
-        modelId = "claude-opus-5";
-      const cfg: OpenClawConfig =
-        authored === undefined
-          ? {}
-          : {
-              models: {
-                providers: {
-                  anthropic: {
-                    baseUrl: "https://api.anthropic.com",
-                    models: [
-                      {
-                        ...createConfiguredModel(),
-                        id: modelId,
-                        contextWindow: 128_000,
-                        contextTokens: authored,
-                      },
-                    ],
-                  },
-                },
-              },
-            };
-      const result = resolveEmbeddedRuntimeModelPolicy({
-        cfg,
-        provider,
-        modelId,
-        nativeModelOwned: false,
-        contextWindow: selected,
-        runtimeModel: {
-          ...createRuntimeModel(),
-          provider,
-          id: modelId,
-          api: "anthropic-messages",
-          baseUrl: "https://api.anthropic.com",
-          contextWindow: 128_000,
-          contextTokens: prompt,
-          ...(selected
-            ? { contextWindows: [{ id: "small", label: "Small", contextWindow: 200_000 }] }
-            : {}),
-        },
-      });
-      expect(result.contextTokenBudget).toBe(expected);
-      expect(result.contextWindowInfo?.tokens).toBe(expected);
     },
   );
 });

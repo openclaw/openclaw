@@ -1,4 +1,3 @@
-import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import type {
   Api,
   AssistantMessageEventStreamContract,
@@ -10,10 +9,9 @@ import type {
   OAuthProviderInterface,
   OAuthLoginCallbacks as ProviderOAuthLoginCallbacks,
 } from "../../plugin-sdk/provider-oauth-runtime.js";
-import type { ProviderAuthMode } from "./model-registry-schema.js";
 
 /** Shared fields accepted by extension and registry provider registration. */
-interface ProviderConfigBase {
+export interface ProviderConfigBase {
   /** Display name for the provider in UI. */
   name?: string;
   /** Base URL for the API endpoint. Required when defining models. */
@@ -32,7 +30,7 @@ interface ProviderConfigBase {
   authHeader?: boolean;
 }
 
-interface ProviderModelConfig
+export interface ProviderModelConfig
   extends
     Pick<
       Model,
@@ -62,19 +60,4 @@ export interface ProviderConfig extends ProviderConfigBase {
     /** Display name for the provider in login UI. */
     name: string;
   };
-}
-
-export interface ProviderConfigInput extends ProviderConfigBase {
-  auth?: ProviderAuthMode;
-  /** OAuth provider for /login support */
-  oauth?: Omit<OAuthProviderInterface, "id">;
-  models?: Array<
-    ProviderModelConfig & {
-      contextTokens?: number;
-      contextWindowSource?: "synthetic";
-      contextWindows?: ModelCatalogContextWindowOption[];
-      contextWindowDefault?: string;
-      params?: Record<string, unknown>;
-    }
-  >;
 }

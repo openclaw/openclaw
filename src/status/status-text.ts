@@ -306,32 +306,18 @@ export async function buildStatusReplyParts(
       : {}),
   });
   let selectedModelAuth = selectedResolution.authLabel;
-  const activeResolution = modelRefs.activeDiffers
-    ? await resolveModel({
-        provider: activeStatusProvider,
-        model: modelRefs.active.model || model,
-        runtimeId: effectiveHarness,
-        acceptedProviderIds: activeAuthProviders,
-      })
-    : selectedResolution;
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
-    : activeResolution.authLabel;
-  const resolveOwnerContextCapacity = (
-    capacityProvider: string | undefined,
-    capacityModel: string | undefined,
-  ) => {
-    if (capacityProvider === selectedLookupProvider && capacityModel === selectedLookupModel) {
-      return selectedResolution.ownerCapacity ?? { state: "unavailable" as const };
-    }
-    if (
-      capacityProvider === activeProvider &&
-      capacityModel === (modelRefs.active.model || model)
-    ) {
-      return activeResolution.ownerCapacity ?? { state: "unavailable" as const };
-    }
-    return { state: "unavailable" as const };
-  };
+    : modelRefs.activeDiffers
+      ? (
+          await resolveModel({
+            provider: activeStatusProvider,
+            model: modelRefs.active.model || model,
+            runtimeId: effectiveHarness,
+            acceptedProviderIds: activeAuthProviders,
+          })
+        ).authLabel
+      : selectedModelAuth;
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
     modelRefs.active.label,
@@ -600,25 +586,18 @@ export async function buildStatusReplyParts(
     modelRefs,
     activeModel,
     selectedContextWindow: selectedCatalogEntry?.contextWindow,
-    selectedContextWindowSource: selectedCatalogEntry?.contextWindowSource,
     selectedContextTokens:
       selectedCatalogEntry?.contextTokens ??
-      (selectedCatalogEntry &&
-      !activeRuntimeIsAuthoritative &&
-      selectedCatalogEntry.contextWindowSource !== "synthetic"
-        ? preparedContextTokens
-        : undefined),
+      (selectedCatalogEntry && !activeRuntimeIsAuthoritative ? preparedContextTokens : undefined),
     thinkingCatalog,
     runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
     runtimeContextTokens:
       activeRuntimeIsAuthoritative &&
-      initialActiveCatalogEntry?.contextWindowSource !== "synthetic" &&
       (initialActiveCatalogEntry || fallbackState.active) &&
       (!activeModel || (activeModel.modelProvider === provider && activeModel.model === model))
         ? preparedContextTokens
         : undefined,
     sessionEntry,
-    resolveOwnerContextCapacity,
     sessionKey,
     parentSessionKey,
     sessionScope,

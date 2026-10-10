@@ -89,8 +89,8 @@ export function registerStatusSummarySessionRowCases(params: {
 
       expect(summary.sessions.recent[0]).toMatchObject({
         runtime: "OpenAI Codex",
-        contextTokens: null,
-        remainingTokens: null,
+        contextTokens: 1_000_000,
+        remainingTokens: 999_989,
       });
     });
   });

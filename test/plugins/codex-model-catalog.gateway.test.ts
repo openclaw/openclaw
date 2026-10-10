@@ -179,56 +179,14 @@ describe("models.list native account catalog", () => {
                   refresh,
                   ...(refresh ? { provider: "openai" } : {}),
                 });
-              let lastRegisteredList: ModelsListResult | undefined;
-              try {
-                await expect
-                  .poll(
-                    async () => {
-                      lastRegisteredList = await registeredList();
-                      return lastRegisteredList.models.find((row) => row.id === "synthetic-opaque")
-                        ?.available;
-                    },
-                    { timeout: 15_000 },
-                  )
-                  .toBe(true);
-              } catch (error) {
-                try {
-                  const failedOwner = getPublishedPreparedModelCatalogOwnerSnapshot({
-                    agentId: "main",
-                    config: getRuntimeConfig(),
-                  });
-                  const failedCatalog =
-                    failedOwner?.readFullModelCatalog?.() ?? failedOwner?.modelCatalog;
-                  const syntheticRow = lastRegisteredList?.models.find(
-                    (row) => row.id === "synthetic-opaque",
-                  );
-                  console.error(
-                    "[native-catalog-failure]",
-                    JSON.stringify({
-                      requestMethods: [...new Set(requests)],
-                      syntheticRow: {
-                        present: syntheticRow !== undefined,
-                        available: syntheticRow?.available,
-                        unavailableReason: syntheticRow?.unavailableReason,
-                      },
-                      providerStatuses: lastRegisteredList?.providerOutcomes
-                        ?.filter((outcome) => outcome.provider === "openai")
-                        .map((outcome) => outcome.status),
-                      pendingProviders: lastRegisteredList?.pendingProviders,
-                      ownerCurrent: failedOwner?.isCurrent(),
-                      harnessIds: failedOwner?.pluginRegistry?.agentHarnesses.map(
-                        (entry) => entry.harness.id,
-                      ),
-                      nativeOutcomeStatuses: failedCatalog?.nativeProviderOutcomes?.codex?.map(
-                        (outcome) => outcome.status,
-                      ),
-                    }),
-                  );
-                } catch {
-                  console.error("[native-catalog-failure] diagnostic capture failed");
-                }
-                throw error;
-              }
+              await expect
+                .poll(
+                  async () =>
+                    (await registeredList()).models.find((row) => row.id === "synthetic-opaque")
+                      ?.available,
+                  { timeout: 15_000 },
+                )
+                .toBe(true);
               await expect
                 .poll(async () => (await registeredList()).pendingProviders ?? [], {
                   timeout: 15_000,

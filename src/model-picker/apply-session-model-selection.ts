@@ -475,12 +475,6 @@ export async function applySessionModelSelectionInternal(
     });
   }
 
-  const capacityCatalogEntry = findSelectedCatalogEntry({
-    catalog: thinkingCatalog.filter((entry) =>
-      agentRuntime === "openclaw" ? !entry.nativeRuntime : entry.nativeRuntime === agentRuntime,
-    ),
-    ...request,
-  });
   const contextProvider = resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: agentRuntime,
@@ -497,10 +491,8 @@ export async function applySessionModelSelectionInternal(
       cfg: params.cfg,
       provider: contextProvider,
       model,
-      modelContextWindow: capacityCatalogEntry?.contextWindow,
-      modelContextWindowSource: capacityCatalogEntry?.contextWindowSource,
-      modelContextTokens: capacityCatalogEntry?.contextTokens,
-      nativeRuntime: agentRuntime,
+      modelContextWindow: selectedCatalogEntry?.contextWindow,
+      modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
     ...(configuredDefaultUpdate ? { configuredDefaultUpdate } : {}),
     ...(runtime.kind === "clear" || runtime.kind === "set" ? { runtimeChange: runtime } : {}),

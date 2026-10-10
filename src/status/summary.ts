@@ -127,12 +127,9 @@ function compareSessionCandidatesByUpdatedAt(
 async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   const {
     classifySessionKey,
-    getPublishedPreparedModelCatalogOwnerSnapshot,
-    createStatusModelResolver,
     resolveConfiguredStatusModelRef,
-    resolveConfiguredContextTokenLimits,
+    resolveAuthoredModelContextTokens,
     resolveContextTokensForModel,
-    resolveModelContextTokenProjection,
     resolveSessionRuntime,
     resolveSessionModelRef,
     resolveStatusModelComparisonLabel,
@@ -145,11 +142,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   const resolveProviderContext = createProviderContextResolver({ cfg });
   const modelContextCache = new Map<
     string,
-    Promise<{
-      modelContextWindow?: number;
-      modelContextTokens?: number;
-      modelContextWindowSource?: "synthetic";
-    }>
+    Promise<{ modelContextWindow?: number; modelContextTokens?: number }>
   >();
   const resolveStaticModelContext = async (
     provider: string | undefined,
@@ -169,12 +162,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           resolveManifestModel({ provider, modelId: model }) ??
           (await resolveProviderContext({ provider, modelId: model }));
         return {
-          ...(entry?.contextWindow
-            ? {
-                modelContextWindow: entry.contextWindow,
-                modelContextWindowSource: entry.contextWindowSource,
-              }
-            : {}),
+          ...(entry?.contextWindow ? { modelContextWindow: entry.contextWindow } : {}),
           ...(entry?.contextTokens ? { modelContextTokens: entry.contextTokens } : {}),
         };
       } catch {
@@ -272,6 +260,14 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
+        const resolvedContextTokens = resolveContextTokensForModel({
+          cfg,
+          provider: lookupModel.provider,
+          model: lookupModelId,
+          ...modelContext,
+          fallbackContextTokens: configContextTokens,
+          allowAsyncLoad: false,
+        });
         const runtime = resolveSessionRuntime({
           cfg,
           entry,
@@ -280,64 +276,18 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           agentId,
           sessionKey: key,
         });
-        const owner = agentId
-          ? getPublishedPreparedModelCatalogOwnerSnapshot({ config: cfg, agentId })
-          : undefined;
-        const ownerCapacity =
-          owner?.workspaceDir && agentId && lookupModel.provider && lookupModelId
-            ? (
-                await createStatusModelResolver({
-                  cfg,
-                  agentId,
-                  agentDir: owner.agentDir,
-                  workspaceDir: owner.workspaceDir,
-                  sessionEntry: entry,
-                  owner,
-                })({
-                  provider: lookupModel.provider,
-                  model: lookupModelId,
-                  runtimeId: runtime.id,
-                  acceptedProviderIds: [],
-                  authLabelOverride: undefined,
-                })
-              ).ownerCapacity
-            : { state: "unavailable" as const };
-        const reportedOwnerCapacity =
-          ownerCapacity?.state === "ready" && !ownerCapacity.synthetic
-            ? ownerCapacity.contextTokens
-            : undefined;
-        const contextProjection = resolveModelContextTokenProjection(
-          {
-            cfg,
-            provider: lookupModel.provider,
-            model: lookupModelId,
-            nativeRuntime: runtime.id,
-            ...(reportedOwnerCapacity !== undefined
-              ? { modelContextTokens: reportedOwnerCapacity }
-              : runtime.id && runtime.id !== "openclaw"
-                ? {}
-                : modelContext),
-            fallbackContextTokens: configContextTokens,
-            allowAsyncLoad: false,
-          },
-          reportedOwnerCapacity !== undefined ? () => undefined : undefined,
-          reportedOwnerCapacity !== undefined ? () => undefined : undefined,
-        );
         const contextTokens =
           resolveProjectedSessionContextTokens({
             entry,
             provider: lookupModel.provider,
             model: lookupModelId,
             agentHarnessId: runtime.id,
-            ownerCapacity,
-            resolvedContextTokens:
-              contextProjection.source === "fallback" ? undefined : contextProjection.contextTokens,
-            configuredContextTokenLimits: resolveConfiguredContextTokenLimits({
+            resolvedContextTokens,
+            authoredContextTokens: resolveAuthoredModelContextTokens({
               cfg,
               provider: lookupModel.provider,
               modelProvider: contextModelProvider,
               model: lookupModelId,
-              nativeRuntime: runtime.id,
             }),
           }) ?? null;
         const total = resolveSessionTotalTokens(entry);

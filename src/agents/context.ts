@@ -1,7 +1,4 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
-import type { resolveProjectedSessionContextTokenBudget } from "../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -21,17 +18,12 @@ import {
 import {
   type ContextTokenResolutionParams,
   type ModelContextTokenProjection,
-  resolveConfiguredContextTokenLimits,
   resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
-import { findModelInCatalog } from "./model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { resolveModelContextWindowProfile } from "./model-context-window.js";
-import type { LoadPreparedModelCatalogParams } from "./prepared-model-catalog.js";
 
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -162,26 +154,18 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (shouldStop()) {
       return;
     }
-    // Consume only accepted inventory; this passive read does not acquire or renew it.
-    // A retired owner cannot lend another account's limits during projection yields.
-    const modelCatalog = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
-    const isCurrent = () =>
-      !shouldStop() &&
-      owner.isCurrent() &&
-      (owner.readFullModelCatalog?.() ?? owner.modelCatalog) === modelCatalog;
-    if (!isCurrent()) {
-      return;
-    }
+    // Gateway publication intentionally exposes configured/static turn facts. Full catalog
+    // inventory is a separate control-plane load and must not run in post-ready warmup.
     const caches = await prepareContextWindowCaches({
       config: owner.config,
-      modelCatalog,
+      modelCatalog: owner.modelCatalog,
       assertCurrent: () => {
-        if (!isCurrent()) {
+        if (shouldStop()) {
           throw new Error("context window cache prewarm cancelled");
         }
       },
     });
-    if (!isCurrent()) {
+    if (shouldStop()) {
       return;
     }
     replaceContextWindowCaches(caches);
@@ -283,172 +267,9 @@ export function resolveContextTokensForModel(
 export function resolveModelContextTokenProjection(
   params: ContextTokenResolutionParams,
 ): ModelContextTokenProjection {
-  const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
-  if (!nativeRuntime || nativeRuntime === "openclaw") {
-    prepareContextWindowCache({
-      allowAsyncLoad: params.allowAsyncLoad,
-      skipRuntimeConfigLoad: Boolean(params.cfg),
-    });
-  }
+  prepareContextWindowCache({
+    allowAsyncLoad: params.allowAsyncLoad,
+    skipRuntimeConfigLoad: Boolean(params.cfg),
+  });
   return resolveModelContextTokenProjectionFromCache(params);
-}
-
-type ContextBudgetPreparationParams = ContextTokenResolutionParams &
-  Pick<LoadPreparedModelCatalogParams, "agentId" | "agentDir" | "workspaceDir" | "env"> & {
-    profileId?: string | null;
-    contextWindow?: string;
-    route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
-    knownContextBudget?: ReturnType<typeof resolveProjectedSessionContextTokenBudget>;
-  };
-
-export async function resolveContextTokenBudgetForModel(
-  params: ContextBudgetPreparationParams,
-): Promise<ModelContextTokenProjection> {
-  let input = { ...params, allowAsyncLoad: false };
-  // A provider/model cache has no account or transport binding; this operation consumes owned facts.
-  let current = resolveModelContextTokenProjectionFromCache(
-    input,
-    () => undefined,
-    () => undefined,
-  );
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model) {
-    return current;
-  }
-  try {
-    const runtime = await loadPreparedModelCatalogRuntime();
-    const request = {
-      config: params.cfg ?? getRuntimeConfig(),
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    };
-    const published = runtime.getPublishedPreparedModelCatalogOwnerSnapshot(request);
-    const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
-    const { createSessionContextCapacityResolver } = await import("./session-context-capacity.js");
-    const capacity = createSessionContextCapacityResolver(published)(provider, model, {
-      nativeRuntime: nativeRuntime && nativeRuntime !== "openclaw" ? nativeRuntime : undefined,
-      profileId: params.profileId,
-      contextWindow: params.contextWindow,
-      route: params.route,
-    });
-    if (capacity?.unacceptedModelMetadata) {
-      input = {
-        ...input,
-        modelContextTokens: undefined,
-        modelContextWindow: undefined,
-        modelContextWindowSource: undefined,
-      };
-      current = resolveModelContextTokenProjectionFromCache(
-        input,
-        () => undefined,
-        () => undefined,
-      );
-    }
-    if (capacity?.state === "ready") {
-      const projection =
-        capacity.synthetic && current.source !== "fallback"
-          ? current
-          : resolveModelContextTokenProjectionFromCache(
-              {
-                ...input,
-                modelContextTokens: capacity.synthetic ? undefined : capacity.contextTokens,
-                modelContextWindow: capacity.contextTokens,
-                modelContextWindowSource: capacity.synthetic ? "synthetic" : undefined,
-              },
-              () => undefined,
-              () => undefined,
-            );
-      const contextTokens = minPositiveContextTokens(
-        projection.contextTokens,
-        current.source === "fallback" ? undefined : current.contextTokens,
-        capacity.contextTokenLimit,
-      );
-      return {
-        ...projection,
-        contextTokens,
-        ...(capacity.contextTokensSource && projection.contextTokensSource !== "synthetic"
-          ? { contextTokensSource: capacity.contextTokensSource }
-          : {}),
-      };
-    }
-    if (
-      published ||
-      params.profileId !== undefined ||
-      params.route ||
-      (nativeRuntime && nativeRuntime !== "openclaw") ||
-      (params.knownContextBudget && params.knownContextBudget.contextTokensSource !== "synthetic")
-    ) {
-      return current;
-    }
-    const catalog = await runtime.loadPreparedModelCatalogSnapshot({
-      ...request,
-      readOnly: true,
-      providerDiscoveryProviderIds: [provider],
-      scopedLiveProviderDiscovery: false,
-    });
-    const entry = findModelInCatalog(
-      [...catalog.entries, ...(catalog.staticEntries ?? [])].filter(
-        (candidate) => !candidate.nativeRuntime,
-      ),
-      provider,
-      model,
-    );
-    const profile = resolveModelContextWindowProfile({
-      catalogEntry: entry,
-      selected: params.contextWindow,
-    });
-    if (!entry) {
-      return current;
-    }
-    // Fresh catalog facts replace an unbound cache estimate; only caller/configuration caps remain.
-    current = resolveModelContextTokenProjectionFromCache(
-      { ...input, cfg: request.config },
-      () => undefined,
-      () => undefined,
-    );
-    const projection = resolveModelContextTokenProjectionFromCache(
-      {
-        ...input,
-        cfg: request.config,
-        modelContextWindow: profile.contextTokens,
-        modelContextWindowSource: profile.contextWindow ? undefined : entry.contextWindowSource,
-        modelContextTokens: entry.contextTokens,
-      },
-      () => undefined,
-      () => undefined,
-    );
-    const { fixedContextWindow } = resolveConfiguredContextTokenLimits({
-      ...input,
-      cfg: request.config,
-      provider,
-      model,
-    });
-    const promptTokens = asPositiveFiniteNumber(entry.contextTokens);
-    const contextTokenLimit =
-      promptTokens !== undefined || profile.contextWindow
-        ? minPositiveContextTokens(
-            promptTokens,
-            profile.contextWindow
-              ? profile.contextTokens
-              : (fixedContextWindow ??
-                  (entry.contextWindowSource === "synthetic" ? undefined : profile.contextTokens)),
-          )
-        : undefined;
-    return {
-      ...projection,
-      ...(profile.contextWindows && projection.contextTokensSource !== "synthetic"
-        ? { contextTokensSource: "resolved" as const }
-        : {}),
-      contextTokens: minPositiveContextTokens(
-        projection.contextTokens,
-        current.source === "fallback" ? undefined : current.contextTokens,
-        contextTokenLimit,
-      ),
-    };
-  } catch {
-    return current;
-  }
 }

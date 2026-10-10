@@ -25,8 +25,8 @@ import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-gene
 import * as taskRuntime from "../media-generation-task-status.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
+import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
-import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.snapshot.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {

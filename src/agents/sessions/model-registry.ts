@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -44,15 +45,13 @@ import {
   type ModelsConfig,
   type ProviderAuthMode,
 } from "./model-registry-schema.js";
-import type { ProviderConfigInput } from "./provider-config.js";
+import type { ProviderConfigBase, ProviderModelConfig } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
-
-export type { ProviderConfigInput } from "./provider-config.js";
 
 const log = createSubsystemLogger("agents/model-registry");
 
@@ -949,4 +948,18 @@ export class ModelRegistry {
   }
 }
 
+export interface ProviderConfigInput extends ProviderConfigBase {
+  auth?: ProviderAuthMode;
+  /** OAuth provider for /login support */
+  oauth?: Omit<OAuthProviderInterface, "id">;
+  models?: Array<
+    ProviderModelConfig & {
+      contextTokens?: number;
+      contextWindowSource?: "synthetic";
+      contextWindows?: ModelCatalogContextWindowOption[];
+      contextWindowDefault?: string;
+      params?: Record<string, unknown>;
+    }
+  >;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
