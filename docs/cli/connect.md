@@ -25,7 +25,7 @@ The command prints the URL and a pasteable command that installs a background
 node service and enables it to run agent sessions:
 
 ```bash
-npx -y openclaw connect https://gateway.example/j/<shortcode> --service --session-host
+npx -y openclaw@<gateway-version> connect https://gateway.example/j/<shortcode> --service --session-host
 ```
 
 Only use session hosting on a machine you trust as shared Gateway infrastructure.
@@ -34,6 +34,16 @@ runtime's default remains non-hosting. See [Session hosting](/nodes/session-host
 For a command-only node, omit `--session-host` and keep `--service`.
 The `-y` flag skips npm's package-install confirmation, not OpenClaw pairing or
 session-hosting consent.
+
+The Gateway chooses its own published npm version, even when you run
+`devices join-code` from a different CLI version. Source checkouts and
+unpublished builds use a resolvable matching release-channel tag when available,
+otherwise unpinned `openclaw`, with a note to use a matching Gateway build.
+Registry checks are bounded to two seconds; an unavailable registry also shows
+the matching-build note.
+
+Already have OpenClaw installed? Run: `openclaw connect <join-url> --service --session-host`.
+This uses your installed build instead of npx; make sure it matches the Gateway.
 
 The shortcode has 128 bits of entropy, expires with the setup credential after
 about 10 minutes, and can be fetched exactly once. Mint another code if it

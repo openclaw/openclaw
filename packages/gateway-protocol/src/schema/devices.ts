@@ -197,6 +197,10 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   setupId: Type.Optional(SetupIdSchema),
   setupCode: NonEmptyString,
   joinUrl: Type.Optional(NonEmptyString),
+  command: Type.Optional(NonEmptyString),
+  serviceCommand: Type.Optional(NonEmptyString),
+  installedCommand: Type.Optional(NonEmptyString),
+  versionNote: Type.Optional(NonEmptyString),
   qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
   gatewayUrl: NonEmptyString,
   gatewayUrls: Type.Optional(
