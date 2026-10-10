@@ -186,8 +186,8 @@ export function createPlacementLifecycleWorkerOps(runtime: {
         },
         readReceipt,
         publish(placements) {
-          for (const placement of placements) {
-            signalTurnClaimRelease(runtime.path, placement.sessionId);
+          for (const clearedPlacement of placements) {
+            signalTurnClaimRelease(runtime.path, clearedPlacement.sessionId);
           }
         },
       });
