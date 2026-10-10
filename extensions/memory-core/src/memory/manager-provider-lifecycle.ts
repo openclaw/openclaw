@@ -215,7 +215,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     let activeFailure = failure;
     if (currentIdentity.status !== "valid") {
       try {
-        await this.syncAdmitted({ reason: "search", force: true });
+        await this.syncAdmitted({ reason: "embedding-bootstrap-recovery", force: true });
       } catch (err) {
         const message = redactSensitiveText(formatErrorMessage(err), { mode: "tools" });
         log.warn(`memory sync failed (embedding-bootstrap-recovery): ${message}`);
@@ -303,17 +303,18 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (cached) {
       return cached.ok;
     }
-    if (!this.provider) {
+    const provider = this.provider;
+    if (!provider) {
       return false;
     }
     try {
-      await this.embedBatchWithRetry(["ping"]);
+      await this.probeEmbeddingProvider(provider, this.providerRuntime);
       this.cacheProbeResult({ ok: true });
       return true;
     } catch (err) {
       this.markEmbeddingBootstrapFailure(err, {
         retainProvider: true,
-        provider: this.provider.id,
+        provider: provider.id,
       });
       return false;
     }
@@ -365,7 +366,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         ) {
           return;
         }
-        await this.embedQueryWithRetry("ping", undefined, candidate, result.runtime);
+        await this.probeEmbeddingProvider(candidate, result.runtime);
         // Sync owns its captured provider/index pair. A stale probe must not
         // replace a newer provider or one that is already writing an index.
         if (
@@ -576,13 +577,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     providerKeyKnown?: boolean;
     indexState?: MemoryRetrievalIndexState;
   }) {
+    // Provider retirement preserves configured identity for both search and status.
     const provider =
       this.settings.provider === "none"
         ? null
-        : this.providerInitialized
+        : this.providerInitialized && this.providerLifecycle.mode !== "degraded"
           ? this.provider
-            ? { id: this.provider.id, model: this.provider.model }
-            : null
           : undefined;
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
@@ -715,7 +715,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         });
       }
       try {
-        await this.embedBatchWithRetry(["ping"]);
+        await this.probeEmbeddingProvider(this.provider, this.providerRuntime);
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
         const message = formatErrorMessage(err);

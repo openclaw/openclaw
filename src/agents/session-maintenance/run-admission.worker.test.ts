@@ -1,5 +1,5 @@
 import { copyFileSync, renameSync } from "node:fs";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
@@ -30,6 +30,11 @@ vi.mock("../command/runtime-loaders.js", () => ({
   loadAgentRunnerMemoryRuntime: async () => memory,
   loadSessionStoreRuntime: () => import("../command/session-store.runtime.js"),
 }));
+
+beforeEach(() => {
+  memory.runMemoryFlushIfNeeded.mockClear();
+  memory.runSessionCompactionIfNeeded.mockClear();
+});
 
 it("rejects a replacement database while waiting for the foreground owner", async () => {
   await withOpenClawTestState({ label: "maintenance-worker-source" }, async ({ env, path }) => {
@@ -212,8 +217,6 @@ it.for(["lifecycle", "logical source"] as const)(
           await waitForSessionMaintenance(sessionKey);
           sql?.restore();
           reader.mockRestore();
-          memory.runMemoryFlushIfNeeded.mockClear();
-          memory.runSessionCompactionIfNeeded.mockClear();
         }
       },
     );

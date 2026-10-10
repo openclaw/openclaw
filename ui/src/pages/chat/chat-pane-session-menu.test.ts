@@ -336,6 +336,21 @@ describe("chat pane session menu boundary", () => {
     { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "removed" },
     { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "replacement" },
     { action: { kind: "toggle-unread" }, patch: { unread: true }, current: "replacement" },
+    {
+      action: { kind: "set-communication", communication: { send: "never" } },
+      patch: { communication: { send: "never" } },
+      current: "replacement",
+    },
+    {
+      action: { kind: "set-communication", communication: null },
+      patch: { communication: null },
+      current: "refreshed",
+    },
+    {
+      action: { kind: "set-communication", communication: { send: "never" } },
+      patch: { communication: { send: "never" } },
+      current: "removed",
+    },
     { action: { kind: "set-icon", icon: "🦞" }, patch: { icon: "🦞" }, current: "replacement" },
     {
       action: { kind: "set-color", color: "red" },

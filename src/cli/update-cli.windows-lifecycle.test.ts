@@ -393,6 +393,7 @@ describe("update-cli", () => {
               settled: true,
             },
             steps: [
+              expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
               expect.objectContaining({ stderrTail: expect.stringContaining("enable denied") }),
               recoveryVerificationStep(undefined, root),
             ],

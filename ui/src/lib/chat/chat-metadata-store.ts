@@ -162,6 +162,9 @@ function preparePublication(entry: ChatMetadataEntry): ChatMetadataPublication {
             : {
                 commands: result.commands,
                 ...(result.revision ? { revision: result.revision } : {}),
+                ...(result.requiredWorkerInferenceProfileId !== undefined
+                  ? { requiredWorkerInferenceProfileId: result.requiredWorkerInferenceProfileId }
+                  : {}),
               };
       if (!metadata) {
         if (isCurrent()) {

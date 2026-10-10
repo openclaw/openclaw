@@ -77,10 +77,6 @@ import {
 } from "./session-accessor.sqlite-worker-transport.js";
 
 type DatabaseOptions = SqliteArchiveReclamationPlan["databaseOptions"];
-type SqliteMutationWorkerRequest =
-  | SqliteReclamationWorkerRequest
-  | SqliteReclamationPrepareRequest
-  | SqliteCanonicalValidationWorkerRequest;
 type MutationRunParams<Result> = {
   claim: SqliteReclamationClaim;
   validationOwner?: SqliteMutationWorkerValidationOwner;
@@ -380,7 +376,10 @@ export class SqliteReclamationWorker {
       request: (
         operationId: number,
         coordination: SqliteMutationWorkerCoordination,
-      ) => SqliteMutationWorkerRequest;
+      ) =>
+        | SqliteReclamationWorkerRequest
+        | SqliteReclamationPrepareRequest
+        | SqliteCanonicalValidationWorkerRequest;
       transferList: ArrayBuffer[];
     },
   ): Promise<Result> {
@@ -389,7 +388,6 @@ export class SqliteReclamationWorker {
     params.assertCurrent();
     const transport = (this.transport ??= await this.start());
     params.assertCurrent();
-    const worker = transport.channel;
     if (params.diagnostics) {
       params.diagnostics.workerThreadId = this.workerThreadId;
     }
@@ -425,7 +423,10 @@ export class SqliteReclamationWorker {
           validationOwner: params.validationOwner,
           readOpeningValidation: params.readOpeningValidation,
           dispatch: () =>
-            worker.postMessage(params.request(operationId, coordination), [...params.transferList]),
+            transport.channel.postMessage(params.request(operationId, coordination), [
+              ...params.transferList,
+              ...(coordination.databaseAdmission ? [coordination.databaseAdmission] : []),
+            ]),
         }).then(
           (value) => ({ value }),
           (error: unknown) => {
@@ -435,6 +436,7 @@ export class SqliteReclamationWorker {
             throw error;
           },
         ),
+      params.assertCurrent,
     )
       .catch((error: unknown) => {
         this.failure ??= toStringifiedError(error);

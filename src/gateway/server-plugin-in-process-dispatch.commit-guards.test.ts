@@ -44,8 +44,9 @@ it.each(["direct", "tool"] as const)(
                   const entry = await patchSessionEntryCore(scope, () => ({ label: kind }), {
                     workerGuard: { source: sessionMutationCommitGuard },
                   });
+                  // The canonical writer (#167932) upserts session rows natively.
                   nativeMutation = sql.queries.some((query) =>
-                    /^update "session_nodes" set\b/i.test(query),
+                    /^(?:update "session_nodes" set\b|insert into "session_nodes"\s)/i.test(query),
                   );
                   respond(true, { label: entry?.label });
                 } finally {

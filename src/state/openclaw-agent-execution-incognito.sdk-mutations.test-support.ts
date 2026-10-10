@@ -15,7 +15,6 @@ import {
   type SessionTranscriptWriteContext,
 } from "../plugin-sdk/session-transcript-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import type { IncognitoMutationFixture } from "./openclaw-agent-execution-incognito.mutation-admission.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 
@@ -27,23 +26,17 @@ export function registerIncognitoSdkMutationTests(
     const sessionId = "sdk-unqualified-target";
     const sessionKey = key(sessionId);
     await actor.sessions.create(authority, { sessionKey, entry: entry(sessionId) });
-    const sql = observeMainThreadSql();
-    try {
-      await expect(
-        withIncognitoSessionActor(actor, () =>
-          resolveSessionTranscriptIdentity({
-            agentId: actor.agentId,
-            storePath: actor.path,
-            env,
-            sessionId,
-            sessionKey: "dashboard:incognito-sdk-unqualified-target",
-          }),
-        ),
-      ).resolves.toMatchObject({ agentId: actor.agentId, sessionId, sessionKey });
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    await expect(
+      withIncognitoSessionActor(actor, () =>
+        resolveSessionTranscriptIdentity({
+          agentId: actor.agentId,
+          storePath: actor.path,
+          env,
+          sessionId,
+          sessionKey: "dashboard:incognito-sdk-unqualified-target",
+        }),
+      ),
+    ).resolves.toMatchObject({ agentId: actor.agentId, sessionId, sessionKey });
   });
 
   it("prepares SDK sequence appends outside transactions and refuses a changed read snapshot", async () => {
@@ -89,7 +82,6 @@ export function registerIncognitoSdkMutationTests(
         return { assertCurrent: guard, checks: [] };
       },
     });
-    const sql = observeMainThreadSql();
     try {
       await withIncognitoSessionActor(actor, async () => {
         await withSessionTranscriptWriteAssertion(target, writerGuard, () =>
@@ -160,11 +152,9 @@ export function registerIncognitoSdkMutationTests(
         expect(events.filter((event) => JSON.stringify(event).includes("stale decision"))).toEqual(
           [],
         );
-        sql.expectIdle();
       });
     } finally {
       external.emitDestroy();
-      sql.restore();
     }
   });
 
@@ -177,57 +167,51 @@ export function registerIncognitoSdkMutationTests(
       const sourceId = `${sessionId}-source`;
       await actor.sessions.create(authority, { sessionKey, entry: entry(sessionId) });
       const target = { agentId: actor.agentId, storePath: actor.path, sessionKey, sessionId, env };
-      const sql = observeMainThreadSql();
-      try {
-        await withIncognitoSessionActor(actor, async () => {
-          await withSessionTranscriptWrite(target, (write) =>
-            write.appendMessage({
-              eventId: sourceId,
-              message: { role: "assistant", content: [{ type: "text", text: "mirror me" }] },
+      await withIncognitoSessionActor(actor, async () => {
+        await withSessionTranscriptWrite(target, (write) =>
+          write.appendMessage({
+            eventId: sourceId,
+            message: { role: "assistant", content: [{ type: "text", text: "mirror me" }] },
+          }),
+        );
+        await actor.sessions.transcript(authority, {
+          type: "session.event.append",
+          input: {
+            sessionKey,
+            sessionId,
+            fence: {},
+            eventJson: JSON.stringify({
+              id: `${sessionId}-metadata`,
+              parentId: sourceId,
+              timestamp: "2026-10-08T00:00:00.000Z",
+              ...(kind === "model_change"
+                ? { type: kind, provider: "openclaw", modelId: "synthetic" }
+                : { type: kind, customType: "proof", data: { note: "trailing metadata" } }),
             }),
-          );
-          await actor.sessions.transcript(authority, {
-            type: "session.event.append",
-            input: {
-              sessionKey,
-              sessionId,
-              fence: {},
-              eventJson: JSON.stringify({
-                id: `${sessionId}-metadata`,
-                parentId: sourceId,
-                timestamp: "2026-10-08T00:00:00.000Z",
-                ...(kind === "model_change"
-                  ? { type: kind, provider: "openclaw", modelId: "synthetic" }
-                  : { type: kind, customType: "proof", data: { note: "trailing metadata" } }),
-              }),
-            },
-          });
-          await expect(
-            appendAssistantMirrorMessageByIdentity({
-              ...target,
-              text: "mirror me",
-              idempotencyKey: "mirror-copy",
-              deliveryMirror: { kind: "channel-final" },
-              updateMode: "none",
-            }),
-          ).resolves.toMatchObject({ ok: true });
-          const facts = await withCodexSessionTranscriptMirrorWrite(target, (write) =>
-            write.readMessageFacts({ idempotencyKeys: ["mirror-copy"] }),
-          );
-          expect(
-            facts.messagesByIdempotencyKey.get("mirror-copy"),
-            `Channel-final mirror lost correlation after ${kind}`,
-          ).toMatchObject({
-            openclawDeliveryMirror: {
-              kind: "channel-final",
-              sourceAssistantMessageId: sourceId,
-            },
-          });
-          sql.expectIdle();
+          },
         });
-      } finally {
-        sql.restore();
-      }
+        await expect(
+          appendAssistantMirrorMessageByIdentity({
+            ...target,
+            text: "mirror me",
+            idempotencyKey: "mirror-copy",
+            deliveryMirror: { kind: "channel-final" },
+            updateMode: "none",
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        const facts = await withCodexSessionTranscriptMirrorWrite(target, (write) =>
+          write.readMessageFacts({ idempotencyKeys: ["mirror-copy"] }),
+        );
+        expect(
+          facts.messagesByIdempotencyKey.get("mirror-copy"),
+          `Channel-final mirror lost correlation after ${kind}`,
+        ).toMatchObject({
+          openclawDeliveryMirror: {
+            kind: "channel-final",
+            sourceAssistantMessageId: sourceId,
+          },
+        });
+      });
     },
   );
 

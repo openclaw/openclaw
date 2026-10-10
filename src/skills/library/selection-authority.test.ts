@@ -100,7 +100,7 @@ describe("skill library worker reads and prepared selection authority", () => {
       throw new Error("Expected catalog");
     }
     expect(listed.result.value.entries).toHaveLength(100);
-    expect.soft(listed.calls).toBe(5);
+    expect.soft(listed.calls).toBe(4);
     expect.soft(listed.blobs).toBe(0);
     const insertOwner =
       db.prepare(`INSERT INTO user_profiles (id, display_name, created_at, updated_at)
@@ -127,7 +127,7 @@ describe("skill library worker reads and prepared selection authority", () => {
       UPDATE skill_library_entries SET owner_profile_id = 'missing-owner' WHERE skill_id = 'catalog-5'`);
     db.exec("COMMIT");
     const cohorts = measure("list");
-    expect(cohorts.calls).toBe(7);
+    expect(cohorts.calls).toBe(6);
     expect(cohorts.blobs).toBe(0);
     if (cohorts.result.kind !== "list") {
       throw new Error("Expected catalog");
@@ -157,7 +157,7 @@ describe("skill library worker reads and prepared selection authority", () => {
     expect.soft(seeded.entryRows).toBe(0);
     expect.soft(seeded.blobs).toBe(0);
     expect(measure("list").entryRows).toBe(501);
-    expect(seeded.calls).toBe(3);
+    expect(seeded.calls).toBe(2);
   });
 
   it("keeps solo defaults, counts aliases once, and never creates library tables on discovery", async () => {

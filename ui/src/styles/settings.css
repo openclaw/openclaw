@@ -11,6 +11,206 @@
  * ui/src/components/settings-ui.ts rather than hand-rolled markup.
  */
 
+/* Personal backgrounds use the shared settings rows; samples are controls, not panels. */
+openclaw-appearance-background {
+  display: block;
+  min-width: 0;
+}
+
+.settings-background-artwork {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-background-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.settings-background-option {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  overflow: hidden;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.settings-background-option[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.settings-background-option:disabled {
+  opacity: 0.5;
+}
+
+.settings-background-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: var(--space-1);
+}
+
+.settings-background-option__sample {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--bg-content, var(--bg));
+}
+
+.settings-background-option--theme .settings-background-option__sample {
+  background-image: var(--app-background-image);
+  background-size: cover;
+  background-position: center;
+}
+
+.settings-background-option__sample img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.settings-background-option__sample svg {
+  width: 24px;
+  height: 24px;
+}
+
+.settings-background-option__label {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  justify-content: space-between;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.settings-background-option__label svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.settings-background-actions,
+.settings-background-visibility {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.settings-background-actions {
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.settings-background-formats {
+  margin-inline-end: auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (max-width: 640px) {
+  .settings-background-option {
+    flex-direction: column;
+  }
+
+  .settings-background-option__label {
+    justify-content: center;
+  }
+
+  .settings-background-formats {
+    flex-basis: 100%;
+  }
+}
+
+.settings-background-visibility {
+  flex-wrap: nowrap;
+  width: 100%;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-background-visibility input {
+  width: clamp(120px, 20vw, 224px);
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.settings-background-visibility__value {
+  min-width: 4ch;
+  color: var(--text);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The preview stays in its local DOM and paints within the measured Settings
+   canvas, not the narrow column. Fixed placement keeps it beside controls below
+   the fold. Isolation keeps its negative layer above the canvas and below the
+   controls; the sidebar stays outside it. Nothing fades or changes layout. */
+.content[data-background-preview] {
+  isolation: isolate;
+
+  .settings-group {
+    background: var(--card);
+    background-color: oklch(from var(--card) l c h / 1);
+  }
+
+  .settings-section__header,
+  .settings-section__desc,
+  .settings-status,
+  .content-header {
+    color: var(--text);
+    text-shadow:
+      0 1px 1px var(--bg-content, var(--bg)),
+      0 0 4px var(--bg-content, var(--bg)),
+      0 0 12px var(--bg-content, var(--bg));
+  }
+}
+
+openclaw-appearance-background > .settings-background-preview {
+  display: none;
+}
+
+.content[data-background-preview] openclaw-appearance-background > .settings-background-preview {
+  position: fixed;
+  display: block;
+  z-index: -1;
+  inset: auto;
+  top: var(--settings-background-preview-top);
+  left: var(--settings-background-preview-left);
+  width: var(--settings-background-preview-width);
+  height: var(--settings-background-preview-height);
+}
+
+/* The preview deliberately has no enter/exit animation or opacity transition,
+   including with reduced motion: values track the range directly. */
+openclaw-appearance-background .settings-background-preview,
+openclaw-appearance-background .settings-background-preview .session-background__image {
+  animation: none;
+  transition: none;
+}
+
 .settings-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -148,7 +348,8 @@
   font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
 }
 
-.settings-section {
+.settings-section,
+.config-tier-groups {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -298,13 +499,6 @@
 
 /* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
-
-.config-tier-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
 
 .config-advanced-disclosure {
   margin-top: var(--space-5);

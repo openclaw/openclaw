@@ -1,8 +1,8 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
@@ -81,6 +81,9 @@ describe("chat transcript rendering", () => {
         transcript.hostConnected();
         transcript.hostUpdated();
         await flushDeferredRowPrune();
+        expect(
+          container.querySelector(".chat-thread")?.classList.contains("chat-thread--direct"),
+        ).toBe(avatarPlacement !== "gutter");
         const replies = container.querySelectorAll(".chat-group.assistant");
         expect(replies).toHaveLength(3);
         for (const reply of replies) {
@@ -159,12 +162,12 @@ describe("chat transcript rendering", () => {
     const fetchArtwork = vi
       .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
       .mockImplementation(async ({ url }) => `blob:${url}`);
-    let branding = {
-      mascot: "claw" as const,
+    let branding = resolveThemeBranding({
+      mascot: "claw",
       critters: [],
       avatarHat: "beret",
       artwork: { hats: { beret: { url: "/hat?v=1" } } },
-    };
+    });
     const agentId = expectDefined(
       Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
         resolveAvatarHat(id, branding),

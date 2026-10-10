@@ -661,7 +661,7 @@ async function runPreparedSqliteSessionReclamation(
                   completed.kind === "lifecycle-projection-commit"
                     ? completed.value.removedSessionKeys
                     : completed.kind === "maintenance-finalize"
-                      ? completed.value.committedEntries.map(({ sessionKey }) => sessionKey)
+                      ? collectReclamationChangedSessionKeys(plan, completed)
                       : completed.kind === "entry" &&
                           plan.kind === "entry" &&
                           completed.value.deleted

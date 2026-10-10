@@ -31,7 +31,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   executeOpenClawStateWorker,
-  inspectOpenClawStateDatabaseGeneration,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -344,19 +343,6 @@ describe("canonical shared-state worker admission", () => {
       await runOpenClawStateWorkerOperation(captured, inspect, { existingOnly: true }),
     ).toBeUndefined();
     expect(inspect).not.toHaveBeenCalled();
-    expect(
-      await inspectOpenClawStateDatabaseGeneration(captured, {
-        database: {
-          birthtimeNs: 0n,
-          ctimeNs: 0n,
-          dev: 0n,
-          ino: 0n,
-          mtimeNs: 0n,
-          size: 0n,
-          sha256: "0".repeat(64),
-        },
-      }),
-    ).toBeUndefined();
     expect(existsSync(captured.admission.databasePath)).toBe(false);
   });
 

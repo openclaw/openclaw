@@ -20,7 +20,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import { createModel } from "./agentsapi.test-support.js";
+import { createModel, createHostedSession } from "./agentsapi.test-support.js";
 import plugin from "./index.js";
 
 export function registerHarness(
@@ -142,13 +142,22 @@ export function requireExecutorHarness(runtime: PluginRuntime) {
   const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
   plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
   const harness = registerAgentHarness.mock.calls[0]?.[0];
-  if (!harness?.runAttempt || !harness.reset || !harness.withSessionDeletion || !harness.dispose) {
-    throw new Error("The Agents API harness requires run, reset, deletion, and disposal");
+  if (
+    !harness?.runAttempt ||
+    !harness.reset ||
+    !harness.withSessionDeletion ||
+    !harness.withSessionContextReset ||
+    !harness.dispose
+  ) {
+    throw new Error(
+      "The Agents API harness requires run, reset, deletion, context reset, and disposal",
+    );
   }
   return {
     runAttempt: harness.runAttempt.bind(harness),
     reset: harness.reset.bind(harness),
     withSessionDeletion: harness.withSessionDeletion,
+    withSessionContextReset: harness.withSessionContextReset,
     dispose: harness.dispose.bind(harness),
   };
 }
@@ -222,4 +231,15 @@ export async function createAttempt(stateDir: string) {
       waitForApproval: async () => undefined,
     },
   } satisfies AgentHarnessAttemptParamsV2;
+}
+
+export function mockClient(sessionId: string) {
+  const session = vi
+    .spyOn(AgentsApiClient.prototype, "session")
+    .mockResolvedValue(createHostedSession("idle"));
+  const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(sessionId);
+  const update = vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
+  const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
+  vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+  return { create, update, message, session };
 }
