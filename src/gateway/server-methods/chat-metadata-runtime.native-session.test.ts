@@ -13,7 +13,10 @@ import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
-import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
+import {
+  readPreparedChatMetadata,
+  projectSessionModelCatalog,
+} from "./chat-metadata-session-projection.js";
 
 describe("gateway chat metadata native session ownership", () => {
   test("projects only ambient worker-owned auth failures as available", () => {
@@ -413,5 +416,84 @@ describe("gateway chat metadata native session ownership", () => {
         }
       }
     });
+  });
+});
+
+describe("required worker inference composer policy", () => {
+  test.each([
+    {
+      name: "required device worker",
+      required: "coding",
+      provider: "device",
+      inference: "worker",
+      expected: "coding",
+    },
+    {
+      name: "optional device worker",
+      required: undefined,
+      provider: "device",
+      inference: "worker",
+      expected: undefined,
+    },
+    {
+      name: "required Gateway inference",
+      required: "coding",
+      provider: "device",
+      inference: "gateway",
+      expected: undefined,
+    },
+    {
+      name: "missing profile",
+      required: "missing",
+      provider: "device",
+      inference: "worker",
+      expected: undefined,
+    },
+    {
+      name: "foreign provider setting",
+      required: "coding",
+      provider: "custom",
+      inference: "worker",
+      expected: undefined,
+    },
+    {
+      name: "invalid device setting",
+      required: "coding",
+      provider: "device",
+      inference: "native",
+      expected: undefined,
+    },
+  ])("projects only current $name policy", ({ required, provider, inference, expected }) => {
+    const config: OpenClawConfig = {
+      cloudWorkers: {
+        requiredProfile: required,
+        profiles: { coding: { provider, settings: { device: "paired-worker", inference } } },
+      },
+    };
+    const params = { agentId: "main", sessionKey: "agent:main:example" };
+    const metadata = { swarmEnabled: false };
+    const owner = createChatMetadataOwner(config, "fixture");
+    const projection = {
+      read: () => ({}),
+      agent: {
+        agentId: "main",
+        owner,
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+        modelCatalog: owner.modelCatalog,
+        ...metadata,
+      },
+    } satisfies Parameters<typeof readPreparedChatMetadata>[0];
+    const project = (readParams: Parameters<typeof readPreparedChatMetadata>[1]) =>
+      readPreparedChatMetadata(projection, readParams, config, null);
+    expect(project(params).requiredWorkerInferenceProfileId).toBe(expected);
+    expect(project({ agentId: "main" })).not.toHaveProperty("requiredWorkerInferenceProfileId");
+    expect(
+      project({ ...params, sessionEntry: { agentRuntimeOverride: "codex" } })
+        .requiredWorkerInferenceProfileId,
+    ).toBeUndefined();
+    delete config.cloudWorkers!.requiredProfile;
+    expect(project(params).requiredWorkerInferenceProfileId).toBeUndefined();
+    expect(metadata).toEqual({ swarmEnabled: false });
   });
 });

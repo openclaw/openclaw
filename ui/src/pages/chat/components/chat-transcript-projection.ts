@@ -64,6 +64,7 @@ import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const workPreviewCache =
@@ -161,7 +162,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     sessionKey: props.sessionKey,
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
-    session: activeSession,
+    session: props.transcriptMetadata ?? activeSession,
   });
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
   const replyNavigationId = props.replyMessageAccess?.navigationId;
@@ -337,6 +338,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     waitingApproval: props.waitingApproval,
     waitingSubagents: subagentWait ?? undefined,
     runningSubagents: subagents.running,
+    subagentActivity: subagents.activity.length
+      ? html`<openclaw-chat-subagent-activity
+          .rows=${subagents.activity}
+          .onOpenSubagent=${props.onOpenSubagent}
+          .onOpenSession=${props.onOpenSession}
+        ></openclaw-chat-subagent-activity>`
+      : undefined,
     // Subagents the panel does not list still open as sessions, and have no list to show.
     onOpenSubagent: (subagents.listed && props.onOpenSubagent) || props.onOpenSession,
     onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
@@ -710,7 +718,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
         header,
-        Boolean(replyNavigationId),
       ),
   };
 }

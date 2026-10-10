@@ -94,7 +94,7 @@ it.each([false, true])(
                 observation.queries.filter((sql) =>
                   /^SELECT role, schema_version, agent_id/iu.test(sql),
                 ),
-              ).toHaveLength(20);
+              ).toHaveLength(0);
             } finally {
               observation.restore();
               prepare.mockRestore();
@@ -109,7 +109,7 @@ it.each([false, true])(
   },
 );
 
-it("pins admission and rows together before a foreign ownership change", async () => {
+it("keeps admitted ownership while pinned metadata reads observe foreign commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const { path } = openOpenClawAgentDatabase(options);
@@ -133,7 +133,7 @@ it("pins admission and rows together before a foreign ownership change", async (
             { snapshot: true },
           ),
         ).toEqual({ found: true, value: "main" });
-        expect(read).toThrow("belongs to agent other");
+        expect(read()).toEqual({ found: true, value: "other" });
       });
     } finally {
       writer.close();
@@ -197,27 +197,22 @@ it("keeps one connection while nested reads retain independent committed snapsho
 it.each([
   {
     sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-    error: "newer schema version",
   },
   {
     sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`,
-    error: "run openclaw doctor --fix",
   },
   {
     sql: "UPDATE schema_meta SET agent_id = 'another' WHERE meta_key = 'primary'",
-    error: "belongs to agent another",
   },
   {
     sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
-    error: "has schema role state",
   },
   {
     sql: "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
-    error: "canonical validation schema is missing or drifted",
   },
 ])(
-  "revalidates retained read admission on the next read after a commit: $sql",
-  async ({ sql, error }) => {
+  "reuses admitted format while observing fresh rows after a foreign commit: $sql",
+  async ({ sql }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
       const { path } = openOpenClawAgentDatabase(options);
@@ -225,16 +220,36 @@ it.each([
       const target = { agentId: "main", path };
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
       const read = () =>
-        scope.run(target, () => withOpenClawAgentDatabaseReadOnly(() => "admitted", options));
+        scope.run(target, () =>
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()
+                ?.updated_at,
+            options,
+          ),
+        );
       try {
-        expect(read()).toEqual({ found: true, value: "admitted" });
+        expect(read()).toEqual({ found: true, value: expect.any(Number) });
         const writer = new (requireNodeSqlite().DatabaseSync)(path);
         try {
           writer.exec(sql);
+          writer.exec("UPDATE schema_meta SET updated_at = 42 WHERE meta_key = 'primary'");
         } finally {
           writer.close();
         }
-        expect(read).toThrow(error);
+        const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        try {
+          expect(read()).toEqual({ found: true, value: 42 });
+          expect(
+            observation.queries.filter((query) =>
+              /sqlite_schema|sqlite_master|PRAGMA\s+(?:user_version|schema_version|integrity_check|foreign_key_check)|^SELECT role, schema_version, agent_id/iu.test(
+                query,
+              ),
+            ),
+          ).toEqual([]);
+        } finally {
+          observation.restore();
+        }
       } finally {
         scope.close();
       }

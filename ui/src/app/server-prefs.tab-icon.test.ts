@@ -4,14 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { changedServerUiPrefs, selectThemeSettings } from "./server-prefs-intent.ts";
+import { resetServerUiPref, selectThemeSettings } from "./server-prefs-controls.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { extractServerUiPrefs } from "./server-prefs-state.ts";
 import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   flushServerUiPrefs,
   pushServerUiPrefs,
   refreshProfileAppearancePrefs,
-  resetServerUiPref,
   resetServerUiPrefsSync,
   resolveServerUiPrefState,
 } from "./server-prefs.ts";
