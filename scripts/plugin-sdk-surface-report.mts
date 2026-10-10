@@ -197,7 +197,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      151,
+      // +1: the shared state-owner boundary for plugin CLIs.
+      152,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -215,7 +216,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -8: retired Skill Workshop proposal hook types.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +7: approved prepared/data-only session patches and their authority contracts.
-      3651,
+      // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
+      3655,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -230,7 +232,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +3: approved prepared/data-only session patches and authority-bound routes.
-      2117,
+      // +4: the same four CLI state-owner and transport functions.
+      2121,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
