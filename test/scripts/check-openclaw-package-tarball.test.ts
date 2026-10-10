@@ -809,7 +809,7 @@ syncBuiltinESMExports();
       inventory: ["dist/managed-handoff-runtime.mjs"],
       files: {
         "dist/managed-handoff-runtime.mjs":
-          'new URL("./node_modules/koffi/indirect.cjs", import.meta.url);\n',
+          'new URL("./node_modules/@openclaw/proc-safe/dist/identity.js", import.meta.url);\n',
       },
       options: { pack: "pnpm", postinstall: true },
       status: 0,
@@ -819,11 +819,12 @@ syncBuiltinESMExports();
       name: "rejects a handoff static import of the unpackaged native runtime",
       inventory: ["dist/managed-handoff-runtime.mjs"],
       files: {
-        "dist/managed-handoff-runtime.mjs": 'import "./node_modules/koffi/indirect.cjs";\n',
+        "dist/managed-handoff-runtime.mjs":
+          'import "./node_modules/@openclaw/proc-safe/dist/identity.js";\n',
       },
       status: "nonzero",
       stderr: [
-        "dist/managed-handoff-runtime.mjs imports missing dist/node_modules/koffi/indirect.cjs",
+        "dist/managed-handoff-runtime.mjs imports missing dist/node_modules/@openclaw/proc-safe/dist/identity.js",
       ],
     },
     {
