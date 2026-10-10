@@ -442,8 +442,20 @@ describe("mutations", () => {
       scopes: ["operator.admin"],
     });
     expect(output()).toContain(joinUrl);
-    expect(output()).toContain(`npx openclaw connect ${joinUrl}`);
+    expect(output()).toContain(`npx -y openclaw connect ${joinUrl} --service --session-host`);
+    expect(output()).toContain("Installs a background node service that can run agent sessions.");
+    expect(output()).toContain(`Command-only node: npx -y openclaw connect ${joinUrl} --service`);
     expect(output()).not.toContain("opaque");
+  });
+  it("returns the session-host service command in JSON without printing text", async () => {
+    const joinUrl = `https://gateway.example/j/${"b".repeat(22)}`;
+    callGateway.mockResolvedValueOnce({ joinUrl });
+    await run("join-code", "--json");
+    expect(runtime.writeJson).toHaveBeenCalledWith({
+      joinUrl,
+      command: `npx -y openclaw connect ${joinUrl} --service --session-host`,
+    });
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });
 

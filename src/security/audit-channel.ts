@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { resolveChannelAccount, resolveChannelDmPolicy } from "../channels/account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -305,7 +305,8 @@ export async function collectChannelSecurityFindingsCore(params: {
         orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
-      const dmPolicy = plugin.security.resolveDmPolicy?.({
+      const dmPolicy = await resolveChannelDmPolicy({
+        plugin,
         cfg: params.cfg,
         accountId,
         account,

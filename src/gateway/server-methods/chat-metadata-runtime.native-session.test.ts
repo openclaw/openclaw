@@ -3,6 +3,7 @@ import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionWorkerReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -41,7 +42,7 @@ describe("gateway chat metadata native session ownership", () => {
     ] satisfies ModelChoice[];
     const scope = { agentId: "main", workerInference: "worker" as const };
 
-    expect(projectSessionModelCatalog(scope, models, config)).toEqual([
+    expect(projectSessionModelCatalog(scope, models, config, undefined)).toEqual([
       { provider: "openai", id: "gpt-5.6-sol", name: "Sol" },
       models[1],
     ]);
@@ -50,6 +51,7 @@ describe("gateway chat metadata native session ownership", () => {
         scope,
         [{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }],
         config,
+        undefined,
       ),
     ).toEqual([{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }]);
     expect(
@@ -57,6 +59,7 @@ describe("gateway chat metadata native session ownership", () => {
         { ...scope, sessionEntry: { modelOverride: "gpt-5.6-luna" } },
         models,
         config,
+        undefined,
       ),
     ).toEqual(models);
     expect(
@@ -70,6 +73,7 @@ describe("gateway chat metadata native session ownership", () => {
         },
         models,
         config,
+        undefined,
       ),
     ).toEqual(models);
     for (const authProfileOverrideSource of [undefined, "user-link"] as const) {
@@ -84,6 +88,7 @@ describe("gateway chat metadata native session ownership", () => {
           },
           models,
           config,
+          undefined,
         ),
       ).toEqual(models);
     }
@@ -237,7 +242,10 @@ describe("gateway chat metadata native session ownership", () => {
         runAttempt: async () => {
           throw new Error("metadata must not start a model turn");
         },
-        resolveSessionRuntimeOwnership: (params) => {
+        resolveSessionRuntimeOwnership() {
+          throw new Error("Chat metadata must use worker-owned ownership preparation");
+        },
+        resolveSessionRuntimeOwnershipAsync: async (params) => {
           params.assertCurrent();
           return params.sessionKey === request.sessionKey && params.sessionId === boundSessionId
             ? ownership
@@ -357,8 +365,8 @@ describe("gateway chat metadata native session ownership", () => {
           runAttempt: async () => {
             throw new Error("metadata must not start a model turn");
           },
-          resolveSessionRuntimeOwnership: ({ readPreviousSessionId }) =>
-            readPreviousSessionId?.() === "new-predecessor"
+          resolveSessionRuntimeOwnershipAsync: async ({ readPreviousSessionId }) =>
+            (await readPreviousSessionId?.()) === "new-predecessor"
               ? { model: "native", auth: "native" }
               : undefined,
         },
@@ -376,7 +384,7 @@ describe("gateway chat metadata native session ownership", () => {
           await release.promise;
           return projection;
         });
-        const readSpy = vi.spyOn(sessionAccessor, "loadSessionEntryReadOnly");
+        const readSpy = vi.spyOn(sessionWorkerReader, "readSessionEntryReadOnlyInWorker");
         restoreReadSpy = () => readSpy.mockRestore();
         pending = harness.runtime.read({
           agentId: target.agentId,
@@ -398,11 +406,10 @@ describe("gateway chat metadata native session ownership", () => {
             : hostModels,
         );
         expect(readSpy).toHaveBeenCalledOnce();
-        expect(readSpy).toHaveBeenCalledWith({
-          ...target,
-          hydrateSkillPromptRefs: false,
-          readConsistency: "latest",
-        });
+        expect(readSpy).toHaveBeenCalledWith(
+          { ...target, hydrateSkillPromptRefs: false, readConsistency: "latest" },
+          expect.any(Function),
+        );
         expect(entry.sessionId).toBe("metadata-current");
         expect(entry.previousSessionId).toBe(initialPredecessor);
       } finally {
@@ -485,7 +492,7 @@ describe("required worker inference composer policy", () => {
       },
     } satisfies Parameters<typeof readPreparedChatMetadata>[0];
     const project = (readParams: Parameters<typeof readPreparedChatMetadata>[1]) =>
-      readPreparedChatMetadata(projection, readParams, config, null);
+      readPreparedChatMetadata(projection, readParams, config, null, undefined);
     expect(project(params).requiredWorkerInferenceProfileId).toBe(expected);
     expect(project({ agentId: "main" })).not.toHaveProperty("requiredWorkerInferenceProfileId");
     expect(

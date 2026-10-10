@@ -22,10 +22,8 @@ import {
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
-import {
-  appendTranscriptEvent,
-  replaceTranscriptEvents,
-} from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { prepareSessionTranscriptProjection } from "./session-transcript-projection-rebuild.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import { createMemoryTranscriptProjectionSource } from "./session-transcript-reconcile-memory.js";

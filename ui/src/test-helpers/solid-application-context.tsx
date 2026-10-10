@@ -4,10 +4,7 @@ import type { ApplicationContext } from "../app/context-types.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { normalizeApplicationContext } from "./application-context-fixtures.ts";
 
-export {
-  createApplicationGateway,
-  hiddenScopeUpgradeCapability,
-} from "./application-context-fixtures.ts";
+export { createApplicationGateway } from "./application-context-fixtures.ts";
 
 export function createSolidApplicationContextProvider(initial: ApplicationContext) {
   const [context, setContext] = createSignal(normalizeApplicationContext(initial));
