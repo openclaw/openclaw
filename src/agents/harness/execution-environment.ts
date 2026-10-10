@@ -291,6 +291,7 @@ export type ResolvedPluginHarnessToolPolicies = {
   groupPolicy?: PluginHarnessToolPolicy;
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
   safeDeniedToolNames: string[];
+  requiresLiveToolAuthority: boolean;
   toolPolicyRestricted: boolean;
 };
 
@@ -447,9 +448,12 @@ export function resolvePluginHarnessToolPolicies(
       requestedToolPolicy,
     ],
     safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
+    requiresLiveToolAuthority: Boolean(policy.delegatedToolPolicy),
     // Native tools bypass the collector's noninteractive OpenClaw wrappers.
     // Keep policy-allowed host replacements, without ambient input or approval surfaces.
     toolPolicyRestricted:
+      // Delegated tools require OpenClaw’s live pre-effect grant checks.
+      Boolean(policy.delegatedToolPolicy) ||
       params.swarmCollector === true ||
       nativeToolNames?.some((toolName) => !isToolAllowedByPolicies(toolName, profilePolicies)) ===
         true ||

@@ -8,6 +8,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -32,6 +33,14 @@ export type SpawnedToolContext = {
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /** Prepared by the host before policy flattening; never accepted from tool arguments. */
+  delegatedToolDenyFloor?: DelegatedToolDenyFloor;
+  /** Immediate requester execution snapshot; ordinary inherited denies retain revocation fallback. */
+  requesterToolDenylist?: string[];
+  /** Bound at tool construction so an awaited spawn cannot pin a superseded runtime config. */
+  readDelegationConfig?: () => OpenClawConfig;
+  /** A mediated producer cannot export its active native delegation exception. */
+  delegatedToolPolicyUnavailable?: boolean;
   /** Restrictive requester policy originated at trusted sender/channel ingress. */
   inheritedToolPolicySource?: "sender";
 };

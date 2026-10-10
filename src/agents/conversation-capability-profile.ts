@@ -178,11 +178,13 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     inheritedToolPolicy,
     runtimeToolPolicy,
   ];
+  const inheritedToolPolicyForSpawn =
+    requesterPolicies.inheritedToolPolicyForSpawn ?? inheritedToolPolicy;
   const inheritancePolicies = [
     profilePolicy,
     providerProfilePolicy,
     ...configuredOverridePolicies,
-    inheritedToolPolicy,
+    inheritedToolPolicyForSpawn,
     runtimeToolPolicyForInheritance,
   ];
 
@@ -232,6 +234,8 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       sandboxSessionRenameOnly,
       subagentPolicy,
       inheritedToolPolicy,
+      inheritedToolPolicyForSpawn,
+      delegatedToolPolicy: requesterPolicies.delegatedToolPolicy,
       inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,

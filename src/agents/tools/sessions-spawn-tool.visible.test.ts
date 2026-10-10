@@ -5,6 +5,8 @@ import {
   admitChildSessionPublication,
   readChildSessionPublication,
 } from "../../channels/message-access/child-session-publication.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareDelegatedToolDenyFloor } from "../delegated-tool-policy.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-queries.js";
 import {
@@ -33,9 +35,72 @@ describe("sessions_spawn visible work receipts", () => {
     hoisted.spawnAcpDirectMock.mockReset();
   });
 
+  it("delegates an explicitly granted coding target without the front-door local tool ceiling", async () => {
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:worker:dashboard:coding-child",
+      runStarted: true,
+      runId: "coding-child-run",
+    });
+    const config = {
+      agents: {
+        defaults: { model: "mock-provider/primary" },
+        entries: {
+          main: {
+            tools: { deny: ["exec", "write", "edit", "apply_patch"] },
+            subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] },
+          },
+          worker: {},
+        },
+      },
+    };
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config,
+      senderIsOwner: true,
+      delegatedToolDenyFloor: prepareDelegatedToolDenyFloor(
+        resolveConversationCapabilityProfile({
+          config,
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      ),
+      inheritedToolDenylist: ["exec", "write", "edit", "apply_patch"],
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+    const result = await tool.execute("authorized-coding-handoff", {
+      task: "Implement and test the requested repository fix",
+      agentId: "worker",
+      visible: true,
+    });
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(hoisted.inProcessCreationMock.mock.calls[0]?.[2]).toMatchObject({
+      inheritedToolPolicy: {
+        version: 1,
+        allow: [],
+        deny: ["exec", "write", "edit", "apply_patch"],
+        delegatedToolPolicy: expect.objectContaining({
+          requesterSessionKey: "agent:main:main",
+          targetAgentId: "worker",
+          deny: [],
+        }),
+      },
+    });
+  });
+
   it.each(["subagent", "acp"])("refuses another agent before dispatching %s", async (runtime) => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
+      senderIsOwner: true,
+      config: {
+        agents: {
+          entries: {
+            main: { subagents: { allowAgents: ["other"], delegateToolsTo: ["other"] } },
+            other: {},
+          },
+        },
+      },
+      delegatedToolDenyFloor: { policyAgentId: "main", deny: [] },
       inheritedToolPolicySource: "sender",
       inheritedToolAllowlist: ["read", "sessions_spawn"],
     });
@@ -51,6 +116,38 @@ describe("sessions_spawn visible work receipts", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a delegated ceiling or grant from model arguments", async () => {
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:worker:dashboard:ordinary-child",
+      runStarted: true,
+      runId: "ordinary-child-run",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: { model: "mock-provider/primary" },
+          entries: { main: { subagents: { allowAgents: ["worker"] } }, worker: {} },
+        },
+      },
+      inheritedToolDenylist: ["exec"],
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+    const result = await tool.execute("forged-delegation", {
+      task: "inspect",
+      agentId: "worker",
+      visible: true,
+      delegateToolsTo: ["worker"],
+      delegatedToolDenyFloor: { deny: [] },
+      delegatedToolPolicy: { requesterAgentId: "main", targetAgentId: "worker", deny: [] },
+    });
+    expect(result.details).toMatchObject({ status: "accepted" });
+    const creation = hoisted.inProcessCreationMock.mock.calls[0]?.[2];
+    expect(creation.inheritedToolPolicy).toMatchObject({ deny: ["exec"] });
+    expect(creation.inheritedToolPolicy.delegatedToolPolicy).toBeUndefined();
   });
 
   it("carries only host invocation intent to creation and reports the exact committed publication", async () => {
