@@ -4,7 +4,6 @@ import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
-import type { ApplicationContext } from "../../app/context-types.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { sessionParticipantIdentityKey } from "../../lib/chat/sender-label.ts";
 import { resolveAvatar } from "../../lib/identity-avatar.ts";
@@ -43,18 +42,14 @@ export type ViewerAvatarProps = {
   variant?: "session" | "footer" | "profile";
   identity?: SessionParticipantIdentity;
   markAsViewer?: boolean;
-  application?: ApplicationContext;
 };
 
 export function ViewerAvatarContent(props: ViewerAvatarProps) {
   const application = useIdentityApplication();
-  const gateway = createMemo(() => {
-    const context = props.application ?? application;
-    return context ? projectGateway(context.gateway) : undefined;
-  });
+  const gateway = application ? projectGateway(application.gateway) : undefined;
   const selfAvatarUrl = () => {
     const identity = props.identity ?? props.user?.identity;
-    const self = gateway()?.read().snapshot.selfUser;
+    const self = gateway?.read().snapshot.selfUser;
     return identity?.type === "profile" &&
       self?.identity?.type === "profile" &&
       identity.id === self.identity.id
@@ -82,7 +77,7 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
             : presenceViewerLabel(props.user!)
         }
       >
-        <Show when={view().imageUrl}>
+        <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage view={view()} fallbackSelector=".viewer-avatar" />
         </Show>
         <span
@@ -213,6 +208,7 @@ export function AgentViewerAvatar(props: {
   user: Pick<PresenceViewer, "id" | "name" | "email" | "avatarUrl">;
   identity: Extract<SessionParticipantIdentity, { type: "agent" }>;
   markAsViewer?: boolean;
+  label?: string;
 }) {
   const avatar = createMemo(() => {
     const resolved = resolveAvatar({
@@ -226,7 +222,7 @@ export function AgentViewerAvatar(props: {
   return (
     <span
       class="viewer-avatar viewer-avatar--session"
-      aria-label={presenceViewerLabel(props.user)}
+      aria-label={props.label ?? presenceViewerLabel(props.user)}
       data-viewer-id={props.markAsViewer ? props.user.id : undefined}
     >
       <AgentIdentityAvatar agent={{ id: props.identity.id, avatar: avatar() }} />

@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   SessionOwnerChipContent,
   type SessionOwnerChipProps,
@@ -41,8 +41,8 @@ function mount(params: { participants?: SessionParticipant[]; participantCount?:
           participantCount={params.participantCount ?? participants.length}
         />
       ),
-      chip,
-    ),
+      { container: chip },
+    ).unmount,
   );
   flush();
   expect(chip.querySelector(".session-owner-chip")).not.toBeNull();

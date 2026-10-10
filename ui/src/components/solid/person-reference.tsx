@@ -3,7 +3,6 @@ import { createEffect, createMemo, onCleanup, onSettled, Show, untrack } from "s
 import type { UsersListResult } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { buildControlUiUserAvatarPath } from "../../../../src/gateway/control-ui-user-avatar-route.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import {
@@ -37,7 +36,6 @@ import "../../styles/chat/person-reference.css";
 
 export type PersonReferenceProps = {
   host: HTMLElement;
-  application?: ApplicationContext;
   profileId?: string;
   label?: string;
 };
@@ -47,8 +45,7 @@ let nextCardId = 0;
 
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
 export function PersonReferenceContent(props: PersonReferenceProps) {
-  const providedApplication = useIdentityApplication();
-  const application = () => props.application ?? providedApplication;
+  const context = useIdentityApplication();
   const profileId = () => props.profileId ?? "";
   const label = () => props.label ?? "";
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
@@ -102,30 +99,16 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     }
   }
 
-  createEffect(application, (context) => {
-    close();
-    connection.invalidate();
-    if (!context) {
-      connection.transition({ client: null, phase: "stopped" });
-      return;
-    }
-    const gateway = projectGateway(context.gateway);
-    const sync = () => {
-      if (connection.transition(gateway.read().snapshot)) {
-        close();
-      } else {
-        renderCard();
-      }
-    };
-    const stop = gateway.subscribe(sync);
-    sync();
-    return () => {
-      stop();
-      gateway.dispose();
-      connection.invalidate();
+  const gateway = context ? projectGateway(context.gateway) : undefined;
+  const syncConnection = () => {
+    if (gateway && connection.transition(gateway.read().snapshot)) {
       close();
-    };
-  });
+    } else {
+      renderCard();
+    }
+  };
+  const stopGateway = gateway?.subscribe(() => untrack(syncConnection));
+  untrack(syncConnection);
 
   createEffect(
     () => ({ profileId: profileId(), label: label(), loading: t("common.loading") }),
@@ -142,6 +125,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     return () => activityExpiry.disconnect();
   });
   onCleanup(() => {
+    stopGateway?.();
     close();
     connection.dispose();
   });
@@ -163,7 +147,6 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("focusin", outside, true);
     document.addEventListener("keydown", escape, true);
-    const context = application();
     stopRoute = context?.router.subscribe(() => untrack(close));
     if (context) {
       activity = observePersonActivityData(context, () => renderCard());
@@ -175,7 +158,6 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
 
   async function loadPerson(card: HTMLDivElement) {
     const scope = connection.capture();
-    const context = application();
     const requestedId = profileId();
     if (!scope || !context) {
       return;
@@ -208,12 +190,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     } catch {
       // An unavailable or unauthorized profile remains an explicit, unresolved reference.
     }
-    if (
-      portal.card !== card ||
-      profileId() !== requestedId ||
-      application() !== context ||
-      !connection.isCurrent(scope)
-    ) {
+    if (portal.card !== card || profileId() !== requestedId || !connection.isCurrent(scope)) {
       return;
     }
     person = resolved;
@@ -223,7 +200,6 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
   function renderCard() {
     activityExpiry.sync();
     const card = portal.card;
-    const context = application();
     if (!card) {
       return;
     }
@@ -277,7 +253,6 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
                     commit: () => {
                       if (
                         !scope ||
-                        application() !== context ||
                         context.router.getState().location !== route ||
                         !connection.isCurrent(scope)
                       ) {
@@ -375,7 +350,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
         aria-hidden="true"
         data-initials={avatar().fallback.initials}
       >
-        <Show when={avatar().imageUrl}>
+        <Show when={Boolean(avatar().imageUrl)}>
           <IdentityAvatarImage
             view={avatar()}
             fallbackSelector=".markdown-person-reference__avatar"

@@ -11,12 +11,10 @@ import {
 import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
-import { readAvatarGatewayContext } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
   resolveAvatar,
   resolveAvatarInitials,
-  resolveTrustedAvatarUrl,
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
@@ -25,7 +23,8 @@ import "../styles/identity-avatar.css";
 import { icons } from "./icons.ts";
 import { renderPluginThemeArtwork } from "./plugin-theme-artwork.ts";
 import {
-  IdentityAvatarImage,
+  bindIdentityAvatarImage,
+  type IdentityAvatarImageProps,
   setIdentityAvatarState as setAvatarState,
 } from "./solid/identity-avatar-image.tsx";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
@@ -75,35 +74,26 @@ class IdentityAvatarClassDirective extends Directive {
 /** Preserve image-event state when Lit reconciles an unchanged source. */
 export const identityAvatarClass = directive(IdentityAvatarClassDirective);
 
-// Lit supplies the existing image node; the Solid component owns every resource and event.
+// Lit keeps its direct-child image; the shared Solid binding owns resources and events.
 class IdentityAvatarImageDirective extends AsyncDirective {
-  private part?: AttributePart;
-  private view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl"> = { imageUrl: null };
-  private fallbackSelector = "";
-  private onImageError?: () => void;
+  private image!: HTMLImageElement;
+  private input!: IdentityAvatarImageProps;
   private dispose?: () => void;
-  private publish?: (view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl">) => void;
+  private publish?: (input: IdentityAvatarImageProps) => void;
 
-  override render(
-    _imageUrl: IdentityAvatarView["imageUrl"],
-    _sourceUrl: string | undefined,
-    _fallbackSelector: string,
-    _onImageError?: () => void,
-  ) {
+  override render(_input: IdentityAvatarImageProps) {
     return noChange;
   }
 
-  override update(
-    part: AttributePart,
-    [imageUrl, sourceUrl, fallbackSelector, onImageError]: Parameters<this["render"]>,
-  ) {
-    this.part = part;
-    this.view = { imageUrl, sourceUrl };
-    this.fallbackSelector = fallbackSelector;
-    this.onImageError = onImageError;
+  override update(part: AttributePart, [input]: Parameters<this["render"]>) {
+    if (!(part.element instanceof HTMLImageElement)) {
+      return noChange;
+    }
+    this.image = part.element;
+    this.input = input;
     if (this.isConnected) {
       if (this.publish) {
-        this.publish(this.view);
+        this.publish(input);
       } else {
         this.mount();
       }
@@ -113,32 +103,12 @@ class IdentityAvatarImageDirective extends AsyncDirective {
   }
 
   private mount() {
-    const image = this.part?.element;
-    if (!(image instanceof HTMLImageElement)) {
-      return;
-    }
-    const source = this.view.sourceUrl;
-    const trusted = source
-      ? resolveTrustedAvatarUrl(source, readAvatarGatewayContext().origin)
-      : null;
     createRoot((dispose) => {
       this.dispose = dispose;
-      const [view, publish] = createSignal(this.view);
+      const [input, publish] = createSignal(this.input);
       this.publish = publish;
-      const selector = () => this.fallbackSelector;
-      const onError = () => this.onImageError?.();
-      IdentityAvatarImage({
-        element: image,
-        get view() {
-          return view();
-        },
-        get fallbackSelector() {
-          return selector();
-        },
-        onImageError: onError,
-      });
+      bindIdentityAvatarImage(input)(this.image);
     });
-    this.view = { ...this.view, sourceUrl: trusted ?? undefined };
   }
 
   override disconnected() {
@@ -148,8 +118,16 @@ class IdentityAvatarImageDirective extends AsyncDirective {
   }
 
   override reconnected() {
-    if (this.view.sourceUrl) {
-      this.view = { ...this.view, imageUrl: resolveAvatarImageUrl(this.view.sourceUrl) };
+    const view = this.input.view;
+    if (view.sourceUrl) {
+      const imageUrl = resolveAvatarImageUrl(view.sourceUrl);
+      this.input = {
+        ...this.input,
+        view: {
+          ...view,
+          imageUrl: imageUrl ?? (view.imageUrl === view.sourceUrl ? view.imageUrl : null),
+        },
+      };
     }
     this.mount();
     flush();
@@ -179,7 +157,7 @@ export function renderIdentityAvatarImage({
   }
   return html`<img
     class=${className ?? nothing}
-    src=${identityAvatarImage(view.imageUrl, view.sourceUrl, fallbackSelector, onImageError)}
+    src=${identityAvatarImage({ view, fallbackSelector, onImageError })}
     alt=${alt}
     aria-hidden=${ariaHidden ? "true" : nothing}
     referrerpolicy="no-referrer"
@@ -234,15 +212,42 @@ class SystemAgentAvatarDirective extends AsyncDirective {
 
 const systemAgentAvatar = directive(SystemAgentAvatarDirective);
 
+export type AgentIdentity = {
+  id: string;
+  name?: string;
+  avatar?: string | null;
+  textAvatar?: string | null;
+  pending?: boolean;
+};
+
+export function resolveAgentIdentityAvatarView(agent: AgentIdentity) {
+  const imageUrl =
+    !isReservedSystemAgentId(agent.id) && agent.avatar && !agent.pending
+      ? (resolveAvatarImageUrl(agent.avatar) ?? agent.avatar)
+      : null;
+  return {
+    imageUrl,
+    sourceUrl: agent.avatar ?? undefined,
+    pending: agent.pending ?? imageUrl !== null,
+  };
+}
+
+export function renderAgentAvatarFallback(agent: AgentIdentity) {
+  return guard([agent.id, agent.textAvatar], () =>
+    until(
+      agent.textAvatar
+        ? html`<span class="identity-avatar__text" data-avatar=${agent.textAvatar}></span>`
+        : import("./agent-avatar-face.ts").then(({ renderAgentAvatarFace }) =>
+            renderAgentAvatarFace(agent.id),
+          ),
+      nothing,
+    ),
+  );
+}
+
 /** Agent images and emoji share one fallback across every surface. */
 export function renderAgentIdentityAvatar(
-  agent: {
-    id: string;
-    name?: string;
-    avatar?: string | null;
-    textAvatar?: string | null;
-    pending?: boolean;
-  },
+  agent: AgentIdentity,
   className = "",
   onImageError?: () => void,
 ) {
@@ -250,13 +255,7 @@ export function renderAgentIdentityAvatar(
   if (isReservedSystemAgentId(agent.id)) {
     return html`${systemAgentAvatar(agent.name, className)}`;
   }
-  const imageUrl =
-    agent.avatar && !agent.pending ? (resolveAvatarImageUrl(agent.avatar) ?? agent.avatar) : null;
-  const view = {
-    imageUrl,
-    sourceUrl: agent.avatar ?? undefined,
-    pending: agent.pending ?? imageUrl !== null,
-  };
+  const view = resolveAgentIdentityAvatarView(agent);
   return html`<span
     class=${identityAvatarClass(`identity-avatar--agent ${className}`, view)}
     role=${agent.name ? "img" : nothing}
@@ -264,18 +263,7 @@ export function renderAgentIdentityAvatar(
     aria-hidden=${agent.name ? nothing : "true"}
   >
     ${renderIdentityAvatarImage({ view, fallbackSelector: ".identity-avatar--agent", className: "identity-avatar__image", onImageError })}
-    <span class="identity-avatar__fallback">
-      ${guard([agent.id, agent.textAvatar], () =>
-        until(
-          agent.textAvatar
-            ? html`<span class="identity-avatar__text" data-avatar=${agent.textAvatar}></span>`
-            : import("./agent-avatar-face.ts").then(({ renderAgentAvatarFace }) =>
-                renderAgentAvatarFace(agent.id),
-              ),
-          nothing,
-        ),
-      )}
-    </span>
+    <span class="identity-avatar__fallback"> ${renderAgentAvatarFallback(agent)} </span>
     ${agent.pending ? nothing : renderAgentAvatarHat(agent.id, branding)}
   </span>`;
 }
@@ -288,13 +276,19 @@ export function renderAgentAvatarHat(
   if (!hat) {
     return nothing;
   }
+  return html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
+    >${renderAgentAvatarHatContents(hat, branding)}</span
+  >`;
+}
+
+export function renderAgentAvatarHatContents(hat: string | null, branding: ThemeBranding) {
+  if (!hat) {
+    return nothing;
+  }
   const artwork = branding.artwork?.hats?.[hat];
-  const sprite = isThemeAvatarHatId(hat)
+  return isThemeAvatarHatId(hat)
     ? AVATAR_HAT_SPRITES[hat]
     : artwork
       ? renderPluginThemeArtwork(artwork.url, "identity-avatar__hat-img")
       : nothing;
-  return html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
-    >${sprite}</span
-  >`;
 }

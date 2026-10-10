@@ -1,7 +1,5 @@
 import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
-import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
-import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
-import { resolveTrustedAvatarUrl } from "../../lib/identity-avatar.ts";
+import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import type { IdentityAvatarView } from "../identity-avatar-view.ts";
 
 export type IdentityAvatarImageProps = {
@@ -11,8 +9,6 @@ export type IdentityAvatarImageProps = {
   alt?: string;
   ariaHidden?: boolean;
   onImageError?: () => void;
-  /** The Lit adapter supplies its existing image, preserving direct-child selectors. */
-  element?: HTMLImageElement;
 };
 
 export function setIdentityAvatarState(
@@ -39,34 +35,26 @@ export function identityAvatarState(
   };
 }
 
-/** One image owns its pending and displayed resource until replacement or disposal. */
-export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
-  const suppliedElement = untrack(() => props.element);
-  let image = suppliedElement;
-  let currentUrl: string | null = null;
+/** Shared by native JSX and the Lit adapter; the existing loader owns all image resources. */
+export function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
+  let image: HTMLImageElement;
   let release: (() => void) | undefined;
-  const source = createMemo(
-    () => [props.view.imageUrl, props.view.sourceUrl, props.fallbackSelector] as const,
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  const settle = (failed: boolean) => {
-    const wrapper = image?.closest(props.fallbackSelector);
-    if (wrapper) {
-      setIdentityAvatarState(wrapper, failed ? "failed" : "loaded");
-    }
-    if (failed) {
-      props.onImageError?.();
+  const state = (value: "pending" | "loaded" | "failed") => {
+    const frame = image.closest(untrack(() => input().fallbackSelector));
+    if (frame) {
+      setIdentityAvatarState(frame, value);
     }
   };
-  createEffect(source, ([imageUrl, sourceUrl, selector]) => {
-    const element = image!;
-    const wrapper = () => element.closest(selector);
-    const inputUrl = sourceUrl ?? (typeof imageUrl === "string" ? imageUrl : undefined);
-    const trusted = inputUrl
-      ? resolveTrustedAvatarUrl(inputUrl, readAvatarGatewayContext().origin)
-      : null;
-    const result = trusted && imageUrl === inputUrl ? resolveAvatarImageUrl(trusted) : imageUrl;
-    // Retain the replacement before releasing: the cache can evict zero-reference entries.
+  const load = () => state("loaded");
+  const error = () => {
+    state("failed");
+    input().onImageError?.();
+  };
+  // Keep the pending resource opaque: returning its Promise would make this an async memo.
+  const source = createMemo(() => ({ result: input().view.imageUrl }), {
+    equals: (previous, next) => previous.result === next.result,
+  });
+  createEffect(source, ({ result }) => {
     const nextRelease = retainAvatarImageUrl(result);
     release?.();
     release = nextRelease;
@@ -75,22 +63,25 @@ export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
       if (!active) {
         return;
       }
-      const changed = currentUrl !== url;
-      currentUrl = url;
+      if (image.getAttribute("src") !== url || !url) {
+        state(url ? "pending" : "failed");
+      }
       if (url) {
-        element.setAttribute("src", url);
+        image.setAttribute("src", url);
       } else {
-        element.removeAttribute("src");
+        image.removeAttribute("src");
       }
-      const frame = wrapper();
-      if (frame && (changed || !url)) {
-        setIdentityAvatarState(frame, url ? "pending" : "failed");
-      }
-      // The Lit adapter can assign src before its image joins the wrapper.
+      // Lit can supply an image before inserting it into its wrapper; cached decodes emit no event.
       queueMicrotask(() =>
         untrack(() => {
-          if (active && url && currentUrl === url && element.complete && element.naturalWidth > 0) {
-            settle(false);
+          if (
+            active &&
+            url &&
+            image.getAttribute("src") === url &&
+            image.complete &&
+            image.naturalWidth > 0
+          ) {
+            load();
           }
         }),
       );
@@ -98,49 +89,34 @@ export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
     if (typeof result === "string" || result === null) {
       apply(result);
     } else {
-      currentUrl = null;
-      element.removeAttribute("src");
-      const frame = wrapper();
-      if (frame) {
-        setIdentityAvatarState(frame, "pending");
-      }
+      image.removeAttribute("src");
+      state("pending");
       void result.then((url) => untrack(() => apply(url)));
     }
     return () => {
       active = false;
     };
   });
-  const load = () => settle(false);
-  const error = () => settle(true);
-  createEffect(
-    () => null,
-    () => {
-      const element = image!;
-      element.addEventListener("load", load);
-      element.addEventListener("error", error);
-      return () => {
-        element.removeEventListener("load", load);
-        element.removeEventListener("error", error);
-      };
-    },
-  );
   onCleanup(() => {
+    image.removeEventListener("load", load);
+    image.removeEventListener("error", error);
     release?.();
-    currentUrl = null;
   });
+  return (element: HTMLImageElement) => {
+    image = element;
+    image.addEventListener("load", load);
+    image.addEventListener("error", error);
+  };
+}
+
+export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
   return (
-    <>
-      {suppliedElement ?? (
-        <img
-          ref={(element) => {
-            image = element;
-          }}
-          class={props.class}
-          alt={props.alt ?? ""}
-          aria-hidden={props.ariaHidden ? "true" : undefined}
-          referrerpolicy="no-referrer"
-        />
-      )}
-    </>
+    <img
+      ref={bindIdentityAvatarImage(() => props)}
+      class={props.class}
+      alt={props.alt ?? ""}
+      aria-hidden={props.ariaHidden ? "true" : undefined}
+      referrerpolicy="no-referrer"
+    />
   );
 }

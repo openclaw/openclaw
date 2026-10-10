@@ -1,7 +1,9 @@
-/* @vitest-environment jsdom */
-import { render as mountSolid } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+/* @vitest-environment jsdom */
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import { SessionOwnerChipContent } from "./session-owner-chip.tsx";
 import {
@@ -16,38 +18,56 @@ afterEach(() => {
     dispose();
   }
   document.body.replaceChildren();
+  setAvatarGatewayOrigin(null);
+  vi.restoreAllMocks();
 });
 
-it("retains a loaded Solid avatar while its label changes and resets for a new revision", () => {
-  const container = document.body.appendChild(document.createElement("div"));
-  const [user, setUser] = createSignal<ViewerAvatarProps["user"]>({
-    id: "profile-ada",
-    name: "Ada",
-    avatarUrl: "/api/users/profile-ada/avatar?v=1",
-    watchedSessions: [],
-  });
-  disposals.push(mountSolid(() => <ViewerAvatarContent user={user()} />, container));
-  const image = container.querySelector("img")!;
-  image.dispatchEvent(new Event("load"));
-  expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
-    "loaded",
-  );
-  setUser({ ...user()!, name: "Ada Lovelace" });
-  flush();
-  expect(container.querySelector("img")).toBe(image);
-  expect(container.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
-    "Ada Lovelace",
-  );
-  expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
-    "loaded",
-  );
-  setUser({ ...user()!, avatarUrl: "/api/users/profile-ada/avatar?v=2" });
-  flush();
-  expect(container.querySelector("img")).toBe(image);
-  expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
-    "pending",
-  );
-});
+it.each([false, true])(
+  "retains a loaded Solid avatar through label updates (authenticated=%s)",
+  async (authenticated) => {
+    if (authenticated) {
+      setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        async () =>
+          new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+      );
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:solid-avatar");
+    }
+    const container = document.body.appendChild(document.createElement("div"));
+    const [user, setUser] = createSignal<ViewerAvatarProps["user"]>({
+      id: "profile-ada",
+      name: "Ada",
+      avatarUrl: "/api/users/profile-ada/avatar?v=1",
+      watchedSessions: [],
+    });
+    disposals.push(mountSolid(() => <ViewerAvatarContent user={user()} />, { container }).unmount);
+    const image = container.querySelector("img")!;
+    expect(image).not.toBeNull();
+    expect(container.querySelector(".viewer-avatar")?.classList.contains("is-pending")).toBe(true);
+    if (authenticated) {
+      await waitForSolid(() => expect(image.getAttribute("src")).toBe("blob:solid-avatar"));
+    }
+    image.dispatchEvent(new Event("load"));
+    expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
+      "loaded",
+    );
+    setUser((previous) => ({ ...previous!, name: "Ada Lovelace" }));
+    flush();
+    expect(container.querySelector("img")).toBe(image);
+    expect(container.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
+      "Ada Lovelace",
+    );
+    expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
+      "loaded",
+    );
+    setUser((previous) => ({ ...previous!, avatarUrl: "/api/users/profile-ada/avatar?v=2" }));
+    flush();
+    expect(container.querySelector("img")).toBe(image);
+    expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
+      "pending",
+    );
+  },
+);
 
 it("updates Solid owner attribution and participant stacks from the current props", () => {
   const container = document.body.appendChild(document.createElement("div"));
@@ -62,8 +82,8 @@ it("updates Solid owner attribution and participant stacks from the current prop
           participants={[{ identity: { type: "profile", id: "bob" }, label: "Bob" }]}
         />
       ),
-      container,
-    ),
+      { container },
+    ).unmount,
   );
   expect(container.querySelector(".session-owner-stack")).toBeNull();
   setCount(1);
@@ -88,8 +108,8 @@ it("keeps the namespace when profile and agent participants share an id", () => 
           ]}
         />
       ),
-      container,
-    ),
+      { container },
+    ).unmount,
   );
   expect(container.querySelectorAll("openclaw-tooltip")).toHaveLength(2);
   expect(container.querySelector(".identity-avatar--agent")).not.toBeNull();
@@ -102,8 +122,8 @@ it("renders and retires a Solid agent's configured image without losing its fall
   disposals.push(
     mountSolid(
       () => <AgentIdentityAvatar agent={{ id: "research", avatar: avatar(), textAvatar: "🦀" }} />,
-      container,
-    ),
+      { container },
+    ).unmount,
   );
   container.querySelector("img")!.dispatchEvent(new Event("error"));
   expect(

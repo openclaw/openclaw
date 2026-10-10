@@ -7,7 +7,7 @@ import {
   type SessionCreatedActor,
   type SessionOwnerOption,
 } from "../../lib/session-owner.ts";
-import { AgentIdentityAvatar } from "./identity-avatar.tsx";
+import { AgentViewerAvatar } from "./viewer-facepile.tsx";
 
 export type SessionOwnerChipProps = {
   owner?: SessionCreatedActor | null;
@@ -29,18 +29,13 @@ function ownerHue(id: string): number {
 export function SessionOwnerAvatar(props: {
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">;
 }) {
-  const avatar = createMemo(() => {
-    const resolved = resolveAvatar({
-      id: props.owner.id,
-      identity: props.owner.identity,
-      name: props.owner.label,
-      profileAvatarUrl: props.owner.avatarUrl,
-    });
-    return resolved.kind === "profile" ? resolved.url : null;
-  });
+  const identity = () => {
+    const value = props.owner.identity;
+    return value?.type === "agent" ? value : undefined;
+  };
   return (
     <Show
-      when={props.owner.identity?.type === "agent"}
+      when={identity()}
       fallback={
         <openclaw-viewer-avatar
           prop:identity={props.owner.identity}
@@ -56,17 +51,13 @@ export function SessionOwnerAvatar(props: {
         />
       }
     >
-      <span
-        class="viewer-avatar viewer-avatar--session"
-        aria-label={props.owner.label || props.owner.id}
-      >
-        <AgentIdentityAvatar
-          agent={{
-            id: props.owner.identity!.id,
-            avatar: avatar(),
-          }}
+      {(agent) => (
+        <AgentViewerAvatar
+          user={{ id: props.owner.id, name: props.owner.label, avatarUrl: props.owner.avatarUrl }}
+          identity={agent()}
+          label={props.owner.label || props.owner.id}
         />
-      </span>
+      )}
     </Show>
   );
 }
