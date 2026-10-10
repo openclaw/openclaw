@@ -18,6 +18,7 @@ import type {
 } from "./server-prefs-profile.ts";
 import {
   isAppearancePref,
+  prefValuesEqual,
   isNavigationPref,
   SYNCED_PREFS,
   UI_NAVIGATION_PREFERENCE_KEYS,
@@ -122,12 +123,20 @@ export async function writeProfileAppearancePrefs(
         const remote = SYNCED_PREFS.sidebarEntries.extract(
           snapshot.entries[UI_NAVIGATION_PREFERENCE_KEYS.sidebarEntries] ?? DEFAULT_SIDEBAR_ENTRIES,
         );
-        if (!observed || !remote) {
+        if (!observed || !prefValuesEqual(observed, base)) {
+          return {
+            ok: false,
+            reason: "rejected",
+            error:
+              "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
+            batch: { sidebarEntries: batch.sidebarEntries },
+          };
+        }
+        if (!remote) {
           return {
             ok: false,
             reason: "unavailable",
-            error:
-              "Navigation edit has no valid observed base. Reload preferences before editing again.",
+            error: "Navigation preferences are unavailable.",
             batch,
           };
         }

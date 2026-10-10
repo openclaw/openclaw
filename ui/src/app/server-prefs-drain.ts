@@ -1,6 +1,7 @@
 import { sleepWithAbort } from "@openclaw/retry";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
+import { showToast } from "../lib/toast.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import { foldSidebarEntriesBase, hasSidebarOrderIntent } from "./server-prefs-intent.ts";
 import {
@@ -511,6 +512,14 @@ export async function drainPendingPrefs(
             result.error,
             result.reason === "rejected",
           );
+          const localPins = SYNCED_PREFS.sidebarEntries.extract(failed.sidebarEntries);
+          if (result.reason === "rejected" && localPins && sync.batchIsCurrent(acknowledgedBatch)) {
+            // Preserve the choice in the existing profile mirror before retiring its
+            // unwritable outbox entry; other preferences must still be allowed to drain.
+            sync.applyServerPrefsPatch({ sidebarEntries: localPins });
+            sync.updateRetainedLocalKeys(sync.pendingScope, ["sidebarEntries"], true);
+            showToast({ message: result.error });
+          }
           sync.publishPreferenceWrites();
         }
         if (

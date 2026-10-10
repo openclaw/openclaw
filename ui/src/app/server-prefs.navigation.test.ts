@@ -545,8 +545,8 @@ describe("personal navigation preference boundary", () => {
         true,
         "a",
       ),
-    ).toMatchObject({ ok: false, reason: "unavailable" });
-    expect(a.request).toHaveBeenCalledOnce();
+    ).toMatchObject({ ok: false, reason: "rejected" });
+    expect(a.request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", expect.anything());
   });
 
   it("re-drains repeated CAS conflicts using the original intent rather than overwriting remote edits", async () => {
