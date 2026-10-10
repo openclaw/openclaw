@@ -276,6 +276,7 @@ describe("settleEmbeddedRun compaction identity", () => {
           count: 1,
           currentContextSnapshot: { tokens: 3_000 },
           previousSessionId: fixture.target.sessionId,
+          hostCompactionCommitted: true,
           target: {
             ...fixture.target,
             sessionId: accepted.entry.sessionId,
@@ -341,6 +342,7 @@ describe("settleEmbeddedRun compaction identity", () => {
           kind: "durable",
           count: 1,
           currentContextSnapshot: { tokens: 3_000 },
+          hostCompactionCommitted: true,
           target: {
             ...fixture.target,
             lifecycleRevision: fixture.writer.expectedLifecycleRevision,
@@ -349,6 +351,53 @@ describe("settleEmbeddedRun compaction identity", () => {
         },
       ]);
       expect(fixture.loadEntry()).toEqual(before);
+    });
+  });
+});
+
+describe("settleEmbeddedRun transcript-byte latch", () => {
+  it.each([
+    {
+      title: "clears the latch once a committed host compaction is persisted",
+      committed: true,
+      latchedAfterSettle: false,
+    },
+    {
+      title: "keeps the latch for native-only accounting without a host commit",
+      committed: false,
+      latchedAfterSettle: true,
+    },
+  ] as const)("$title", async ({ committed, latchedAfterSettle }) => {
+    await withSettlementFixture(async (fixture) => {
+      const { replaceSessionEntry } = await import("../../../config/sessions/session-accessor.js");
+      const entry = fixture.loadEntry();
+      if (!entry) {
+        throw new Error("settlement fixture lost its session row");
+      }
+      await replaceSessionEntry(fixture.target, {
+        ...entry,
+        transcriptByteCompactionLatch: {
+          activeBytes: 60_000,
+          sessionId: fixture.target.sessionId,
+          maxBytes: 50_000,
+        },
+      });
+      // Exercise the direct persistence route taken when no host captures the fact.
+      fixture.input.runInput.runParams.onCompactionAccounting = undefined;
+      if (committed) {
+        await fixture.accept(fixture.target.sessionId);
+      }
+      await fixture.settle();
+      const latch = fixture.loadEntry()?.transcriptByteCompactionLatch;
+      if (latchedAfterSettle) {
+        expect(latch).toEqual({
+          activeBytes: 60_000,
+          sessionId: fixture.target.sessionId,
+          maxBytes: 50_000,
+        });
+      } else {
+        expect(latch).toBeUndefined();
+      }
     });
   });
 });

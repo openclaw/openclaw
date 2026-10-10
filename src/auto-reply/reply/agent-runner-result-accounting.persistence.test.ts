@@ -17,7 +17,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
-import { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import { accountAgentTurn, accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
   createAgentAccountingPersistenceFixture,
@@ -308,6 +308,49 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
     totalTokensFresh: true,
   });
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+});
+
+const byteLatchSeed = (sessionId: string) => ({
+  activeBytes: 60_000,
+  sessionId,
+  maxBytes: 50_000,
+});
+
+it("lifts byte-preflight suppression when accounting a committed host compaction", async () => {
+  const fixture = await createFixture();
+  const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
+  compaction.durable[0] = { ...compaction.durable[0]!, hostCompactionCommitted: true };
+  const entry = fixture.context.activeSessionEntry!;
+  await fixture.replace({
+    ...entry,
+    transcriptByteCompactionLatch: byteLatchSeed(entry.sessionId),
+  });
+
+  await accountAgentTurnCompaction({
+    compaction,
+    sessionStore: fixture.context.activeSessionStore,
+    replyOperation: fixture.context.replyOperation,
+  });
+
+  expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
+});
+
+it("keeps byte-preflight suppression for native-only compaction accounting", async () => {
+  const fixture = await createFixture();
+  const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
+  const entry = fixture.context.activeSessionEntry!;
+  await fixture.replace({
+    ...entry,
+    transcriptByteCompactionLatch: byteLatchSeed(entry.sessionId),
+  });
+
+  await accountAgentTurnCompaction({
+    compaction,
+    sessionStore: fixture.context.activeSessionStore,
+    replyOperation: fixture.context.replyOperation,
+  });
+
+  expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(byteLatchSeed(entry.sessionId));
 });
 
 it.each([

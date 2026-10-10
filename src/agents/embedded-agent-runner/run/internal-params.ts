@@ -33,6 +33,8 @@ export type CompactionAccountingFact = Readonly<
         target: CompactionAccountingTarget;
         /** Present only when the host committed a successor session rotation. */
         previousSessionId?: string;
+        /** The host rewrote this transcript at its commit edge; byte-latch suppression must not survive it. */
+        hostCompactionCommitted?: true;
       }
     | { kind: "presentation-only" }
   )

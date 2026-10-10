@@ -65,6 +65,9 @@ export async function accountAgentTurnCompaction(params: {
       expectedSession: fact.target,
       amount: fact.count,
       tokensAfter: fact.currentContextSnapshot?.tokens,
+      // A committed host compaction rewrote the transcript; its accounting must lift
+      // byte-preflight suppression instead of inheriting the keep default.
+      transcriptByteLatch: fact.hostCompactionCommitted ? { kind: "clear" } : undefined,
       authorize,
     });
     if (persistedCount !== undefined) {
