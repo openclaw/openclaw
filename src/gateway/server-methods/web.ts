@@ -7,6 +7,7 @@ import {
   type WebLoginStartParams,
   type WebLoginWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listChannelPlugins, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/registry-loaded.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
@@ -95,7 +96,8 @@ function webLoginHandler<
     params: P,
     context: GatewayRequestContext,
     request: {
-      accountId?: string;
+      requestedAccountId?: string;
+      lifecycleAccountId: string;
       provider: WebLoginProvider;
       run: NonNullable<WebLoginGateway[M]>;
     },
@@ -107,7 +109,6 @@ function webLoginHandler<
       return;
     }
     try {
-      const accountId = params.accountId;
       const provider = resolveWebLoginProvider(params.channel);
       if (!provider) {
         const repairHint = resolveMissingWebLoginPluginHint(context);
@@ -136,10 +137,23 @@ function webLoginHandler<
         );
         return;
       }
+      // Lifecycle control needs one concrete account so an omitted one does not fan out across
+      // the channel. The plugin keeps receiving the request as sent: account ids and credential
+      // profiles are not the same namespace, and some plugins resolve an omitted account
+      // differently from a named one.
+      const requestedAccountId = params.accountId;
+      const lifecycleAccountId =
+        requestedAccountId ??
+        resolveChannelDefaultAccountId({ plugin: provider, cfg: context.getRuntimeConfig() });
       await handle(
         params,
         context,
-        { accountId, provider, run: run.bind(gateway) as NonNullable<WebLoginGateway[M]> },
+        {
+          ...(requestedAccountId === undefined ? {} : { requestedAccountId }),
+          lifecycleAccountId,
+          provider,
+          run: run.bind(gateway) as NonNullable<WebLoginGateway[M]>,
+        },
         respond,
       );
     } catch (err) {
@@ -153,31 +167,33 @@ export const webHandlers: GatewayRequestHandlers = {
     "web.login.start",
     validateWebLoginStartParams,
     "loginWithQrStart",
-    async (params, context, { accountId, provider, run }, respond) => {
+    async (params, context, { requestedAccountId, lifecycleAccountId, provider, run }, respond) => {
       const runtime = context.getRuntimeSnapshot();
-      const account = accountId
-        ? resolveRuntimeAccountSnapshot({ runtime, channelId: provider.id, accountId })
-        : runtime.channels[provider.id];
+      const account = resolveRuntimeAccountSnapshot({
+        runtime,
+        channelId: provider.id,
+        accountId: lifecycleAccountId,
+      });
       const wasRunning = account?.running === true;
       const forceLogin = Boolean(params.force);
       const stoppedBeforeLogin = forceLogin || !wasRunning;
       if (stoppedBeforeLogin) {
-        await context.stopChannel(provider.id, accountId);
+        await context.stopChannel(provider.id, lifecycleAccountId);
       }
       const result = await run({
         force: forceLogin,
         timeoutMs: params.timeoutMs,
         verbose: Boolean(params.verbose),
-        accountId,
+        accountId: requestedAccountId,
       });
       const stoppedAfterQrTakeover = !stoppedBeforeLogin && Boolean(result.qrDataUrl);
       if (stoppedAfterQrTakeover) {
-        await context.stopChannel(provider.id, accountId);
+        await context.stopChannel(provider.id, lifecycleAccountId);
       }
       const stoppedForLogin = stoppedBeforeLogin || stoppedAfterQrTakeover;
       // A failed start without a QR code must also restore the running account.
       if (stoppedForLogin && (result.connected || (wasRunning && !result.qrDataUrl))) {
-        await context.startChannel(provider.id, accountId);
+        await context.startChannel(provider.id, lifecycleAccountId);
       }
       respond(true, result, undefined);
     },
@@ -186,15 +202,15 @@ export const webHandlers: GatewayRequestHandlers = {
     "web.login.wait",
     validateWebLoginWaitParams,
     "loginWithQrWait",
-    async (params, context, { accountId, provider, run }, respond) => {
+    async (params, context, { requestedAccountId, lifecycleAccountId, provider, run }, respond) => {
       const result = await run({
         timeoutMs: params.timeoutMs,
-        accountId,
+        accountId: requestedAccountId,
         sessionKey: params.sessionKey,
         currentQrDataUrl: params.currentQrDataUrl,
       });
       if (result.connected) {
-        await context.startChannel(provider.id, accountId);
+        await context.startChannel(provider.id, lifecycleAccountId);
       }
       respond(true, result, undefined);
     },

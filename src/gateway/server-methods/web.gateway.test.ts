@@ -27,6 +27,7 @@ describe("web QR login Gateway dispatch", () => {
           source: "test",
           plugin: {
             id: "whatsapp",
+            config: { listAccountIds: () => ["default"] },
             meta: { aliases: [] },
             gatewayMethods: ["web.login.start", "web.login.wait"],
             gateway: {
@@ -40,6 +41,7 @@ describe("web QR login Gateway dispatch", () => {
           source: "test",
           plugin: {
             id: "openclaw-weixin",
+            config: { listAccountIds: () => ["default"] },
             meta: { aliases: ["weixin", "wechat"] },
             gatewayMethods: ["web.login.start", "web.login.wait"],
             gateway: {
@@ -124,6 +126,7 @@ describe("web QR login Gateway dispatch", () => {
         source: "test",
         plugin: {
           id: "whatsapp",
+          config: { listAccountIds: () => ["default"] },
           meta: { aliases: [] },
           gatewayMethods: ["web.login.start"],
           gateway: { loginWithQrStart: globalWhatsappStart },
@@ -136,6 +139,7 @@ describe("web QR login Gateway dispatch", () => {
         source: "test",
         plugin: {
           id: "openclaw-weixin",
+          config: { listAccountIds: () => ["default"] },
           meta: { aliases: ["wechat"] },
           gatewayMethods: ["web.login.start"],
           gateway: { loginWithQrStart: scopedWeixinStart },
