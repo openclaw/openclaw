@@ -3,7 +3,7 @@ import { captureIncognitoSessionSource } from "../../config/sessions/session-inc
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store.types.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withSubagentSessionSource } from "../subagents/spawn/subagent-session-source.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -11,7 +11,7 @@ export function withSessionsSendRequesterSource<T>(
   opts: SessionsSendToolOptions | undefined,
   consume: () => Promise<T>,
 ): Promise<T> {
-  return opts?.agentSessionKey
+  return opts?.agentSessionKey && isIncognitoSessionKey(opts.agentSessionKey)
     ? withSubagentSessionSource(
         {
           agentId: opts.agentId ?? resolveAgentIdFromSessionKey(opts.agentSessionKey),
