@@ -2,13 +2,13 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
-type AgentIdentityGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  phase: ApplicationGatewayPhase;
-};
+type AgentIdentityGatewaySnapshot = Pick<
+  ApplicationGatewaySnapshot,
+  "client" | "phase" | "restartPending" | "suspensionPhase"
+>;
 
 type AgentIdentityGateway = {
   readonly snapshot: AgentIdentityGatewaySnapshot;
@@ -24,8 +24,6 @@ type AgentIdentityCacheEntry = {
 };
 
 const AGENT_IDENTITY_CACHE_LIMIT = 128;
-// Workspace avatars can change in place without a config or roster event.
-const AGENT_IDENTITY_CACHE_TTL_MS = 60_000;
 const identityRequests = new WeakMap<GatewayBrowserClient, Map<string, AgentIdentityCacheEntry>>();
 
 /** Retire every UI surface's cached request when its connection or roster revision changes. */
@@ -44,10 +42,6 @@ function invalidateAgentIdentityCache(
   } else {
     identityRequests.delete(client);
   }
-}
-
-function hasFreshAgentIdentityResult(entry: AgentIdentityCacheEntry | undefined): boolean {
-  return Boolean(entry?.result && Date.now() < entry.refreshAt);
 }
 
 export function fetchAgentIdentity(
@@ -80,8 +74,6 @@ export function fetchAgentIdentity(
           return null;
         }
         entry.result = { identity };
-        entry.refreshAt = Date.now() + AGENT_IDENTITY_CACHE_TTL_MS;
-        entry.failures = 0;
         return identity;
       },
       (error: unknown) => {
@@ -95,7 +87,7 @@ export function fetchAgentIdentity(
         if (cache.size <= AGENT_IDENTITY_CACHE_LIMIT) {
           break;
         }
-        if (Number.isFinite(candidate.refreshAt)) {
+        if (candidate.result || Number.isFinite(candidate.refreshAt)) {
           cache.delete(id);
         }
       }
@@ -162,16 +154,13 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || snapshot.phase !== "connected") {
+      if (!client || !isGatewayAvailable(snapshot)) {
         return;
       }
       const generation = connectionGeneration;
       const missing = normalizeUniqueTrimmedStringList(agentIds).filter((agentId) => {
         const cached = identityRequests.get(client)?.get(agentId);
-        return (
-          !hasFreshAgentIdentityResult(cached) ||
-          identities.get(agentId) !== cached?.result?.identity
-        );
+        return !cached?.result || identities.get(agentId) !== cached?.result?.identity;
       });
       if (missing.length === 0) {
         return;

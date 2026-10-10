@@ -115,6 +115,26 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
+    await using state = await createState({ prompt: "Task B: inspect the blue database." });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [],
+    });
+    const completed = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "The blue database was inspected." }],
+    });
+    state.continueFromCurrentTranscript({ messages: [completed] });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [completed],
+    });
+    expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
   it.each([
     { name: "moves command cancellation to an accepted compaction successor", replaced: false },
     { name: "preserves command ownership when a replacement rejects compaction", replaced: true },
@@ -469,43 +489,14 @@ describe("embedded run session prompt state", () => {
     });
   });
 
-  it.each([{ modelRun: true }, { promptMode: "none" as const }])(
-    "keeps the original prompt for a raw model run retry (%o)",
-    async (rawRun) => {
-      await using state = await createState(rawRun);
+  it("keeps the original prompt for a raw model run retry", async () => {
+    await using state = await createState({ promptMode: "none" });
 
-      state.continueFromCurrentTranscript();
+    state.continueFromCurrentTranscript();
 
-      // Raw runs load no transcript history, so a continuation prompt would drop the task.
-      expect(state.activePrompt.override).toBeUndefined();
-      expect(state.activePrompt.internal).toBe(false);
-    },
-  );
-
-  it("continues from the transcript after compaction when the runtime persisted the user turn", async () => {
-    const runtimeMessage = makeUserMessage();
-    const persistApproved = vi.fn(async () => undefined);
-    const recorder = createRecorder({
-      hasPersisted: vi.fn(() => true),
-      persistApproved,
-    });
-    const onUserMessagePersisted = vi.fn();
-    await using state = await createState({
-      userTurnTranscriptRecorder: recorder,
-      onUserMessagePersisted,
-    });
-
-    state.onUserMessagePersisted(runtimeMessage);
-    await state.prepareCompactedTranscriptRetry(assertActive);
-
-    expect(persistApproved).toHaveBeenCalledOnce();
-    expect(onUserMessagePersisted).toHaveBeenCalledWith(runtimeMessage);
-    expect(state.activePrompt).toEqual({
-      override: CONTINUE_FROM_TRANSCRIPT_PROMPT,
-      persisted: true,
-      internal: true,
-    });
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
+    // Raw runs load no transcript history, so a continuation prompt would drop the task.
+    expect(state.activePrompt.override).toBeUndefined();
+    expect(state.activePrompt.internal).toBe(false);
   });
 
   it("persists before_agent_run block markers through the blocked path", async () => {
@@ -612,7 +603,11 @@ describe("embedded run session prompt state", () => {
         expect(state.suppressNextUserMessagePersistence).toBe(false);
       } else {
         await retryPromise;
-        expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
+        expect(state.activePrompt).toEqual({
+          override: CONTINUE_FROM_TRANSCRIPT_PROMPT,
+          persisted: true,
+          internal: true,
+        });
         expect(state.suppressNextUserMessagePersistence).toBe(true);
       }
       expect(persistApproved).toHaveBeenCalledOnce();

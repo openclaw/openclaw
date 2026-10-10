@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
@@ -51,23 +52,18 @@ function readAgentDatabaseLeaseIds(pathname: string, env: NodeJS.ProcessEnv): st
 
 function observeCanonicalWriterLeases() {
   const leases = new Map<string, string>();
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        const facts = request.facts;
-        if (
-          request.stage === "open" &&
-          isRecord(facts) &&
-          typeof facts.databasePath === "string" &&
-          typeof facts.leaseId === "string"
-        ) {
-          leases.set(facts.databasePath, facts.leaseId);
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const spy = probe.admission(admission, (request, grant, admit) => {
+    const facts = request.facts;
+    if (
+      request.stage === "open" &&
+      isRecord(facts) &&
+      typeof facts.databasePath === "string" &&
+      typeof facts.leaseId === "string"
+    ) {
+      leases.set(facts.databasePath, facts.leaseId);
+    }
+    admit(request, grant);
+  });
   return { leases, restore: () => spy.mockRestore() };
 }
 

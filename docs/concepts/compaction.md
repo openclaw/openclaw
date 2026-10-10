@@ -16,7 +16,7 @@ Every model has a context window: the maximum number of tokens it can process. W
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
-The built-in summarizer accounts for Chinese, Japanese, and Korean (CJK) characters in both message text and tool arguments when estimating chunk sizes. These budgets are approximate; a tool call and its results stay together even when that group exceeds a chunk target.
+Built-in compaction summarizes the older history in one model request, whatever the size of the session or the context window. A split turn adds one request for the turn prefix, and a failed safeguard quality audit adds one request per corrective attempt. Each request's conversation input is capped at 160,000 characters (about 40,000 tokens), or less when the summarizer's own context window is smaller. A larger history is filled in this order: the newest messages verbatim, in half of that budget; your older messages, which carry the asks, decisions and corrections, in a quarter, each trimmed to at most 2,000 characters and spread evenly across the history when they do not all fit; the oldest messages, in a tenth; and evenly spaced runs of the remaining messages, trimmed to 6,000 characters each. Each gap is marked with the number of messages left out, and the summarizer is told not to guess their content and to keep the previous summary's facts. Chinese, Japanese, and Korean (CJK) characters count by their approximate token weight. The bound applies to the summarizer input only; the transcript keeps every message.
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
@@ -49,7 +49,7 @@ If an automatic compaction's summary times out while the turn is still active (t
 
 This applies in safeguard mode too, which gives up its identifier-retention guarantee for that compaction: older facts that were never summarized leave the model context, and later compactions do not bring them back, because each one starts from the previous compaction boundary. The transcript still keeps every message for history and explicit retrieval. Without this exception, every following turn would wait out the same timeout and the session would stay unusable.
 
-The built-in OpenClaw runtime performs required checkpointing and compaction before inference. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
+The built-in OpenClaw runtime performs required checkpointing and compaction before inference. This includes helper-completion and approval-follow-up turns; their user-facing model selection remains unchanged. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
 
 One-shot `openclaw agent --local` commands skip optional post-turn work; the next command performs required maintenance before inference. Generic CLI backends keep their existing synchronous host compaction, and native runtimes retain their own compaction policy. Optional maintenance failures are logged without replacing an already completed reply. Cancellation, restart, or a replaced session still fences active writers.
 
@@ -173,7 +173,19 @@ that size. This is useful for long-running sessions where provider-side context
 management may keep model context healthy while persisted transcript history
 keeps growing. Set a positive byte count or size string such as `"20mb"` to opt
 in; `0` or an unset value disables the guard. It does not split raw bytes; it
-asks the normal compaction pipeline to create a semantic summary. For Codex
+asks the normal compaction pipeline to create a semantic summary. If compaction
+is declined or leaves history over the limit, the turn continues with a bounded
+view of recent history. OpenClaw omits the oldest whole turns, keeps tool calls
+with their results, and preserves the system instructions and current request.
+An oversized historical turn may be omitted in full. This fallback does not
+rewrite saved messages or count a failed attempt as successful compaction.
+It shows a notice even with compaction notifications disabled; resend any
+essential details from omitted history. The bound applies to selected history,
+not the fixed instructions, tool definitions, or current request.
+
+Suppressed byte-compaction retries still use a bounded view on subsequent turns.
+Retained history remains available on disk and may continue growing; this is not
+a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and
 oversized native threads restart fresh.
 
@@ -232,11 +244,21 @@ After a successful continuation, OpenClaw uses the provider's measured context u
 
 Predicted context pressure uses budget compaction before the next request. The public OpenAI Responses API and native xAI can use their compact endpoint by default; `params.responsesCompactEndpoint: false` disables that endpoint for a model. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
 
+Once the foreground request budget is prepared, a returned endpoint window must
+also fit beside its fixed instructions, tools, pending input, and reserve before
+OpenClaw saves it. If retained user messages still exceed that budget,
+client-side compaction selects a smaller recent tail instead of retrying the
+same oversized window.
+
+If the pending input alone fills the model's context window, recovery asks for a
+smaller message or a larger-context model without repeatedly compacting history.
+Later messages retain their normal recovery budget.
+
 If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
 
 ### Successor transcripts
 
-A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
+A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The active reply follows the accepted identity for its remaining session-state reads; unrelated resets and cancellation still stop stale work. Tool-policy classification retains its independently captured session identity. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
 
 A [worker placement](/gateway/cloud-workers) cannot transfer ownership to a different session identity during compaction. Custom engines must keep the current identity while the placement owns the session, or the operator must move the session back to the Gateway before retrying. A rejected transition leaves the original session and worker claim intact.
 

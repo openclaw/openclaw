@@ -1,9 +1,6 @@
 /** Best-effort durable signal log for session state changes. */
 import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
-import type {
-  SessionEntriesCurrentCheck,
-  SessionEntryCurrentCheck,
-} from "../config/sessions/session-entry-current.types.js";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import {
   preparePhysicalSessionStorePath,
   prepareSessionWatcherStorePaths,
@@ -45,7 +42,10 @@ import {
   rowToSessionStateEvent,
   type SessionStateEventInput,
 } from "./session-state-events.kernel.js";
-import { runSessionWatchOperation } from "./session-state-events.operation.js";
+import {
+  runSessionWatchOperation,
+  type SessionWatchOptions,
+} from "./session-state-events.operation.js";
 import { pruneSessionStateEvents } from "./session-state-events.prune.js";
 import type { SessionStateReadOperations } from "./session-state-events.read.worker-contract.js";
 import type { SessionStateEventRecord } from "./session-state-events.types.js";
@@ -53,6 +53,7 @@ import type {
   SessionStateWatchAddress,
   SessionStateWorkerOperations,
 } from "./session-state-events.worker-contract.js";
+import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
 import { enqueueSessionStateNotice } from "./session-state-notices.js";
 import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
@@ -156,12 +157,6 @@ export async function listSessionStateEventsSince(
   return { events: [], truncated: false, earliestAvailableSequence: 0, historyGap: false };
 }
 
-type SessionWatchOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
-  now?: number;
-  assertCurrent?: () => void;
-  sessionEntriesCurrent?: SessionEntriesCurrentCheck;
-};
-
 type PreparedSessionWatchCaller = Pick<
   SessionWatchOptions,
   "assertCurrent" | "sessionEntriesCurrent"
@@ -178,55 +173,17 @@ type SessionWatchRegistrationOptions =
     });
 
 /** Ack only the frozen notice watermark; advancing to head would lose an interleaved event. */
-export async function acknowledgeSessionStateNotices(
+export function acknowledgeSessionStateNotices(
   watcherSessionKey: string,
   notices: readonly SessionStateWatchAddress[],
   options: SessionWatchOptions = {},
 ): Promise<void> {
-  try {
-    const context = captureOpenClawStateWorkerContext(options);
-    const now = options.now ?? Date.now();
-    const isStoreCurrent = captureSystemEventStoreCurrentCheck(watcherSessionKey);
-    const cursors = [
-      ...new Map(
-        notices
-          .filter((notice) => isStoreCurrent(notice.watcherStorePath))
-          .map((notice) => [notice.targetSessionKey, { ...notice }]),
-      ).values(),
-    ];
-    const assertCurrent = () => {
-      options.assertCurrent?.();
-      for (const cursor of cursors) {
-        if (!isStoreCurrent(cursor.watcherStorePath)) {
-          throw new Error("Session watch acknowledgment lost its system-event store");
-        }
-      }
-    };
-    await runSessionWatchOperation(
-      context,
-      async (scope) => {
-        if (cursors.length === 0) {
-          return;
-        }
-        const followups = await scope.execute({
-          type: "sessionState.acknowledge",
-          input: {
-            watcherSessionKey,
-            cursors,
-            now,
-            sessionEntryCurrentSources: options.sessionEntriesCurrent?.sources,
-          },
-        });
-        for (const followup of followups) {
-          enqueueSessionStateNotice(followup);
-        }
-      },
-      assertCurrent,
-      options.sessionEntriesCurrent,
-    );
-  } catch (error) {
-    log.warn(`failed to acknowledge session state notices: ${String(error)}`);
-  }
+  return acknowledgeSessionStateNoticesInWorker(
+    watcherSessionKey,
+    notices,
+    enqueueSessionStateNotice,
+    options,
+  );
 }
 
 /** Reset parent-side assumptions while retaining target history across session incarnations. */

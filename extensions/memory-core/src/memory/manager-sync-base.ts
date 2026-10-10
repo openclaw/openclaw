@@ -42,6 +42,7 @@ import {
 } from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
 export type MemorySyncProgressState = {
@@ -90,6 +91,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
   protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected abstract readonly runInBackgroundContext: NonNullable<
+    MemoryCoreRuntimeHost["runInBackgroundContext"]
+  >;
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
@@ -343,14 +347,14 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     });
   }
 
-  protected resolveCurrentIndexIdentityState(params?: {
+  protected resolveCurrentIndexIdentityState(params: {
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
     providerKeyKnown?: boolean;
     vectorReady?: boolean;
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
-    const hasProviderOverride = params && "provider" in params;
+    const hasProviderOverride = params.provider !== undefined;
     const configuredIndexIdentity =
       !hasProviderOverride && !this.provider && this.settings.provider !== "none"
         ? this.resolveConfiguredIndexIdentity()
@@ -370,10 +374,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       : this.provider
         ? { id: this.provider.id, model: this.provider.model }
         : configuredProvider;
-    const vectorReady =
-      params && "vectorReady" in params
-        ? Boolean(params.vectorReady)
-        : this.vector.available === true;
+    const vectorReady = params.vectorReady ?? this.vector.available === true;
     const initializedProviderIdentities =
       provider &&
       this.provider &&
@@ -394,15 +395,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         : configuredProviderIdentities;
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
     return resolveMemoryIndexIdentityState({
-      meta: params && "meta" in params ? params.meta! : this.readMeta(),
+      meta: params.meta === undefined ? this.readMeta() : params.meta,
       provider,
       providerKey: configuredProviderKeyKnown
         ? providerIdentities[0]?.providerKey
-        : params?.providerKeyKnown === false
+        : params.providerKeyKnown === false
           ? undefined
           : (this.providerKey ?? undefined),
       providerAliases: providerIdentities.slice(1),
-      providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
+      providerKeyKnown: configuredProviderKeyKnown ? true : params.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
@@ -412,10 +413,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
       vectorReady,
-      hasIndexedChunks:
-        params && "hasIndexedChunks" in params
-          ? Boolean(params.hasIndexedChunks)
-          : this.hasIndexedChunks(),
+      hasIndexedChunks: params.hasIndexedChunks ?? this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
   }
@@ -506,7 +504,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       }
       if (
         !this.database.readOnly &&
-        (await this.withDatabaseWrite(() => this.dropLegacyVectorTable()))
+        (await this.withDatabaseWrite(() => this.dropVectorTable(LEGACY_VECTOR_TABLE)))
       ) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
@@ -564,26 +562,18 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     this.vector.dims = dimensions;
   }
 
-  private dropLegacyVectorTable(): boolean {
-    if (!memoryTableExists(this.db, LEGACY_VECTOR_TABLE)) {
+  private dropVectorTable(
+    tableName: typeof VECTOR_TABLE | typeof LEGACY_VECTOR_TABLE = VECTOR_TABLE,
+  ): boolean {
+    const legacy = tableName === LEGACY_VECTOR_TABLE;
+    if (legacy && !memoryTableExists(this.db, tableName)) {
       return false;
     }
     try {
-      this.db.exec(`DROP TABLE ${LEGACY_VECTOR_TABLE}`);
+      this.db.exec(`DROP TABLE ${legacy ? "" : "IF EXISTS "}${tableName}`);
       return true;
     } catch (err) {
-      log.debug(`Failed to drop ${LEGACY_VECTOR_TABLE}: ${formatErrorMessage(err)}`);
-      return false;
-    }
-  }
-
-  private dropVectorTable(): boolean {
-    try {
-      this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
-      return true;
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
+      log.debug(`Failed to drop ${tableName}: ${formatErrorMessage(err)}`);
       return false;
     }
   }

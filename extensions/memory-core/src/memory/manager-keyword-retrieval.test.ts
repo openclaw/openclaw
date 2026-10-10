@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
@@ -30,7 +31,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -187,7 +192,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -296,7 +305,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -343,9 +356,6 @@ describe("memory index", () => {
   it("counts exact candidate headroom by distinct path instead of chunk", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
-    // Query by bare stem: the shared persistent index also holds MEMORY.md
-    // bodies containing the token "md", and OR-joined keyword recall would
-    // otherwise pull those unrelated chunks into the result window.
     for (let index = 0; index < 200; index += 1) {
       const dir = path.join(fixture.paths.memory, index.toString().padStart(3, "0"));
       await fs.mkdir(dir, { recursive: true });
@@ -353,7 +363,7 @@ describe("memory index", () => {
     }
     await manager.sync({ reason: "test" });
 
-    const results = await manager.search("foo", { maxResults: 204, minScore: 0 });
+    const results = await manager.search("foo.md", { maxResults: 204, minScore: 0 });
 
     expect(results).toHaveLength(200);
     expect(new Set(results.map((entry) => entry.path)).size).toBe(200);
@@ -366,7 +376,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -417,7 +431,11 @@ describe("memory index", () => {
       extraPaths: [staleDir, freshDir],
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -454,7 +472,11 @@ describe("memory index", () => {
       extraPaths,
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -542,7 +564,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -584,7 +610,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);

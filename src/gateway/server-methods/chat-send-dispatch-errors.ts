@@ -70,7 +70,7 @@ type ChatSendJobAdmission = Pick<
 > & {
   sessionBinding: Pick<
     AdmittedChatSend["sessionBinding"],
-    "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration"
+    "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration" | "terminalOutcomeObserved"
   >;
 };
 
@@ -154,6 +154,7 @@ export async function handleChatSendSetupError(params: {
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
   if (!hidden && failureDisposition !== "client-retry") {
     broadcastChatError({
+      terminalEntry: jobSessionBinding,
       context: params.context,
       runId: clientRunId,
       sessionKey,
@@ -203,6 +204,27 @@ export function createChatSendDispatchErrorLifecycle(params: {
   let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
   let publishDispatchError: (() => void) | undefined;
 
+  const broadcastError = (
+    error: Pick<
+      Parameters<typeof broadcastChatError>[0],
+      "errorMessage" | "errorKind" | "stopReason"
+    >,
+  ) => {
+    if (
+      !hidden &&
+      (params.isReplyDispatchRun?.() || activeRunAbort.entry?.terminalOutcomeObserved !== true)
+    ) {
+      broadcastChatError({
+        terminalEntry: jobSessionBinding,
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        ...error,
+      });
+    }
+  };
+
   const handleError = async (err: unknown) => {
     const errorMessage = formatChatSendError(err);
     const errorKind = resolveStateContentionPresentation(err)?.errorKind;
@@ -222,10 +244,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
     // only the signal and must retain its real dispatch-failure outcome.
     const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
     const abortMarkerAtDispatchReject = context.chatRunState.runs.get(clientRunId)?.abortMarker;
-    const agentTerminalPersistenceOwnedAtDispatchReject =
-      activeRunAbort.entry?.projectSessionTerminalPending === true ||
-      activeRunAbort.entry?.projectSessionTerminalPersistence !== undefined ||
-      activeRunAbort.entry?.projectSessionTerminalPersisted === true;
+    const agentTerminalOwnedAtDispatchReject =
+      activeRunAbort.entry?.terminalOutcomeObserved === true;
 
     if (abortedAtDispatchReject && abortMarkerAtDispatchReject !== undefined) {
       // chat.abort has already emitted the canonical terminal lifecycle and
@@ -253,13 +273,13 @@ export function createChatSendDispatchErrorLifecycle(params: {
     // Retire abortability before asynchronous terminal persistence. Otherwise
     // a later chat.abort can publish a second terminal for a rejected run.
     context.chatRunState.deleteAbortMarker(clientRunId);
-    if (agentTerminalPersistenceOwnedAtDispatchReject && activeRunAbort.entry) {
+    if (agentTerminalOwnedAtDispatchReject && activeRunAbort.entry) {
       activeRunAbort.entry.isAbortable = () => false;
     }
     activeRunAbort.cleanup();
 
     let restartSafeDispatchFailureTerminalized = false;
-    if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
+    if (restartSafeAdmission && !agentTerminalOwnedAtDispatchReject) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
         error: errorMessage,
         errorKind,
@@ -291,7 +311,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       !suppressLifecycle &&
       !restartSafeDispatchFailureTerminalized &&
       abortMarkerAtDispatchReject === undefined &&
-      !agentTerminalPersistenceOwnedAtDispatchReject
+      !agentTerminalOwnedAtDispatchReject
     ) {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
@@ -301,7 +321,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         startedAt: activeRunAbort.entry?.startedAtMs ?? now,
       };
     }
-    if (!agentTerminalPersistenceOwnedAtDispatchReject || params.isReplyDispatchRun?.()) {
+    if (!agentTerminalOwnedAtDispatchReject || params.isReplyDispatchRun?.()) {
       // Native lifecycle owns its replay result; dispatched runtimes leave
       // failure projection to this owner, including transcript-write failures.
       const publish = () => {
@@ -321,16 +341,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
             error,
           },
         });
-        if (!hidden) {
-          broadcastChatError({
-            context,
-            runId: clientRunId,
-            sessionKey,
-            agentId,
-            errorMessage,
-            errorKind,
-          });
-        }
+        broadcastError({ errorMessage, errorKind });
       };
       if (pendingDispatchLifecycleError) {
         // agent.wait consumes the cached terminal immediately. Commit the lifecycle
@@ -447,5 +458,5 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  return { finalize, handleError };
+  return { broadcastError, finalize, handleError };
 }

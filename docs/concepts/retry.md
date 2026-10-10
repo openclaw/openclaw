@@ -75,6 +75,7 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 - Retries on rate-limit errors (HTTP 429), request timeouts, HTTP 5xx responses, and transient transport failures such as DNS lookup failures, connection resets, socket closes, and fetch failures.
 - Uses Discord `retry_after` when available, otherwise exponential backoff.
+- If an error response body cannot be read, the received HTTP status and rate-limit headers still govern retries. Permanent `401`, `403`, and `404` refusals are not retried.
 
 ### Telegram
 

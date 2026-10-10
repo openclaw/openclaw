@@ -6,6 +6,7 @@ import {
   editChannelMessage,
   type RequestClient,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
@@ -14,7 +15,7 @@ const DEFAULT_THROTTLE_MS = 1200;
 const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
 type DiscordDraftMessage = { channelId: string; messageId: string };
-type DiscordDraftUpdate = { text: string; complete: boolean };
+type DiscordDraftUpdate = { text: string; complete: boolean; assertCurrent?: () => void };
 
 export function createDiscordDraftStream(params: {
   rest: RequestClient;
@@ -126,7 +127,8 @@ export function createDiscordDraftStream(params: {
     throttleMs,
     coalesceInFlight: true,
     state: streamState,
-    sendOrEditStreamMessage,
+    sendOrEditStreamMessage: (update) =>
+      withDiscordRequestAuthority(update.assertCurrent, () => sendOrEditStreamMessage(update)),
     emptyValue: { text: "", complete: false },
     isEmpty: (value) => !value.text,
     readMessageId: () => streamMessage,
@@ -141,8 +143,12 @@ export function createDiscordDraftStream(params: {
     warnPrefix: "discord stream preview cleanup failed",
   });
   const { loop, update: updateDraft, stop, discardPending, seal } = lifecycle;
-  const update = (text: string, options?: { complete?: boolean }) =>
-    updateDraft({ text, complete: options?.complete === true });
+  const update = (text: string, options?: { complete?: boolean; assertCurrent?: () => void }) =>
+    updateDraft({
+      text,
+      complete: options?.complete === true,
+      assertCurrent: options?.assertCurrent,
+    });
 
   /** Move the draft to another channel, preserving its current text. */
   const retarget = async (nextChannelId: string) => {
@@ -176,6 +182,7 @@ export function createDiscordDraftStream(params: {
     flush: loop.flush,
     messageId: () => streamMessage?.messageId,
     lastDeliveredText: () => lastSentText,
+    isStopped: () => streamState.stopped,
     clear: () => lifecycle.retireCurrent(discardPending),
     deleteCurrentMessage: () =>
       lifecycle.retireCurrent(async () => {

@@ -27,25 +27,6 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-function attributedSuggestionClient(
-  client: GatewayClient,
-  suggestion: StoredSessionSuggestion,
-): GatewayClient {
-  const label = suggestion.authorLabel ?? suggestion.authorId;
-  return {
-    ...client,
-    internal: {
-      ...client.internal,
-      syntheticClient: true,
-      senderAttribution: {
-        id: suggestion.authorId,
-        identity: { type: "profile", id: suggestion.authorId },
-        name: `Suggested by ${label}`,
-      },
-    },
-  };
-}
-
 export async function dispatchSuggestion(params: {
   context: GatewayRequestContext;
   client: GatewayClient;
@@ -71,7 +52,20 @@ export async function dispatchSuggestion(params: {
   const captureResponse: RespondFn = (...args) => {
     response = args;
   };
-  const chatClient = attributedSuggestionClient(params.client, params.suggestion);
+  const { client, suggestion } = params;
+  const label = suggestion.authorLabel ?? suggestion.authorId;
+  const chatClient: GatewayClient = {
+    ...client,
+    internal: {
+      ...client.internal,
+      syntheticClient: true,
+      senderAttribution: {
+        id: suggestion.authorId,
+        identity: { type: "profile", id: suggestion.authorId },
+        name: `Suggested by ${label}`,
+      },
+    },
+  };
   const assertRequestCurrent = () => {
     params.signal?.throwIfAborted();
     params.sessionMutationAuthorization?.assertCurrent();

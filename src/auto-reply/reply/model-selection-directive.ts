@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { modelKey } from "../../agents/model-ref-shared.js";
+import { modelKey, type ModelRef } from "../../agents/model-ref-shared.js";
 import {
   type ModelAliasIndex,
   resolveModelRefFromString,
@@ -102,9 +102,8 @@ function scoreFuzzyMatch(params: {
   }
 
   const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
-  const modelVariants = FUZZY_VARIANT_TOKENS.filter((token) => modelLower.includes(token));
   const variantMatchCount = fragmentVariants.filter((token) => modelLower.includes(token)).length;
-  const variantCount = modelVariants.length;
+  const variantCount = FUZZY_VARIANT_TOKENS.filter((token) => modelLower.includes(token)).length;
   if (fragmentVariants.length === 0 && variantCount > 0) {
     score -= variantCount * 30;
   } else if (fragmentVariants.length > 0) {
@@ -153,19 +152,18 @@ export function resolveModelDirectiveSelection(params: {
     });
 
   const rawTrimmed = raw.trim();
-  const rawLower = rawTrimmed.toLowerCase();
-  const allows = (ref: { provider: string; model: string }) =>
+  const allows = (ref: ModelRef) =>
     policy.allows(ref) && (params.operatorModelPolicy?.allows(ref) ?? true);
 
-  const buildSelection = (provider: string, model: string): ModelDirectiveSelection => {
-    const alias = aliasIndex.byKey.get(modelKey(provider, model))?.[0];
-    return {
-      provider,
-      model,
-      isDefault: provider === defaultProvider && model === defaultModel,
-      ...(alias ? { alias } : undefined),
-    };
-  };
+  const buildSelection = (
+    { provider, model }: ModelRef,
+    alias?: string,
+  ): ModelDirectiveSelection => ({
+    provider,
+    model,
+    isDefault: provider === defaultProvider && model === defaultModel,
+    ...(alias ? { alias } : undefined),
+  });
 
   const resolveFuzzy = (paramsLocal: {
     provider?: string;
@@ -228,7 +226,10 @@ export function resolveModelDirectiveSelection(params: {
     const bestScored = scored[0];
     const minScore = providerFilter ? 90 : 120;
     return bestScored && bestScored.score >= minScore
-      ? buildSelection(bestScored.provider, bestScored.model)
+      ? buildSelection(
+          bestScored,
+          aliasIndex.byKey.get(modelKey(bestScored.provider, bestScored.model))?.[0],
+        )
       : undefined;
   };
 
@@ -241,45 +242,36 @@ export function resolveModelDirectiveSelection(params: {
   });
 
   if (!resolved) {
-    const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-    if (fuzzy) {
-      return { selection: fuzzy };
-    }
-    return {
-      error: `Unrecognized model "${rawTrimmed}". Use /models to list providers, or /models <provider> to list models.`,
-    };
+    const selection = resolveFuzzy({ fragment: rawTrimmed });
+    return selection
+      ? { selection }
+      : {
+          error: `Unrecognized model "${rawTrimmed}". Use /models to list providers, or /models <provider> to list models.`,
+        };
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
+  const isExactSelection =
+    rawTrimmed.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey);
   if (
     params.operatorModelPolicy &&
     !params.operatorModelPolicy.allows(resolved.ref) &&
-    (rawLower.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
+    isExactSelection
   ) {
     return {
       error:
         "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
     };
   }
-  const explicitSelection = {
-    selection: {
-      provider: resolved.ref.provider,
-      model: resolved.ref.model,
-      isDefault: resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel,
-      ...(resolved.alias ? { alias: resolved.alias } : {}),
-    },
-  };
+  const explicitSelection = buildSelection(resolved.ref, resolved.alias);
   const permitted = allows(resolved.ref);
   // Preserve catalog hints for bare fragments, while explicit routes and aliases
   // depend only on policy, never on finite picker membership.
-  if (
-    permitted &&
-    (rawLower.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
-  ) {
-    return explicitSelection;
+  if (permitted && isExactSelection) {
+    return { selection: explicitSelection };
   }
 
-  if (rawLower.includes("/")) {
+  if (rawTrimmed.includes("/")) {
     const slash = rawTrimmed.indexOf("/");
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
     const fragment = rawTrimmed.slice(slash + 1).trim();
@@ -289,20 +281,15 @@ export function resolveModelDirectiveSelection(params: {
     }
   }
 
-  const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-  if (fuzzy) {
-    return { selection: fuzzy };
-  }
-
-  if (permitted) {
-    return explicitSelection;
-  }
-
-  return {
-    error: formatNotAllowedError({
-      modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
-      policyPath: policy.allowRepairConfigPath,
-      rawRuntime: params.rawRuntime,
-    }),
-  };
+  const selection =
+    resolveFuzzy({ fragment: rawTrimmed }) ?? (permitted ? explicitSelection : undefined);
+  return selection
+    ? { selection }
+    : {
+        error: formatNotAllowedError({
+          modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
+          policyPath: policy.allowRepairConfigPath,
+          rawRuntime: params.rawRuntime,
+        }),
+      };
 }

@@ -1,6 +1,6 @@
 import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
-import { parentPort } from "node:worker_threads";
+import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
@@ -9,7 +9,10 @@ import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { SQLITE_WORKER_SOURCE_FENCE } from "./sqlite-source-fence-contract.js";
+import { runSqliteSourceFence } from "./sqlite-source-fence.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_PREPARE_COMMAND,
@@ -63,6 +66,19 @@ const stateContexts = new Map<number, SqliteWorkerStateContext>();
 let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
+let nativeRuntimeAdmissionSent = false;
+
+async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
+  if (!sourceLoaderRegistered && sourceLoaderUrl) {
+    const loader: unknown = await import(sourceLoaderUrl);
+    if (!isRecord(loader) || typeof loader.register !== "function") {
+      throw new Error("SQLite source worker loader is unavailable");
+    }
+    loader.register();
+    sourceLoaderRegistered = true;
+  }
+  return import(moduleUrl);
+}
 
 function runWithActorFacts<T>(actor: number, operation: () => T): T {
   const context = stateContexts.get(actor);
@@ -75,6 +91,17 @@ function runInActorContext<T>(actor: number, operation: () => T): T {
       ? withSqliteWorkerOperationAdmission(operationAdmission.context, operation)
       : operation(),
   );
+}
+
+function assertSynchronousResult(value: unknown, phase: string, beforeReject?: () => void): void {
+  if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
+    beforeReject?.();
+    if (isPromise(value)) {
+      // Retirement owns the failure; consume rejection while native exit is joined.
+      void value.catch(() => {});
+    }
+    throw new Error(`SQLite worker ${phase} must remain synchronous`);
+  }
 }
 
 async function receive(request: SqliteWorkerRequest): Promise<void> {
@@ -116,15 +143,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             const settlement: unknown = runInActorContext(request.actor, () => ({
               settlement: backend.assertSettled?.(),
             })).settlement;
-            if (
-              isPromise(settlement) ||
-              (isRecord(settlement) && typeof settlement.then === "function")
-            ) {
-              if (isPromise(settlement)) {
-                void settlement.catch(() => {});
-              }
-              throw new Error("SQLite worker settlement checks must remain synchronous");
-            }
+            assertSynchronousResult(settlement, "settlement checks");
             return backend.assertSettled !== undefined;
           };
           const settleCommand = (failure?: { error: unknown }) => {
@@ -151,15 +170,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 const cleanup: unknown = runInActorContext(request.actor, () => ({
                   cleanup: backend[SQLITE_WORKER_OPERATION_CLEANUP]?.(typedCommand),
                 })).cleanup;
-                if (
-                  isPromise(cleanup) ||
-                  (isRecord(cleanup) && typeof cleanup.then === "function")
-                ) {
-                  if (isPromise(cleanup)) {
-                    void cleanup.catch(() => {});
-                  }
-                  throw new Error("SQLite worker operation cleanup must remain synchronous");
-                }
+                assertSynchronousResult(cleanup, "operation cleanup");
                 assertSettled();
               }
             } catch (error) {
@@ -203,10 +214,21 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 await admitted;
               }
             }
-            value = runInActorContext(request.actor, () => ({
-              // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
-              result: backend.execute(typedCommand),
-            })).result;
+            const execute = () =>
+              runInActorContext(request.actor, () => ({
+                // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
+                result: backend.execute(typedCommand),
+              })).result;
+            const fence = runInActorContext(request.actor, () =>
+              backend[SQLITE_WORKER_SOURCE_FENCE]?.(typedCommand),
+            );
+            value = fence
+              ? await runSqliteSourceFence(
+                  fence,
+                  (operation) => runInActorContext(request.actor, operation),
+                  execute,
+                )
+              : execute();
           } catch (error) {
             // Cleanup can replace the refusal; only settled command failures retain its provenance.
             const admissionRefused =
@@ -219,17 +241,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           }
           executed = true;
           completeResult = true;
-          if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
+          assertSynchronousResult(value, "operations", () => {
             retire = true;
             if (operationAdmission) {
               settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
             }
-            if (isPromise(value)) {
-              // Retirement owns the failure; consume rejection while native exit is joined.
-              void value.catch(() => {});
-            }
-            throw new Error("SQLite worker operations must remain synchronous");
-          }
+          });
           settleCommand();
         },
       );
@@ -302,15 +319,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (request.existingIdentity) {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
-      if (!sourceLoaderRegistered && request.sourceLoaderUrl) {
-        const loader: unknown = await import(request.sourceLoaderUrl);
-        if (!isRecord(loader) || typeof loader.register !== "function") {
-          throw new Error("SQLite source worker loader is unavailable");
-        }
-        loader.register();
-        sourceLoaderRegistered = true;
-      }
-      const module: unknown = await import(request.moduleUrl);
+      const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
       const factoryName = request.existingIdentity
         ? "openExistingSqliteWorkerBackend"
         : "createSqliteWorkerBackend";
@@ -356,6 +365,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         (SQLITE_WORKER_OPERATION_CLEANUP in backend &&
           backend[SQLITE_WORKER_OPERATION_CLEANUP] !== undefined &&
           (typeof backend[SQLITE_WORKER_OPERATION_CLEANUP] !== "function" ||
+            typeof backend.assertSettled !== "function")) ||
+        (SQLITE_WORKER_SOURCE_FENCE in backend &&
+          backend[SQLITE_WORKER_SOURCE_FENCE] !== undefined &&
+          (typeof backend[SQLITE_WORKER_SOURCE_FENCE] !== "function" ||
             typeof backend.assertSettled !== "function")) ||
         (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
           backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
@@ -463,6 +476,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     nativeCleanupFailure = undefined;
   }
   if (reply.ok) {
+    if (complete && !reply.cleanupFailure && !nativeRuntimeAdmissionSent) {
+      const admission = captureSqliteNativeRuntimeAdmission();
+      if (admission) {
+        reply.nativeRuntimeAdmission = admission;
+        nativeRuntimeAdmissionSent = true;
+      }
+    }
     const bytes = ownedWorkerBytes(reply.value);
     port.postMessage({ ...reply, value: bytes }, [bytes.buffer]);
   } else {
@@ -471,6 +491,20 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (complete) {
     scheduleWorkerIdleGc();
   }
+}
+
+// Preparation has no actor, native locator, input, or admission grant.
+const runtimeData: unknown = workerData;
+if (isRecord(runtimeData) && runtimeData.sqliteRuntimePreparation !== undefined) {
+  const source = runtimeData.sqliteRuntimePreparation;
+  if (
+    !isRecord(source) ||
+    typeof source.moduleUrl !== "string" ||
+    (source.sourceLoaderUrl !== undefined && typeof source.sourceLoaderUrl !== "string")
+  ) {
+    throw new Error("SQLite runtime preparation is invalid");
+  }
+  await loadBackendModule(source.moduleUrl, source.sourceLoaderUrl);
 }
 
 // The broker sends one request at a time, including module initialization.

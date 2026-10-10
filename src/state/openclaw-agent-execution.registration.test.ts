@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { serialize } from "node:v8";
-import type { MessagePort } from "node:worker_threads";
+import { MessagePort } from "node:worker_threads";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -15,7 +15,6 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
-import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type {
   OpenClawAgentDatabaseRegistrationCommit,
@@ -43,7 +42,10 @@ const edge = vi.hoisted(() => {
         registration?: OpenClawAgentDatabaseRegistrationObserver,
       ) => typeof database
     >(),
-    request: vi.fn<(request: SqliteWorkerAdmissionRequest) => void>(),
+    request:
+      vi.fn<
+        typeof import("../infra/sqlite-worker-operation-admission.js").requestSqliteWorkerOperationAdmission
+      >(),
     attachment: vi.fn(() => ({ kind: "agent-execution", startupJournal: false })),
     nativeClose: vi.fn(() => {
       database.db.isOpen = false;
@@ -69,6 +71,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     isMarkedAsUntransferable: actual.isMarkedAsUntransferable,
     Worker: edge.forbidden,
     MessageChannel: actual.MessageChannel,
+    MessagePort: actual.MessagePort,
     receiveMessageOnPort: actual.receiveMessageOnPort,
   };
 });
@@ -79,7 +82,11 @@ vi.mock("node:child_process", () => ({
   execFileSync: edge.forbidden,
   fork: edge.forbidden,
 }));
-vi.mock("../infra/node-sqlite.js", () => ({ openNodeSqliteDatabase: edge.forbidden }));
+// mock-isolation: Native database opening must remain forbidden in the worker registration fixture.
+vi.mock("../infra/node-sqlite.js", () => ({
+  openNodeSqliteDatabase: edge.forbidden,
+  captureSqliteNativeRuntimeAdmission: () => undefined,
+}));
 vi.mock("../logging/console.js", () => ({ routeLogsToStderr() {} }));
 vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: (done: () => void) => done() }));
 vi.mock("../infra/sqlite-worker-identity.js", async () => ({
@@ -94,7 +101,19 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
     await importOriginal<typeof import("../infra/sqlite-worker-operation-admission.js")>();
   return {
     ...actual,
-    requestSqliteWorkerOperationAdmission: edge.request,
+    requestSqliteWorkerOperationAdmission: (...args: Parameters<typeof edge.request>) => {
+      const [request] = args;
+      const facts = request.facts;
+      if (
+        facts &&
+        typeof facts === "object" &&
+        "validationPort" in facts &&
+        facts.validationPort instanceof MessagePort
+      ) {
+        facts.validationPort.postMessage({ deferUnverifiedIntegrity: false }, []);
+      }
+      edge.request(...args);
+    },
     takeSqliteWorkerOperationAdmissionAttachment: edge.attachment,
   };
 });
@@ -201,25 +220,29 @@ function retireFailedReply(
     reject,
     detach() {},
   };
-  receiveSqliteWorkerReply({ current: job, worker: { postMessage: edge.forbidden } }, reply, {
-    fail(error, currentError, openOutcome) {
-      if (!(error instanceof Error)) {
-        throw error;
-      }
-      settleFailedSqliteWorkerJobs({
-        current: job,
-        queued: [],
-        queuedError: new SqliteWorkerError("retired", "unavailable"),
-        error,
-        currentError,
-        openOutcome,
-        retire: () => retired.promise,
-        finish: settleSqliteWorkerJob,
-      });
+  receiveSqliteWorkerReply(
+    { actors: new Set(), current: job, worker: { postMessage: edge.forbidden } },
+    reply,
+    {
+      fail(error, currentError, openOutcome) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        settleFailedSqliteWorkerJobs({
+          current: job,
+          queued: [],
+          queuedError: new SqliteWorkerError("retired", "unavailable"),
+          error,
+          currentError,
+          openOutcome,
+          retire: () => retired.promise,
+          finish: settleSqliteWorkerJob,
+        });
+      },
+      finish: edge.forbidden,
+      dispatch: edge.forbidden,
     },
-    finish: edge.forbidden,
-    dispatch: edge.forbidden,
-  });
+  );
   return { retired, completion, reject, settleNative };
 }
 

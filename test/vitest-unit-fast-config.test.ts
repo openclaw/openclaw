@@ -558,7 +558,7 @@ describe("unit-fast vitest lane", () => {
       "src/agents/agent-command.embedded-maintenance.test.ts",
       "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
-      "src/agents/provider-transport-fetch.headers.test.ts",
+      "src/agents/provider-transport-fetch.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
       "src/commands/status-overview-values.test.ts",
     ]) {

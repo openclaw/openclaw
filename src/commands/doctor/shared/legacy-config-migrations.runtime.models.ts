@@ -4,7 +4,6 @@ import {
   type LegacyConfigMigrationSpec,
 } from "../../../config/legacy.shared.js";
 import { materializeModelPolicyAllowlist } from "../../../config/model-policy-allowlist-migration.js";
-import { isModelThinkingFormat } from "../../../config/types.models.js";
 import { materializeUtilityModelSeparation } from "../../../config/utility-model-separation-migration.js";
 import { containsAuthoredInclude } from "./include-migration-ownership.js";
 import * as catalog from "./legacy-config-migrations.runtime.models.catalog.js";
@@ -149,18 +148,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
     id: "models.providers.*.models.*.compat.thinkingFormat-invalid",
     legacyRules: [vllm.INVALID_THINKING_FORMAT_RULE],
     apply: (raw, changes) => {
-      for (const { providerId, modelIndex, model } of catalog.providerModelEntries(
-        getRecord(raw.models)?.providers,
-      )) {
-        const compat = getRecord(model.compat);
-        const thinkingFormat = compat?.thinkingFormat;
-        if (
-          !compat ||
-          typeof thinkingFormat !== "string" ||
-          isModelThinkingFormat(thinkingFormat)
-        ) {
-          continue;
-        }
+      for (const {
+        providerId,
+        modelIndex,
+        compat,
+        thinkingFormat,
+      } of catalog.invalidModelThinkingFormats(getRecord(raw.models)?.providers)) {
         delete compat.thinkingFormat;
         changes.push(
           `Removed models.providers.${providerId}.models.${modelIndex}.compat.thinkingFormat (unrecognized value ${JSON.stringify(thinkingFormat)}; runtime default applies).`,
@@ -172,18 +165,14 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
     id: "models.providers.*.models.*.contextWindow-stale",
     legacyRules: [vllm.STALE_CONTEXT_WINDOW_RULE],
     apply: (raw, changes) => {
-      for (const { providerId, modelIndex, model } of catalog.providerModelEntries(
-        getRecord(raw.models)?.providers,
-      )) {
-        const modelId = typeof model.id === "string" ? model.id : undefined;
-        const contextWindow = model.contextWindow;
-        if (!modelId || typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
-          continue;
-        }
-        const fix = catalog.resolveStaleContextWindowFix({ providerId, modelId, contextWindow });
-        if (!fix) {
-          continue;
-        }
+      for (const {
+        providerId,
+        modelIndex,
+        model,
+        modelId,
+        contextWindow,
+        fix,
+      } of catalog.staleModelContextWindows(getRecord(raw.models)?.providers)) {
         model.contextWindow = fix.correct;
         changes.push(
           `Repaired models.providers.${providerId}.models[${modelIndex}].${modelId}.contextWindow (${contextWindow} → ${fix.correct} to match catalog default).`,

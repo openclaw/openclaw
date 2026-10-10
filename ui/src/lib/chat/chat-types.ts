@@ -271,20 +271,8 @@ export type ChatStreamSegment = {
   text: string;
   ts: number;
   runId?: string;
-  /** Persisted user send that causally precedes this transient output. */
-  afterBoundaryRunId?: string;
-  /** Persisted user send that causally follows this transient output. */
-  boundaryRunId?: string;
-  /** Ordering-only boundary with no renderable assistant text. */
-  boundaryMarker?: true;
   /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
   persisted?: true;
-  /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
-  retiredItemId?: string;
-  /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
-  pendingCommentary?: { text: string; prefixLength: number };
-  /** Visible cumulative prefix that must stay before this persisted commentary item. */
-  pendingCommentaryPrefixFor?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -293,11 +281,8 @@ export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
   return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
 }
 
-export function streamSegmentUsesAccumulatedText(segment: {
-  itemId?: unknown;
-  boundaryMarker?: unknown;
-}): boolean {
-  return segment.boundaryMarker !== true && !streamSegmentHasItemId(segment);
+export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+  return !streamSegmentHasItemId(segment);
 }
 
 /** Advance the accumulated-text tracker only when the segment genuinely

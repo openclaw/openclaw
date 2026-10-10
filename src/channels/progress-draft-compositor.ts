@@ -26,6 +26,7 @@ import {
   resolveCommentaryLineId,
   sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
+import { projectChannelWorkStatus } from "./progress-draft-work-status.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
   createChannelProgressDraftGate,
@@ -385,7 +386,11 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
     // Approvals require a user decision; intermediate tool failures belong to the tool log.
     const shouldStoreLine =
-      !quietProgress || (typeof progressLine === "object" && progressLine.kind === "approval");
+      !quietProgress ||
+      (typeof progressLine === "object" &&
+        (progressLine.kind === "approval" ||
+          progressLine.kind === "operation-status" ||
+          progressLine.kind === "subagent-status"));
     // Failure visibility does not grant protected capacity in the rolling tool log.
     const needsAttention =
       shouldStoreLine &&
@@ -432,6 +437,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const progressEventHandlers = createChannelProgressDraftEventHandlers({
     entry: params.entry,
     preparedItems: params.preparedItems,
+    toolIcons: params.toolIcons,
     pushLine: noteProgress,
     onTool: diffStatTracker.stageToolEvent,
     onItem: diffStatTracker.commitItemEvent,
@@ -523,8 +529,31 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     },
     pushToolProgress: noteProgress,
     ...progressEventHandlers,
-    pushItemEvent: (payload: Parameters<typeof progressEventHandlers.pushItemEvent>[0]) =>
-      routePreparedProgressItem({
+    pushItemEvent: async (payload: Parameters<typeof progressEventHandlers.pushItemEvent>[0]) => {
+      if (params.showWorkStatus && quietProgress && canUpdateProgress()) {
+        const status = projectChannelWorkStatus(payload);
+        const current = lines.find(
+          (line) => typeof line === "object" && line.kind === "operation-status",
+        );
+        // A late result for another operation must not replace the operation
+        // the user is currently watching. Retractions still use the real item id.
+        if (
+          status &&
+          (payload.kind === "subagent" ||
+            payload.phase !== "end" ||
+            !current ||
+            (typeof current === "object" && current.id === status.id))
+        ) {
+          diffStatTracker.commitItemEvent(payload);
+          if (payload.kind !== "subagent") {
+            lines = lines.filter(
+              (line) => typeof line !== "object" || line.kind !== "operation-status",
+            );
+          }
+          return await noteProgress(status);
+        }
+      }
+      return await routePreparedProgressItem({
         payload,
         progressMode: params.mode === "progress",
         commentary: commentaryProgressEnabled,
@@ -532,7 +561,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         clearLine,
         pushCommentary: (text, options) => compositor.pushCommentaryProgress(text, options),
         pushHeadline: (text, options) => compositor.pushPreambleHeadline(text, options),
-      }),
+      });
+    },
     async pushApprovalEvent(
       payload: Parameters<typeof progressEventHandlers.pushApprovalEvent>[0],
     ) {

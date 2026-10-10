@@ -28,14 +28,15 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
   let activeMutations = 0;
   let pendingExclusiveOperations = 0;
   let exclusiveTail = Promise.resolve();
-  let mutationsDrained: (() => void)[] = [];
+  // The exclusive tail admits only one drain waiter at a time.
+  let mutationsDrained: (() => void) | undefined;
 
   const waitForMutations = async (): Promise<void> => {
     if (activeMutations === 0) {
       return;
     }
     await new Promise<void>((resolve) => {
-      mutationsDrained.push(resolve);
+      mutationsDrained = resolve;
     });
   };
 
@@ -55,10 +56,8 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
       activeMutations -= 1;
       if (activeMutations === 0) {
         const drained = mutationsDrained;
-        mutationsDrained = [];
-        for (const resolve of drained) {
-          resolve();
-        }
+        mutationsDrained = undefined;
+        drained?.();
       }
     }
   };

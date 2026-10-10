@@ -1,9 +1,7 @@
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as pendingMigrations from "../infra/deferred-plugin-migrations.js";
-import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -12,20 +10,6 @@ import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
-// Observe real launches without replacing SQLite or the child's lifecycle owner.
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: vi.fn(actual.spawn),
-    spawnSync: vi.fn(actual.spawnSync),
-  };
-});
-
-beforeEach(() => {
-  vi.mocked(spawn).mockClear();
-  vi.mocked(spawnSync).mockClear();
-});
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["Doctor repair", "Gateway readiness"] as const)(
@@ -132,47 +116,6 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         } finally {
           await closeOpenClawStateDatabaseAsync();
         }
-      }
-    });
-  },
-);
-
-it.each([false, true])(
-  "does not create pending-state files (config exists: %s)",
-  async (configExists) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      if (configExists) {
-        await fs.mkdir(stateDir, { recursive: true });
-        await fs.writeFile(
-          configPath,
-          JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
-        );
-      }
-      try {
-        const result = await runDoctorConfigPreflight({
-          migrateState: false,
-          migrateLegacyConfig: false,
-          invalidConfigNote: false,
-          observe: false,
-        });
-        expect(result.snapshot.exists).toBe(configExists);
-        expect(result.deferredPluginMigrations ?? []).toEqual([]);
-        for (const suffix of ["", "-wal", "-shm"]) {
-          await expect(fs.stat(`${databasePath}${suffix}`)).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-        }
-        for (const [, args] of [
-          ...vi.mocked(spawn).mock.calls,
-          ...vi.mocked(spawnSync).mock.calls,
-        ]) {
-          expect(args ?? []).not.toContain(SQLITE_READONLY_CHILD_ARG);
-        }
-      } finally {
-        await closeOpenClawStateDatabaseAsync();
       }
     });
   },

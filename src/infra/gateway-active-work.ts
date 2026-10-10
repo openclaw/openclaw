@@ -10,7 +10,7 @@ import { getActiveMediaGenerationRunCount } from "../agents/media-generation-act
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
+import { getTotalQueueSize, listCommandLaneTotals } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -131,7 +131,20 @@ export function createGatewayActiveWorkSnapshot(
       });
     }
   };
-  add(counts.queueSize, "queue", "queued or active operation(s)");
+  add(
+    counts.queueSize,
+    "queue",
+    "queued or active operation(s)",
+    inspectors.getQueueSize
+      ? undefined
+      : () =>
+          listCommandLaneTotals()
+            .filter(({ activeCount, queuedCount }) => activeCount + queuedCount > 0)
+            .map(
+              ({ lane, activeCount, queuedCount }) =>
+                `${lane} (active=${activeCount}, queued=${queuedCount})`,
+            ),
+  );
   add(counts.pendingReplies, "reply", "pending reply delivery operation(s)");
   add(counts.embeddedRuns, "embedded-run", "active embedded run(s)");
   add(counts.backgroundExecSessions, "background-exec", "active background exec session(s)");

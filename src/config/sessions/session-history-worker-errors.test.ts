@@ -10,6 +10,7 @@ import { readChatHistoryDelta } from "../../gateway/server-methods/chat-history-
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import * as sqliteScope from "./session-accessor.sqlite-scope.js";
 import {
@@ -21,6 +22,7 @@ import { prepareSessionTranscriptHydration } from "./session-transcript-hydratio
 import {
   historyLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -51,6 +53,34 @@ function input() {
     },
   };
 }
+
+// These lifecycle checks retain one already-admitted history lane.
+function useAdmittedHistoryReader() {
+  vi.spyOn(agentExecution, "captureExistingOpenClawAgentDatabaseExecution").mockImplementation(
+    (options) => {
+      const claim = { identity: "history", incarnation: "history", assertCurrent() {} };
+      return {
+        agentId: "main",
+        path: options.path,
+        fileIdentity: undefined,
+        assertCurrent() {},
+        captureGenerationClaim: () => claim,
+        capturePreparedGenerationClaim: () => claim,
+        async adoptNativeDatabase() {
+          throw new Error("Readonly history must not adopt a writer");
+        },
+        async prepare() {
+          throw new Error("Readonly history must not prepare a writer");
+        },
+        async runExisting() {
+          throw new Error("Readonly history must not open a writer");
+        },
+        async release() {},
+      };
+    },
+  );
+}
+
 function installWorkerTransport() {
   observed.run.mockImplementation(async (request, options) => {
     const posted = createDeferredCore<unknown>();
@@ -123,7 +153,7 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await rotateDatabaseWorkers(historyLane);
+  await Promise.all([historyLane, targetDiscoveryLane].map((lane) => rotateDatabaseWorkers(lane)));
   vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
 });
@@ -326,6 +356,7 @@ it.each(
 );
 
 it("retires idle history workers under critical pressure after active scopes release custody", async () => {
+  useAdmittedHistoryReader();
   const pressure = channel("openclaw.memory.critical");
   const request = input();
   const retirement = createDeferredCore();
@@ -354,8 +385,13 @@ it.each([
   { retired: false, fails: false },
   { retired: false, fails: true },
 ])(
-  "settles failed reads after their own retirement (already retired=$retired, failure=$fails)",
+  "settles failed reads after pool retirement (already retired=$retired, failure=$fails)",
   async ({ retired, fails }) => {
+    const earlier = input();
+    observed.run.mockResolvedValueOnce({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(earlier.database, (owner) =>
+      owner.readEntryPresence(earlier.scope),
+    );
     const primary = new WorkerTaskError(
       "worker response failed",
       retired ? "unavailable" : "failed",
@@ -382,22 +418,14 @@ it.each([
       .finally(() => {
         settled = true;
       });
-    if (retired) {
-      try {
-        expect(
-          await Promise.race([
-            pending.then(() => "settled"),
-            entered.promise.then(() => "rotating successor"),
-          ]),
-        ).toBe("settled");
-        expect(await pending).toBe(primary);
-      } finally {
-        retirement.resolve();
-        await pending;
-      }
-      return;
+    try {
+      expect(
+        await Promise.race([pending.then(() => "settled"), entered.promise.then(() => "rotating")]),
+      ).toBe("rotating");
+    } catch (error) {
+      retirement.resolve();
+      throw error;
     }
-    await entered.promise;
     expect(settled).toBe(false);
     expect(observed.unregister).not.toHaveBeenCalled();
     if (fails) {
@@ -415,12 +443,13 @@ it.each([
       expect(observed.unregister).not.toHaveBeenCalled();
     } else {
       expect(failure).toBe(primary);
-      expect(observed.unregister).toHaveBeenCalledTimes(1);
+      expect(observed.unregister).toHaveBeenCalledTimes(2);
     }
   },
 );
 
 it("retains aliases until native cleanup and preserves later read custody", async () => {
+  useAdmittedHistoryReader();
   const request = input();
   const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
   const cleanupEntered = createDeferredCore();
@@ -482,6 +511,7 @@ it.each([
 ])(
   "joins idle cleanup and retains failed custody (fails=$fails, capable=$capable)",
   async ({ fails, capable }) => {
+    useAdmittedHistoryReader();
     closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
     const request = input();
     observed.run.mockResolvedValue({ ok: true, value: false });

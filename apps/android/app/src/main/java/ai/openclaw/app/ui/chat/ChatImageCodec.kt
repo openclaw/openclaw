@@ -8,7 +8,6 @@ import ai.openclaw.app.normalizeSharedAttachmentMimeType
 import ai.openclaw.app.sharedAttachmentKindForMimeType
 import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentResolver
-import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -134,7 +133,12 @@ private fun sharedAttachmentFileName(
     try {
       resolver
         .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-        ?.use { cursor -> cursor.firstString(OpenableColumns.DISPLAY_NAME) }
+        ?.use { cursor ->
+          if (!cursor.moveToFirst()) return@use null
+          val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+          if (index < 0 || cursor.isNull(index)) return@use null
+          cursor.getString(index)?.trim()?.takeIf(String::isNotEmpty)
+        }
     } catch (_: Exception) {
       null
     }
@@ -144,13 +148,6 @@ private fun sharedAttachmentFileName(
     .trim()
     .take(128)
     .ifEmpty { "attachment" }
-}
-
-private fun Cursor.firstString(columnName: String): String? {
-  if (!moveToFirst()) return null
-  val index = getColumnIndex(columnName)
-  if (index < 0 || isNull(index)) return null
-  return getString(index)?.trim()?.takeIf { it.isNotEmpty() }
 }
 
 /** Loads a picked image URI into the bounded JPEG attachment shape sent to chat. */

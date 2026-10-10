@@ -27,11 +27,8 @@ import {
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  drainSystemEventEntries,
-  peekSystemEventEntries,
-} from "openclaw/plugin-sdk/system-event-runtime";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCodexCompletionCommandTest } from "./dynamic-tool-build.completion.test-support.js";
 import {
   disableCodexPluginThreadConfig,
   resolveCodexAppServerExecutionCwd,
@@ -700,44 +697,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(result.details).toMatchObject(testCase.expected);
   });
 
-  it("marks a command started by a conversation's completion turn as the conversation's own", async () => {
-    const workspaceDir = path.join(tempDir, "continuation-workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(path.join(tempDir, "continuation.jsonl"), workspaceDir);
-    params.disableTools = false;
-    const sessionKey = "agent:main:telegram:group:-100155462274:topic:42";
-    params.sessionKey = sessionKey;
-    params.trigger = "heartbeat";
-    params.continuesConversation = true;
-    params.execOverrides = { host: "gateway", mode: "full" };
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestToolFactory(params, (options) =>
-      createOpenClawCodingTools(options).filter((tool) => ["exec", "process"].includes(tool.name)),
-    );
-
-    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      nativeToolSurfaceEnabled: false,
-    });
-    const exec = expectDefined(
-      tools.find((tool) => tool.name === "exec"),
-      "OpenClaw exec",
-    );
-    onTestFinished(() => {
-      drainSystemEventEntries(sessionKey);
-    });
-    await exec.execute("continuation-exec", { command: "echo codex-chain-ok", background: true });
-
-    await vi.waitFor(
-      () =>
-        expect(peekSystemEventEntries(sessionKey)).toEqual([
-          expect.objectContaining({
-            text: expect.stringContaining("codex-chain-ok"),
-            fromConversationTurn: true,
-          }),
-        ]),
-      { timeout: 10_000 },
-    );
-  });
+  registerCodexCompletionCommandTest();
 
   it.each([
     { thinkLevel: "ultra", modelId: "gpt-5.6-sol", configuredId: "configured-alias" },

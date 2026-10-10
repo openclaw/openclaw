@@ -150,10 +150,9 @@ export function runAgentAttempt(
       onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
       onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
       onCompactionRequestBudget?: RunEmbeddedAgentInternalParams["onCompactionRequestBudget"];
-      onSuccessfulAuthProfile?: (selection: {
-        authProfileId?: string;
-        authProfileIdSource?: "auto" | "user";
-      }) => void;
+      onSuccessfulAuthProfile?: (
+        selection: Pick<RunEmbeddedAgentInternalParams, "authProfileId" | "authProfileIdSource">,
+      ) => void;
     },
 ) {
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
@@ -461,7 +460,8 @@ export function runAgentAttempt(
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
       disableTools,
       terminalReplyExpectation: replyExpectation,
-      silentReplyPromptMode: replyExpectation === "required" ? "none" : undefined,
+      silentReplyPromptMode:
+        params.opts.silentReplyPromptMode ?? (replyExpectation === "required" ? "none" : undefined),
       bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
@@ -571,9 +571,7 @@ export function runAgentAttempt(
           if (
             hasCliLiveSession({
               backendId: cliExecutionProvider,
-              agentAccountId: params.runContext.accountId,
               agentId: params.sessionAgentId,
-              authProfileId: cliSessionBinding.authProfileId,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
             }) ||

@@ -63,11 +63,11 @@ export function attachDiscordDeployRestContext(
   }
 }
 
-function stringifyDiscordDeployField(value: unknown): string {
+function stringifyDiscordDeployField(value: unknown, depth = 2): string {
   try {
     return JSON.stringify(value);
   } catch {
-    return inspect(value, { depth: 2, breakLength: 120 });
+    return inspect(value, { depth, breakLength: 120 });
   }
 }
 
@@ -126,15 +126,13 @@ export function formatDiscordDeployErrorMessage(err: unknown): string {
     return "Discord REST request was aborted";
   }
   const timing: string[] = [];
-  if (timeoutMs !== undefined) {
-    timing.push(
-      `timeout=${formatDurationSeconds(timeoutMs, { decimals: timeoutMs >= 1000 ? 1 : 0 })}`,
-    );
-  }
-  if (requestMs !== undefined) {
-    timing.push(
-      `observed=${formatDurationSeconds(requestMs, { decimals: requestMs >= 1000 ? 1 : 0 })}`,
-    );
+  for (const [label, value] of [
+    ["timeout", timeoutMs],
+    ["observed", requestMs],
+  ] as const) {
+    if (value !== undefined) {
+      timing.push(`${label}=${formatDurationSeconds(value, { decimals: value >= 1000 ? 1 : 0 })}`);
+    }
   }
   const timingText = timing.length > 0 ? ` (${timing.join(", ")})` : "";
   if (timeoutMs !== undefined && requestMs !== undefined && requestMs >= timeoutMs) {
@@ -286,13 +284,7 @@ export function formatDiscordDeployErrorDetails(err: unknown): string {
     details.push(`code=${discordCode}`);
   }
   if (rawBody !== undefined && !isRedundantDiscordDeployBody(rawBody)) {
-    let bodyText;
-    try {
-      bodyText = JSON.stringify(rawBody);
-    } catch {
-      bodyText =
-        typeof rawBody === "string" ? rawBody : inspect(rawBody, { depth: 3, breakLength: 120 });
-    }
+    const bodyText = stringifyDiscordDeployField(rawBody, 3);
     if (bodyText) {
       const maxLen = 800;
       const trimmed =

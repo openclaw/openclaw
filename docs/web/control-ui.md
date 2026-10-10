@@ -22,7 +22,19 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
+the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
+and **Circle**. Square preserves the full image; rounded and circular icons use a
+centered crop. The choice is saved with your tab-icon preference, and activity
+badges remain visible on every shape.
+
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
+Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
+
+Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. An announced restart or suspension holds these reads until readiness or a new connection resumes loading. If a restart rejection arrives without an announcement, one delayed probe at a time checks for recovery after at least a minute, in case the restart is canceled. Writes are never replayed by this mechanism.
+
+Agent identities are shared across views on the same connection and refresh after configuration or agent changes, rather than expiring while a tab is idle. Reload the tab to pick up direct edits to workspace `IDENTITY.md` or avatar image files that do not publish a configuration change.
 
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
@@ -65,9 +77,9 @@ catalog cache and appear independently of slower search categories.
 
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
-The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
-For messages forwarded from an automation, the **From** link opens that automation's History tab and highlights the originating run. Open the run's transcript from History when needed.
+Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
 
@@ -84,6 +96,14 @@ the total tool-call count. When no run duration is available, the heading reads
 **Worked** rather than estimating from message timestamps. Failures and other
 non-success outcomes remain visible even when collapsed, such as
 **Worked for 2 minutes, 3 seconds · 2 failed**.
+
+Still-streaming assistant text stays at the bottom of its run, below saved output, and
+takes its transcript position once saved.
+
+Steering keeps the current response intact. A steer appears below all server
+output from the run it targets, including live text, restored text, commentary,
+and saved assistant messages. These display rules do not rewrite the stored
+transcript or split an assistant message around a steer.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers

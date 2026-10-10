@@ -594,6 +594,7 @@ function renderInstalledClawHubOverview(
   const reasonText = verdict?.reasons?.length
     ? formatUiExternalText(verdict.reasons.join(", "))
     : null;
+  const feedback = props.state.clawhubVerdictsError || reasonText;
   const status = verdictStatus(verdict, props.state.clawhubVerdictsLoading);
   const installedRef = `${link.ownerHandle ? `@${link.ownerHandle}/` : ""}${link.slug}@${link.installedVersion}`;
   return html`
@@ -610,15 +611,7 @@ function renderInstalledClawHubOverview(
             : nothing
         }
       </div>
-      ${
-        props.state.clawhubVerdictsError
-          ? html`<div class="muted" style="font-size: 13px;">
-              ${props.state.clawhubVerdictsError}
-            </div>`
-          : reasonText
-            ? html`<div class="muted" style="font-size: 13px;">${reasonText}</div>`
-            : nothing
-      }
+      ${feedback ? html`<div class="muted" style="font-size: 13px;">${feedback}</div>` : nothing}
       ${
         auditHref
           ? html`<div style="font-size: 13px;">

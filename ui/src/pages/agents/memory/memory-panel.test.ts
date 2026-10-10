@@ -28,7 +28,7 @@ type TestMemoryPanel = HTMLElement & {
   pendingEnabled: boolean | null;
   applyAgentId: () => void;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
-  loadAll: () => Promise<void>;
+  loadResources: () => Promise<void>;
   openWikiPage: (lookup: string) => Promise<unknown>;
   confirmDreamingTask: (
     method: DreamDiaryActionMethod,
@@ -104,7 +104,7 @@ function createPage(context: ApplicationContext): TestMemoryPanel {
   page.context = context;
   page.agentId = "main";
   page.render = () => nothing;
-  page.loadAll = vi.fn(async () => undefined);
+  page.loadResources = vi.fn(async () => undefined);
   return page;
 }
 

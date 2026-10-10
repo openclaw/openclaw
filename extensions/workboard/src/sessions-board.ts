@@ -214,38 +214,34 @@ function createOwner(
         continue;
       }
       const { isMain: _isMain, unavailable: failure, pullRequestsStale: _stale, ...facts } = row;
+      const current: CachedFacts = {
+        source: row,
+        observation: admittedObservation,
+        redactionRevision: source.redactionRevision,
+        facts,
+      };
       if (failure) {
         unavailable.add(row.key);
         reasons.add(failure);
         const previousFacts = lastKnown.get(row.key);
         const known = previousFacts?.facts.sessionId === row.sessionId ? previousFacts : undefined;
-        resolved.set(row.key, {
-          source: row,
-          observation: admittedObservation,
-          redactionRevision: source.redactionRevision,
-          facts: !known
-            ? facts
-            : known.redactionRevision === source.redactionRevision
-              ? known.facts
-              : retainSessionState(known.facts, facts),
-          stale: known?.stale,
-        });
+        current.facts = !known
+          ? facts
+          : known.redactionRevision === source.redactionRevision
+            ? known.facts
+            : retainSessionState(known.facts, facts);
+        current.stale = known?.stale;
       } else {
-        const current = {
-          source: row,
-          observation: admittedObservation,
-          redactionRevision: source.redactionRevision,
-          facts,
-          stale: row.pullRequestsStale,
-        };
-        resolved.set(row.key, current);
-        // A late read cannot replace the current generation's fallback facts.
-        if (
-          params.store.sessionsRevision === admittedRevision &&
-          (lastKnown.get(row.key)?.observation ?? 0) <= admittedObservation
-        ) {
-          lastKnown.set(row.key, current);
-        }
+        current.stale = row.pullRequestsStale;
+      }
+      resolved.set(row.key, current);
+      // A late read cannot replace the current generation's fallback facts.
+      if (
+        !failure &&
+        params.store.sessionsRevision === admittedRevision &&
+        (lastKnown.get(row.key)?.observation ?? 0) <= admittedObservation
+      ) {
+        lastKnown.set(row.key, current);
       }
     }
     const fallback = sessionsBoardFallback(board);

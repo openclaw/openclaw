@@ -277,17 +277,15 @@ function resolveCompactionPressureDecision(
   );
   const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
 
-  let route: PreemptiveCompactionRoute = "fits";
-  if (overflowTokens > 0) {
-    // Choose truncate-only only when available reduction comfortably exceeds the overflow.
-    if (toolResultReducibleChars <= 0) {
-      route = "compact_only";
-    } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
-      route = "truncate_tool_results_only";
-    } else {
-      route = "compact_then_truncate";
-    }
-  }
+  // Choose truncate-only only when available reduction comfortably exceeds the overflow.
+  const route: PreemptiveCompactionRoute =
+    overflowTokens > 0
+      ? toolResultReducibleChars <= 0
+        ? "compact_only"
+        : toolResultReducibleChars >= truncateOnlyThresholdChars
+          ? "truncate_tool_results_only"
+          : "compact_then_truncate"
+      : "fits";
   return {
     route,
     shouldCompact: route === "compact_only" || route === "compact_then_truncate",

@@ -29,6 +29,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
   isSessionStoreTopologyChange,
@@ -902,25 +903,20 @@ test("patchMany excludes a revoked cold-store promotion while its independent st
       errorShape(ErrorCodes.FORBIDDEN, "Original cold-store source was revoked"),
     );
     const source = new AbortController();
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let failedOpenAdmissions = 0;
-    const admissionObserver = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "open" &&
-            isRecord(request.facts) &&
-            request.facts.databasePath === failedPath &&
-            isRecord(request.facts.creatingIdentity) &&
-            request.facts.creatingIdentity.key === `path:${failedPath}`
-          ) {
-            failedOpenAdmissions++;
-            source.abort(revoked);
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admissionObserver = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "open" &&
+        isRecord(request.facts) &&
+        request.facts.databasePath === failedPath &&
+        isRecord(request.facts.creatingIdentity) &&
+        request.facts.creatingIdentity.key === `path:${failedPath}`
+      ) {
+        failedOpenAdmissions++;
+        source.abort(revoked);
+      }
+      admit(request, grant);
+    });
     const writers = vi.spyOn(sessionReplacement, "applySessionEntryCanonicalReplacements");
     const respond = vi.fn();
     const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };

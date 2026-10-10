@@ -50,6 +50,8 @@ import { runDoctorHealthFlow } from "./doctor-health.js";
 const { mocks } = await import("./doctor-health.test-support.js");
 
 type DoctorManagedRepairOutcome =
+  | "interactive-ready"
+  | "interactive-declined"
   | "ready"
   | "archive-verification"
   | "clean-stopped-repair"
@@ -80,7 +82,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         // These cases own managed agent repair after shared-state initialization.
         materializeSharedStateDatabase(state.env);
-        const clean = outcome.startsWith("clean-") || outcome.startsWith("update-");
+        const interactive = outcome.startsWith("interactive-");
+        const declined = outcome === "interactive-declined";
+        const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
         const archiveVerification = outcome === "archive-verification";
         const current = clean || archiveVerification;
         const inspectionOnly = outcome === "clean-force-inspect";
@@ -212,7 +216,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         });
         const restart = vi.fn(async () => {
           events.push("restart");
-          if (outcome === "ready") {
+          if (outcome === "ready" || outcome === "interactive-ready") {
             for (const agentId of ["main", "research"]) {
               expect(() =>
                 assertNoOpenClawAgentDatabaseLeases(agentId, { env: state.env }),
@@ -230,7 +234,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
               );
             }
           }
-          running = true;
+          // An unhealthy restart leaves the service down; a running service with
+          // unverified readiness is a warning, covered by the readiness tests.
+          running = outcome !== "restart-unhealthy";
           return { outcome: "completed" as const };
         });
         const start = vi.fn(async () => {
@@ -266,7 +272,17 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         });
         mocks.runContributions.mockImplementation(async (ctx) => {
           events.push("repair");
-          expect(ctx.gatewayMaintenanceActive).toBe(!inspectionOnly);
+          expect(ctx.gatewayMaintenanceActive).toBe(!inspectionOnly && !declined);
+          if (interactive) {
+            expect(ctx.prompter.shouldRepair).toBe(false);
+            expect(running).toBe(declined);
+            expect(
+              await ctx.prompter.confirmAutoFix({
+                message: "Apply a selected repair?",
+                initialValue: true,
+              }),
+            ).toBe(false);
+          }
           if (clean || archiveVerification) {
             return;
           }
@@ -291,7 +307,11 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(approvals.warnings.length > 0).toBe(approvalsBlocked);
             await collectSecurityWarnings(ctx.cfg, state.env);
           }
-          if (outcome === "ready" || outcome === "store-close-failed") {
+          if (
+            outcome === "ready" ||
+            outcome === "interactive-ready" ||
+            outcome === "store-close-failed"
+          ) {
             // Later diagnostics reopen runtime handles after the migration closes its own.
             const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
             openOpenClawAgentDatabase({ agentId: "research", env: state.env });
@@ -348,6 +368,11 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         if (outcome === "config-refused") {
           runtime.exit.mockImplementation(expectProcessOwnerReleased);
         }
+        const originalTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+        if (interactive) {
+          Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+          mocks.confirm.mockReset().mockResolvedValue(false).mockResolvedValueOnce(!declined);
+        }
         try {
           const modernUpdate = outcome.startsWith("update-") && outcome !== "update-legacy";
           if (modernUpdate) {
@@ -377,9 +402,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
           const run = runDoctorHealthFlow(runtime, {
-            ...(inspectionOnly ? {} : { repair: true }),
+            ...(interactive || inspectionOnly ? {} : { repair: true }),
             force,
-            nonInteractive: true,
+            ...(interactive ? {} : { nonInteractive: true }),
           });
           if (outcome === "update-no-restart") {
             await expect(run).rejects.toThrow("update parent");
@@ -441,7 +466,17 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
             return;
           }
+          if (declined) {
+            expect(events).toEqual([]);
+            expect(stop).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(mocks.outro).toHaveBeenCalledWith(expect.stringContaining("--lint"));
+            expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+            expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
+            return;
+          }
           const shouldRestart =
+            outcome === "interactive-ready" ||
             outcome === "ready" ||
             archiveVerification ||
             outcome === "repair-failed" ||
@@ -498,6 +533,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           if (
             outcome === "ready" ||
+            outcome === "interactive-ready" ||
             clean ||
             archiveVerification ||
             outcome === "approvals-migrated"
@@ -507,6 +543,14 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
           }
         } finally {
+          if (interactive) {
+            if (originalTty) {
+              Object.defineProperty(process.stdin, "isTTY", originalTty);
+            } else {
+              Reflect.deleteProperty(process.stdin, "isTTY");
+            }
+            mocks.confirm.mockReset().mockResolvedValue(true);
+          }
           archiveRepair?.mockRestore();
           archiveTransform?.mockRestore();
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });

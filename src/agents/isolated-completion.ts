@@ -500,6 +500,14 @@ async function runIsolatedCompletionOwned(
           const authAttempts = prepareAgentRuntimeAuth(authParams).attempts;
           harnessAuth = { model: runtimeModel, store: authProfileStore, attempts: authAttempts };
         }
+        const hasAuthCandidate = (attempt: PreparedAgentRuntimeAuthAttempt | undefined) =>
+          attempt?.kind !== "profile" ||
+          !harnessAuth ||
+          preparedAgentRuntimeProfileAttemptHasCandidate({
+            attempt,
+            store: harnessAuth.store,
+            modelId: harnessAuth.model.id,
+          });
         // Profile rotation shares one inference budget instead of restarting it per account.
         let deadline: number | undefined;
         const remainingTimeoutMs = () => {
@@ -525,15 +533,7 @@ async function runIsolatedCompletionOwned(
             firstError ??= new Error("Prepared direct auth requires a prior profile attempt.");
             continue;
           }
-          if (
-            attempt?.kind === "profile" &&
-            harnessAuth &&
-            !preparedAgentRuntimeProfileAttemptHasCandidate({
-              attempt,
-              store: harnessAuth.store,
-              modelId: harnessAuth.model.id,
-            })
-          ) {
+          if (!hasAuthCandidate(attempt)) {
             firstError ??= new Error(
               "Prepared runtime auth candidates are temporarily unavailable.",
             );
@@ -590,15 +590,7 @@ async function runIsolatedCompletionOwned(
               );
               modelMaxTokens = authorization.model.maxTokens;
             }
-            if (
-              attempt?.kind === "profile" &&
-              harnessAuth &&
-              !preparedAgentRuntimeProfileAttemptHasCandidate({
-                attempt,
-                store: harnessAuth.store,
-                modelId: harnessAuth.model.id,
-              })
-            ) {
+            if (!hasAuthCandidate(attempt)) {
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
             assertCurrent();

@@ -6,10 +6,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  asOptionalObjectRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createAccountScopedBindingAdapter,
   projectThreadBindingRecord,
@@ -18,7 +15,7 @@ import {
   normalizeDiscordBindingChannelId,
   resolveChannelIdForBinding,
 } from "./thread-bindings.discord-api.js";
-import { snapshotThreadBindingJson } from "./thread-bindings.persistence.js";
+import { snapshotThreadBindingMetadata } from "./thread-bindings.persistence.js";
 import {
   resolveBindingRecordKey,
   resolvePreparedThreadBindingLifecycle,
@@ -30,44 +27,34 @@ import {
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
 
-type ThreadBindingDefaults = {
-  idleTimeoutMs: number;
-  maxAgeMs: number;
-};
-
-function toSessionBindingRecord(
-  record: ThreadBindingRecord,
-  defaults: ThreadBindingDefaults,
-): SessionBindingRecord {
-  const bindingId = resolveBindingRecordKey(record) ?? `${record.accountId}:${record.threadId}`;
-  const lifecycle = resolvePreparedThreadBindingLifecycle({ record, ...defaults });
-  return projectThreadBindingRecord(record, {
-    conversation: {
-      channel: "discord",
-      conversationId: record.threadId,
-      parentConversationId: record.channelId,
-    },
-    bindingId,
-    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
-    lifecycle,
-    metadata: (lifecycleMetadata) => ({
-      ...lifecycleMetadata,
-      webhookId: record.webhookId,
-      webhookToken: record.webhookToken,
-      ...record.metadata,
-    }),
-  });
-}
-
 export function createThreadBindingSessionAdapter(params: {
   accountId: string;
   manager: ThreadBindingManager;
-  defaults: ThreadBindingDefaults;
+  defaults: { idleTimeoutMs: number; maxAgeMs: number };
   resolveCurrentCfg: () => OpenClawConfig;
   resolveCurrentToken: () => string | undefined;
 }): SessionBindingAdapter {
-  const serializeBinding = (entry: ThreadBindingRecord) =>
-    toSessionBindingRecord(entry, params.defaults);
+  const serializeBinding = (record: ThreadBindingRecord): SessionBindingRecord => {
+    const defaults = params.defaults;
+    const bindingId = resolveBindingRecordKey(record) ?? `${record.accountId}:${record.threadId}`;
+    const lifecycle = resolvePreparedThreadBindingLifecycle({ record, ...defaults });
+    return projectThreadBindingRecord(record, {
+      conversation: {
+        channel: "discord",
+        conversationId: record.threadId,
+        parentConversationId: record.channelId,
+      },
+      bindingId,
+      targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+      lifecycle,
+      metadata: (lifecycleMetadata) => ({
+        ...lifecycleMetadata,
+        webhookId: record.webhookId,
+        webhookToken: record.webhookToken,
+        ...record.metadata,
+      }),
+    });
+  };
 
   return createAccountScopedBindingAdapter({
     channel: "discord",
@@ -86,10 +73,7 @@ export function createThreadBindingSessionAdapter(params: {
       }
       const conversationId = normalizeOptionalString(input.conversation.conversationId) ?? "";
       const createThread = input.placement === "child";
-      const metadata =
-        asOptionalObjectRecord(
-          snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
-        ) ?? {};
+      const metadata = snapshotThreadBindingMetadata(input) ?? {};
       const targetKind = input.targetKind === "subagent" ? "subagent" : "acp";
       const threadId = createThread ? undefined : conversationId || undefined;
       let channelId: string | undefined;

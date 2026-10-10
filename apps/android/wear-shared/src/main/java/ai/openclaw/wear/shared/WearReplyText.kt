@@ -4,7 +4,6 @@ import ai.openclaw.wear.shared.WearProtocolCodec.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
-import java.security.MessageDigest
 
 /** On-demand pages, not a larger preview or an unbounded Data Layer frame. */
 object WearReplyText {
@@ -27,7 +26,7 @@ object WearReplyText {
   fun revision(
     text: String,
     owner: String,
-  ): String = MessageDigest.getInstance("SHA-256").digest((owner + "\u0000" + text).toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+  ): String = wearSha256Hex(owner + "\u0000" + text)
 
   fun page(
     text: String,

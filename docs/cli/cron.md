@@ -117,6 +117,8 @@ working directory.
 
 Agent-turn jobs default to the creating conversation when session context is available. Without a session key, including ordinary CLI calls and API calls that omit one, the target falls back to `isolated`.
 
+An isolated agent-turn job created from a conversation also captures that conversation's generation for delivery. With `announce` and no explicit or remembered external route, its final result is committed into that conversation while the run remains isolated. Ordinary CLI jobs without a creating session still need a resolvable channel route, webhook delivery, or `--no-deliver`.
+
 <AccordionGroup>
   <Accordion title="Session keys">
     - `main` binds to the agent's main session.
@@ -136,7 +138,7 @@ If session cleanup fails, the error is logged. A removal with no active run also
 
 ## Delivery
 
-`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will fail closed.
 
 If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
 
@@ -154,6 +156,8 @@ Isolated automation chat delivery is shared between the agent and the runner:
 - `announce` fallback-delivers the final reply only when the agent did not send directly to the resolved target.
 - `webhook` posts the finished payload to a URL.
 - `none` disables runner fallback delivery.
+
+For an isolated agent-turn job bound at creation to a routeless conversation, `announce` commits the final visible result there instead. WebChat shows it live and after reload, and retrying the commit does not duplicate it. A deleted or reset creating conversation records a delivery failure. Explicit channel, recipient, account, and thread settings keep normal channel resolution; `webhook` and `none` are unchanged. See [Automation delivery](/automation/cron-jobs/delivery).
 
 Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
@@ -208,6 +212,8 @@ One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delive
 Configured intervals and stagger windows retain millisecond precision in human-readable output: `--every 90s` appears as `every 1m 30s`, and `--stagger 1001ms` as `stagger 1s 1ms`. Use `automations show <job-id>` for the full duration when the list column is truncated. Relative next-run and last-run labels remain rounded.
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
+
+For provider network failures, request timeouts, overloads, rate limits, and server errors (not the job's own execution timeout), the scheduler first re-runs the job after 30s, 1m, and 5m (or at its next scheduled run when sooner), and holds failure alerts and owner repair requests until those re-runs also fail.
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 

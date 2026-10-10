@@ -1,4 +1,4 @@
-import fs, { type BigIntStats } from "node:fs";
+import fs from "node:fs";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FileMutationFingerprint } from "./file-descriptor.js";
@@ -25,17 +25,13 @@ export type SqliteFileGeneration = {
   wal?: SqliteFileFingerprint;
 };
 
-function assertRegularFile(stat: BigIntStats): void {
-  if (!stat.isFile()) {
-    throw new Error("SQLite generation target must be a regular file");
-  }
-}
-
 function fingerprintFile(pathname: string): SqliteFileFingerprint {
   const fd = fs.openSync(pathname, "r");
   try {
     const before = fs.fstatSync(fd, { bigint: true });
-    assertRegularFile(before);
+    if (!before.isFile()) {
+      throw new Error("SQLite generation target must be a regular file");
+    }
     const { sha256 } = hashPublishedFileSync(fs.realpathSync.native(pathname), before);
     const after = fs.fstatSync(fd, { bigint: true });
     const current = fs.statSync(pathname, { bigint: true });

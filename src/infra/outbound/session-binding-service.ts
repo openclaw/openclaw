@@ -157,10 +157,9 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
   const key = buildChannelAccountKey(normalizedAdapter);
   // Registrations are stacked so duplicate module graphs can temporarily
   // coexist and unregister without tearing down the active replacement.
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, [
-    ...(ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? []),
-    { adapter, normalizedAdapter },
-  ]);
+  const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? [];
+  registrations.push({ adapter, normalizedAdapter });
+  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
 }
 
 export function unregisterSessionBindingAdapter(params: {
@@ -180,12 +179,10 @@ export function unregisterSessionBindingAdapter(params: {
   if (registrationIndex < 0) {
     return;
   }
-  const nextRegistrations = registrations.toSpliced(registrationIndex, 1);
-  if (nextRegistrations.length === 0) {
+  registrations.splice(registrationIndex, 1);
+  if (registrations.length === 0) {
     ADAPTERS_BY_CHANNEL_ACCOUNT.delete(key);
-    return;
   }
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, nextRegistrations);
 }
 
 function resolveAdapterForChannelAccount(

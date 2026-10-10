@@ -165,16 +165,12 @@ export async function resolveEmbeddedModelSelection(params: {
     // Durable harness locks own their model metadata and bypass generic repair entirely.
     const initialEntry = sessionEntry;
     const entry = { ...sessionEntry };
-    let entryUpdated = false;
-    if (hasLegacyAutoFallbackWithoutOrigin(entry)) {
-      const { updated } = applyModelOverrideToSessionEntry({
+    const resetToDefaultModel = () =>
+      applyModelOverrideToSessionEntry({
         entry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
-      });
-      if (updated) {
-        entryUpdated = true;
-      }
-    }
+      }).updated;
+    let entryUpdated = hasLegacyAutoFallbackWithoutOrigin(entry) && resetToDefaultModel();
     const repaired = repairProviderWrappedModelOverride({ entry, defaultProvider, defaultModel });
     entryUpdated ||= repaired.updated;
     const directOverride = resolveDirectStoredModelOverride({
@@ -189,10 +185,7 @@ export async function resolveEmbeddedModelSelection(params: {
         model: directOverride.model,
       };
       if (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride)) {
-        const { updated } = applyModelOverrideToSessionEntry({
-          entry,
-          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
-        });
+        const updated = resetToDefaultModel();
         entryUpdated ||= updated;
       }
     }

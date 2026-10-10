@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type * as HeartbeatWake from "../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -10,14 +9,26 @@ const readSessionEntriesMock = vi.hoisted(() => vi.fn());
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntriesFromStoreInWorker: readSessionEntriesMock,
 }));
-const requestHeartbeatMock = vi.hoisted(() => vi.fn());
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof HeartbeatWake>()),
-  requestHeartbeat: requestHeartbeatMock,
+const enqueueSessionEventMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    id: "exec-event",
+    cancel: vi.fn(() => true),
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  })),
+);
+// mock-isolation: Keep session lookup and reply turns outside unavailable-worker process cases.
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: sessionKey,
+    generation: "test",
+  }),
+  enqueueSessionEventForHost: enqueueSessionEventMock,
 }));
 beforeEach(() => {
   readSessionEntriesMock.mockReset().mockRejectedValue(new Error("session worker unavailable"));
-  requestHeartbeatMock.mockClear();
+  enqueueSessionEventMock.mockClear();
 });
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -66,7 +77,7 @@ test("starts and notifies when the session worker fails, then resolves child ide
         entries: [{ sessionKey, entry: { spawnedBy: "agent:main:main", spawnDepth: 1 } }],
       });
     }
-    requestHeartbeatMock.mockClear();
+    enqueueSessionEventMock.mockClear();
     const started = await exec.execute("notification-possible", {
       command: nodeCommand('process.stdout.write("EXEC_STARTED"); process.exitCode = 1'),
       background: true,
@@ -76,7 +87,7 @@ test("starts and notifies when the session worker fails, then resolves child ide
       throw new Error("Expected a background process");
     }
     await waitForExecScope(sessionKey);
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(recovered ? 0 : 1);
+    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(recovered ? 0 : 1);
     const result = await processTool.execute("collect", {
       action: "poll",
       sessionId: started.details.sessionId,

@@ -1,10 +1,12 @@
-import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  SkillsWorkshopChangesResult,
+  SkillsWorkshopListResult,
+} from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -18,7 +20,7 @@ import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
-import { formatCliRequirements } from "./skills-hooks-cli.format.js";
+import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
 
 type SkillsListOptions = {
   json?: boolean;
@@ -162,35 +164,21 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     return appendClawHubHint(message);
   }
 
-  const ready = skills.filter(isReadyForAgent);
-  const tableWidth = getTerminalTableWidth();
-  const rows = skills.map((skill) => ({
-    Status: formatSkillStatus(skill),
-    Skill: formatSkillName(skill),
-    Description: theme.muted(skill.description),
-    Source: skill.source,
-    Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
-  }));
-
-  const columns = [
-    { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Skill", header: "Skill", minWidth: 22 },
-    { key: "Description", header: "Description", minWidth: 24, flex: true },
-    { key: "Source", header: "Source", minWidth: 10 },
-  ];
-  if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
-  }
-
   return appendClawHubHint(
-    [
-      `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
-      renderTable({
-        width: tableWidth,
-        columns,
-        rows,
-      }).trimEnd(),
-    ].join("\n"),
+    formatCliStatusTable({
+      title: "Skills",
+      ready: skills.filter(isReadyForAgent).length,
+      nameColumn: { key: "Skill", header: "Skill", minWidth: 22 },
+      sourceColumn: { key: "Source", header: "Source", minWidth: 10 },
+      verbose: opts.verbose,
+      rows: skills.map((skill) => ({
+        Status: formatSkillStatus(skill),
+        Skill: formatSkillName(skill),
+        Description: theme.muted(skill.description),
+        Source: skill.source,
+        Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+      })),
+    }),
   );
 }
 
@@ -399,49 +387,39 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   return appendClawHubHint(lines.join("\n"));
 }
 
-export function formatSkillCuratorStatus(status: SkillsCuratorCompatibleStatusResult): string {
-  const timestamp = (value: number | null) =>
-    value === null ? "never" : new Date(value).toISOString();
+export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
   const lines = [
-    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
-    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
-    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
+    `${theme.muted("Agent:")} ${sanitizeForLog(result.agentId)}  ${theme.muted("Mode:")} ${result.mode}`,
+    `${theme.muted("Root:")} ${shortenHomePath(result.root)}`,
+    "",
   ];
-  if (!("inventory" in status)) {
+  if (result.skills.length === 0) {
+    lines.push("No learned skills.");
+  }
+  for (const skill of result.skills) {
+    const uses = skill.useCount === undefined ? "" : `  uses=${skill.useCount}`;
     lines.push(
-      "Legacy inventory: this Gateway reports limited coverage. Upgrade the Gateway for current Workshop inventory.",
+      `${theme.command(sanitizeForLog(skill.name))}  updated ${formatTimeAgo(Math.max(0, Date.now() - skill.updatedAtMs))}${uses}  ${sanitizeForLog(skill.description)}`,
     );
   }
-  if (status.lastError) {
-    lines.push(`Last error: ${status.lastError}`);
-  }
-  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
-  for (const review of Object.values(status.collectionReview ?? {})) {
-    lines.push(
-      `Collection review: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
-    );
-  }
-  for (const [workspace, review] of Object.entries(status.experienceReview ?? {})) {
-    lines.push(
-      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
-    );
-  }
-  const keyCounts = new Map<string, number>();
-  for (const skill of status.skills) {
-    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
-  }
-  for (const skill of status.skills) {
-    const pinned = skill.pinned ? " pinned" : "";
-    const lastUsed =
-      skill.lastUsedAtMs === null ? "not recorded" : new Date(skill.lastUsedAtMs).toISOString();
-    const label =
-      keyCounts.get(skill.skillKey) === 1
-        ? skill.skillKey
-        : `${skill.skillKey} (${skill.skillFile})`;
-    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
-  }
-  for (const overlap of status.overlaps) {
-    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
+  const archived = result.archived.filter((entry) => !entry.live);
+  if (archived.length > 0) {
+    lines.push("", theme.heading("Archived:"));
+    for (const entry of archived) {
+      lines.push(`${sanitizeForLog(entry.name)}  versions=${entry.versions.length}`);
+    }
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function formatSkillsWorkshopChanges(result: SkillsWorkshopChangesResult): string {
+  if (result.changes.length === 0) {
+    return "No Workshop changes.\n";
+  }
+  return `${result.changes
+    .map((change) => {
+      const version = change.versionId ? `  version=${change.versionId}` : "";
+      return `${formatTimeAgo(Math.max(0, Date.now() - change.createdAtMs))}  ${change.actor}  ${change.action}  ${sanitizeForLog(change.skillName)}  ${sanitizeForLog(change.summary)}${version}`;
+    })
+    .join("\n")}\n`;
 }

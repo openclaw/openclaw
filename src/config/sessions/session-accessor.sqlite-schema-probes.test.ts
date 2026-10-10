@@ -33,9 +33,11 @@ import * as identityPublication from "./session-accessor.sqlite-identity.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
   measureSessionSchemaProbes,
+  measureSqliteSchemaProbes,
   type SessionProbeOperations,
 } from "./session-accessor.sqlite-schema-probes.test-support.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -134,6 +136,31 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       expect(result.schemaVersion).toBe(0);
       expect(result.userVersion).toBe(0);
       expect(result.dataVersion).toBeLessThanOrEqual(100);
+    }
+    // Exercise both native execution paths with statements retained before observation.
+    const probeGroups = [
+      ["schema_version", "user_version", "data_version"].map((name) =>
+        writer.db.prepare(`PRAGMA ${name}`),
+      ),
+      [
+        writer.db.prepare(`SELECT schema_version, user_version, data_version
+          FROM main.pragma_schema_version(), main.pragma_user_version(), main.pragma_data_version()`),
+      ],
+    ];
+    for (const statements of probeGroups) {
+      for (const method of ["get", "all", "iterate"] as const) {
+        const probes = measureSqliteSchemaProbes(writer.db, () => {
+          for (const statement of statements) {
+            if (method === "iterate") {
+              Array.from(statement.iterate());
+            } else {
+              statement[method]();
+            }
+          }
+          return true;
+        });
+        expect(probes).toMatchObject({ schemaVersion: 100, userVersion: 100, dataVersion: 100 });
+      }
     }
     if (typeof writer.db.setAuthorizer === "function") {
       let allowed = true;
@@ -272,7 +299,7 @@ it.each<{
     for (const { entry } of entries.filter(({ entry: candidate }) => candidate.skillsSnapshot)) {
       expect(entry.skillsSnapshot).toEqual(saved);
     }
-    expect(entries).toHaveLength(scope.cronRetention ? 6 : fullKeys.length);
+    expect(entries.map(({ sessionKey }) => sessionKey)).toEqual(fullKeys);
   },
 );
 
@@ -356,10 +383,10 @@ describe.each([
 it("retains unrelated canonical-key errors for an empty selection", () => {
   const { database, read } = fixture(listSessionEntriesReadOnly);
   read();
-  // Raw DML after validation must not disappear behind an unrelated selection.
+  // Explicitly pending repair rows must not disappear behind an unrelated selection.
   database.db
     .prepare(
-      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at) VALUES(?, ?, ?, ?)",
+      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES(?, ?, ?, ?, 1)",
     )
     .run(
       "AGENT:MAIN:UNRELATED",
@@ -367,6 +394,7 @@ it("retains unrelated canonical-key errors for an empty selection", () => {
       JSON.stringify({ sessionId: "unrelated", updatedAt: 1 }),
       1,
     );
+  markCanonicalSessionValidationPending(database, ["AGENT:MAIN:UNRELATED"]);
   expect(() => read([])).toThrow("non-canonical persisted row");
 });
 
@@ -388,6 +416,7 @@ it("validates unrelated warm delivery aliases before selecting listing keys", ()
   database.db
     .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
     .run(JSON.stringify(entry), legacyKey);
+  markCanonicalSessionValidationPending(database, [legacyKey]);
   expect(() => read(["agent:main:a"])).toThrow(
     `non-canonical persisted row resolves to session key ${canonicalKey}`,
   );

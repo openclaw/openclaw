@@ -49,7 +49,7 @@ type SubmissionDependencies = NativeSubmissionCallDependencies & {
     assignment: NativeSubagentAssignment,
     options: { admitAssignment: true; completionCustody?: AgentHarnessCompletionCustody },
   ) => ChildState | undefined;
-  admitFollowup: (known: KnownChild, threadId: string) => ChildState | undefined;
+  admitFollowup: (known: KnownChild) => ChildState | undefined;
   resumeChild: (child: ChildState) => void;
   completeChild: (notification: CodexServerNotification, child: ChildState) => Promise<void>;
   retain: (state: ParentState, childThreadId: string) => () => void;
@@ -340,14 +340,7 @@ export class CodexNativeSubagentSubmissionOwner {
   ): void {
     if (
       !this.isObserving(state, custody) ||
-      !this.admitTurn(
-        state,
-        custody.receipt,
-        turn,
-        custody.owner,
-        historyValidated,
-        custody.completionCustody,
-      )
+      !this.admitTurn(state, custody, turn, historyValidated)
     ) {
       return;
     }
@@ -447,11 +440,9 @@ export class CodexNativeSubagentSubmissionOwner {
 
   private admitTurn(
     state: ParentState,
-    receipt: CodexNativeSubagentSubmission,
+    { receipt, owner, completionCustody }: SubmissionCustody,
     turn: JsonObject,
-    owner: ParentOwner | undefined,
     historyValidated: boolean,
-    completionCustody: AgentHarnessCompletionCustody | undefined,
   ): boolean {
     if (
       readString(turn, "id") !== receipt.submissionId ||
@@ -526,7 +517,7 @@ export class CodexNativeSubagentSubmissionOwner {
         pending.admittedOwner = owner;
         owner.onDirectChildAccepted?.();
       }
-      this.dependencies.admitFollowup(known, receipt.childThreadId);
+      this.dependencies.admitFollowup(known);
     }
     const child = this.dependencies.currentChild(receipt.childThreadId);
     if (child?.runId !== runId) {

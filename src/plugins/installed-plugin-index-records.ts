@@ -3,11 +3,11 @@ import { copyPluginInstallRecordMap } from "../config/plugin-install-record-map.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
-  refreshPersistedInstalledPluginIndexWithLeaseSync,
-  type InstalledPluginIndexWriteLease,
+  refreshPersistedInstalledPluginIndexWithReceipt,
   type InstalledPluginIndexWriteReceipt,
 } from "./installed-plugin-index-store-write.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
+import type { PluginLifecycleLeaseContext } from "./plugin-lifecycle-lease.js";
 export { recordPluginInstallInRecords } from "./installs.js";
 export {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -35,10 +35,12 @@ type InstalledPluginIndexRecordRefreshOptions = InstalledPluginIndexRecordStoreO
 export async function writePersistedInstalledPluginIndexInstallRecordsWithLease(
   records: Record<string, PluginInstallRecord>,
   options: InstalledPluginIndexRecordRefreshOptions & {
-    lease: InstalledPluginIndexWriteLease;
+    lease: PluginLifecycleLeaseContext;
+    assertCurrent?: () => void;
+    onAcknowledged?: (receipt: InstalledPluginIndexWriteReceipt) => void;
   },
 ): Promise<InstalledPluginIndexWriteReceipt> {
-  const { index: _index, ...receipt } = refreshPersistedInstalledPluginIndexWithLeaseSync({
+  const { index: _index, ...receipt } = await refreshPersistedInstalledPluginIndexWithReceipt({
     ...options,
     reason: "source-changed",
     installRecords: records,

@@ -17,7 +17,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   reserveAgentTerminalEvent,
   getAgentEventLifecycleGeneration,
-  type AgentEventPayload,
 } from "../infra/agent-events.js";
 import {
   releaseAgentRunDelegatedAuthority,
@@ -25,17 +24,16 @@ import {
 } from "../infra/agent-run-registry.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
-import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
+import {
+  markChatAbortTerminalOutcome,
+  removeChatAbortControllerEntry,
+} from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
+import { projectInFlightRunSnapshot, type InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
-import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
-import {
-  createChatAbortMarker,
-  type ChatRunPlanSnapshot,
-  type ChatRunState,
-} from "./server-chat-state.js";
+import { createChatAbortMarker, type ChatRunState } from "./server-chat-state.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   resolveSessionSubscriptionKey,
@@ -54,44 +52,6 @@ export type RestartRecoveryCandidate = {
   sessionId: string;
   observedAt?: number;
 };
-
-export type InFlightRunSnapshot = {
-  runId: string;
-  text: string;
-  startedAt?: number;
-  /**
-   * True when the in-flight run is owned by the embedded-run registry and can
-   * only be cancelled through the session-owned abort path (sessions.abort),
-   * never through run-specific chat.abort. Control UI uses this to keep Stop
-   * routing session-scoped for recovered embedded runs.
-   */
-  sessionAbortable?: boolean;
-  plan?: ChatRunPlanSnapshot;
-  events?: AgentEventPayload[];
-};
-
-export function projectInFlightRunSnapshot(params: {
-  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
-  runId: string;
-  startedAtMs?: number;
-  sessionAbortable?: boolean;
-}): InFlightRunSnapshot {
-  const run = params.chatRunState.runs.get(params.runId);
-  const projected = projectLiveAssistantBufferedText(
-    params.chatRunState.resolveBuffer(params.runId).text,
-    { suppressLeadFragments: true },
-  );
-  const plan = run?.planSnapshot;
-  const events = run?.progressSnapshot?.events;
-  return {
-    runId: params.runId,
-    text: projected.suppress ? "" : projected.text,
-    ...(params.startedAtMs === undefined ? {} : { startedAt: params.startedAtMs }),
-    ...(params.sessionAbortable ? { sessionAbortable: true } : {}),
-    ...(plan ? { plan } : {}),
-    ...(events?.length ? { events } : {}),
-  };
-}
 
 type RegisteredChatAbortController = {
   controller: AbortController;
@@ -173,6 +133,7 @@ export function registerChatAbortController(params: {
     entry: ChatAbortControllerEntry,
   ) => ReturnType<NonNullable<ChatAbortControllerEntry["resolveTerminalProducer"]>>;
   onRemoved?: () => void;
+  onQueueTimeout?: (entry: ChatAbortControllerEntry) => void;
   kind?: ChatAbortControllerEntry["kind"];
   turnKind?: ChatAbortControllerEntry["turnKind"];
   lifecycleGeneration?: string;
@@ -180,7 +141,20 @@ export function registerChatAbortController(params: {
   now?: number;
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
+  const rawNow = params.now ?? Date.now();
+  const queueDeadlineMs = resolveExpiresAtMsFromDurationMs(params.timeoutMs, { nowMs: rawNow });
   const controller = new AbortController();
+  let queueTimer: ReturnType<typeof setTimeout> | undefined;
+  const isStopped = (entry: ChatAbortControllerEntry) =>
+    entry.registrationCleanupRequested ||
+    controller.signal.aborted ||
+    entry.abortStopReason !== undefined ||
+    entry.projectSessionTerminalPending === true ||
+    entry.projectSessionTerminalObservedAt !== undefined;
+  const onAbort = () => {
+    clearTimeout(queueTimer);
+    notifyGatewayWorkMetricsChanged();
+  };
   const bindAgentRunDelegatedAuthority = (authority: AgentRunDelegatedAuthority) => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (
@@ -202,15 +176,16 @@ export function registerChatAbortController(params: {
       return false;
     }
     const entry = params.chatAbortControllers.get(params.runId);
-    if (
-      entry?.controller !== controller ||
-      entry.registrationCleanupRequested ||
-      controller.signal.aborted
-    ) {
+    if (entry?.controller !== controller || isStopped(entry)) {
+      return false;
+    }
+    if (params.onQueueTimeout && !isFutureDateTimestampMs(queueDeadlineMs, { nowMs: Date.now() })) {
+      params.onQueueTimeout(entry);
       return false;
     }
     executionStarted = true;
     entry.executionStarted = true;
+    clearTimeout(queueTimer);
     if (entry.kind !== "agent") {
       return true;
     }
@@ -225,6 +200,7 @@ export function registerChatAbortController(params: {
     return true;
   };
   const cleanup = () => {
+    clearTimeout(queueTimer);
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       // This registration carries the exact operational instance. Close its
@@ -280,7 +256,6 @@ export function registerChatAbortController(params: {
     };
   }
 
-  const rawNow = params.now ?? Date.now();
   const now = resolveDateTimestampMs(rawNow, 0);
   const explicitExpiresAtMs =
     params.expiresAtMs === undefined ? undefined : (asDateTimestampMs(params.expiresAtMs) ?? 0);
@@ -306,7 +281,8 @@ export function registerChatAbortController(params: {
       ? () => params.resolveTerminalProducer?.(entry)
       : undefined,
     onRemoved: () => {
-      controller.signal.removeEventListener("abort", notifyGatewayWorkMetricsChanged);
+      clearTimeout(queueTimer);
+      controller.signal.removeEventListener("abort", onAbort);
       notifyGatewayWorkMetricsChanged();
       params.onRemoved?.();
     },
@@ -315,7 +291,20 @@ export function registerChatAbortController(params: {
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
-  controller.signal.addEventListener("abort", notifyGatewayWorkMetricsChanged, { once: true });
+  if (params.onQueueTimeout) {
+    // The maintenance expiry includes execution grace and cannot own a queued deadline.
+    queueTimer = setTimeout(() => {
+      if (
+        params.chatAbortControllers.get(params.runId) === entry &&
+        entry.executionStarted === false &&
+        !isStopped(entry)
+      ) {
+        params.onQueueTimeout?.(entry);
+      }
+    }, params.timeoutMs);
+    queueTimer.unref();
+  }
+  controller.signal.addEventListener("abort", onAbort, { once: true });
   notifyGatewayWorkMetricsChanged();
   return {
     controller,
@@ -555,6 +544,7 @@ export function abortChatRunById(
     // Transcript handoff failure cannot prevent an already accepted cancellation.
   }
   active.projectSessionActive = false;
+  markChatAbortTerminalOutcome(active);
   // Reserve terminal ownership before abort listeners run; synchronous caller
   // cleanup must not erase the entry before Gateway observes the event below.
   active.projectSessionTerminalPending = true;

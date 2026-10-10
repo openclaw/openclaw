@@ -58,7 +58,6 @@ export type ActiveInference = {
   identity: WorkerConnectionIdentity;
   request: WorkerInferenceStartParams;
   sessionTarget: BoundAgentRunSessionTarget;
-  requestHash: string;
   storeInput: WorkerInferenceTurnInput;
   sink: WorkerInferenceSink;
   sinkReady: boolean;

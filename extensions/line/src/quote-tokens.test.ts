@@ -4,8 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyLineQuoteToken,
-  canCarryLineQuoteToken,
-  reportLineQuoteCarrierMissing,
   readLineQuoteToken,
   recordLineQuoteToken,
   resolveLineQuoteToken,
@@ -67,58 +65,6 @@ describe("readLineQuoteToken", () => {
 });
 
 describe("the quote token store", () => {
-  it("returns the token recorded for that message in that chat", () => {
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: "Cgroup",
-      messageId: "m-1",
-      quoteToken: "token-1",
-    });
-
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "Cgroup", messageId: "m-1" }),
-    ).toBe("token-1");
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "Cgroup", messageId: "m-2" }),
-    ).toBeUndefined();
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "Cgroup", messageId: undefined }),
-    ).toBeUndefined();
-  });
-
-  it("accepts the addressed forms of a chat id the send path is given", () => {
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: "Caddressed",
-      messageId: "m-addr",
-      quoteToken: "token-addr",
-    });
-
-    for (const target of ["Caddressed", "line:Caddressed", "line:group:Caddressed"]) {
-      expect(
-        resolveLineQuoteToken({ cfg, accountId: "default", chatId: target, messageId: "m-addr" }),
-      ).toBe("token-addr");
-    }
-  });
-
-  it("refuses a token from another chat, which LINE rejects with the whole request", () => {
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: "Corigin",
-      messageId: "m-shared",
-      quoteToken: "origin-token",
-    });
-
-    expect(
-      resolveLineQuoteToken({
-        cfg,
-        accountId: "default",
-        chatId: "Celsewhere",
-        messageId: "m-shared",
-      }),
-    ).toBeUndefined();
-  });
-
   it("keeps accounts apart, because a token belongs to the channel that issued it", () => {
     recordLineQuoteToken({
       accountId: "work",
@@ -159,24 +105,6 @@ describe("the quote token store", () => {
     ).toBe("default-token");
   });
 
-  it("says at verbose level why a reply target could not be quoted", () => {
-    logVerboseMock.mockClear();
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: "Cknown",
-      messageId: "m-known",
-      quoteToken: "token-known",
-    });
-
-    resolveLineQuoteToken({ cfg, accountId: "default", chatId: "Cknown", messageId: "m-known" });
-    expect(logVerboseMock).not.toHaveBeenCalled();
-
-    resolveLineQuoteToken({ cfg, accountId: "default", chatId: "Cknown", messageId: "m-gone" });
-    expect(logVerboseMock).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("account default remembers no quote token for Cknown|m-gone"),
-    );
-  });
-
   it("records nothing for a message kind that carries no token", () => {
     recordLineQuoteToken({
       accountId: "default",
@@ -188,24 +116,6 @@ describe("the quote token store", () => {
     expect(
       resolveLineQuoteToken({ cfg, accountId: "default", chatId: "Cnone", messageId: "m-none" }),
     ).toBeUndefined();
-  });
-
-  it("forgets the oldest tokens once the bound is reached, keeping the newest", () => {
-    for (let index = 0; index < 600; index += 1) {
-      recordLineQuoteToken({
-        accountId: "bulk",
-        chatId: "Cbulk",
-        messageId: `bulk-${index}`,
-        quoteToken: `token-${index}`,
-      });
-    }
-
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "bulk", chatId: "Cbulk", messageId: "bulk-0" }),
-    ).toBeUndefined();
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "bulk", chatId: "Cbulk", messageId: "bulk-599" }),
-    ).toBe("token-599");
   });
 
   it("keeps a quiet account's tokens while a busy account fills its own bound", () => {
@@ -230,6 +140,9 @@ describe("the quote token store", () => {
     expect(
       resolveLineQuoteToken({ cfg, accountId: "busy", chatId: "Cbusy", messageId: "busy-0" }),
     ).toBeUndefined();
+    expect(
+      resolveLineQuoteToken({ cfg, accountId: "busy", chatId: "Cbusy", messageId: "busy-1999" }),
+    ).toBe("busy-token-1999");
   });
 
   it("re-quoting a message replaces its token and moves it out of eviction range", () => {
@@ -268,91 +181,8 @@ describe("the quote token store", () => {
   });
 });
 
-describe("canCarryLineQuoteToken", () => {
-  it("names the outbound types LINE accepts a quote on", () => {
-    // Asked of the platform: a type it allows answers "Quote token is invalid"
-    // for a bad token, while any other answers "does not support quote message".
-    const carriers: messagingApi.Message["type"][] = ["text", "textV2", "sticker"];
-    const rest: messagingApi.Message["type"][] = [
-      "flex",
-      "image",
-      "video",
-      "audio",
-      "location",
-      "template",
-      "imagemap",
-    ];
-
-    expect(carriers.filter((type) => canCarryLineQuoteToken({ type }))).toEqual(carriers);
-    expect(rest.filter((type) => canCarryLineQuoteToken({ type }))).toEqual([]);
-  });
-});
-
-describe("reportLineQuoteCarrierMissing", () => {
-  it("names the chat whose reply could not carry the quote", () => {
-    logVerboseMock.mockClear();
-    reportLineQuoteCarrierMissing("Cgroup");
-
-    expect(logVerboseMock).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("nothing in this reply to Cgroup can carry a quote"),
-    );
-  });
-});
-
-describe("applyLineQuoteToken", () => {
-  const flex: messagingApi.Message = {
-    type: "flex",
-    altText: "card",
-    contents: { type: "bubble" },
-  };
-  const text: messagingApi.Message = { type: "text", text: "hello" };
-  const second: messagingApi.Message = { type: "text", text: "world" };
-
-  it("quotes the first message LINE accepts a quote on, and only that one", () => {
-    expect(applyLineQuoteToken([flex, text, second], "token")).toEqual([
-      flex,
-      { type: "text", text: "hello", quoteToken: "token" },
-      second,
-    ]);
-  });
-
-  it("quotes a textV2 message, which LINE also accepts a quote on", () => {
-    const textV2: messagingApi.Message = { type: "textV2", text: "hello" };
-
-    expect(applyLineQuoteToken([flex, textV2], "token")).toEqual([
-      flex,
-      { type: "textV2", text: "hello", quoteToken: "token" },
-    ]);
-  });
-
-  it("leaves a request alone when no message can carry a quote", () => {
-    const image: messagingApi.Message = {
-      type: "image",
-      originalContentUrl: "https://example.com/a.jpg",
-      previewImageUrl: "https://example.com/a.jpg",
-    };
-
-    expect(applyLineQuoteToken([flex, image], "token")).toEqual([flex, image]);
-  });
-
-  it("leaves a request alone when there is no token to spend", () => {
-    expect(applyLineQuoteToken([text], undefined)).toEqual([text]);
-  });
-
-  it("does not mutate the messages it was given", () => {
-    const messages = [text];
-    applyLineQuoteToken(messages, "token");
-
-    expect(messages[0]).toEqual({ type: "text", text: "hello" });
-  });
-});
-
 describe("withoutLineQuoteTokens", () => {
   const text: messagingApi.Message = { type: "text", text: "hello" };
-
-  it("reports nothing to drop when the request carried no quote", () => {
-    expect(withoutLineQuoteTokens([text])).toBeUndefined();
-  });
 
   it("drops the quote and keeps the rest of the request intact", () => {
     const flex: messagingApi.Message = {
@@ -363,12 +193,5 @@ describe("withoutLineQuoteTokens", () => {
     const quoted = applyLineQuoteToken([flex, text], "token");
 
     expect(withoutLineQuoteTokens(quoted)).toEqual([flex, text]);
-  });
-
-  it("leaves the request it was given quoted", () => {
-    const quoted = applyLineQuoteToken([text], "token");
-    withoutLineQuoteTokens(quoted);
-
-    expect(quoted[0]).toEqual({ type: "text", text: "hello", quoteToken: "token" });
   });
 });

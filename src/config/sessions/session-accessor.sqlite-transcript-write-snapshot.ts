@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -29,6 +30,7 @@ import type {
   TranscriptMessageAppendOptions,
 } from "./session-accessor.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { readTranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -46,7 +48,18 @@ export async function prepareNativeLockedAppend<T>(
   scope: SessionTranscriptWriteScope,
   options: LockedTranscriptMessageAppendOptions<T>,
 ): Promise<(database: OpenClawAgentDatabase) => TranscriptMessageAppendOptions<T>> {
-  const { prepareMessageAfterIdempotencyCheckAsync: prepare, ...retained } = options;
+  const { preparation, prepareMessageAfterIdempotencyCheckAsync, ...legacy } = options;
+  const prepare = preparation?.prepareMessage ?? prepareMessageAfterIdempotencyCheckAsync;
+  const retained = {
+    ...legacy,
+    ...(preparation?.source ? { beforeFreshMessageCommit: preparation.source } : {}),
+  };
+  if (
+    preparation &&
+    (options.prepareMessageAfterIdempotencyCheck || options.beforeFreshMessageCommit)
+  ) {
+    throw new Error("Choose preparation or the legacy transcript callback form, not both.");
+  }
   if (!prepare) {
     return () => retained;
   }
@@ -123,13 +136,19 @@ export function runTranscriptWriteSnapshotSync<T>(
       }
       const lifecycleRevision = fresh?.entry.lifecycleRevision;
       const value = operation(database, resolved);
+      const postimage = readTranscriptAppendPostimage(value);
       view?.assertCurrent();
       assertOwnedTranscriptWriteCommit(fencedScope);
       return ok({
         result: value,
         lifecycleRevision,
         before,
-        after: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+        // Hooks may write after the append. Reuse only within its unchanged native snapshot.
+        after:
+          postimage?.anchor.sessionId === resolved.sessionId &&
+          getSqliteReadScopeRevision(database.db) === postimage.revision
+            ? { ...postimage.version }
+            : readTranscriptContextVersionInTransaction(database, resolved.sessionId),
       });
     },
     toDatabaseOptions(resolved),

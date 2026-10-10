@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MessageFlags } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -35,8 +36,6 @@ import {
 } from "./retry.js";
 import { createDiscordMessageNonce } from "./send.message-request.js";
 
-const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
-const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
@@ -96,14 +95,6 @@ async function getAudioDuration(filePath: string): Promise<number> {
   } catch (err) {
     const errMessage = formatErrorMessage(err);
     throw new Error(`Failed to get audio duration: ${errMessage}`, { cause: err });
-  }
-}
-
-async function generateWaveform(filePath: string): Promise<string> {
-  try {
-    return await generateWaveformFromPcm(filePath);
-  } catch {
-    return generatePlaceholderWaveform();
   }
 }
 
@@ -217,7 +208,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
  * Wait for waveform cleanup before callers can release the audio input.
  */
 export async function getVoiceMessageMetadata(filePath: string): Promise<VoiceMessageMetadata> {
-  const waveform = generateWaveform(filePath);
+  const waveform = generateWaveformFromPcm(filePath).catch(generatePlaceholderWaveform);
   try {
     return { durationSecs: await getAudioDuration(filePath), waveform: await waveform };
   } finally {
@@ -392,7 +383,7 @@ export async function sendDiscordVoiceMessage(
     return attachment;
   }, "voice-upload");
 
-  const flags = DISCORD_VOICE_MESSAGE_FLAG | (silent ? SUPPRESS_NOTIFICATIONS_FLAG : 0);
+  const flags = MessageFlags.IsVoiceMessage | (silent ? MessageFlags.SuppressNotifications : 0);
   const messagePayload = {
     flags,
     nonce: createDiscordMessageNonce(),

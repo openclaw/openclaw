@@ -114,6 +114,36 @@ the next Plugin SDK major. See the [migration table](/plugins/sdk-migration/how-
 for every replacement, return value, and the additive extension and provider
 replay APIs. Transcript formats, schemas, and update behavior are unchanged.
 
+## Native assistant persistence
+
+Assistant producers should reuse the committed row's `idempotencyKey` as the
+live `assistant` event's `itemId`. The Gateway retires that exact occurrence
+when its run-owned commit is published, including corrections that arrive
+after persistence. Separate occurrences need separate identities even when
+their text is identical.
+
+Native harnesses that publish committed assistant rows with
+`publishSessionTranscriptUpdateByIdentity` from
+`openclaw/plugin-sdk/session-transcript-runtime` can include
+`update.assistantItemIds`. These are the exact `assistant` stream item IDs whose
+live display the committed row replaces or supersedes. Capture the IDs before
+awaiting persistence, and publish only after the row commits or an exact
+idempotent persistence receipt confirms it. An empty array still identifies a
+native row with no preceding streamed item. The persisted row's existing
+idempotency key also identifies a later canonical assistant frame.
+
+This field is display provenance, not terminal or run authorization. Existing
+session and run ownership checks still apply. It is internal to the host's
+transcript notification path: do not put it in the persisted message or public
+gateway events. Independently owned keyed commentary and async rows omit it.
+When steering commits a completed item, include only that item's ID; a later
+unfinished item remains live even if its text repeats the committed row.
+
+The Gateway does not infer ownership from text. An unkeyed producer's text
+stays in the live tail until an identity-bearing commit can own it or the run
+terminates. Such a producer can temporarily show a duplicate durable row;
+the Gateway favors preserving unsaved text over guessing which occurrence to hide.
+
 ## Bounded model context
 
 Use `await SessionManager.openModelContextAsync(...)` from
@@ -255,7 +285,8 @@ the provider's own awaited work.
     **Session store helpers** are under `api.runtime.agent.session`:
 
     ```typescript
-    const entry = api.runtime.agent.session.getSessionEntry({ agentId, sessionKey });
+    const entry = await api.runtime.agent.session.getSessionEntryAsync({ agentId, sessionKey });
+    const match = await api.runtime.agent.session.getSessionEntryByIdAsync({ agentId, sessionId });
     for (const { sessionKey, entry } of api.runtime.agent.session.listSessionEntries({ agentId })) {
       // Iterate session rows without depending on the legacy sessions.json shape.
     }
@@ -287,7 +318,13 @@ the provider's own awaited work.
     );
     ```
 
-    Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
+    Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
+
+    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and will be removed at the next Plugin SDK major. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
+
+    By default, `getSessionEntryByIdAsync(...)` chooses the first visible exact ID match in session-key order, falling back to trimmed legacy IDs only when there is no exact match. Pass `orderBy: "updatedAt"` to choose the most recently updated match across exact and trimmed IDs, with session-key order breaking ties. Active Memory uses this option to preserve its most-recent-session selection.
+
+    Incognito actor support is inactive preparation: ordinary unbound incognito calls still use the existing host-owned store and allocate no actor. Explicit host bindings exercise the actor arm; fresh selected absence remains distinct from an ended retained actor. `rethrowIncognitoSessionError(error)` preserves those typed refusals in optional-read error handlers. Active Memory awaits entry, eligibility, and status preparation and does not turn actor loss into empty recall. No schema, retention, or update migration is introduced.
 
     When patch authority can change while `update` awaits, pass `assertCommitAllowed: () => void`. The storage owner calls this synchronous guard inside the commit transaction; throw to reject the entire patch. Keep network requests and other asynchronous work in `update`.
 

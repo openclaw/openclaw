@@ -1,4 +1,4 @@
-import { ButtonStyle, Routes } from "discord-api-types/v10";
+import { ButtonStyle } from "discord-api-types/v10";
 import {
   createChannelApprovalNativeRuntimeAdapter,
   type ApprovalViewModel,
@@ -27,6 +27,7 @@ import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
   Button,
   Container,
+  createChannelMessage,
   createUserDmChannel,
   deleteChannelMessage,
   editChannelMessage,
@@ -213,25 +214,19 @@ async function finalizeMessage(params: {
         token: params.token,
         accountId: params.accountId,
       });
+      let request: () => Promise<unknown>;
       if (operation === "delete") {
-        await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-          discordRequest(
-            () => deleteChannelMessage(rest, params.channelId, params.messageId),
-            "delete-approval",
-          ),
-        );
+        request = () => deleteChannelMessage(rest, params.channelId, params.messageId);
       } else {
         const payload = buildExecApprovalPayload(params.container);
-        await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-          discordRequest(
-            () =>
-              editChannelMessage(rest, params.channelId, params.messageId, {
-                body: stripUndefinedFields(serializePayload(payload)),
-              }),
-            "update-approval",
-          ),
-        );
+        request = () =>
+          editChannelMessage(rest, params.channelId, params.messageId, {
+            body: stripUndefinedFields(serializePayload(payload)),
+          });
       }
+      await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
+        discordRequest(request, `${operation}-approval`),
+      );
       return;
     } catch (err) {
       logError(`discord approvals: failed to ${operation} message: ${String(err)}`);
@@ -319,10 +314,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         accountId: resolved.accountId,
       });
       const userId = plannedTarget.target.to;
-      const dmChannel = (await discordRequest(
-        () => createUserDmChannel(rest, userId),
-        "dm-channel",
-      )) as { id: string };
+      const dmChannel = await discordRequest(() => createUserDmChannel(rest, userId), "dm-channel");
       if (!dmChannel?.id) {
         logError(`discord approvals: failed to create DM for user ${userId}`);
         return null;
@@ -359,11 +351,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         nonce: createDiscordMessageNonce(),
         enforce_nonce: true,
       };
-      const message = (await discordRequest(
-        () => rest.post(Routes.channelMessages(preparedTarget.discordChannelId), { body }),
+      const message = await discordRequest(
+        () => createChannelMessage(rest, preparedTarget.discordChannelId, { body }),
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
         { safety: "nonce-protected-create" },
-      )) as { id: string; channel_id: string };
+      );
       if (!message?.id) {
         if (plannedTarget.surface === "origin") {
           logError("discord approvals: failed to send to channel");

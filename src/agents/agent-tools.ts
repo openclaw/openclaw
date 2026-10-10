@@ -349,12 +349,14 @@ function* assembleOpenClawCodingTools(
     accountId: options?.agentAccountId,
     channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
   });
+  const sessionEventToolsAllow: string[] = [];
   const wrapGatewayCaller = createCodingToolsGatewayCaller({
     options,
     agentId: executionAgentId,
     sessionKey: executionSessionKey,
     accountId: gatewayCaller.accountId,
     capabilityProfile,
+    sessionEventToolsAllow,
   });
   const pluginToolOptions = {
     ...options,
@@ -383,11 +385,9 @@ function* assembleOpenClawCodingTools(
         }),
     options?.clientCaps,
   );
-  // Provider flushes must not regain setup tools outside their declared projection.
+  // Neither flush arm may regain execution tools outside its persistence projection.
   const ringZeroTools =
-    includeOpenClawTools && !(isMemoryFlushRun && options?.memoryFlushTools)
-      ? getActiveAgentRingZeroTools()
-      : [];
+    includeOpenClawTools && !isMemoryFlushRun ? getActiveAgentRingZeroTools() : [];
   const toolSearchTools =
     toolSearchControlsEnabled && ringZeroTools.length === 0
       ? createToolSearchTools({
@@ -604,7 +604,7 @@ function* assembleOpenClawCodingTools(
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
-  return finalizeAgentTools({
+  const finalizedTools = finalizeAgentTools({
     ...options,
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
     wrapBeforeToolCallHook: preparedTools
@@ -614,7 +614,9 @@ function* assembleOpenClawCodingTools(
       : options?.wrapBeforeToolCallHook,
     hookContext,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
-  }).map(wrapGatewayCaller);
+  });
+  sessionEventToolsAllow.push(...finalizedTools.map((tool) => tool.name));
+  return finalizedTools.map(wrapGatewayCaller);
 }
 
 /** @deprecated Use createOpenClawCodingToolsInternalAsync for runtime construction. */

@@ -1,4 +1,4 @@
-import type { APIAllowedMentions } from "discord-api-types/v10";
+import { AllowedMentionsTypes, type APIAllowedMentions } from "discord-api-types/v10";
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
@@ -47,9 +47,9 @@ import {
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 import { resolveDiscordWebhookId } from "./sender-identity.js";
 
-const TARGETED_ONLY_ALLOWED_MENTIONS = {
-  parse: ["users", "roles"],
-} as APIAllowedMentions;
+const TARGETED_ONLY_ALLOWED_MENTIONS: APIAllowedMentions = {
+  parse: [AllowedMentionsTypes.User, AllowedMentionsTypes.Role],
+};
 
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
@@ -170,7 +170,18 @@ export async function processDiscordMessage(
     sessionKey: persistedSessionKey,
   });
 
-  const replyRuntime = createDiscordMessageReplyRuntime({
+  const {
+    replyPipeline,
+    onModelSelected,
+    tableMode,
+    maxLinesPerMessage,
+    chunkMode,
+    beginQueuedDeliveryCorrelation,
+    endDeliveryCorrelation,
+    resolveCurrentTurnTranscriptFinalText,
+    draftPreview,
+    resolvedBlockStreamingEnabled,
+  } = createDiscordMessageReplyRuntime({
     ctx,
     processContext,
     replyReference,
@@ -183,23 +194,12 @@ export async function processDiscordMessage(
     onFinalReplyStart: observer?.onFinalReplyStart,
     onFinalReplyDelivered: observer?.onFinalReplyDelivered,
   });
-  const {
-    replyPipeline,
-    onModelSelected,
-    tableMode,
-    maxLinesPerMessage,
-    chunkMode,
-    beginQueuedDeliveryCorrelation,
-    endDeliveryCorrelation,
-    resolveCurrentTurnTranscriptFinalText,
-    draftPreview,
-    resolvedBlockStreamingEnabled,
-  } = replyRuntime;
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;
     await draftPreview.retarget(threadId);
   });
   const { lifecycle } = draftPreview;
+  const hasCompletedFinalReply = () => lifecycle.finalSucceeded || lifecycle.previewFinalized;
   const observeFinalDelivery = async () => {
     if (lifecycle.finalSucceeded) {
       return;
@@ -336,11 +336,7 @@ export async function processDiscordMessage(
       !options?.allowFallbackOnlyToolWarning &&
       isFallbackOnlyToolWarningFinal(payload)
     ) {
-      if (
-        !lifecycle.finalSucceeded &&
-        !lifecycle.previewFinalized &&
-        (!lifecycle.finalStarted || lifecycle.finalFailed)
-      ) {
+      if (!hasCompletedFinalReply() && (!lifecycle.finalStarted || lifecycle.finalFailed)) {
         // Root settlement can outlive this participant's dispatch scope.
         pendingToolWarningFinal = { payload, info, deliverySession };
       }
@@ -364,6 +360,10 @@ export async function processDiscordMessage(
     if (!deliverablePayload) {
       logSkippedDelivery("internal-only payload");
       return { visibleReplySent: false };
+    }
+    if (await draftPreview.adoptProgressDraft(deliverablePayload, info)) {
+      replyReference.markSent();
+      return { visibleReplySent: true };
     }
     if (isFinal && !replyLifecycleStarted && !isRoomEvent && configuredTypingMode !== "never") {
       // Fast replies can bypass the normal resolver lifecycle. Start feedback
@@ -446,12 +446,7 @@ export async function processDiscordMessage(
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
-    if (
-      !pendingToolWarningFinal ||
-      lifecycle.finalSucceeded ||
-      lifecycle.previewFinalized ||
-      abortSignal?.aborted
-    ) {
+    if (!pendingToolWarningFinal || hasCompletedFinalReply() || abortSignal?.aborted) {
       return undefined;
     }
     const pending = pendingToolWarningFinal;
@@ -584,12 +579,11 @@ export async function processDiscordMessage(
     await draftPreview.cleanup({ failed: finalDeliveryFailed || dispatchError });
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }
-  const finalDispatchResult = dispatchResult;
-  if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
+  if (!dispatchResult || !hasFinalInboundReplyDispatch(dispatchResult)) {
     return;
   }
   if (shouldLogVerbose()) {
-    const finalCount = finalDispatchResult.settledReceipt?.counts.final.delivered ?? 0;
+    const finalCount = dispatchResult.settledReceipt?.counts.final.delivered ?? 0;
     logVerbose(
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyPlan.replyTarget}`,
     );

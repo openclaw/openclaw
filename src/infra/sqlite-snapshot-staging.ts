@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { getChildLogger } from "../logging/logger.js";
+import { tryReadDiskSpace } from "./disk-space.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   isPrivateDirectoryCreationRefused,
@@ -21,6 +22,7 @@ import {
   SqliteSnapshotCleanupError,
   retireSqliteSnapshotPayload,
 } from "./sqlite-readonly-location-cleanup.js";
+import { sqliteSnapshotSourceFileSize } from "./sqlite-snapshot-policy.js";
 import {
   acquireSqliteSnapshotToken as snapshotToken,
   beginSqliteSnapshotRetirement,
@@ -173,6 +175,7 @@ export function sqliteSnapshotStagingError(
   tempDir: string,
   cause: unknown,
   allocation = false,
+  sourcePath?: string,
 ): unknown {
   markSqliteInspectionOperation(cause, "snapshot");
   let destination = allocation;
@@ -200,7 +203,21 @@ export function sqliteSnapshotStagingError(
   const guidance = capacity
     ? "free disk space/quota"
     : "check filesystem health and write permissions";
-  const message = `${cause instanceof Error ? cause.message : String(cause)}${sqliteErrcode !== undefined ? ` (SQLite errcode=${sqliteErrcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}: ${guidance} or set XDG_CACHE_HOME to a writable filesystem`;
+  let capacityDetail = "";
+  if (capacity && sourcePath) {
+    try {
+      const estimatedBytes =
+        sqliteSnapshotSourceFileSize(sourcePath) +
+        sqliteSnapshotSourceFileSize(`${sourcePath}-wal`) +
+        sqliteSnapshotSourceFileSize(`${sourcePath}-journal`);
+      const availableBytes = tryReadDiskSpace(tempDir)?.availableBytes;
+      const liveWal = fs.existsSync(`${sourcePath}-wal`) && fs.existsSync(`${sourcePath}-shm`);
+      capacityDetail = `; estimated ${estimatedBytes} bytes needed; ${availableBytes === undefined ? "available bytes unknown" : `${availableBytes} bytes available`}; source ${liveWal ? "has live WAL sidecars" : "has no live WAL sidecars"}`;
+    } catch {
+      // A failed capacity observation must preserve the original storage error.
+    }
+  }
+  const message = `${cause instanceof Error ? cause.message : String(cause)}${sqliteErrcode !== undefined ? ` (SQLite errcode=${sqliteErrcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}${capacityDetail}: ${guidance} or set XDG_CACHE_HOME to a writable filesystem`;
   const error = new Error(message, { cause });
   return isPrivateDirectoryCreationRefused(cause)
     ? markPrivateDirectoryCreationRefused(error)

@@ -68,12 +68,14 @@ Stopping already-running work is a different intent from redirecting future work
 | `collect`   | Does not steer.                                        | Coalesces compatible queued messages into one later turn after the debounce window. |
 | `interrupt` | Aborts the active run instead of steering it.          | Starts the newest message after aborting.                                           |
 
+Messages with separate durable ingress admission, including Discord and Telegram messages, are not compatible for batching: `collect` keeps them as separate followup turns. Compatible Gateway `chat.send` inputs can still combine. See [Queue modes](/concepts/queue#queue-modes).
+
 ## Burst example
 
 If four users send messages while the agent is executing a tool call:
 
 - OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
-- With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates a followup turn with compatible queued messages after the debounce window.
+- With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
@@ -157,8 +159,9 @@ runId })`. Use the `runId` returned by that message's `chat.send`. This withdraw
 that message without stopping the active run or retrying it as a followup.
 
 Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
-work. If delivery cannot be confirmed, the existing steering safeguards can stop
-the active run to avoid replaying input whose consumption is uncertain.
+work. If delivery cannot be confirmed, OpenClaw reports the uncertainty and retains
+the input without replaying it. An uncertain steering receipt does not stop the
+active run or its running tools. Use `/stop` to stop that work explicitly.
 
 ## Debounce
 

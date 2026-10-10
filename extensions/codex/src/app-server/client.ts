@@ -141,26 +141,14 @@ class CodexAppServerIndeterminateTransportError extends Error {
 export function isCodexAppServerIndeterminateRequestCancellationError(
   error: unknown,
 ): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: true } {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
-    "mayHaveWritten" in error &&
-    error.mayHaveWritten === true
-  );
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", true);
 }
 
 /** True when local cancellation happened before a request write was attempted. */
 export function isCodexAppServerPrewriteRequestCancellationError(
   error: unknown,
 ): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: false } {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
-    "mayHaveWritten" in error &&
-    error.mayHaveWritten === false
-  );
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", false);
 }
 
 /** True when transport failure cannot prove a written request stopped running. */
@@ -168,12 +156,16 @@ export function isCodexAppServerIndeterminateTransportError(error: unknown): err
   code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE";
   mayHaveWritten: true;
 } {
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE", true);
+}
+
+function hasRequestWriteState(error: unknown, code: string, written: boolean): boolean {
   return (
     error instanceof Error &&
     "code" in error &&
-    error.code === "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE" &&
+    error.code === code &&
     "mayHaveWritten" in error &&
-    error.mayHaveWritten === true
+    error.mayHaveWritten === written
   );
 }
 

@@ -45,7 +45,7 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { resolveFastModeSupport } from "./fast-mode-policy.js";
-import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
+import { projectAnthropicLiveModels } from "./live-model-projection.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createAnthropicAuthMethods, createAnthropicProvider } from "./provider-contract-api.js";
@@ -564,10 +564,14 @@ export function buildAnthropicProvider(): ProviderPlugin {
         wizard: apiKeyMethod.wizard,
       }),
     ],
+    // A single-provider result is republished under every hook alias, which would
+    // list these API rows as `claude-cli/*` too. Claude CLI rows come only from
+    // `modelCatalog.providers.claude-cli` and its hosted catalog because Claude
+    // Code does not serve every API model (Mythos 5 is direct-API only).
     catalog: {
       order: "simple",
-      run: async (ctx) =>
-        restoreUnpublishedAnthropicModels(
+      run: async (ctx) => {
+        const result = restoreUnpublishedAnthropicModels(
           await buildOpenAICompatibleProviderCatalog({
             discoveryMode: "strict",
             ctx,
@@ -579,14 +583,23 @@ export function buildAnthropicProvider(): ProviderPlugin {
                 "anthropic-version": "2023-06-01",
                 ...buildAnthropicDiscoveryAuthHeaders(discoveryApiKey ?? apiKey),
               }),
-              acceptUnknownModel: acceptsAnthropicLiveModelContract,
+              projectRows: projectAnthropicLiveModels,
             },
           }),
-        ),
+        );
+        // Keep the discovery outcomes: retention after a later transient failure
+        // matches on the profile that last published successfully.
+        return result && "provider" in result
+          ? {
+              providers: { [providerId]: result.provider },
+              ...(result.outcomes ? { outcomes: result.outcomes } : {}),
+            }
+          : result;
+      },
     },
     staticCatalog: {
       order: "simple",
-      run: async () => ({ provider: buildAnthropicCatalogProvider() }),
+      run: async () => ({ providers: { [providerId]: buildAnthropicCatalogProvider() } }),
     },
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
