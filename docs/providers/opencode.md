@@ -146,6 +146,8 @@ Some Zen free-tier models only accept requests from the OpenCode client. A
 `403 FreeTierError` means that the model's free tier is restricted, not that
 your saved key has expired. Choose another model or use a paid plan that allows
 API access. Signing in again or changing the User-Agent does not grant access.
+This refusal marks only the selected model unavailable; it does not put the
+credential into cooldown for other models.
 An ID in the account listing alone does not prove that it can run in OpenClaw.
 The listing has no free-tier flag, so OpenClaw does not guess access from model
 names. A `402` insufficient-funds response means that the account needs more
