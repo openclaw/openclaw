@@ -504,6 +504,53 @@ describe("profile avatar HTTP endpoint", () => {
     },
   );
 
+  it.each([undefined, "42", "41"])(
+    "caches only a current revision's definite miss (%s)",
+    async (revision) => {
+      const profileId = "profile-negative-cache";
+      profileFixture.mockReturnValue({
+        id: profileId,
+        updatedAt: 42,
+        emails: [],
+        hasAvatar: false,
+      });
+      const pathname = `/api/users/${profileId}/avatar`;
+      const missing = response();
+      await handleUserProfileAvatarHttpRequest(
+        request(revision === undefined ? pathname : `${pathname}?v=${revision}`),
+        missing.response,
+        pathname,
+        { auth: {} as never },
+      );
+      expect(missing.response.statusCode).toBe(404);
+      expect(missing.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      expect(missing.setHeader).toHaveBeenCalledWith(
+        "Cache-Control",
+        revision === "42" ? "private, max-age=60" : "no-store",
+      );
+      if (revision === "42") {
+        expect(missing.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
+      }
+
+      avatarFixture.mockReturnValue({
+        bytes: new Uint8Array([1]),
+        mime: "image/png",
+        sha256: "uploaded",
+      });
+      const uploaded = response();
+      await handleUserProfileAvatarHttpRequest(
+        request(`${pathname}?v=uploaded-png`),
+        uploaded.response,
+        pathname,
+        { auth: {} as never },
+      );
+      expect(uploaded.writeHead).toHaveBeenCalledWith(
+        200,
+        expect.objectContaining({ "Cache-Control": "private, max-age=31536000, immutable" }),
+      );
+    },
+  );
+
   it.each([200, 404])("caches a normalized primary-email Gravatar response (%s)", async (code) => {
     const profileId = `profile-gravatar-cache-${code}`;
     const email = code === 200 ? " Ada@Example.com " : "missing-avatar@example.com";

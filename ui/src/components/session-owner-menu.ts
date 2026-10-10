@@ -80,7 +80,9 @@ export class SessionOwnerMenu {
           profile.githubIdentity?.login ||
           profile.emails[0] ||
           profile.id,
-        avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt),
+        avatarUrl: profile.hasAvatar
+          ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
+          : undefined,
       }));
     for (const agent of context?.agents.state.agentsList?.agents ?? []) {
       const identity = context?.agentIdentity.get(agent.id);

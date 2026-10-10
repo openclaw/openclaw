@@ -597,6 +597,8 @@ export async function handleControlUiAvatarRequest(
     }
 
     if (resolved?.kind !== "local" || !projection.file) {
+      res.setHeader("Cache-Control", "private, max-age=60");
+      res.setHeader("Vary", "Authorization, Cookie");
       respondControlUiNotFound(res);
       return true;
     }

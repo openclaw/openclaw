@@ -106,7 +106,7 @@ it("renders trusted presence avatar routes directly", async () => {
 });
 
 it.each([true, false])(
-  "derives a missing presence avatar only with profile provenance: %s",
+  "keeps a missing presence avatar on initials regardless of profile provenance: %s",
   async (qualified) => {
     const profileId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
     const avatar = document.createElement("openclaw-viewer-avatar");
@@ -121,9 +121,7 @@ it.each([true, false])(
 
     await vi.waitFor(async () => {
       await avatar.updateComplete;
-      expect(avatar.querySelector("img")?.getAttribute("src")).toBe(
-        qualified ? `/api/users/${profileId}/avatar` : undefined,
-      );
+      expect(avatar.querySelector("img")?.getAttribute("src")).toBe(undefined);
       expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
         "Ada Lovelace",
       );
@@ -158,7 +156,7 @@ it.each(["live", "prepared"])(
       await facepile.updateComplete;
       expect(
         [...facepile.querySelectorAll("img")].map((image) => image.getAttribute("src")),
-      ).toEqual([`/api/users/${id}/avatar`]);
+      ).toEqual([]);
       expect([...facepile.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
         "/activity/ada-lovelace-c3e324520467",
       ]);
