@@ -5,11 +5,13 @@ import {
 } from "../config/runtime-snapshot.js";
 import { preserveSessionInheritedToolPolicy } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import {
+  prepareDelegatedToolDenyFloor,
+  resolveConversationCapabilityProfile,
+} from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
 import {
   captureDelegatedToolPolicyAssertion,
-  prepareDelegatedToolDenyFloor,
   readDelegatedToolPolicy,
   selectDelegatedToolPolicy,
 } from "./delegated-tool-policy.js";

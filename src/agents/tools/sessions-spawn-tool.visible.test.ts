@@ -5,8 +5,10 @@ import {
   admitChildSessionPublication,
   readChildSessionPublication,
 } from "../../channels/message-access/child-session-publication.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { prepareDelegatedToolDenyFloor } from "../delegated-tool-policy.js";
+import {
+  prepareDelegatedToolDenyFloor,
+  resolveConversationCapabilityProfile,
+} from "../conversation-capability-profile.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-queries.js";
 import {

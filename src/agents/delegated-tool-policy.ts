@@ -4,65 +4,31 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
-import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
-import type { SpawnedToolContext } from "./spawned-context.js";
 import { resolveSubagentTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
-import { collectExplicitDenylist, hasRestrictiveAllowPolicy } from "./tool-policy.js";
+import { hasRestrictiveAllowPolicy } from "./tool-policy.js";
 
 export type DelegatedToolPolicy = NonNullable<SessionEntry["delegatedToolPolicy"]>;
+export type DelegatedToolPolicyContext = {
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
+  /** Prepared by the host before policy flattening; never accepted from tool arguments. */
+  delegatedToolDenyFloor?: DelegatedToolDenyFloor;
+  /** Immediate requester execution snapshot; ordinary inherited denies retain revocation fallback. */
+  requesterToolDenylist?: string[];
+  /** Bound at tool construction so an awaited spawn cannot pin a superseded runtime config. */
+  readDelegationConfig?: () => OpenClawConfig;
+  /** A mediated producer cannot export its active native delegation exception. */
+  delegatedToolPolicyUnavailable?: boolean;
+  /** Restrictive requester policy originated at trusted sender/channel ingress. */
+  inheritedToolPolicySource?: "sender";
+};
+
 export type DelegatedToolDenyFloor = {
   policyAgentId: string;
   deny: string[];
   continuation?: Pick<DelegatedToolPolicy, "requesterSessionKey" | "targetAgentId">;
 };
-
-/** Prepare before flattening: duplicate nonlocal denies survive the local exception. */
-export function prepareDelegatedToolDenyFloor(
-  profile: ResolvedConversationCapabilityProfile,
-  additionalDeny: readonly string[] = [],
-): DelegatedToolDenyFloor | undefined {
-  const policy = profile.policy;
-  const continuation = policy.delegatedToolPolicy;
-  if (
-    !policy.agentId ||
-    policy.inheritedToolPolicySource === "sender" ||
-    policy.runtimeToolPolicyForInheritance?.allow.length === 0 ||
-    (!continuation && policy.inheritancePolicies.some(hasRestrictiveAllowPolicy))
-  ) {
-    return undefined;
-  }
-  if (!continuation && !policy.agentPolicy?.deny?.length) {
-    return undefined;
-  }
-  return {
-    policyAgentId: policy.agentId,
-    deny: normalizeInheritedToolDenylist([
-      ...collectExplicitDenylist([
-        policy.globalPolicy,
-        policy.globalProviderPolicy,
-        // A grantee's own local policy is never waived by the original requester's grant.
-        continuation ? policy.agentPolicy : undefined,
-        policy.agentProviderPolicy,
-        policy.groupPolicy,
-        policy.senderPolicy,
-        policy.sandboxPolicy,
-        policy.subagentPolicy,
-        continuation ? policy.inheritedToolPolicy : policy.inheritedToolPolicyForSpawn,
-        policy.runtimeToolPolicyForInheritance,
-      ]),
-      ...additionalDeny,
-    ]),
-    ...(continuation
-      ? {
-          continuation: {
-            requesterSessionKey: continuation.requesterSessionKey,
-            targetAgentId: continuation.targetAgentId,
-          },
-        }
-      : {}),
-  };
-}
 
 function hasCurrentDelegationGrant(
   config: OpenClawConfig,
@@ -155,7 +121,7 @@ export function prepareNativeDelegatedToolPolicy(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
   targetAgentId: string;
-  context?: SpawnedToolContext;
+  context?: DelegatedToolPolicyContext;
 }) {
   const context = params.context;
   const policy = selectDelegatedToolPolicy({
