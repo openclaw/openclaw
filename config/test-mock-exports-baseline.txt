@@ -9449,7 +9449,6 @@
 ["src/process/scoped-child-reaper.test.ts","./kill-tree.js","0523a8d2032b81e47405327541b5c158a70632fa15d73e06542412531fecb501",1]
 ["src/process/spawn-broker/host-native-lifetime.test.ts","../../infra/runtime-worker-url.js","58cf4a6cde8ba8cb3c64dbab9b7944cc2abb6a424a353b0ca24f6738c465e77c",1]
 ["src/process/spawn-broker/host-native-lifetime.test.ts","./cleanup.js","fca937d17bb0de04c52566a871915f8500f7cc199ffb851e9f3d41957f75140d",1]
-["src/process/spawn-broker/host-scope-settlement.test.ts","../../infra/runtime-worker-url.js","58cf4a6cde8ba8cb3c64dbab9b7944cc2abb6a424a353b0ca24f6738c465e77c",1]
 ["src/process/spawn-broker/host-scope-settlement.test.ts","../../shared/pid-alive.js","aca202866a05fffef4b88a6989c6446c4a4725d0d572bb033d35966bf17abc44",1]
 ["src/process/spawn-broker/host-scope-settlement.test.ts","../child-process-tree.js","e7b4c922f19ae50d22c7cb913ed76d9d92fdccc0837a769ea9d12e69e8fe7a4b",1]
 ["src/process/spawn-broker/host-scope-settlement.test.ts","../kill-tree.js","cbf6595843c240438a9b59898a488f26a1435eb0f80906e84793d59abbdb575c",1]

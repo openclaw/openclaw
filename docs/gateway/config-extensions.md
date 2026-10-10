@@ -118,6 +118,18 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   directing you to stop or reset unused sessions. A runtime can own multiple
   configured server connections. Sessions without available MCP servers and
   sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
+- Retained stdio MCP children do not consume the spawn broker's 256 concurrent
+  startup slots once their startup handoff completes. Ordinary commands can
+  continue starting while session servers stay alive. The broker also limits
+  pending and retained children to 512 total, with at most 448 MCP children,
+  leaving 64 slots available to ordinary commands. Both host and worker enforce
+  these limits; capacity errors direct you to close unused sessions or running
+  processes before retrying. Reservations last until process cleanup settles.
+  Unconfirmed launch outcomes keep their reservations across broker restarts;
+  restart the Gateway if capacity remains unavailable after session cleanup.
+  Session and command owners retain control of process lifetime. The runtime
+  limit above still applies, and native broker resources have a separate
+  256-resource limit.
 - MCP config changes retire only changed or removed server connections. Unchanged
   servers keep their transports and tool catalogs; active runs can continue calling
   their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin

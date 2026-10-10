@@ -1514,6 +1514,7 @@ src/process/kill-tree.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
+src/process/spawn-broker/admission.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
@@ -1524,6 +1525,7 @@ src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
+src/process/spawn-broker/resource-directory.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-diagnostics.ts

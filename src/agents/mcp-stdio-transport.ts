@@ -16,6 +16,7 @@ import {
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
+import { runWithSpawnBrokerAdmission } from "../process/spawn-broker/admission.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
@@ -89,17 +90,20 @@ export class OpenClawStdioClientTransport implements Transport {
     }
 
     try {
-      const child = await createOwnedStdioProcess({
-        argv: [this.serverParams.command, ...(this.serverParams.args ?? [])],
-        cwd: this.serverParams.cwd,
-        env: this.serverParams.exactEnv
-          ? mergeProcessEnv([this.serverParams.env])
-          : mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]),
-        ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
-        abortSignal: this.startupAbort.signal,
-        stderrDestination:
-          this.stderrStream ?? (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
-      });
+      const child = await runWithSpawnBrokerAdmission("mcp", () =>
+        createOwnedStdioProcess({
+          argv: [this.serverParams.command, ...(this.serverParams.args ?? [])],
+          cwd: this.serverParams.cwd,
+          env: this.serverParams.exactEnv
+            ? mergeProcessEnv([this.serverParams.env])
+            : mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]),
+          ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
+          abortSignal: this.startupAbort.signal,
+          stderrDestination:
+            this.stderrStream ??
+            (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
+        }),
+      );
       this.process = child;
       child.onError((error) => this.onerror?.(error));
       const receive = (chunk: Buffer) => {

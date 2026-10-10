@@ -12,6 +12,10 @@ import { startBrokerExeca, type BrokerExecaProcess } from "./execa-worker.js";
 import { createBrokerReceiver } from "./ipc.js";
 import { holdPipeForTransfer, takePipePrefix } from "./pipe.js";
 import {
+  childCapacityError,
+  type BrokerAdmission,
+  MAX_NATIVE_RESOURCES,
+  MAX_PENDING_SPAWNS,
   serializeBrokerError,
   SpawnBrokerError,
   type BrokerRequest,
@@ -33,6 +37,8 @@ type Owned = {
 };
 type Admission = { type: "started"; entry: Owned } | { type: "failed"; execa: BrokerExecaProcess };
 const owned = new Map<number, Owned>();
+// One reservation spans startup and retained custody, without counting either twice.
+const childAdmissions = new Map<number, BrokerAdmission>();
 const receiver = createBrokerReceiver();
 let stopping = false;
 const starting = new Map<number, { canceled?: boolean; signal?: NodeJS.Signals | number }>();
@@ -61,6 +67,7 @@ function report(
 function forget(id: number, entry: Owned): void {
   if (entry.announced && entry.exited && entry.resultSettled && entry.openPipes.size === 0) {
     owned.delete(id);
+    childAdmissions.delete(id);
   }
 }
 
@@ -137,8 +144,10 @@ function disposeFailedChild(child: ChildProcess | undefined): void {
 async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
-  if (stopping || owned.size + starting.size + (resources?.size ?? 0) >= 256) {
-    const error = new SpawnBrokerError("Spawn broker request capacity exceeded");
+  const admissionClass = message.admission ?? "command";
+  const capacityError = childCapacityError(childAdmissions.values(), admissionClass);
+  if (stopping || starting.size >= MAX_PENDING_SPAWNS || capacityError) {
+    const error = new SpawnBrokerError(capacityError ?? "Spawn broker startup capacity exceeded");
     // The ordered failed-admission result proves no native work was started.
     // No command metadata exists because this guard precedes spawn preparation.
     await report({
@@ -169,6 +178,7 @@ async function launch(
     return;
   }
   const pending: { canceled?: boolean; signal?: NodeJS.Signals | number } = {};
+  childAdmissions.set(message.id, admissionClass);
   starting.set(message.id, pending);
   let spawnedChild: ChildProcess | undefined;
   const assertActive = () => {
@@ -377,6 +387,12 @@ async function launch(
     current.announced = true;
     forget(message.id, current);
   } catch (error) {
+    // A failed handoff can still leave a native child closing after SIGKILL.
+    if (owned.get(message.id)?.exited) {
+      childAdmissions.delete(message.id);
+    } else if (spawnedChild?.pid) {
+      spawnedChild.once("close", () => childAdmissions.delete(message.id));
+    }
     disposeFailedChild(spawnedChild);
     owned.delete(message.id);
     if (!stopping) {
@@ -385,10 +401,14 @@ async function launch(
         id: message.id,
         error: serializeBrokerError(error instanceof Error ? error : new Error(String(error))),
         resultUnavailable: true,
+        ...(!spawnedChild?.pid ? { notStarted: true as const } : {}),
       });
     }
   } finally {
     starting.delete(message.id);
+    if (!owned.has(message.id) && !spawnedChild?.pid) {
+      childAdmissions.delete(message.id);
+    }
   }
 }
 
@@ -537,7 +557,7 @@ async function initialize(raw: unknown): Promise<void> {
       secret: authority.secret,
       generation: authority.generation,
       reportParent: report,
-      canAdmit: () => !stopping && owned.size + starting.size + (resources?.size ?? 0) < 256,
+      canAdmit: () => !stopping && (resources?.size ?? 0) < MAX_NATIVE_RESOURCES,
     });
     if (stopping) {
       resources.disconnect();

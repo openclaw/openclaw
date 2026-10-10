@@ -1,6 +1,35 @@
 import type { Serializable, SpawnOptions } from "node:child_process";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 
+// Startup backpressure is separate from custody of already running children.
+export const MAX_PENDING_SPAWNS = 256;
+export const MAX_NATIVE_RESOURCES = 256;
+// Keep 64 child slots available to commands even when MCP custody is full.
+const MAX_OWNED_CHILDREN = 512;
+const MAX_MCP_CHILDREN = 448;
+export type BrokerAdmission = "command" | "mcp";
+
+export function childCapacityError(
+  admissions: Iterable<BrokerAdmission>,
+  admission: BrokerAdmission,
+): string | undefined {
+  let total = 0;
+  let mcp = 0;
+  for (const retained of admissions) {
+    total++;
+    if (retained === "mcp") {
+      mcp++;
+    }
+  }
+  if (total >= MAX_OWNED_CHILDREN) {
+    return `Spawn broker child capacity exceeded (${MAX_OWNED_CHILDREN}); close running processes before retrying`;
+  }
+  if (admission === "mcp" && mcp >= MAX_MCP_CHILDREN) {
+    return `Spawn broker MCP child capacity exceeded (${MAX_MCP_CHILDREN}); close unused MCP sessions before retrying`;
+  }
+  return undefined;
+}
+
 export type BrokerSpawnOptions = Pick<
   SpawnOptions,
   | "cwd"
@@ -15,9 +44,21 @@ export type BrokerSpawnOptions = Pick<
   | "gid"
 > & { stdio: ("pipe" | "ignore" | "inherit" | "ipc")[] };
 export type BrokerRequest =
-  | { type: "spawn" | "prepare-spawn"; id: number; argv: string[]; options: BrokerSpawnOptions }
+  | {
+      type: "spawn" | "prepare-spawn";
+      id: number;
+      argv: string[];
+      options: BrokerSpawnOptions;
+      admission?: BrokerAdmission;
+    }
   | { type: "launch"; id: number; allowed: boolean }
-  | { type: "spawn-execa"; id: number; argv: string[]; options: BrokerExecaOptions }
+  | {
+      type: "spawn-execa";
+      id: number;
+      argv: string[];
+      options: BrokerExecaOptions;
+      admission?: BrokerAdmission;
+    }
   | { type: "kill"; id: number; signal: NodeJS.Signals | number }
   | { type: "ipc"; id: number; sequence: number; message: Serializable }
   | { type: "disconnect"; id: number }
@@ -48,7 +89,7 @@ export type BrokerResponse =
       connected: boolean;
       stdioLength: number;
     }
-  | { type: "error"; id: number; error: BrokerError; resultUnavailable?: true }
+  | { type: "error"; id: number; error: BrokerError; resultUnavailable?: true; notStarted?: true }
   | { type: "ipc-sent"; id: number; sequence: number; error?: BrokerError }
   | { type: "exit"; id: number; code: number | null; signal: NodeJS.Signals | null }
   | { type: "closed"; id: number }
