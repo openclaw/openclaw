@@ -144,6 +144,7 @@ suite.define(() => {
                   kind: "direct",
                   label: "Second conversation",
                   updatedAt: 1,
+                  owner: { actor: { type: "human", id: profileId, label: "Theme Reader" } },
                 },
               ],
               deferredMethods: saved ? ["users.prefs.get"] : [],

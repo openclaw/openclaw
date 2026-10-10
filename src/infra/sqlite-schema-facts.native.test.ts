@@ -10,6 +10,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
@@ -17,6 +18,7 @@ import {
   hasPendingSqliteDatabaseSchemaMutation,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
+  revokeSqliteDatabaseAdmissions,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import { schemaAdmission } from "./sqlite-schema-admission.js";
@@ -34,6 +36,59 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
+
+  it("reuses admission publications until their owner changes them", () => {
+    const root = tempDirs.make("openclaw-admission-publications-");
+    const first = openDatabase(
+      "CREATE TABLE first_value(id)",
+      true,
+      path.join(root, "first.sqlite"),
+    );
+    const second = openDatabase(
+      "CREATE TABLE second_value(id)",
+      true,
+      path.join(root, "second.sqlite"),
+    );
+    const cursor = createSqliteDatabaseAdmissionCursor();
+    const before = captureSqliteDatabaseAdmissions(cursor);
+    const firstSnapshot = before.find((record) => record.location === first.location())!;
+    const secondSnapshot = before.find((record) => record.location === second.location())!;
+    const key = { name: "publication-value", read: (value: unknown) => value };
+
+    installSqliteDatabaseAdmissions(before);
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(
+      captureSqliteDatabaseAdmissions().find(
+        (record) => record.identity === firstSnapshot.identity,
+      ),
+    ).toBe(firstSnapshot);
+
+    publishSqliteDatabaseAdmission(second, key, 42);
+    const changed = captureSqliteDatabaseAdmissions(cursor);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]!.identity).toBe(secondSnapshot.identity);
+    expect(changed[0]!.facts.get(key.name)?.value).toBe(42);
+    expect(secondSnapshot.facts.has(key.name)).toBe(false);
+    expect(
+      captureSqliteDatabaseAdmissions().find(
+        (record) => record.identity === firstSnapshot.identity,
+      ),
+    ).toBe(firstSnapshot);
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+
+    revokeSqliteDatabaseAdmissions(second);
+    installSqliteDatabaseAdmissions(changed);
+    expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    const secondLocation = second.location()!;
+    second.close();
+    retireSqliteDatabaseAdmissionForPath(secondLocation);
+    expect(
+      captureSqliteDatabaseAdmissions().some(
+        (record) => record.identity === secondSnapshot.identity,
+      ),
+    ).toBe(false);
+  });
 
   it.each([
     "CREATE TEMP TABLE other_input (id)",

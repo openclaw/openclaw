@@ -332,7 +332,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.compactView === "icon" ||
       this.compactView === "group" ||
       this.compactView === "snooze" ||
-      this.compactView === "settings"
+      this.compactView === "advanced" ||
+      this.compactView === "archive"
     ) {
       return this.managementActions.renderCompactView(this.compactView);
     }
@@ -402,9 +403,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       ${this.managementActions.renderOrganizationActions()}
       ${this.renderQuickActionItems("session", this.sessionActions, true)}
       <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderTransferActions()}
-      <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderDeleteAction()}
+      ${this.managementActions.renderAdvancedAction()}
     `;
   }
 
@@ -440,7 +439,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           }
         }}
         @wa-show=${this.handleShow}
-        @wa-after-hide=${this.managementActions.settings.close}
+        @wa-after-hide=${this.managementActions.advanced.close}
         @wa-select=${this.handleSelect}
       >
         <button
