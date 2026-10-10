@@ -148,26 +148,25 @@ describe("Workboard terminal hook automation ownership", () => {
     const enqueue = vi.spyOn(cron, "enqueueRun");
     const dispatch: GatewayRequestHandler = async ({ respond }) =>
       respond(true, await cron.enqueueRun(job.id, "if-enabled"));
+    const describeSession: GatewayRequestHandler = ({ respond }) => {
+      expect(getGatewayToolCallerIdentity()).toBeUndefined();
+      respond(true, {
+        session: {
+          key: sessionKey,
+          status: "done",
+          hasActiveRun: false,
+          updatedAt: Date.now(),
+        },
+      });
+    };
     gatewayContext.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry([
         ...methods,
         {
-          name: "sessions.list",
+          name: "sessions.describe",
           scope: "operator.read",
           owner: { kind: "core", area: "sessions" },
-          handler: ({ respond }) => {
-            expect(getGatewayToolCallerIdentity()).toBeUndefined();
-            respond(true, {
-              sessions: [
-                {
-                  key: sessionKey,
-                  status: "done",
-                  hasActiveRun: false,
-                  updatedAt: Date.now(),
-                },
-              ],
-            });
-          },
+          handler: describeSession,
         },
         {
           name: "cron.run",

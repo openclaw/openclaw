@@ -568,6 +568,10 @@ terminal, active, idle, missing, and stale session state. Each store mutation em
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
 the canonical card instead of writing its own lifecycle projection.
 
+Incognito sessions remain absent from session discovery. Explicitly linked
+Incognito cards use authorized exact-session metadata reads, without derived
+titles or message previews, to reconcile their terminal outcomes.
+
 While a card is in an active work state, Workboard follows the linked session:
 
 | Linked session state                  | Card status |

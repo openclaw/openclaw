@@ -1,6 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import {
@@ -68,6 +69,7 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
 
 type WorkboardLifecycleSessionReadOptions = {
   includeUnknown: boolean;
+  sessionKey?: string;
 };
 
 type WorkboardLifecycleSessionReader = (
@@ -207,6 +209,9 @@ export async function syncWorkboardAgentEnded(params: {
   // Only the session owner can establish the run's terminal outcome.
   const snapshot = await params.readSessions({
     includeUnknown: params.context.sessionKey === "unknown",
+    ...(params.context.sessionKey && parseAgentSessionKey(params.context.sessionKey)
+      ? { sessionKey: params.context.sessionKey }
+      : {}),
   });
   const session = snapshot.sessions.find((entry) => entry.key === params.context.sessionKey);
   if (!session) {
@@ -395,6 +400,19 @@ export async function readWorkboardLifecycleSessions(
   if (!(await gateway.isAvailable())) {
     return { sessions: [], complete: false };
   }
+  if (options.sessionKey) {
+    const payload = await gateway.request(
+      "sessions.describe",
+      { key: options.sessionKey, includeDerivedTitles: false, includeLastMessage: false },
+      { scopes: ["operator.read"] },
+    );
+    if (!isRecord(payload) || (payload.session !== null && !isRecord(payload.session))) {
+      throw new Error("sessions.describe returned an invalid lifecycle snapshot");
+    }
+    const session = normalizeSession(payload.session);
+    // An exact read establishes no facts about the rest of the catalog.
+    return { sessions: session ? [session] : [], complete: false };
+  }
   let includeUnknown = false;
   if (options.includeUnknown) {
     const agentsPayload = await gateway.request("agents.list", {}, { scopes: ["operator.read"] });
@@ -539,6 +557,26 @@ export function createWorkboardLifecycleService(params: {
                 });
                 if (generation !== owner) {
                   return;
+                }
+                // Incognito sessions are absent from discovery. Read only identities
+                // already linked to cards, without requesting private preview content.
+                let describedIncognitoKeys: Set<string> | undefined;
+                for (const card of cards) {
+                  const sessionKey = cardSessionKey(card);
+                  if (
+                    card.metadata?.archivedAt ||
+                    !sessionKey ||
+                    !isIncognitoSessionKey(sessionKey) ||
+                    describedIncognitoKeys?.has(sessionKey)
+                  ) {
+                    continue;
+                  }
+                  (describedIncognitoKeys ??= new Set()).add(sessionKey);
+                  const exact = await params.readSessions({ includeUnknown: false, sessionKey });
+                  if (generation !== owner) {
+                    return;
+                  }
+                  snapshot.sessions.push(...exact.sessions);
                 }
                 await syncWorkboardLifecycleSessions({
                   store: params.store,

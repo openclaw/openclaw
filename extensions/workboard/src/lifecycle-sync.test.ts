@@ -425,23 +425,27 @@ describe("Workboard gateway lifecycle sync", () => {
       runId: "run-agent",
       execution: execution(sessionKey, "run-agent"),
     });
+    let active = true;
+    const request = vi.fn().mockImplementation(async (method: string) =>
+      method === "sessions.list"
+        ? { sessions: [] }
+        : {
+            session: {
+              key: sessionKey,
+              status: active ? "running" : success ? "done" : "failed",
+              hasActiveRun: active,
+              updatedAt: card.updatedAt + 1,
+            },
+          },
+    );
+    const gateway = { isAvailable: async () => true, request };
 
     const handler = vi.fn(async (...args: unknown[]) =>
       syncWorkboardAgentEnded({
         store,
         event: args[0] as Parameters<typeof syncWorkboardAgentEnded>[0]["event"],
         context: args[1] as Parameters<typeof syncWorkboardAgentEnded>[0]["context"],
-        readSessions: async () => ({
-          sessions: [
-            {
-              key: sessionKey,
-              status: success ? "done" : "failed",
-              hasActiveRun: false,
-              updatedAt: card.updatedAt + 1,
-            },
-          ],
-          complete: true,
-        }),
+        readSessions: (options) => readWorkboardLifecycleSessions(gateway, options),
         now: card.updatedAt + 1,
       }),
     );
@@ -449,6 +453,29 @@ describe("Workboard gateway lifecycle sync", () => {
     await runner.runAgentEnd(
       { messages: [{ role: "user", content: "PRIVATE_INPUT" }], error: "PRIVATE_ERROR", success },
       { runId: "run-agent", sessionKey },
+    );
+    expect((await store.get(card.id))?.status).toBe("running");
+    active = false;
+    const onMatched = vi.fn();
+    const service = createWorkboardLifecycleService({
+      store,
+      readSessions: (options) => readWorkboardLifecycleSessions(gateway, options),
+      onMatched,
+    });
+    const operation = vi.spyOn(store, "runOperation");
+    try {
+      await service.start(nudgeContext(vi.fn()));
+      service.onGatewayStart();
+      await operation.mock.results[0]?.value;
+    } finally {
+      service.onGatewayStop();
+      operation.mockRestore();
+    }
+    expect(onMatched).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(
+      "sessions.describe",
+      { key: sessionKey, includeDerivedTitles: false, includeLastMessage: false },
+      { scopes: ["operator.read"] },
     );
     await expect(store.get(card.id)).resolves.toMatchObject({
       status,
