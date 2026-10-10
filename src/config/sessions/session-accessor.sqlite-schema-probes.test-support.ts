@@ -14,13 +14,22 @@ import { readCanonicalSessionMainKey } from "./session-canonical-key.js";
 
 const key = "agent:main:probe";
 
-export function measureSessionSchemaProbes(database: { agentId: string; db: DatabaseSync }) {
+export function measureSessionSchemaProbes(
+  database: { agentId: string; db: DatabaseSync },
+  label?: string,
+) {
   const reads = {
-    cache: () =>
-      readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(key)
-        ?.sessionId === "probe",
-    exact: () =>
-      readExactSessionEntryRowValidated(database, key, "list")?.entry.sessionId === "probe",
+    cache: () => {
+      const entry = readSessionEntryCache(database, {
+        cache: true,
+        projection: "list",
+      }).entries.get(key);
+      return entry?.sessionId === "probe" && entry.label === label;
+    },
+    exact: () => {
+      const entry = readExactSessionEntryRowValidated(database, key, "list")?.entry;
+      return entry?.sessionId === "probe" && entry.label === label;
+    },
     owner: () => hasSqliteSessionOwnerColumns(database.db),
   };
   return Object.fromEntries(
@@ -143,7 +152,10 @@ export function measureSqliteSchemaProbes(database: DatabaseSync, read: () => bo
 }
 
 export type SessionProbeOperations = {
-  read: { input: undefined; output: ReturnType<typeof measureSessionSchemaProbes> };
+  read: {
+    input: { label?: string } | undefined;
+    output: ReturnType<typeof measureSessionSchemaProbes>;
+  };
   mainKey: {
     input: { yieldAfterRead: true } | undefined;
     output: { mainKey: string; statements: number };
@@ -213,7 +225,7 @@ export function createSqliteWorkerBackend(
   return {
     execute(command) {
       if (command.type === "read") {
-        return measureSessionSchemaProbes(opened.database);
+        return measureSessionSchemaProbes(opened.database, command.input?.label);
       }
       if (command.type === "mainKeyLookupTraffic") {
         return measureMainKeyLookupTraffic(command.input.path);

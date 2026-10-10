@@ -10,7 +10,11 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "../config/io.health-state.js";
-import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  requireNodeSqlite,
+  resolveImmutableSqliteFileUri,
+} from "../infra/node-sqlite.js";
 import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,

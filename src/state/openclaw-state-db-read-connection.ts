@@ -449,20 +449,16 @@ export function readOpenClawStateReadOnlyLocation<T>(
           admitStateReadSchemaFacts(opened.database.db, pathname);
           if (coldAdmission) {
             // A peer can upgrade after catalog capture releases its SQLite snapshot.
-            return runSqliteReadOperationSync(
-              opened.database.db,
-              () => {
-                assertStateReadSchemaForPolicy(
-                  opened.database.db,
-                  pathname,
-                  existingSchema,
-                  undefined,
-                  readContentVersionRow,
-                );
-                return operation(opened.database);
-              },
-              "fresh",
-            );
+            return runSqliteReadOperationSync(opened.database.db, () => {
+              assertStateReadSchemaForPolicy(
+                opened.database.db,
+                pathname,
+                existingSchema,
+                undefined,
+                readContentVersionRow,
+              );
+              return operation(opened.database);
+            });
           }
           assertStateReadSchemaForPolicy(
             opened.database.db,

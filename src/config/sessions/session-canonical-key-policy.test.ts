@@ -74,7 +74,7 @@ describe("canonical main-key policy facts", () => {
     },
   );
 
-  it("reuses current policy across read transactions and refreshes after savepoint rollback", () => {
+  it("keeps current policy inside read transactions and refreshes after savepoint rollback", () => {
     const { db, read } = fixture();
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
@@ -86,9 +86,6 @@ describe("canonical main-key policy facts", () => {
             }
           });
         }
-        expect(
-          observation.queries.filter((sql) => sql.includes('from "session_key_contract"')),
-        ).toHaveLength(0);
       });
       runSqliteDeferredTransactionSync(db, () => {
         const isVersionProbe = (sql: string) =>

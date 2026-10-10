@@ -315,6 +315,15 @@ private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
 
+`readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
+reads the existing physical database identity and in-process writer receipt without
+issuing SQL or a worker request. Retained row caches may reuse results only when
+the token is defined and unchanged before and after reading. An undefined token
+means cache reuse is unproven, including while a write is unsettled; it does not
+deny an ordinary read or grant effect authority. A changed token invalidates every
+derived cache that depends on that database, including caches in sibling plugin
+instances. The helper does not observe writes by other processes.
+
 First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
 same subpath to admit cold agent storage in its existing executor before
 receiving a native handle. The operation callback still runs on the caller;

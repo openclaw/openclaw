@@ -1,17 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
+import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
   installSqliteTempTrackingSchema,
-  readSqliteCacheDataVersion,
   readSqliteRollbackRevision,
 } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */
 export type SqliteSessionEntryRevision = {
-  dataVersion: number;
+  siblingWriteRevision: number | undefined;
   sessionNodesGeneration: number;
 };
 
@@ -96,11 +96,10 @@ export function readSessionNodesGeneration(database: DatabaseSync): number {
 
 export function readSessionEntryCacheValidityToken(
   database: DatabaseSync,
-  mode: "fresh" | "cached" = database.isTransaction ? "cached" : "fresh",
 ): SqliteSessionEntryRevision {
-  // Managed transactions already probe after BEGIN; local writes still advance the generation.
+  // Shared writer receipts cover other handles; TEMP triggers cover this connection's writes.
   return {
-    dataVersion: readSqliteCacheDataVersion(database, mode),
+    siblingWriteRevision: readSqliteDatabaseSiblingWriteRevision(database),
     sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }
@@ -110,7 +109,8 @@ export function cacheValidityTokensEqual(
   right: SqliteSessionEntryRevision,
 ): boolean {
   return (
-    left.dataVersion === right.dataVersion &&
+    left.siblingWriteRevision !== undefined &&
+    left.siblingWriteRevision === right.siblingWriteRevision &&
     left.sessionNodesGeneration === right.sessionNodesGeneration
   );
 }
@@ -132,7 +132,11 @@ export function createSessionEntryRevisionGuard(
   const guard = () => {
     assertSourceCurrent();
     const before = readSessionEntryCacheValidityToken(database);
-    if (verified && cacheValidityTokensEqual(verified, before)) {
+    if (
+      verified &&
+      !(mode === "read" && database.isTransaction) &&
+      cacheValidityTokensEqual(verified, before)
+    ) {
       assertSourceCurrent();
       return;
     }
@@ -144,11 +148,21 @@ export function createSessionEntryRevisionGuard(
     }
     const after = readSessionEntryCacheValidityToken(database);
     assertSourceCurrent();
-    // A foreign commit during the predicate must not be hidden by its later revision.
-    if (!cacheValidityTokensEqual(before, after)) {
+    // A sibling commit during the predicate must not be hidden by its later receipt.
+    if (
+      before.sessionNodesGeneration !== after.sessionNodesGeneration ||
+      before.siblingWriteRevision !== after.siblingWriteRevision
+    ) {
       throw new SessionEntryRevisionChangedError(
         "Session entry facts changed during their mutation check",
       );
+    }
+    if (
+      before.siblingWriteRevision === undefined ||
+      after.siblingWriteRevision === undefined ||
+      (mode === "read" && database.isTransaction)
+    ) {
+      return;
     }
     if (!database.isTransaction) {
       verified = after;
@@ -177,7 +191,7 @@ export function createSessionEntryRevisionGuard(
         throw error;
       }
       // Reprepare read facts once; no snapshot outlives this check.
-      runSqlitePinnedReadSnapshotSync(database, guard);
+      runSqliteReadSnapshotSync(database, guard);
     }
   };
 }

@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -11,12 +10,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   loadExactSessionEntryReadOnly,
-  replaceSessionEntry,
   patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as transcriptWriteGuard from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -537,14 +536,11 @@ test.each([
           { sessionId: "other-session", updatedAt: 1 },
         );
       }
-      const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
-      const other = new DatabaseSync(database.path);
-      const mutate = (key: string, property: string) =>
-        other
-          .prepare(
-            "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-          )
-          .run(`$.${property}`, "concurrent-write", key);
+      const mutate = (sessionKey: string, property: string) => {
+        const scope = { agentId: identity.agentId, storePath, sessionKey };
+        const entry = loadExactSessionEntryReadOnly(scope)!.entry;
+        replaceSessionEntrySync(scope, { ...entry, [property]: "concurrent-write" });
+      };
       let armed = stage === "prepare";
       let committed = false;
       const createPredicate = transcriptWriteGuard.createSessionTranscriptOwnerPredicate;
@@ -596,7 +592,6 @@ test.each([
         expect(run).toHaveBeenCalledTimes(conflicts && stage === "prepare" ? 0 : 1);
       } finally {
         predicate.mockRestore();
-        other.close();
       }
     });
   },

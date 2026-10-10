@@ -3,13 +3,10 @@ import { constants } from "node:sqlite";
 import { afterEach, expect, it, vi, describe } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  openSqliteWorkerStore,
-  runSqliteWorkerStoreOperation,
-} from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
@@ -17,10 +14,11 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
 import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
@@ -33,7 +31,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as identityPublication from "./session-accessor.sqlite-identity.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
@@ -49,10 +47,11 @@ import {
 } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 it("publishes native writes into a warm cache without new generation probes", () => {
@@ -109,7 +108,7 @@ it("publishes native writes into a warm cache without new generation probes", ()
   }
 });
 
-it("bounds schema and freshness probes across admitted session reader entry points", async () => {
+it("refreshes admitted session readers after worker commits without schema or freshness probes", async () => {
   const options = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("session-schema-probes-") },
@@ -119,12 +118,19 @@ it("bounds schema and freshness probes across admitted session reader entry poin
   if (!reader.found) {
     throw new Error("Session probe reader is missing");
   }
-  const worker = await openSqliteWorkerStore<SessionProbeOperations>({
-    moduleUrl: new URL("./session-accessor.sqlite-schema-probes.test-support.ts", import.meta.url),
-    databasePath: writer.path,
-    input: undefined,
-  });
+  const broker = new SqliteWorkerBroker();
   try {
+    const worker = await broker.open<SessionProbeOperations>({
+      moduleUrl: new URL(
+        "./session-accessor.sqlite-schema-probes.test-support.ts",
+        import.meta.url,
+      ),
+      databasePath: writer.path,
+      input: undefined,
+    });
+    if (!worker) {
+      throw new Error("Session probe worker is unavailable");
+    }
     const lookupDatabase = openOpenClawAgentDatabase({
       ...options,
       path: path.join(path.dirname(writer.path), "lookup-traffic.sqlite"),
@@ -137,7 +143,7 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       lookupMessages: 0,
       workerPublishRefused: true,
     });
-    const raced = await runSqliteWorkerStoreOperation(
+    const raced = await broker.runOperation(
       worker,
       (scope) => scope.execute({ type: "mainKey", input: { yieldAfterRead: true } }),
       undefined,
@@ -166,7 +172,7 @@ it("bounds schema and freshness probes across admitted session reader entry poin
     const results = {
       writer: measureSessionSchemaProbes(writer),
       readOnly: measureSessionSchemaProbes(reader.database),
-      snapshot: runSqlitePinnedReadSnapshotSync(reader.database.db, () =>
+      snapshot: runSqliteReadSnapshotSync(reader.database.db, () =>
         measureSessionSchemaProbes(reader.database),
       ),
       borrowed: borrowed.value,
@@ -177,7 +183,32 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       expect(result.admitted).toBe(true);
       expect(result.schemaVersion).toBe(0);
       expect(result.userVersion).toBe(0);
-      expect(result.dataVersion).toBeLessThanOrEqual(100);
+      expect(result.dataVersion).toBe(0);
+    }
+    const writes = observeHostDataSql();
+    try {
+      await replaceSessionEntry(
+        { ...options, storePath: writer.path, sessionKey: "agent:main:probe" },
+        { sessionId: "probe", updatedAt: 1, label: "worker-committed" },
+      );
+      expect(
+        writes.queries.filter((sql) => /^(?:INSERT|UPDATE|DELETE)\b/iu.test(sql.trim())),
+      ).toEqual([]);
+    } finally {
+      writes.restore();
+    }
+    const refreshed = [
+      measureSessionSchemaProbes(writer, "worker-committed"),
+      measureSessionSchemaProbes(reader.database, "worker-committed"),
+      await worker.execute({ type: "read", input: { label: "worker-committed" } }),
+    ];
+    for (const result of refreshed.flatMap(Object.values)) {
+      expect(result).toMatchObject({
+        admitted: true,
+        schemaVersion: 0,
+        userVersion: 0,
+        dataVersion: 0,
+      });
     }
     expect(readCanonicalSessionMainKey(writer)).toBe("main");
     expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
@@ -277,7 +308,7 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       expect(read()?.label).toBe("current");
     }
   } finally {
-    await worker.close();
+    await broker.close();
     reader.database.close();
   }
 });

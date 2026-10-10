@@ -10,10 +10,15 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import {
+  SQLITE_DATABASE_GENERATION_LENGTH,
+  SqliteDatabaseGenerationSlot,
+} from "./sqlite-database-admission-record.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   hasPendingSqliteDatabaseSchemaMutation,
   publishSqliteDatabaseAdmission,
+  readSqliteDatabaseWriteRevision,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
@@ -30,6 +35,12 @@ import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const moduleUrl = new URL("./sqlite-database-admission.worker.test-support.ts", import.meta.url);
+
+it("assigns a distinct shared generation slot to every admission witness", () => {
+  const slots = Object.values(SqliteDatabaseGenerationSlot);
+  expect(new Set(slots).size).toBe(slots.length);
+  expect(Math.max(...slots)).toBeLessThan(SQLITE_DATABASE_GENERATION_LENGTH);
+});
 
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
   const root = tempDirs.make("sqlite-late-host-admission-");
@@ -86,6 +97,8 @@ it.each([
     const reader = openNodeSqliteDatabase(location);
     reader.exec("PRAGMA journal_mode=WAL; CREATE TABLE original(value)");
     admitSqliteSchema(reader);
+    const writeRevision = readSqliteDatabaseWriteRevision(reader);
+    expect(writeRevision).toBeTypeOf("number");
     const broker = new SqliteWorkerBroker();
     let held = false;
     try {
@@ -103,6 +116,7 @@ it.each([
           nativeLocations: [location],
           admission: createSqliteWorkerOperationAdmission((_request, grant) => {
             held = true;
+            expect(readSqliteDatabaseWriteRevision(reader)).toBeUndefined();
             expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
             expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
               !rollback,
@@ -122,6 +136,8 @@ it.each([
         await mutation;
       }
       expect(held).toBe(true);
+      expect(readSqliteDatabaseWriteRevision(reader)).toBeTypeOf("number");
+      expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(writeRevision);
       expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
       expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
         !rollback,

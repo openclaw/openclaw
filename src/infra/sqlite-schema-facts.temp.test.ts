@@ -10,8 +10,8 @@ import {
   getAdmittedSqliteSchemaFacts,
   getSqliteReadOperationRevision,
   readSqliteNativeMutationRevision,
-  runSqliteReadOperationSync,
   registerSqliteSchemaMutationListener,
+  runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.js";
 
@@ -54,6 +54,9 @@ describe("connection-local SQLite schema admission", () => {
     "CREATE TABLE unexpected (id INTEGER)",
     "CREATE TEMP TABLE scratch (id); CREATE TABLE unexpected (id INTEGER)",
     "PRAGMA user_version = 2",
+    "DROP TABLE session_nodes",
+    "DROP TABLE main.session_nodes",
+    "DROP TRIGGER temp.openclaw_session_nodes_cache_generation_update; CREATE TABLE unexpected (id)",
     "DROP TRIGGER temp.openclaw_session_nodes_cache_generation_update",
   ])("still revokes admission for ordinary DDL after tracker installation: %s", (sql) => {
     const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
@@ -117,6 +120,19 @@ describe("connection-local SQLite schema admission", () => {
     expect(schemaMutation).not.toHaveBeenCalled();
   });
 
+  it("does not suppress reentrant MAIN DDL inside a TEMP table statement", () => {
+    const database = openDatabase();
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    database.function("create_main_table", () => {
+      database.exec("CREATE TABLE callback_table(id)");
+      return 1;
+    });
+    database.exec("CREATE TEMP TABLE scratch AS SELECT create_main_table()");
+    expect(schemaMutation).toHaveBeenCalledWith(undefined);
+    expect(tableExists(database, "callback_table")).toBe(true);
+  });
+
   it("observes reentrant MAIN DDL during a declared tracker installation", () => {
     const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
     const schemaMutation = vi.fn();
@@ -132,19 +148,6 @@ describe("connection-local SQLite schema admission", () => {
     } finally {
       exec.mockRestore();
     }
-  });
-
-  it("does not suppress reentrant MAIN DDL inside a TEMP table statement", () => {
-    const database = openDatabase();
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    database.function("create_main_table", () => {
-      database.exec("CREATE TABLE callback_table(id)");
-      return 1;
-    });
-    database.exec("CREATE TEMP TABLE scratch AS SELECT create_main_table()");
-    expect(schemaMutation).toHaveBeenCalledWith(undefined);
-    expect(tableExists(database, "callback_table")).toBe(true);
   });
 
   it("revokes admission when tracker installation fails", () => {

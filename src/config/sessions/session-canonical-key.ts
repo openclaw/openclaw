@@ -11,6 +11,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import {
   getSqliteDatabaseAdmission,
+  readSqliteDatabaseWriteRevision,
   publishSqliteDatabaseAdmission,
   revokeSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissionKey,
@@ -23,7 +24,6 @@ import {
 import {
   getAdmittedSqliteSchemaFacts,
   getSqliteReadScopeRevision,
-  readSqliteDataVersion,
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -355,7 +355,9 @@ type CanonicalSessionMetadata = {
   keys: string[];
 };
 
-export type ValidatedSessionMetadata = CanonicalSessionMetadata & { dataVersion: number };
+export type ValidatedSessionMetadata = CanonicalSessionMetadata & {
+  writeRevision: number | undefined;
+};
 
 function isCanonicalSessionKey(sessionKey: string): boolean {
   const trimmed = sessionKey.trim();
@@ -590,7 +592,11 @@ export function assertCanonicalSqliteSessionKeysCurrent(
       // A copied clean projection is not first-admission proof for an unknown file.
       deferCanonicalSessionValidation(database, true);
       const metadata: ValidatedSessionMetadata | undefined = collectMetadata
-        ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
+        ? {
+            writeRevision: readSqliteDatabaseWriteRevision(database.db),
+            entries: new Map(),
+            keys: [],
+          }
         : undefined;
       scanCanonicalSqliteSessionEntries(database, undefined, metadata);
       markOpenClawAgentCanonicalValidation(database);
@@ -619,7 +625,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   }
   // A list already needs the whole inventory; hand its parsed rows through once.
   const metadata: ValidatedSessionMetadata | undefined = collectMetadata
-    ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
+    ? { writeRevision: readSqliteDatabaseWriteRevision(database.db), entries: new Map(), keys: [] }
     : undefined;
   scanCanonicalSqliteSessionEntries(database, undefined, metadata);
   remember();
