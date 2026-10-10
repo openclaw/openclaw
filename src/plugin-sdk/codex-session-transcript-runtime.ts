@@ -177,21 +177,23 @@ export async function readCodexSessionTranscriptEventsBeforeAdmission(
   );
 }
 
-export type CodexSessionTranscriptMirrorWriteLockContext =
-  InternalSessionTranscriptWriteLockContext & {
-    appendMessageWithMessageSequence: <TMessage>(
-      options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
-    ) => Promise<{
-      lifecycleRevision?: string;
-      messageSeq?: number;
-      result: TranscriptMessageAppendResult<TMessage> | undefined;
-    }>;
-    readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
-      anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
-      existingIdempotencyKeys: Set<string>;
-      messagesByIdempotencyKey: Map<string, AgentMessage>;
-    }>;
-  };
+export type CodexSessionTranscriptMirrorWriteLockContext = Omit<
+  InternalSessionTranscriptWriteLockContext,
+  "readMessageFacts"
+> & {
+  appendMessageWithMessageSequence: <TMessage>(
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
+  ) => Promise<{
+    lifecycleRevision?: string;
+    messageSeq?: number;
+    result: TranscriptMessageAppendResult<TMessage> | undefined;
+  }>;
+  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+    anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
+    existingIdempotencyKeys: Set<string>;
+    messagesByIdempotencyKey: Map<string, AgentMessage>;
+  }>;
+};
 
 /** @deprecated Use withCodexSessionTranscriptMirrorWrite. Removed at the next Plugin SDK major. */
 export async function withCodexSessionTranscriptMirrorWriteLock<T>(
@@ -201,7 +203,10 @@ export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   return withMirrorWrite(params, run, "lock");
 }
 
-export type CodexSessionTranscriptMirrorWriteContext = SessionTranscriptWriteContext & {
+export type CodexSessionTranscriptMirrorWriteContext = Omit<
+  SessionTranscriptWriteContext,
+  "readMessageFacts"
+> & {
   readMessageFacts: CodexSessionTranscriptMirrorWriteLockContext["readMessageFacts"];
   appendMessageWithMessageSequence: <TMessage>(
     options: Omit<
