@@ -1,4 +1,5 @@
 import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -8,16 +9,24 @@ import {
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
 import { SessionDetailsController } from "./session-details-controller.ts";
-import type { SessionMenuData, SessionManagementActionKind } from "./session-menu-actions.ts";
+
+type SessionSettingsActionKind =
+  | "set-icon"
+  | "set-color"
+  | "assign-owner"
+  | SessionCommunicationMenuAction["kind"];
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
   readState: () => {
-    session: SessionMenuData;
+    session: Pick<GatewaySessionRow, "communication" | "effectiveCommunication"> & {
+      target?: { key: string; agentId?: string };
+      sessionId: string | null;
+    };
     selectionCount: number;
-    actionDisabledReasons: Partial<Record<SessionManagementActionKind, string>>;
+    actionDisabledReasons: Partial<Record<SessionSettingsActionKind, string>>;
   };
-  disabled: (kind: "set-icon" | "set-color" | "assign-owner" | "set-communication") => boolean;
+  disabled: (kind: SessionSettingsActionKind) => boolean;
   renderSubmenu: (
     view: "settings" | "icon" | "assign-owner",
     label: string,

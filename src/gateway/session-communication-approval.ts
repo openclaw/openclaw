@@ -9,6 +9,7 @@ import type {
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { authorizeCurrentOperatorRoleScopes } from "./operator-role-policy.js";
 import type { QuestionManager } from "./question-manager.js";
+import type { QuestionClientAuthorization } from "./question-session-access.types.js";
 import { questionShapeError } from "./question-validation.js";
 import type { GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
 import {
@@ -22,7 +23,7 @@ function canApproveSessionCommunication(params: {
   client: GatewayClient | null;
   endpoint: CommunicationEndpoint;
   context: Pick<GatewayRequestContext, "getRuntimeConfig">;
-  target?: SessionSharingTarget | null;
+  target?: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "entry"> | null;
 }): boolean {
   const { client, endpoint } = params;
   if (
@@ -103,7 +104,7 @@ export async function requestSessionCommunicationApproval(params: {
   params.assertCurrent();
   params.signal?.throwIfAborted();
   let decisionPending = true;
-  const authorizeClient = (client: GatewayClient | null, target?: SessionSharingTarget | null) => {
+  const authorizeClient: QuestionClientAuthorization = (client, target) => {
     try {
       if (decisionPending) {
         params.assertCurrent();

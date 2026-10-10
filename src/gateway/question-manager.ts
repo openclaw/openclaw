@@ -22,9 +22,10 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import type { QuestionSessionAccess } from "./question-session-access.types.js";
-import type { GatewayClient } from "./server-methods/client-types.js";
-import type { SessionSharingTarget } from "./session-sharing-policy.js";
+import type {
+  QuestionClientAuthorization,
+  QuestionSessionAccess,
+} from "./question-session-access.types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -61,7 +62,7 @@ type QuestionManagerRequest = {
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => Promise<void>);
   /** Host-owned human decision boundary; never accepted from wire data. */
-  authorizeClient?: (client: GatewayClient | null, target?: SessionSharingTarget | null) => boolean;
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
   requesterRun?: OperationalRunInstanceRef;
@@ -79,7 +80,7 @@ type QuestionEntry = {
   waiters: Set<Waiter>;
   onResolved?: QuestionManagerRequest["onResolved"];
   /** Host-owned human decision boundary; never accepted from wire data. */
-  authorizeClient?: (client: GatewayClient | null, target?: SessionSharingTarget | null) => boolean;
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
   requesterRun?: OperationalRunInstanceRef;
@@ -95,10 +96,7 @@ export type QuestionObservation = {
   readonly record: QuestionRecord;
   readonly ordinary: boolean;
   readonly sessionAccess?: QuestionSessionAccess;
-  readonly authorizeClient?: (
-    client: GatewayClient | null,
-    target?: SessionSharingTarget | null,
-  ) => boolean;
+  readonly authorizeClient?: QuestionClientAuthorization;
   isCurrent: () => boolean;
   refreshRequester: () => void;
 };

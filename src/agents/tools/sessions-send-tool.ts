@@ -7,6 +7,7 @@ import { resolveSessionThreadInfo } from "../../channels/plugins/session-convers
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
+import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -304,7 +305,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       if (!visibleSession.ok) {
         return sendFailure(visibleSession.status, visibleSession.error, unresolvedDisplayKey);
       }
-      const resolvedKey = visibleSession.key;
+      let resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
       const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
       const isLiteralLegacyKeyInput =
@@ -357,10 +358,15 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           unresolvedDisplayKey,
         );
       }
+      resolvedKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: resolvedKey,
+        storeAgentId: targetAgentId,
+      });
       const mayUseRequesterForLiteralSentinel =
         isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
-      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const requesterSession = await readSession(effectiveRequesterKey, requesterAgentId);
+      const requesterSessionKey = opts?.agentSessionKey ? requesterSession.canonicalKey : undefined;
       const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
       if (opts?.agentSessionId && requesterSessionEntry?.sessionId !== opts.agentSessionId) {
         return sendFailure("forbidden", "The sending session incarnation changed.");
@@ -604,7 +610,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 callGateway: communication.callGateway,
               });
             }
-            const ownChild = targetSessionEntry?.spawnedBy === effectiveRequesterKey;
+            const ownChild = targetSessionEntry?.spawnedBy === requesterSession.canonicalKey;
             const startParams: Parameters<typeof dispatchSessionsSendFollowup>[0] = {
               cfg,
               callGateway: communication.callGateway,
@@ -649,7 +655,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               ownedTask: communication.ownedTask,
               isIsolatedCronRequester,
               targetIsSubagent,
-              requesterSessionKey: effectiveRequesterKey,
+              requesterSessionKey: requesterSession.canonicalKey,
               targetSession: targetSessionEntry
                 ? { ...targetSessionEntry, acp: targetAcpMeta }
                 : undefined,
@@ -670,7 +676,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 message,
                 ownChild,
                 nativeChild: !targetAcpMeta,
-                requesterSessionKey: effectiveRequesterKey,
+                requesterSessionKey: requesterSession.canonicalKey,
                 requesterAgentId,
                 requesterTurnRunId: opts?.requesterTurnRunId,
                 targetSession: targetSessionEntry,
